@@ -105,7 +105,7 @@ router.get("/", async (req: Request, res) => {
 router.get("/summary", async (req: Request, res) => {
   await ensureTable();
   const companyId = await resolveCompanyId(req);
-  const where = companyId ? `WHERE company_id = ${companyId}` : "";
+  const where = `WHERE company_id = ${companyId}`;
   const rows = await db.execute(sql.raw(`
     SELECT
       COUNT(*) AS total_count,
@@ -122,12 +122,13 @@ router.get("/summary", async (req: Request, res) => {
 // ─── GET /api/vendor-payments/:id ────────────────────────────────────────────
 router.get("/:id", async (req: Request, res) => {
   await ensureTable();
+  const companyId = await resolveCompanyId(req);
   const id = parseInt(String(req.params.id));
   const result = await db.execute(sql.raw(`
     SELECT vp.*, s.name AS supplier_name_ref, s.contact_email AS supplier_email
     FROM vendor_payments vp
     LEFT JOIN suppliers s ON s.id = vp.supplier_id
-    WHERE vp.id = ${id}
+    WHERE vp.id = ${id} AND vp.company_id = ${companyId}
   `));
   const row = result.rows[0];
   if (!row) return res.status(404).json({ message: "Pembayaran tidak ditemukan." });
@@ -143,11 +144,12 @@ router.get("/:id", async (req: Request, res) => {
 // ─── DELETE /api/vendor-payments/:id ─────────────────────────────────────────
 router.delete("/:id", async (req: Request, res) => {
   await ensureTable();
+  const companyId = await resolveCompanyId(req);
   const id = parseInt(String(req.params.id));
-  const result = await db.execute(sql.raw(`SELECT * FROM vendor_payments WHERE id = ${id}`));
+  const result = await db.execute(sql.raw(`SELECT * FROM vendor_payments WHERE id = ${id} AND company_id = ${companyId}`));
   if (!result.rows[0]) return res.status(404).json({ message: "Pembayaran tidak ditemukan." });
   const before = result.rows[0] as Record<string, unknown>;
-  await db.execute(sql.raw(`DELETE FROM vendor_payments WHERE id = ${id}`));
+  await db.execute(sql.raw(`DELETE FROM vendor_payments WHERE id = ${id} AND company_id = ${companyId}`));
   audit(req as Request, {
     action: "delete",
     module: "payment",

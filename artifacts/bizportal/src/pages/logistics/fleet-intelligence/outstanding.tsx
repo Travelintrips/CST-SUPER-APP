@@ -457,7 +457,7 @@ export default function FleetOutstandingPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Gagal import");
     }
-  }, [selectedFile, showImportLog, refetchImportLog, qc]);
+  }, [selectedFile, clearFirst, showImportLog, refetchImportLog, qc]);
 
   /* ── checkbox helpers ────────────────────────────────────────────── */
   function toggleSelect(id: number) {

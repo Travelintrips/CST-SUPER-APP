@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,13 +28,14 @@ export default function AccountingHubPLPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ company_id: "", date_from: "", date_to: "", source_module: "", branch_id: "" });
+  const [appliedFilters, setAppliedFilters] = useState({ company_id: "", date_from: "", date_to: "", source_module: "", branch_id: "" });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const res = await fetch(`/api/accounting/hub/profit-loss?${params}`, { credentials: "include" });
       if (!res.ok) { setRows([]); setSummary(null); setError(`Gagal memuat data (${res.status})`); return; }
       const json = await res.json();
@@ -47,9 +48,9 @@ export default function AccountingHubPLPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const revenues = rows.filter(r => r.account_type === "revenue");
   const expenses  = rows.filter(r => r.account_type === "expense");
@@ -88,7 +89,7 @@ export default function AccountingHubPLPage() {
                 {MODULES.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button size="sm" onClick={load}>Terapkan</Button>
+            <Button size="sm" onClick={() => setAppliedFilters({ ...filters })}>Terapkan</Button>
           </div>
         </CardContent>
       </Card>

@@ -33,6 +33,13 @@ function GoogleIcon() {
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 type LoginMode = "password" | "otp" | "wa";
 
+interface AuthCapabilities {
+  emailOtp: boolean;
+  google: boolean;
+  whatsapp: boolean;
+  password: boolean;
+}
+
 const CUSTOMER_RETURN_PREFIXES = [
   "/login", "/register", "/dashboard", "/vendor-dashboard", "/orders", "/admin",
   "/services", "/marketplace", "/jasa", "/vendor", "/freight-forwarding", "/pabean",
@@ -62,6 +69,9 @@ export default function Login() {
   const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
 
   const [mode, setMode] = useState<LoginMode>("otp");
+  const [capabilities, setCapabilities] = useState<AuthCapabilities>({
+    emailOtp: true, google: true, whatsapp: true, password: true,
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [otpEmail, setOtpEmail] = useState("");
@@ -87,6 +97,15 @@ export default function Login() {
       setErrorMsg(t("login.googleCallbackFailed", "Login Google gagal saat memproses callback. Silakan coba lagi."));
     }
   }, [oauthError, t]);
+
+  useEffect(() => {
+    fetch(`${BASE}/api/portal/auth/capabilities`, { credentials: "include" })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("capabilities unavailable")))
+      .then((data: AuthCapabilities) => setCapabilities(data))
+      .catch(() => setCapabilities((current) => ({
+        ...current, emailOtp: false, google: false, whatsapp: false,
+      })));
+  }, []);
 
   const loginSchema = z.object({
     email: z.string().email({ message: t("login.email") }),
@@ -340,6 +359,10 @@ export default function Login() {
   }
 
   function handleGoogleLogin() {
+    if (!capabilities.google) {
+      setErrorMsg("Login Google belum tersedia karena provider belum dikonfigurasi.");
+      return;
+    }
     setErrorMsg("");
     // Preserve returnTo so the portal callback can redirect correctly after OAuth.
     const rt = new URLSearchParams(window.location.search).get("returnTo");
@@ -404,9 +427,9 @@ export default function Login() {
             )}
 
             <div className="mb-5">
-              <button type="button" onClick={handleGoogleLogin} className="flex items-center justify-center gap-3 w-full h-11 rounded-lg border border-border bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors shadow-sm">
+              <button type="button" onClick={handleGoogleLogin} disabled={!capabilities.google} className="flex items-center justify-center gap-3 w-full h-11 rounded-lg border border-border bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
                 <GoogleIcon />
-                {t("login.signIn")} Google
+                {capabilities.google ? `${t("login.signIn")} Google` : "Google (belum tersedia)"}
               </button>
             </div>
             {errorMsg && (
@@ -417,17 +440,16 @@ export default function Login() {
             )}
 
             <div className="flex rounded-lg bg-muted p-1 mb-5">
-              <button type="button" onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              <button type="button" disabled={!capabilities.emailOtp} onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed disabled:opacity-50`}>
                 {t("login.tabEmailOtp")}
               </button>
-              <button type="button" onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              <button type="button" disabled={!capabilities.whatsapp} onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed disabled:opacity-50`}>
                 {t("login.tabWa", "No HP / WA")}
               </button>
               <button type="button" onClick={() => { setMode("password"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "password" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                 {t("login.password", "Password")}
               </button>
             </div>
-
             {mode === "otp" && (
               <div className="space-y-4">
                 {otpMsg && (

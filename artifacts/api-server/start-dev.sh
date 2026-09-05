@@ -42,13 +42,14 @@ export APP_ENV
 # Production uses start.sh/start:secure instead.
 SAFE_DEV_TEST_MODE=${SAFE_DEV_TEST_MODE:-true}
 ALLOW_DEV_STORAGE_WRITES=${ALLOW_DEV_STORAGE_WRITES:-true}
+ALLOW_DEV_AI_REQUESTS=${ALLOW_DEV_AI_REQUESTS:-true}
 CUSTOMER_AUTH_HARNESS_CAPTURE=${CUSTOMER_AUTH_HARNESS_CAPTURE:-0}
 MOCK_WHATSAPP=${MOCK_WHATSAPP:-true}
 MOCK_EMAIL=${MOCK_EMAIL:-true}
 MOCK_PAYMENT=${MOCK_PAYMENT:-true}
 MOCK_STORAGE=${MOCK_STORAGE:-true}
 USE_TEST_STORAGE=${USE_TEST_STORAGE:-true}
-export SAFE_DEV_TEST_MODE ALLOW_DEV_STORAGE_WRITES CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
+export SAFE_DEV_TEST_MODE ALLOW_DEV_STORAGE_WRITES ALLOW_DEV_AI_REQUESTS CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
 
 # ── Deterministic single-listener configuration ─────────────────────────────
 # The artifact workflow exposes 18444. Express binds directly to that port;
@@ -82,7 +83,10 @@ check_port() {
 # This check must happen before the lib/db build and before dev.mjs, otherwise
 # this redundant instance can still enter the migration chain.
 PRIMARY_API_PORT=${PRIMARY_API_PORT:-8080}
-PRIMARY_API_WAIT_SECONDS=${PRIMARY_API_WAIT_SECONDS:-30}
+# Artifact-only sessions use this API directly on :18444. Keep a short grace
+# period for a legacy primary workflow on :8080, but do not make every preview
+# restart wait half a minute when that workflow is not configured.
+PRIMARY_API_WAIT_SECONDS=${PRIMARY_API_WAIT_SECONDS:-3}
 
 if [ "$API_PORT" != "$PRIMARY_API_PORT" ]; then
   echo "[start-dev] Checking for primary API on :$PRIMARY_API_PORT before startup..."

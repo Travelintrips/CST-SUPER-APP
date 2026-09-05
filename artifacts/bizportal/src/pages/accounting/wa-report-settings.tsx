@@ -90,7 +90,7 @@ export default function WaReportSettingsPage() {
       })
       .catch((err) => toast({ title: "Gagal memuat pengaturan", description: String(err), variant: "destructive" }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [toast]);
 
   const handleSave = async () => {
     setSaving(true);

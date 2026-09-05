@@ -158,7 +158,7 @@ export default function ExpenseRoutinePage() {
   const { data: suppliersResponse } = useListSuppliers(supplierListParams, {
     query: { queryKey: getListSuppliersQueryKey(supplierListParams), staleTime: 300_000, refetchInterval: false },
   });
-  const suppliers = suppliersResponse?.data ?? [];
+  const suppliers = suppliersResponse?.data;
   const { data: employeeUsers = [] } = useQuery<any[]>({
     queryKey: ["expenseApprovalUsers", activeCompanyId],
     queryFn: async () => {
@@ -295,7 +295,7 @@ export default function ExpenseRoutinePage() {
     } else {
       if (sourceAutoFilled) { setSourceAccountId("none"); setSourceAutoFilled(false); }
     }
-  }, [selectedCat?.id, taxes.length]);
+  }, [amountAutoFilled, debitAutoFilled, selectedCat, sourceAutoFilled, taxAutoFilled, taxes]);
 
   const amount = parseIDR(amountRaw);
   const selectedTax = taxes.find((t) => t.id.toString() === taxRateId);

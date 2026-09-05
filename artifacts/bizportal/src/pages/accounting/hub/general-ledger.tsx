@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -141,6 +141,15 @@ export default function AccountingHubGLPage() {
     account_name:   urlParams.get("account_name")   ?? "",
     payment_method: urlParams.get("payment_method") ?? "",
   });
+  const [appliedFilters, setAppliedFilters] = useState({
+    company_id:     urlParams.get("company_id")     ?? "",
+    date_from:      urlParams.get("date_from")      ?? "",
+    date_to:        urlParams.get("date_to")        ?? "",
+    source_module:  urlParams.get("source_module")  ?? "",
+    account_id:     urlParams.get("account_id")     ?? "",
+    account_name:   urlParams.get("account_name")   ?? "",
+    payment_method: urlParams.get("payment_method") ?? "",
+  });
   const [month, setMonth] = useState(urlParams.get("month") ?? "");
   const [sortBy,  setSortBy]  = useState<SortCol>(DEFAULT_SORT_COL);
   const [sortDir, setSortDir] = useState<SortDir>(DEFAULT_SORT_DIR);
@@ -149,7 +158,7 @@ export default function AccountingHubGLPage() {
   // period when the user drills down into General Ledger and goes back.
   const trialBalanceParams = new URLSearchParams();
   for (const key of ["company_id", "date_from", "date_to"]) {
-    const value = filters[key as "company_id" | "date_from" | "date_to"];
+    const value = appliedFilters[key as "company_id" | "date_from" | "date_to"];
     if (value) trialBalanceParams.set(key, value);
   }
   const trialBalanceHref = `/accounting/hub/trial-balance${trialBalanceParams.toString() ? `?${trialBalanceParams}` : ""}`;
@@ -168,6 +177,8 @@ export default function AccountingHubGLPage() {
   });
 
   const effectiveLimit = rowsPerPage === "all" ? 999999 : rowsPerPage;
+  const queryOptionsRef = useRef({ sortBy, sortDir, rowsPerPage });
+  queryOptionsRef.current = { sortBy, sortDir, rowsPerPage };
 
   const applyMonthFilter = (m: string) => {
     setMonth(m);
@@ -189,7 +200,7 @@ export default function AccountingHubGLPage() {
   const [error, setError] = useState<string | null>(null);
   const [detailRow, setDetailRow] = useState<GLRow | null>(null);
 
-  const load = async (p = page, sb = sortBy, sd = sortDir, rpp: RppOption = rowsPerPage) => {
+  const load = useCallback(async (p: number, sb: SortCol, sd: SortDir, rpp: RppOption) => {
     const lim = rpp === "all" ? 999999 : rpp;
     setLoading(true);
     setError(null);
@@ -200,7 +211,7 @@ export default function AccountingHubGLPage() {
         sort_by: sb,
         sort_dir: sd,
       });
-      Object.entries(filters).forEach(([k, v]) => {
+      Object.entries(appliedFilters).forEach(([k, v]) => {
         if (v && k !== "account_name") params.set(k, v);
       });
       // payment_method is already included via the loop above
@@ -224,11 +235,15 @@ export default function AccountingHubGLPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters]);
 
-  useEffect(() => { load(1, sortBy, sortDir); setPage(1); }, []);
+  useEffect(() => {
+    const { sortBy: currentSortBy, sortDir: currentSortDir, rowsPerPage: currentRowsPerPage } = queryOptionsRef.current;
+    void load(1, currentSortBy, currentSortDir, currentRowsPerPage);
+    setPage(1);
+  }, [load]);
 
-  const applyFilters = () => { setPage(1); load(1, sortBy, sortDir); };
+  const applyFilters = () => { setPage(1); setAppliedFilters({ ...filters }); };
 
   // Toggle sort: same col → flip dir; new col → default desc (except entry_number → asc)
   const handleSort = (col: SortCol) => {
@@ -241,7 +256,7 @@ export default function AccountingHubGLPage() {
     setSortBy(col);
     setSortDir(newDir);
     setPage(1);
-    load(1, col, newDir);
+    load(1, col, newDir, rowsPerPage);
   };
 
   const clearAccountFilter = () => {
@@ -283,7 +298,7 @@ export default function AccountingHubGLPage() {
       setVoidDialog(null);
       setSuccessMsg(`Entry ${voidDialog.entryNumber} berhasil dibatalkan. Jurnal pembalik telah dibuat.`);
       setTimeout(() => setSuccessMsg(null), 5000);
-      load(page, sortBy, sortDir);
+      load(page, sortBy, sortDir, rowsPerPage);
     } catch (e: any) {
       setVoidError(e.message ?? "Terjadi kesalahan");
     } finally {
@@ -355,7 +370,7 @@ export default function AccountingHubGLPage() {
             </div>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => load(page, sortBy, sortDir)} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => load(page, sortBy, sortDir, rowsPerPage)} disabled={loading}>
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />Refresh
         </Button>
       </div>
@@ -455,8 +470,7 @@ export default function AccountingHubGLPage() {
                 setSortBy(DEFAULT_SORT_COL);
                 setSortDir(DEFAULT_SORT_DIR);
                 setPage(1);
-                // load with reset values directly (state not updated yet in same tick)
-                setTimeout(() => load(1, DEFAULT_SORT_COL, DEFAULT_SORT_DIR), 0);
+                setAppliedFilters({ company_id: "", date_from: "", date_to: "", source_module: "", account_id: "", account_name: "", payment_method: "" });
               }}>
                 <X className="h-3.5 w-3.5 mr-1" />Reset
               </Button>
@@ -477,7 +491,7 @@ export default function AccountingHubGLPage() {
                   setSortBy(DEFAULT_SORT_COL);
                   setSortDir(DEFAULT_SORT_DIR);
                   setPage(1);
-                  load(1, DEFAULT_SORT_COL, DEFAULT_SORT_DIR);
+                  load(1, DEFAULT_SORT_COL, DEFAULT_SORT_DIR, rowsPerPage);
                 }}
               >
                 <X className="h-3 w-3" />
@@ -748,10 +762,10 @@ export default function AccountingHubGLPage() {
           </span>
           {rowsPerPage !== "all" && total > effectiveLimit && (
             <div className="flex gap-1">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => { setPage(p => p - 1); load(page - 1, sortBy, sortDir); }}>
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => { setPage(p => p - 1); load(page - 1, sortBy, sortDir, rowsPerPage); }}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <Button variant="outline" size="sm" disabled={page * effectiveLimit >= total} onClick={() => { setPage(p => p + 1); load(page + 1, sortBy, sortDir); }}>
+              <Button variant="outline" size="sm" disabled={page * effectiveLimit >= total} onClick={() => { setPage(p => p + 1); load(page + 1, sortBy, sortDir, rowsPerPage); }}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>

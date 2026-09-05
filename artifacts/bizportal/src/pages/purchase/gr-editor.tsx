@@ -69,7 +69,7 @@ export default function GoodsReceiptEditorPage() {
         receivingNotes: "",
       })));
     }
-  }, [poData, isNew]);
+  }, [poData, isNew, lines.length]);
 
   const saveMut = useMutation({
     mutationFn: async () => {

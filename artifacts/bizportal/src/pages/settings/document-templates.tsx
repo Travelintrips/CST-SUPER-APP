@@ -384,9 +384,7 @@ export default function DocumentTemplatesPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  useEffect(() => { fetchAll(); }, []);
-
-  async function fetchAll() {
+  const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(API, { credentials: "include" });
@@ -402,7 +400,9 @@ export default function DocumentTemplatesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => { void fetchAll(); }, [fetchAll]);
 
   function switchType(type: string) {
     setActiveType(type);

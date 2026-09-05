@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -247,7 +247,7 @@ export default function FleetCashPaymentsPage() {
   });
 
   /* ── derived state ────────────────────────────────────────────────────── */
-  const payments = listData?.payments ?? [];
+  const payments = useMemo(() => listData?.payments ?? [], [listData?.payments]);
   const totals   = summaryData?.totals;
   const settings = settingsData;
   const coaList  = coaData ?? [];

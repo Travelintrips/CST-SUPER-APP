@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { runInvoiceTaxEngine, type InvoiceTaxInput } from "../lib/invoiceTaxEngine.js";
 import { runSapTaxEngine, buildSapTaxInput, type SapTaxInput } from "../lib/sapTaxEngine.js";
+import { buildInvoiceTaxReview } from "../lib/invoiceTaxReview.js";
 import { ocrIpRateLimiter, ocrUserRateLimiter, ocrCompanyRateLimiter } from "../middlewares/securityRateLimiter.js";
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +118,8 @@ RULES:
   does not print those values; use null and add a flag for manual verification.
 - payable_amount must only be populated when the invoice explicitly prints the amount payable
   after withholding. Never derive it from gross minus a tax rate.
+- For every line_item, also return "coa_hint" as a short non-posting classification hint (for example "office supplies", "freight", "professional services"). Never invent a numeric COA code.
+- Detect withholding tax separately from PPN. Return "withholding_tax_type" only when the document explicitly identifies PPh (such as PPh 21, PPh 23, PPh 4(2), PPh 15, PPh 26) and return "tax_object" only when the transaction object is explicit. If either is ambiguous, keep the field null and add a flag.
 - payment_status_hint: "PAID" if marked lunas/paid, "UNPAID" if has due date without payment, "PARTIAL" if partial.
 - raw_confidence: 0.0–1.0. High if text is clear. Low if messy/OCR noise.
 - flags: array of strings noting anomalies, assumptions, or missing data.
@@ -149,7 +152,8 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
       "quantity": number | null,
       "unit_price": number | null,
       "total": number | null,
-      "tax": number | null
+      "tax": number | null,
+      "coa_hint": string | null
     }
   ],
   "invoice_breakdown": {
@@ -191,6 +195,9 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
       "payable_amount": number | null
     }
   },
+  "withholding_tax_type": "PPh 21" | "PPh 22" | "PPh 23" | "PPh 4(2)" | "PPh 15" | "PPh 26" | null,
+  "tax_object": string | null,
+  "withholding_amount": number | null,
   "payment_status_hint": "PAID" | "UNPAID" | "PARTIAL" | null,
   "raw_confidence": number,
   "flags": [string]
@@ -481,7 +488,13 @@ router.post(
     const sapTax = runSapTaxEngine(sapInput);
     logger.info({ sapTax }, "[invoiceOcr] SAP tax engine result");
 
-    res.json({ ok: true, data: sanitized, tax: taxResult, sap_tax: sapTax });
+    const taxReview = buildInvoiceTaxReview({
+      withholdingTaxType: sanitized.withholding_tax_type,
+      taxObject: sanitized.tax_object,
+      withholdingAmount: sanitized.withholding_amount,
+    });
+
+    res.json({ ok: true, data: sanitized, tax: taxResult, sap_tax: sapTax, tax_review: taxReview });
   } catch (err) {
     logger.error({ err }, "[invoiceOcr] extraction error");
     res.status(500).json({ error: "Gagal mengekstrak invoice", detail: String(err) });

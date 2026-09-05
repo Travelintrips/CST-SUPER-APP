@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,16 +37,17 @@ export default function AccountingHubCOAMappingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const [companyId, setCompanyId] = useState("");
+  const [appliedCompanyId, setAppliedCompanyId] = useState("");
   const [dialog, setDialog]   = useState<{ open: boolean; mode: "add" | "edit"; row: Partial<MappingRow> }>({ open: false, mode: "add", row: {} });
   const [form, setForm]       = useState({ company_id: "", module: "", transaction_type: "", debit_account_id: "", credit_account_id: "", description: "" });
   const [saving, setSaving]   = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (companyId) params.set("company_id", companyId);
+      if (appliedCompanyId) params.set("company_id", appliedCompanyId);
       const res = await fetch(`/api/accounting/hub/coa-mapping?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
@@ -59,9 +60,9 @@ export default function AccountingHubCOAMappingPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedCompanyId]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const openAdd = () => {
     setForm({ company_id: companyId, module: "", transaction_type: "", debit_account_id: "", credit_account_id: "", description: "" });
@@ -158,7 +159,18 @@ export default function AccountingHubCOAMappingPage() {
         <CardContent className="pt-4">
           <div className="flex gap-2">
             <Input placeholder="Company ID" value={companyId} onChange={e => setCompanyId(e.target.value)} className="w-32" />
-            <Button size="sm" onClick={load}>Terapkan</Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (companyId === appliedCompanyId) {
+                  void load();
+                } else {
+                  setAppliedCompanyId(companyId);
+                }
+              }}
+            >
+              Terapkan
+            </Button>
           </div>
         </CardContent>
       </Card>

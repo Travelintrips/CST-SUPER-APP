@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -269,7 +269,7 @@ export default function AppSecretsPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const { toast } = useToast();
 
-  async function loadSecrets() {
+  const loadSecrets = useCallback(async () => {
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -289,9 +289,9 @@ export default function AppSecretsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
-  useEffect(() => { void loadSecrets(); }, []);
+  useEffect(() => { void loadSecrets(); }, [loadSecrets]);
 
   const groups = [...new Set(secrets.map((s) => s.group).filter((g): g is string => !!g))];
 

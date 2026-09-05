@@ -97,6 +97,10 @@ import {
   generateQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
 import {
+  correctPostedSportPaymentAmount,
+  SportPaymentAmountCorrectionError,
+} from "../lib/reconciliation/sportPaymentAmountCorrection.js";
+import {
   QrisApprovalPaymentGuardError,
   selectQrisApprovalPaymentIds,
 } from "../lib/reconciliation/qrisApprovalPaymentGuard.js";
@@ -2192,6 +2196,116 @@ router.post("/qris-candidates/generate", async (req, res) => {
     return res.status(500).json({
       error: "Gagal menyimpan pemeriksaan QRIS. Coba lagi, atau hubungi admin bila masalah berulang.",
       code: "QRIS_CANDIDATE_GENERATION_FAILED",
+    });
+  }
+});
+
+// ─── PATCH /api/bank-reconciliation/qris-candidates/payments/:paymentId/amount ─
+// Correct a posted Sport Center payment without mutating its posted journal.
+// The transaction validates the canonical source, public mirror, accounting
+// payment, and posted journal before creating one additive correction entry.
+router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+
+  const paymentId = Number.parseInt(String(req.params.paymentId ?? ""), 10);
+  const requestedAmount = req.body?.amount
+    ?? req.body?.newAmount
+    ?? req.body?.new_amount;
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const companyFromBody = req.body?.companyId ?? req.body?.company_id;
+
+  if (!Number.isInteger(paymentId) || paymentId <= 0) {
+    return res.status(400).json({
+      error: "ID payment Sport Center tidak valid",
+      code: "INVALID_PAYMENT_ID",
+    });
+  }
+  if (reason.length < 5 || reason.length > 500) {
+    return res.status(400).json({
+      error: "Alasan koreksi wajib diisi (5–500 karakter)",
+      code: "INVALID_REASON",
+    });
+  }
+
+  let companyId: number;
+  try {
+    companyId = resolveCompanyId(req);
+  } catch (error: any) {
+    return res.status(400).json({
+      error: error?.message ?? "Company context tidak tersedia",
+      code: "COMPANY_CONTEXT_REQUIRED",
+    });
+  }
+  if (
+    companyFromBody != null
+    && companyFromBody !== ""
+    && Number(companyFromBody) !== companyId
+  ) {
+    return res.status(403).json({
+      error: "Company payment tidak sesuai dengan perusahaan aktif",
+      code: "COMPANY_CONTEXT_MISMATCH",
+    });
+  }
+
+  try {
+    const result = await db.transaction((tx) =>
+      correctPostedSportPaymentAmount(tx, {
+        paymentId,
+        companyId,
+        requestedAmount,
+        reason,
+      }),
+    );
+
+    audit(req, {
+      action: "correct-sport-center-payment-amount",
+      module: "accounting",
+      resourceId: `sport-payment-${paymentId}`,
+      companyId,
+      description: "Koreksi nominal payment posted melalui additive journal",
+      before: {
+        amount: result.previousAmount,
+        accountingPaymentId: result.accountingPaymentId,
+      },
+      after: {
+        amount: result.amount,
+        correctionEntryId: result.correctionEntryId,
+        reason,
+        mirror: result.mirror,
+      },
+    });
+
+    if (result.changed) {
+      // The source transaction is committed before the potentially expensive
+      // company-wide candidate scan. Never approve or post settlement here.
+      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+    }
+
+    return res.json({
+      ok: true,
+      changed: result.changed,
+      idempotent: result.idempotent,
+      payment: result.source,
+      mirror: result.mirror,
+      accountingPaymentId: result.accountingPaymentId,
+      correctionEntryId: result.correctionEntryId,
+      candidateRefreshPending: result.changed,
+      message: result.changed
+        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi sebagai review-only."
+        : "Nominal payment sudah sesuai; tidak ada jurnal koreksi baru.",
+    });
+  } catch (error: any) {
+    const status = error instanceof SportPaymentAmountCorrectionError
+      ? error.statusCode
+      : Number(error?.statusCode) || 500;
+    logger.error(
+      { err: error?.cause?.message ?? error?.message, paymentId, companyId },
+      "[bankRecon] PATCH QRIS payment amount failed",
+    );
+    return res.status(status).json({
+      error: error?.message ?? "Gagal mengoreksi nominal payment Sport Center",
+      code: error?.code ?? "PAYMENT_AMOUNT_CORRECTION_FAILED",
+      ...(error?.details ?? {}),
     });
   }
 });

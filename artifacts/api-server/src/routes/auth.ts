@@ -35,6 +35,7 @@ import { trackSuspiciousActivity } from "../lib/suspiciousActivity.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin";
 import { signPortalJwt } from "../lib/portalJwt.js";
 import { setPortalSessionCookie } from "../lib/supabaseAuth.js";
+import { linkPortalGoogleIdentity } from "../lib/services/portalIdentityService.js";
 import {
   decodeGoogleOAuthContext,
   encodeGoogleOAuthContext,
@@ -433,6 +434,15 @@ async function upsertPortalGoogleCustomer(
     observeStage?.("ACCOUNT_LOOKUP", "passed", { result: "existing" });
     observeStage?.("ACCOUNT_LINK", "started");
     try {
+      if (
+        customer.oauthProvider === "google"
+        && customer.oauthId
+        && googleId
+        && customer.oauthId !== googleId
+      ) {
+        throw new Error("Portal account already has a different Google identity");
+      }
+      await linkPortalGoogleIdentity(customer.id, googleId);
       const [updated] = await db
         .update(portalCustomersTable)
         .set({
@@ -456,6 +466,17 @@ async function upsertPortalGoogleCustomer(
   if (!customer) {
     observeStage?.("ACCOUNT_CREATE", "failed", { result: "empty_result" });
     throw new Error("Unable to create portal customer");
+  }
+  if (
+    customer.oauthProvider === "google"
+    && customer.oauthId
+    && googleId
+    && customer.oauthId !== googleId
+  ) {
+    throw new Error("Portal account already has a different Google identity");
+  }
+  if (googleId) {
+    await linkPortalGoogleIdentity(customer.id, googleId);
   }
   if ((customer.accountStatus ?? "active") !== "active") {
     observeStage?.("ACCOUNT_LOOKUP", "failed", { result: "account_not_active" });

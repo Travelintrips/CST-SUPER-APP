@@ -129,7 +129,7 @@ export function BankDisbursementQuickDialog({
         setForm(f => ({ ...f, accountId: String(filtered[0]!.id) }));
       }
     });
-  }, [open]);
+  }, [open, activeCompanyId, prefill.amount, prefill.memo, prefill.partnerName, prefill.preferredAccountId, prefill.ref, prefill.transactionType, today]);
 
   const handleSubmit = async () => {
     setError(null);

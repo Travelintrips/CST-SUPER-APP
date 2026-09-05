@@ -6,13 +6,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertCircle, ArrowLeft, Check, MessageCircle, Phone, Shield, Truck, User } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, LockKeyhole, Mail, MessageCircle, Phone, Shield, Truck, User } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLanguage } from "@/i18n/LanguageContext";
 
 type UserRole = "customer" | "vendor";
 type CustomerType = "individual" | "company";
 type Step = "phone" | "otp" | "profile";
+type RegistrationMethod = "email" | "google" | "whatsapp" | "password";
+
+interface AuthCapabilities {
+  emailOtp: boolean;
+  google: boolean;
+  whatsapp: boolean;
+  password: boolean;
+}
 
 interface SimpleItem {
   id: number;
@@ -28,6 +36,10 @@ export default function Register() {
   const returnTo = new URLSearchParams(window.location.search).get("returnTo");
   const phoneFromUrl = new URLSearchParams(window.location.search).get("phone") ?? "";
   const [step, setStep] = useState<Step>("phone");
+  const [method, setMethod] = useState<RegistrationMethod>("email");
+  const [capabilities, setCapabilities] = useState<AuthCapabilities>({
+    emailOtp: false, google: false, whatsapp: false, password: true,
+  });
   const [errorMsg, setErrorMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -36,12 +48,21 @@ export default function Register() {
   const [normalizedPhone, setNormalizedPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [verifyToken, setVerifyToken] = useState("");
+  const [email, setEmail] = useState("");
+  const [emailStep, setEmailStep] = useState<"email" | "code">("email");
+  const [emailCode, setEmailCode] = useState("");
+  const [emailMsg, setEmailMsg] = useState("");
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [passwordName, setPasswordName] = useState("");
+  const [passwordEmail, setPasswordEmail] = useState("");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [passwordMsg, setPasswordMsg] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   const [role, setRole] = useState<UserRole>("customer");
   const [customerType, setCustomerType] = useState<CustomerType>("individual");
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
-  const [email, setEmail] = useState("");
   const [serviceIds, setServiceIds] = useState<number[]>([]);
   const [products, setProducts] = useState<SimpleItem[]>([]);
   const [rememberDevice, setRememberDevice] = useState(true);
@@ -71,6 +92,141 @@ export default function Register() {
   }, [step]);
 
   const allItems = [...services, ...products];
+
+  useEffect(() => {
+    fetch(`${BASE}/api/portal/auth/capabilities`, { credentials: "include" })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("capabilities unavailable")))
+      .then((data: AuthCapabilities) => {
+        setCapabilities(data);
+        if (method === "email" && !data.emailOtp) {
+          setMethod(data.whatsapp ? "whatsapp" : "password");
+        }
+      })
+      .catch(() => {
+        // Keep only the password path visible if the capability contract fails.
+        setCapabilities((current) => ({ ...current, emailOtp: false, google: false, whatsapp: false }));
+        setMethod("password");
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const selectMethod = (next: RegistrationMethod) => {
+    setMethod(next);
+    setErrorMsg("");
+    setEmailMsg("");
+    setPasswordMsg("");
+    if (next !== "whatsapp") {
+      setStep("phone");
+      setOtp("");
+    }
+  };
+
+  const startGoogleRegistration = () => {
+    if (!capabilities.google) return;
+    const query = new URLSearchParams({ returnTo: "/onboarding", portal: "1" });
+    window.location.assign(`${BASE}/api/login/google?${query.toString()}`);
+  };
+
+  const sendEmailOtp = async () => {
+    setEmailMsg("");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setEmailMsg("Masukkan alamat email yang valid.");
+      return;
+    }
+    setEmailLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/portal/auth/otp/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const json = await res.json() as { message?: string; _dev_code?: string };
+      if (!res.ok) {
+        setEmailMsg(json.message ?? "Gagal mengirim OTP email.");
+      } else {
+        setEmailStep("code");
+        setEmailMsg(json.message ?? "Kode OTP telah dikirim ke email Anda.");
+        if (json._dev_code) setEmailCode(json._dev_code);
+      }
+    } catch {
+      setEmailMsg("Gagal menghubungi server.");
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const verifyEmailOtp = async () => {
+    setEmailMsg("");
+    if (emailCode.trim().length !== 6) {
+      setEmailMsg("Masukkan kode OTP 6 digit.");
+      return;
+    }
+    setEmailLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/portal/auth/otp/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: email.trim(), code: emailCode.trim() }),
+      });
+      const json = await res.json() as {
+        token?: string;
+        isNew?: boolean;
+        message?: string;
+        user?: { id: number; role: string; name: string; email: string };
+      };
+      if (!res.ok || !json.token || !json.user) {
+        setEmailMsg(json.message ?? "Kode OTP tidak valid.");
+        return;
+      }
+      setPortalProfile({ customerId: json.user.id, role: json.user.role, name: json.user.name, email: json.user.email });
+      // New email identities enter the same canonical onboarding as WA/Google.
+      // Existing accounts are also sent through the status-aware onboarding
+      // route, which redirects completed profiles to their portal.
+      setLocation(returnTo && !json.isNew ? returnTo : "/onboarding");
+    } catch {
+      setEmailMsg("Gagal menghubungi server.");
+    } finally {
+      setEmailLoading(false);
+    }
+  };
+
+  const registerWithPassword = async () => {
+    setPasswordMsg("");
+    if (passwordName.trim().length < 3) {
+      setPasswordMsg("Nama minimal 3 karakter.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(passwordEmail.trim())) {
+      setPasswordMsg("Masukkan alamat email yang valid.");
+      return;
+    }
+    if (passwordValue.length < 8) {
+      setPasswordMsg("Password minimal 8 karakter.");
+      return;
+    }
+    setPasswordLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/portal/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: passwordName.trim(), email: passwordEmail.trim(), password: passwordValue, role: "customer" }),
+      });
+      const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
+      if (!res.ok || !json.token || !json.user) {
+        setPasswordMsg(json.message ?? "Registrasi password gagal.");
+        return;
+      }
+      setPortalProfile({ customerId: json.user.id, role: json.user.role, name: json.user.name, email: json.user.email });
+      setLocation("/onboarding");
+    } catch {
+      setPasswordMsg("Gagal menghubungi server.");
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
 
   const sendOtp = async () => {
     setErrorMsg("");
@@ -186,6 +342,31 @@ export default function Register() {
   };
 
   const stepNumber = step === "phone" ? 1 : step === "otp" ? 2 : 3;
+  const methodTitle = method === "whatsapp"
+    ? t("registerPage.title")
+    : method === "email"
+      ? "Registrasi via Email OTP"
+      : method === "google"
+        ? "Registrasi via Google"
+        : "Registrasi dengan Password";
+  const methodDescription = method === "whatsapp"
+    ? (step === "phone" ? t("registerPage.stepPhoneDesc") : step === "otp" ? t("registerPage.stepOtpDesc") : t("registerPage.stepProfileDesc"))
+    : method === "email"
+      ? (emailStep === "email" ? "Gunakan email terverifikasi untuk membuat akun." : "Masukkan kode OTP yang dikirim ke email Anda.")
+      : method === "google"
+        ? "Gunakan akun Google terverifikasi untuk membuat akun."
+        : method === "password"
+          ? "Buat akun dengan email dan password."
+        : "Registrasi";
+  const displayStep = method === "whatsapp" ? stepNumber : method === "email" && emailStep === "code" ? 2 : 1;
+  const displayTotal = method === "whatsapp" ? 3 : method === "email" ? 2 : 1;
+
+  const methodOptions: Array<{ id: RegistrationMethod; label: string; available: boolean }> = [
+    { id: "email", label: "Email OTP", available: capabilities.emailOtp },
+    { id: "google", label: "Google", available: capabilities.google },
+    { id: "whatsapp", label: "WhatsApp", available: capabilities.whatsapp },
+    { id: "password", label: "Password", available: capabilities.password },
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-white to-emerald-100 flex items-center justify-center p-4">
@@ -198,19 +379,17 @@ export default function Register() {
               </Button>
             </Link>
             <div className="text-xs font-medium bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">
-              Langkah {stepNumber} dari 3
+              Langkah {displayStep} dari {displayTotal}
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-emerald-500 text-white grid place-items-center">
-              <MessageCircle className="h-5 w-5" />
+              {method === "email" ? <Mail className="h-5 w-5" /> : method === "password" ? <LockKeyhole className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
             </div>
             <div>
-              <CardTitle className="text-xl">{t("registerPage.title")}</CardTitle>
+              <CardTitle className="text-xl">{methodTitle}</CardTitle>
               <CardDescription className="text-sm">
-                {step === "phone" && t("registerPage.stepPhoneDesc")}
-                {step === "otp" && t("registerPage.stepOtpDesc")}
-                {step === "profile" && t("registerPage.stepProfileDesc")}
+                {methodDescription}
               </CardDescription>
             </div>
           </div>
@@ -231,6 +410,81 @@ export default function Register() {
           )}
 
           {step === "phone" && (
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold">Pilih metode registrasi</p>
+                <p className="text-xs text-muted-foreground">Metode login dapat ditambahkan kemudian ke akun yang sama.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {methodOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={!option.available}
+                    onClick={() => selectMethod(option.id)}
+                    className={`rounded-lg border p-3 text-left text-sm transition ${
+                      method === option.id ? "border-emerald-500 bg-emerald-50" : "border-border"
+                    } ${!option.available ? "cursor-not-allowed opacity-50" : "hover:border-emerald-300"}`}
+                  >
+                    <span className="font-medium">{option.label}</span>
+                    {!option.available && <span className="mt-1 block text-[11px] text-muted-foreground">Belum tersedia</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {step === "phone" && method === "email" && (
+            <div className="space-y-4">
+              {emailMsg && <Alert variant={emailMsg.includes("berhasil") || emailMsg.includes("dikirim") ? "default" : "destructive"}><AlertCircle className="h-4 w-4" /><AlertDescription>{emailMsg}</AlertDescription></Alert>}
+              {emailStep === "email" ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>Email</Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input type="email" className="pl-10 h-12" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" onKeyDown={(e) => e.key === "Enter" && sendEmailOtp()} />
+                    </div>
+                  </div>
+                  <Button className="w-full h-12 bg-emerald-600 hover:bg-emerald-700" onClick={sendEmailOtp} disabled={emailLoading}>
+                    <Mail className="h-4 w-4 mr-2" /> {emailLoading ? "Mengirim..." : "Kirim Kode OTP"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">Kode OTP dikirim ke <strong>{email}</strong>.</p>
+                  <Input type="text" inputMode="numeric" maxLength={6} className="h-14 text-center text-2xl tracking-[0.5em] font-mono" value={emailCode} onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, "").slice(0, 6))} onKeyDown={(e) => e.key === "Enter" && verifyEmailOtp()} />
+                  <Button className="w-full h-12 bg-emerald-600 hover:bg-emerald-700" onClick={verifyEmailOtp} disabled={emailLoading}>
+                    {emailLoading ? "Memverifikasi..." : "Verifikasi & Lanjutkan"}
+                  </Button>
+                  <button type="button" className="w-full text-sm text-muted-foreground hover:text-foreground" onClick={() => { setEmailStep("email"); setEmailCode(""); setEmailMsg(""); }}>Ganti email / kirim ulang</button>
+                </>
+              )}
+            </div>
+          )}
+
+          {step === "phone" && method === "google" && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">Gunakan akun Google terverifikasi. Profil baru akan dilanjutkan ke onboarding.</p>
+              <Button className="w-full h-12" variant="outline" onClick={startGoogleRegistration}>
+                Lanjutkan dengan Google
+              </Button>
+            </div>
+          )}
+
+          {step === "phone" && method === "password" && (
+            <div className="space-y-4">
+              {passwordMsg && <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>{passwordMsg}</AlertDescription></Alert>}
+              <div className="space-y-2"><Label>Nama lengkap</Label><Input value={passwordName} onChange={(e) => setPasswordName(e.target.value)} placeholder="Budi Santoso" /></div>
+              <div className="space-y-2"><Label>Email</Label><Input type="email" value={passwordEmail} onChange={(e) => setPasswordEmail(e.target.value)} placeholder="you@company.com" /></div>
+              <div className="space-y-2"><Label>Password</Label><div className="relative"><LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="password" className="pl-10" value={passwordValue} onChange={(e) => setPasswordValue(e.target.value)} placeholder="Minimal 8 karakter" /></div></div>
+              <Button className="w-full h-12 bg-emerald-600 hover:bg-emerald-700" onClick={registerWithPassword} disabled={passwordLoading}>
+                {passwordLoading ? "Mendaftarkan..." : "Daftar dengan Password"}
+              </Button>
+            </div>
+          )}
+
+          {step === "phone" && method === "whatsapp" && (
             <>
               <div className="space-y-2">
                 <Label>{t("registerPage.phoneLabel")}</Label>

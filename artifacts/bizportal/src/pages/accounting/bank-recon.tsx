@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,16 +81,22 @@ export default function BankReconPage() {
   const [dateFrom, setDateFrom] = useState(firstDay);
   const [dateTo, setDateTo] = useState(today);
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [appliedFilters, setAppliedFilters] = useState({
+    dateFrom: firstDay,
+    dateTo: today,
+    statusFilter: "ALL",
+  });
+  const [refreshKey, setRefreshKey] = useState(0);
   const [rows, setRows] = useState<ReconRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (dateFrom) params.set("date_from", dateFrom);
-      if (dateTo)   params.set("date_to", dateTo);
-      if (statusFilter !== "ALL") params.set("status", statusFilter);
+      if (appliedFilters.dateFrom) params.set("date_from", appliedFilters.dateFrom);
+      if (appliedFilters.dateTo)   params.set("date_to", appliedFilters.dateTo);
+      if (appliedFilters.statusFilter !== "ALL") params.set("status", appliedFilters.statusFilter);
       const res = await fetch(`/api/bank-mutation-import/recon?${params}`);
       const data = await res.json();
       setRows(data.rows ?? []);
@@ -99,9 +105,9 @@ export default function BankReconPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [appliedFilters]);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { void loadData(); }, [loadData, refreshKey]);
 
   const statuses = rows.map(reconStatus);
   const matched   = statuses.filter(s => s === "MATCHED").length;
@@ -109,9 +115,9 @@ export default function BankReconPage() {
   const unmatched = statuses.filter(s => s === "UNMATCHED").length;
   const draft     = statuses.filter(s => s === "DRAFT").length;
 
-  const displayed = statusFilter === "ALL"
+  const displayed = appliedFilters.statusFilter === "ALL"
     ? rows
-    : rows.filter(r => reconStatus(r) === statusFilter);
+    : rows.filter(r => reconStatus(r) === appliedFilters.statusFilter);
 
   return (
     <div className="space-y-6 p-6">
@@ -166,7 +172,14 @@ export default function BankReconPage() {
             </SelectContent>
           </Select>
         </div>
-        <Button onClick={loadData} disabled={loading} className="h-8 gap-1.5 text-sm">
+        <Button
+          onClick={() => {
+            setAppliedFilters({ dateFrom, dateTo, statusFilter });
+            setRefreshKey(key => key + 1);
+          }}
+          disabled={loading}
+          className="h-8 gap-1.5 text-sm"
+        >
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
           Tampilkan
         </Button>

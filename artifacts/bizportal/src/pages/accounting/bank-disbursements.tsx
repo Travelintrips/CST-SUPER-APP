@@ -216,6 +216,15 @@ interface OutstandingInvoice {
   dueDate: string | null;
   currency: string;
   source: "purchase_document" | "vendor_invoice";
+  withholdingLines?: Array<{
+    lineTaxId: number;
+    invoiceLineId: number;
+    taxType: string;
+    taxObject: string;
+    taxAmount: number;
+    liabilityAccountId: number | null;
+    status: string;
+  }>;
 }
 
 interface OutstandingInvoicesResponse {
@@ -240,6 +249,7 @@ interface InvoicePaymentLine {
   dpp: number;
   taxAmount: number;
   expenseAccountId: number | null;
+  withholdingAllocations?: Array<{ lineTaxId: number; invoiceLineId: number; amount: number; liabilityAccountId: number }>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -288,7 +298,7 @@ interface TreasurySummaryResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function useApi(companyId: number | null | undefined) {
-  const headers = () => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") });
+  const headers = useCallback(() => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") }), [companyId]);
   const base = "/api";
   const cq = companyId ? `company=${companyId}` : "";
 
@@ -302,7 +312,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
     return Array.isArray(data) ? data : (data.data ?? []);
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchVendors = useCallback(async (): Promise<{ id: number; name: string }[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -311,7 +321,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) return [];
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchDetail = useCallback(async (id: number) => {
     const qs = cq ? `?${cq}` : "";
@@ -320,7 +330,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchJournals = useCallback(async (): Promise<Journal[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -331,7 +341,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     const list: Journal[] = Array.isArray(d) ? d : (d.data ?? []);
     return list.filter((j) => j.type === "bank" || j.type === "cash");
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchAccounts = useCallback(async (type?: string, subtype?: string, forTxType?: string): Promise<CoacAccount[]> => {
     const params = new URLSearchParams();
@@ -346,7 +356,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d) ? d : [];
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const createDisb = useCallback(async (body: object) => {
     const qs = companyId ? `?company=${companyId}` : "";
@@ -359,7 +369,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message ?? "Gagal menyimpan");
     return d;
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const voidDisb = useCallback(async (id: number, reason: string) => {
     const qs = companyId ? `?company=${companyId}` : "";
@@ -372,7 +382,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message ?? "Gagal void");
     return d;
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchOutstandingInvoices = useCallback(async (): Promise<OutstandingInvoicesResponse> => {
     const qs = cq ? `?${cq}` : "";
@@ -381,7 +391,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchSummary = useCallback(async (): Promise<TreasurySummaryResponse> => {
     const qs = cq ? `?${cq}` : "";
@@ -390,9 +400,9 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
-  return { fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors };
+  return useMemo(() => ({ fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors }), [fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -916,6 +926,10 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
       const whtAmount = inv.source === "vendor_invoice"
         ? Math.min(inv.withholdingTaxAmount, Math.max(0, inv.outstanding - 1))
         : 0;
+       const withholdingLines = inv.withholdingLines ?? [];
+       const withholdingAmount = withholdingLines.reduce((sum, line) => sum + line.taxAmount, 0);
+       const dpp = Math.max(0, inv.outstanding - withholdingAmount);
+       const taxAmount = withholdingAmount;
       onLinesChange([...lines, {
         purchaseDocumentId: inv.source === "purchase_document" ? inv.id : null,
         vendorInvoiceId: inv.source === "vendor_invoice" ? inv.id : null,
@@ -928,6 +942,17 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         whtAccountId: null,
         taxTreatment: "bayar_berikut",
         taxType: "ppn",
+         paymentAmount: dpp,
+         whtAmount: withholdingAmount,
+         whtAccountId: withholdingLines.length === 1 ? withholdingLines[0]!.liabilityAccountId : null,
+         withholdingAllocations: withholdingLines.map((line) => ({
+           lineTaxId: line.lineTaxId,
+           invoiceLineId: line.invoiceLineId,
+           amount: line.taxAmount,
+           liabilityAccountId: line.liabilityAccountId ?? 0,
+         })),
+         taxTreatment: withholdingAmount > 0 ? "setor_sendiri" : "bayar_berikut",
+         taxType: withholdingLines.map((line) => line.taxType).join(", ") || "ppn",
         dpp,
         taxAmount,
         expenseAccountId: null,
@@ -2570,7 +2595,7 @@ function CreateDisbDialog({
       })
       .catch((e) => toast({ title: "Gagal memuat invoice outstanding", description: String(e), variant: "destructive" }))
       .finally(() => setLoadingInvoices(false));
-  }, [open, paymentMode]);
+  }, [open, paymentMode, fetchOutstandingInvoices, initialInvoiceIds, toast]);
 
   const handleItemChange = (idx: number, field: keyof DisbursementItem, value: string | number | null) => {
     setItems((prev) => {
@@ -2618,8 +2643,10 @@ function CreateDisbDialog({
       const imbalanced = invoiceLines.find((l) => Math.abs((l.paymentAmount + l.whtAmount) - l.outstanding) > 1);
       if (imbalanced) { toast({ title: `Invoice ${imbalanced.docNumber}: Supplier Dibayar + Pajak Dipotong ≠ Grand Total`, variant: "destructive" }); return; }
       if (invoiceLines.some((l) => l.paymentAmount <= 0)) { toast({ title: "Jumlah bayar setiap invoice harus > 0", variant: "destructive" }); return; }
-      if (invoiceLines.some((l) => l.whtAmount > 0 && !l.whtAccountId)) { toast({ title: "Pilih akun WHT untuk setiap invoice yang ada WHT", variant: "destructive" }); return; }
-      if (invoiceLines.some((l) => !l.expenseAccountId)) { toast({ title: "Pilih akun pengeluaran (COA) untuk setiap invoice", variant: "destructive" }); return; }
+       if (invoiceLines.some((l) => l.whtAmount > 0 && (!l.withholdingAllocations?.length || l.withholdingAllocations.some((allocation) => !allocation.liabilityAccountId)))) {
+         toast({ title: "PPh harus memiliki alokasi liability per line", variant: "destructive" });
+         return;
+       }
     } else {
       if (items.some((it) => !it.accountId)) { toast({ title: "Semua item harus memilih akun", variant: "destructive" }); return; }
       if (items.some((it) => Number(it.amount) <= 0)) { toast({ title: "Jumlah setiap item harus > 0", variant: "destructive" }); return; }
@@ -2648,7 +2675,12 @@ function CreateDisbDialog({
             paymentAmount: l.paymentAmount,
             whtAmount: l.whtAmount || undefined,
             whtAccountId: l.whtAccountId || undefined,
-            expenseAccountId: l.expenseAccountId || undefined,
+             withholdingAllocations: l.withholdingAllocations?.map((allocation) => ({
+               lineTaxId: allocation.lineTaxId,
+               invoiceLineId: allocation.invoiceLineId,
+               amount: allocation.amount,
+               liabilityAccountId: allocation.liabilityAccountId,
+             })),
           })),
         });
       } else {
@@ -3340,7 +3372,7 @@ function DisbDetailDialog({
     if (!disbId) { setData(null); return; }
     setLoading(true);
     fetchDetail(disbId).then(setData).catch(console.error).finally(() => setLoading(false));
-  }, [disbId]);
+  }, [disbId, fetchDetail]);
 
   if (!disbId) return null;
 
@@ -3794,7 +3826,7 @@ export default function BankDisbursementsPage() {
       loadFormData();
       api.fetchVendors().then(setVendors).catch(() => {});
     }
-  }, [activeCompanyId]);
+  }, [activeCompanyId, api, loadFormData, loadTreasury]);
 
   // ── Load disbursements list (dengan filter vendor) ────────────────────────
   const loadDisbList = useCallback(async () => {
@@ -3812,7 +3844,7 @@ export default function BankDisbursementsPage() {
 
   useEffect(() => {
     if (activeCompanyId) loadDisbList();
-  }, [activeCompanyId, filterVendorId]);
+  }, [activeCompanyId, filterVendorId, loadDisbList]);
 
   // ── URL params: auto-open create dialog ───────────────────────────────────
   useEffect(() => {

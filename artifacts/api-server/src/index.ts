@@ -28,6 +28,8 @@ import { seedProductTemplates } from "./routes/productTemplates.js";
 import {
   runPortalCustomerOrganizationContractMigration,
   runPortalCustomerOrganizationMigration,
+  runPortalAuthIdentityMigration,
+  runPortalEmailOtpMigration,
   runPortalMigration,
 } from "./lib/portalMigration";
 import { runPortalPaymentCompanyMigration } from "./lib/portalPaymentCompanyMigration.js";
@@ -196,6 +198,7 @@ import { runFinanceGovernanceMigration } from "./lib/financeGovernanceMigration.
 import { startDriftMonitorWorker } from "./lib/monitoring/dataDriftDetector.js";
 import { runBankDisbursementMigration, runExpenseDisbursementBridgeMigration } from "./lib/bankDisbursementMigration.js";
 import { runVendorPaymentsMigration } from "./lib/vendorPaymentsMigration.js";
+import { runVendorPaymentHardeningMigration } from "./lib/vendorPaymentHardeningMigration.js";
 import { runKasBankMigration } from "./lib/kasBankMigration.js";
 import { runCashBankMigration } from "./lib/cashBankMigration.js";
 import { runFinanceCoreMigration } from "./lib/financeCoreMigration.js";
@@ -2039,6 +2042,8 @@ async function startServer() {
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
     .then(() => runWithRetry("Portal migration", runPortalMigration))
+    .then(() => runWithRetry("Portal auth identity migration", runPortalAuthIdentityMigration))
+    .then(() => runWithRetry("Portal email OTP migration", runPortalEmailOtpMigration))
     .then(() => runWithRetry("Portal customer organization migration", runPortalCustomerOrganizationMigration))
     .then(() => runWithRetry("Portal customer organization contract migration", runPortalCustomerOrganizationContractMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
@@ -2155,6 +2160,7 @@ async function startServer() {
     .then(() => runWithRetry("Bank disbursement migration", runBankDisbursementMigration))
     .then(() => runWithRetry("Expense-Disbursement bridge migration", runExpenseDisbursementBridgeMigration))
     .then(() => runWithRetry("Vendor payments migration (historical)", runVendorPaymentsMigration))
+    .then(() => runWithRetry("Vendor payment hardening migration", runVendorPaymentHardeningMigration))
     .then(() => runWithRetry("Kas Bank migration", runKasBankMigration))
     .then(() => runWithRetry("Cash Bank enterprise migration", runCashBankMigration))
     .then(() => runWithRetry("Finance core migration", runFinanceCoreMigration))

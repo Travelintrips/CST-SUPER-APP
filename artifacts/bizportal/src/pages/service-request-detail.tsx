@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -127,7 +127,7 @@ export default function ServiceRequestDetailPage() {
   const [itemNotes, setItemNotes] = useState("");
   const [newItemStatus, setNewItemStatus] = useState("");
 
-  async function fetchDetail() {
+  const fetchDetail = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/admin/service-requests/${params.id}`);
@@ -141,9 +141,9 @@ export default function ServiceRequestDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [params.id, toast]);
 
-  useEffect(() => { fetchDetail(); }, [params.id]);
+  useEffect(() => { void fetchDetail(); }, [fetchDetail]);
 
   async function updateStatus(status: string) {
     setActionLoading(true);

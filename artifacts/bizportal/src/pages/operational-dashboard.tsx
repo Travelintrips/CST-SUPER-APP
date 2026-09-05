@@ -265,7 +265,7 @@ export default function OperationalDashboardPage() {
         setNewOrderNums(new Set());
       }, 12_000);
     }
-  }, [dataUpdatedAt, soundEnabled]);
+  }, [dataUpdatedAt, data?.recentOrders, soundEnabled]);
 
   useEffect(() => () => {
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);

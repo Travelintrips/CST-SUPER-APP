@@ -413,7 +413,10 @@ export default function SportCenterDashboard() {
   // Section data
   const byStatus       = hasSupaBookings ? (supaData?.byStatus       ?? []) : (localData?.byStatus       ?? []);
   const topFacilities  = hasSupaBookings ? (supaData?.topFacilities  ?? []) : (localData?.topFacilities  ?? []);
-  const recentBookings = hasSupaBookings ? (supaData?.recentBookings ?? []) : (localData?.recentBookings ?? []);
+  const recentBookings = useMemo(
+    () => hasSupaBookings ? (supaData?.recentBookings ?? []) : (localData?.recentBookings ?? []),
+    [hasSupaBookings, supaData?.recentBookings, localData?.recentBookings],
+  );
 
   useEffect(() => {
     if (cardFilter && cardFilter !== "all" && bookingTableRef.current) {
@@ -477,6 +480,10 @@ export default function SportCenterDashboard() {
   });
 
   useEffect(() => {
+    pushBookingsDone.current = false;
+  }, [activeCompanyId]);
+
+  useEffect(() => {
     if (pushBookingsDone.current) return;
     if (!supaData) return;
     const localCount = syncData?.local?.bookings ?? null;
@@ -488,7 +495,7 @@ export default function SportCenterDashboard() {
     void fetchAllBookingsFromSportCenter().then((data) => {
       if (data && data.length > 0) void pushBookings.mutateAsync(data);
     }).catch(() => {});
-  }, [supaData, syncData, activeCompanyId]);
+  }, [supaData, syncData, activeCompanyId, pushBookings]);
 
   // ── Mutations: trigger resync manual ─────────────────────────────────────
   const resyncFacilities = useMutation({

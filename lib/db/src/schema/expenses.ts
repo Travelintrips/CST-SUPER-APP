@@ -80,6 +80,28 @@ export const expensesTable = pgTable("expenses", {
   index("expenses_disbursement_idx").on(t.disbursementId),
 ]);
 
+export const expenseLinesTable = pgTable("expense_lines", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
+  expenseId: integer("expense_id").notNull().references(() => expensesTable.id, { onDelete: "cascade" }),
+  lineNo: integer("line_no").notNull().default(1),
+  description: text("description").notNull(),
+  qty: numeric("qty", { precision: 14, scale: 4 }).notNull().default("1"),
+  unit: text("unit"),
+  unitPrice: numeric("unit_price", { precision: 14, scale: 2 }).notNull().default("0"),
+  subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  total: numeric("total", { precision: 14, scale: 2 }).notNull().default("0"),
+  coaAccountId: integer("coa_account_id").notNull().references(() => chartOfAccountsTable.id, { onDelete: "restrict" }),
+  coaResolutionStatus: text("coa_resolution_status").notNull().default("confirmed"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("expense_lines_expense_line_no_uniq").on(t.expenseId, t.lineNo),
+  index("expense_lines_company_idx").on(t.companyId),
+  index("expense_lines_expense_idx").on(t.expenseId),
+]);
+
 export const expenseAttachmentsTable = pgTable("expense_attachments", {
   id: serial("id").primaryKey(),
   expenseId: integer("expense_id").notNull(),
@@ -103,6 +125,7 @@ export const insertExpenseSchema = createInsertSchema(expensesTable).omit({
 
 export type ExpenseCategory = typeof expenseCategoriesTable.$inferSelect;
 export type Expense = typeof expensesTable.$inferSelect;
+export type ExpenseLine = typeof expenseLinesTable.$inferSelect;
 export type ExpenseAttachment = typeof expenseAttachmentsTable.$inferSelect;
 export type InsertExpenseCategory = z.infer<typeof insertExpenseCategorySchema>;
 export type InsertExpense = z.infer<typeof insertExpenseSchema>;

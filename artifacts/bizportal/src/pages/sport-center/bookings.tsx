@@ -87,6 +87,11 @@ export default function SportCenterBookings() {
     base_amount: "0", total_amount: "0", notes: "",
   });
 
+  useEffect(() => {
+    pushDoneRef.current = false;
+    syncLegacyDoneRef.current = false;
+  }, [activeCompanyId]);
+
   const { data, isLoading } = useQuery<{ data: Booking[]; total: number }>({
     queryKey: ["sport-center-bookings", activeCompanyId, statusFilter, paymentFilter, dateFilter, searchText, page, pageSize],
     queryFn: async () => {
@@ -219,7 +224,7 @@ export default function SportCenterBookings() {
     if (!supaBookings || supaBookings.length === 0) return;
     pushDoneRef.current = true;
     pushMutation.mutate(supaBookings);
-  }, [isLoading, supaLoading, showingSupabase, supaBookings]);
+  }, [isLoading, supaLoading, showingSupabase, supaBookings, pushMutation]);
 
   // ── Supabase Realtime: pantau sport_center.bookings + sport_center.payments ──
   useEffect(() => {
@@ -392,8 +397,7 @@ export default function SportCenterBookings() {
     if (!supaBookings || supaBookings.length === 0) return;
     syncLegacyDoneRef.current = true;
     void syncLegacyMutation.mutateAsync(supaBookings).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supaBookings]);
+  }, [supaBookings, syncLegacyMutation]);
 
   const handleFacilityChange = (facilityId: string) => {
     const f = facilities?.find((x) => String(x.id) === facilityId);

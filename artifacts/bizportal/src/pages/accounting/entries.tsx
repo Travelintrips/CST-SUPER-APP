@@ -352,9 +352,8 @@ export default function EntriesPage() {
 
   const journalLabel = (id: number) => journals?.find((j) => j.id === id)?.code ?? `#${id}`;
 
-  const allRows = entries ?? [];
   const rows = useMemo(() => {
-    let r = allRows;
+    let r = entries ?? [];
     if (filter.source) r = r.filter((e) => e.source === filter.source);
     if (filter.search) {
       const q = filter.search.toLowerCase();
@@ -364,7 +363,7 @@ export default function EntriesPage() {
       );
     }
     return r;
-  }, [allRows, filter.source, filter.search]);
+  }, [entries, filter.source, filter.search]);
 
   const allSelected = rows.length > 0 && rows.every((e) => selected.has(e.id));
   const someSelected = rows.some((e) => selected.has(e.id));

@@ -162,7 +162,7 @@ function GojekUploadTab() {
       setPollEnabled(false);
       refetchReports();
     }
-  }, [progressData?.status]);
+  }, [progressData, refetchReports]);
 
   const previewMutation = useMutation({
     mutationFn: async () => {

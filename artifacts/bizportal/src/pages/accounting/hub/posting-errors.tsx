@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,18 +35,20 @@ export default function AccountingHubPostingErrorsPage() {
   const [error, setError]         = useState<string | null>(null);
   const [page, setPage]           = useState(1);
   const [onlyUnresolved, setOnlyUnresolved] = useState(true);
+  const [appliedOnlyUnresolved, setAppliedOnlyUnresolved] = useState(true);
   const [filters, setFilters]     = useState({ company_id: "", source_module: "" });
+  const [appliedFilters, setAppliedFilters] = useState({ company_id: "", source_module: "" });
   const [resolveDialog, setResolveDialog] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
   const [resolveNote, setResolveNote] = useState("");
   const [resolveLoading, setResolveLoading] = useState(false);
   const limit = 50;
 
-  const load = async (p = page) => {
+  const load = useCallback(async (p: number) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ page: String(p), limit: String(limit), unresolved: String(onlyUnresolved) });
-      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+      const params = new URLSearchParams({ page: String(p), limit: String(limit), unresolved: String(appliedOnlyUnresolved) });
+      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const res = await fetch(`/api/accounting/hub/posting-errors?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
@@ -61,9 +63,9 @@ export default function AccountingHubPostingErrorsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters, appliedOnlyUnresolved]);
 
-  useEffect(() => { load(1); setPage(1); }, [onlyUnresolved]);
+  useEffect(() => { void load(1); setPage(1); }, [load]);
 
   const handleResolve = async () => {
     if (!resolveDialog.id) return;
@@ -123,7 +125,11 @@ export default function AccountingHubPostingErrorsPage() {
               <Switch checked={onlyUnresolved} onCheckedChange={setOnlyUnresolved} />
               <span className="text-sm">Hanya belum diselesaikan</span>
             </div>
-            <Button size="sm" onClick={() => { setPage(1); load(1); }}>Terapkan</Button>
+            <Button size="sm" onClick={() => {
+              setPage(1);
+              setAppliedFilters({ ...filters });
+              setAppliedOnlyUnresolved(onlyUnresolved);
+            }}>Terapkan</Button>
           </div>
         </CardContent>
       </Card>
@@ -144,7 +150,7 @@ export default function AccountingHubPostingErrorsPage() {
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">
-                {loading ? "Memuat..." : onlyUnresolved ? "🎉 Tidak ada error posting yang belum diselesaikan" : "Tidak ada data"}
+                 {loading ? "Memuat..." : appliedOnlyUnresolved ? "🎉 Tidak ada error posting yang belum diselesaikan" : "Tidak ada data"}
               </td></tr>
             ) : rows.map(r => (
               <tr key={r.id} className="border-t hover:bg-muted/40">

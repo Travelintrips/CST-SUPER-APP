@@ -25,6 +25,8 @@ export * from "./expenses";
 export * from "./emailCorrespondences";
 export * from "./freightCustomsDocs";
 export * from "./portalCustomers";
+export * from "./portalAuthIdentities";
+export * from "./portalEmailOtpCodes";
 export * from "./logisticOrders";
 export * from "./vendorRates";
 export * from "./drivers";
@@ -172,3 +174,4 @@ export * from "./payroll";
 
 // ── COA Proposal Engine (Task #7) ─────────────────────────────────────────────
 export * from "./coaProposals";
+export * from "./purchaseWorkflow";

@@ -226,6 +226,26 @@ export async function runPortalMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS wa_otp_token_idx ON wa_otp_codes (verify_token)
     `);
 
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS portal_email_otp_codes (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        verified BOOLEAN NOT NULL DEFAULT FALSE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS portal_email_otp_email_idx
+        ON portal_email_otp_codes (email)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS portal_email_otp_created_idx
+        ON portal_email_otp_codes (created_at)
+    `);
+
     // Buat tabel trusted_devices jika belum ada
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS trusted_devices (
@@ -242,10 +262,103 @@ export async function runPortalMigration(): Promise<void> {
       ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS avatar_url TEXT
     `);
 
-    logger.info("Portal migration: selesai (role + account status + portal_content + admin email promotion + quote_requests + media_assets + wa_otp_codes + trusted_devices + avatar_url)");
+    // Durable provider identities. portal_customers remains the canonical
+    // account; this table prevents duplicate profiles across login methods.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS portal_auth_identities (
+        id SERIAL PRIMARY KEY,
+        customer_id INTEGER NOT NULL REFERENCES portal_customers(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS portal_auth_identity_provider_subject_unique
+        ON portal_auth_identities (provider, subject)
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS portal_auth_identity_customer_provider_unique
+        ON portal_auth_identities (customer_id, provider)
+    `);
+    // Backfill only deterministic legacy Google identities. Conflicts are
+    // intentionally ignored so a malformed legacy duplicate cannot merge users.
+    await db.execute(sql`
+      INSERT INTO portal_auth_identities (customer_id, provider, subject)
+      SELECT pc.id, 'google', pc.oauth_id
+      FROM portal_customers pc
+      WHERE pc.oauth_provider = 'google'
+        AND pc.oauth_id IS NOT NULL
+      ON CONFLICT DO NOTHING
+    `);
+
+    logger.info("Portal migration: selesai (role + account status + portal_content + admin email promotion + quote_requests + media_assets + wa_otp_codes + trusted_devices + avatar_url + auth identities)");
   } catch (err) {
     logger.error({ err }, "Portal migration gagal");
   }
+}
+
+/**
+ * Additive repair for provider identity linking. This must remain a separate
+ * startup stage because existing databases may already have completed the
+ * legacy portal migration marker.
+ */
+export async function runPortalAuthIdentityMigration(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS portal_auth_identities (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES portal_customers(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS portal_auth_identity_provider_subject_unique
+      ON portal_auth_identities (provider, subject)
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS portal_auth_identity_customer_provider_unique
+      ON portal_auth_identities (customer_id, provider)
+  `);
+  await db.execute(sql`
+    INSERT INTO portal_auth_identities (customer_id, provider, subject)
+    SELECT pc.id, 'google', pc.oauth_id
+    FROM portal_customers pc
+    WHERE pc.oauth_provider = 'google'
+      AND pc.oauth_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `);
+}
+
+/**
+ * Additive repair for the separate email OTP challenge store. Keeping this
+ * independent prevents the legacy reset-token migration marker from hiding it.
+ */
+export async function runPortalEmailOtpMigration(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS portal_email_otp_codes (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      verified BOOLEAN NOT NULL DEFAULT FALSE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS portal_email_otp_email_idx
+      ON portal_email_otp_codes (email)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS portal_email_otp_created_idx
+      ON portal_email_otp_codes (created_at)
+  `);
 }
 
 /**

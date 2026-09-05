@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,11 +43,7 @@ export default function AiChatbotSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/ai-agent/settings", {
@@ -62,7 +58,11 @@ export default function AiChatbotSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [t.common.error, toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function handleSave() {
     setSaving(true);

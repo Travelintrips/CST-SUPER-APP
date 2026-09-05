@@ -62,7 +62,7 @@ export default function QcEditorPage() {
         notes: "",
       })));
     }
-  }, [grData, isNew]);
+  }, [grData, isNew, lines.length]);
 
   const saveMut = useMutation({
     mutationFn: async () => {

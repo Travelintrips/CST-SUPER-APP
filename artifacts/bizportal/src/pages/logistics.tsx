@@ -193,7 +193,7 @@ export default function LogisticsPage() {
     if (newUrl !== currentFull) {
       navigate(newUrl, { replace: true });
     }
-  }, [freightStatusFilter, freightSortOrder, freightDateFilter, customDateFrom, customDateTo]);
+  }, [freightStatusFilter, freightSortOrder, freightDateFilter, customDateFrom, customDateTo, location, navigate, rawSearch]);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 

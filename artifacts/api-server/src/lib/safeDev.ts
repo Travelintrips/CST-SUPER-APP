@@ -59,6 +59,43 @@ function isAllowedDevelopmentMapsRequest(url: URL): boolean {
     || url.pathname === "/maps/api/distancematrix/json";
 }
 
+/**
+ * Invoice OCR is an explicit development-preview capability. Allow only the
+ * configured OpenAI endpoint, never arbitrary external HTTP. E2E runs remain
+ * fully fail-closed even when a caller accidentally inherits the preview flag.
+ */
+function isAllowedDevelopmentAiRequest(url: URL): boolean {
+  if (
+    process.env.APP_ENV !== "development"
+    || process.env.ALLOW_DEV_AI_REQUESTS !== "true"
+    || process.env.E2E_TEST_MODE === "true"
+  ) {
+    return false;
+  }
+
+  const allowedBases: string[] = [];
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    allowedBases.push(process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1");
+  }
+  if (
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY?.trim()
+    && process.env.AI_INTEGRATIONS_OPENAI_BASE_URL?.trim()
+  ) {
+    allowedBases.push(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL.trim());
+  }
+  if (allowedBases.length === 0) return false;
+
+  return allowedBases.some((raw) => {
+    try {
+      const base = new URL(raw);
+      return base.origin === url.origin
+        && (base.pathname === "/" || url.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/"));
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Returns true when either SAFE_DEV_TEST_MODE or E2E_TEST_MODE is active. */
 export function externalIntegrationsDisabled(): boolean {
   return isSafeDevTestMode() || process.env.E2E_TEST_MODE === "true";
@@ -90,6 +127,7 @@ export function installSafeDevOutboundGuard(): void {
       !isLocal
       && !isAllowedDevelopmentStorageRequest(parsed)
       && !isAllowedDevelopmentMapsRequest(parsed)
+      && !isAllowedDevelopmentAiRequest(parsed)
     ) {
       if (!outboundBlockLogged) {
         outboundBlockLogged = true;

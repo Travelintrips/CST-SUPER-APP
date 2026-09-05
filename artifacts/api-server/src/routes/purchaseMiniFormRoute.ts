@@ -358,11 +358,11 @@ async function autoPostVendorInvoice(
       "autoPostVendorInvoice: berhasil diposting ke accounting",
     );
   } catch (e) {
-    // Tetap mark posted meski journal gagal — tidak blokir vendor
-    logger.error({ e, viId: vi.id }, "autoPostVendorInvoice: journal entry gagal — mark posted tanpa entry");
+    // A failed journal must leave the invoice draft so it can be retried safely.
+    logger.error({ e, viId: vi.id }, "autoPostVendorInvoice: journal entry gagal — invoice tetap draft");
     await db
       .update(vendorInvoicesTable)
-      .set({ status: "posted", threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() })
+      .set({ status: "draft", threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() })
       .where(eq(vendorInvoicesTable.id, vi.id));
   }
 }

@@ -1,8 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -57,32 +56,57 @@ export default function ServiceRequestsPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [submittedSearch, setSubmittedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [tradeTypeFilter, setTradeTypeFilter] = useState("all");
+  const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const requestVersionRef = useRef(0);
 
-  async function fetchRequests() {
+  const fetchRequests = useCallback(async (searchTerm = submittedSearch) => {
+    const requestVersion = ++requestVersionRef.current;
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
+      if (searchTerm) params.set("search", searchTerm);
       if (statusFilter !== "all") params.set("status", statusFilter);
       if (tradeTypeFilter !== "all") params.set("tradeType", tradeTypeFilter);
       params.set("limit", "100");
-      const res = await fetch(`/api/admin/service-requests?${params}`);
+      const res = await fetch(`/api/admin/service-requests?${params}`, { signal: controller.signal });
       if (!res.ok) throw new Error("Gagal fetch");
       const data = await res.json();
-      setRequests(data.requests ?? []);
-      setTotal(data.total ?? 0);
+      if (requestVersion === requestVersionRef.current) {
+        setRequests(data.requests ?? []);
+        setTotal(data.total ?? 0);
+      }
+    } catch (error) {
+      const errorName = (error as { name?: unknown } | null)?.name;
+      if (errorName !== "AbortError" && requestVersion === requestVersionRef.current) {
+        setError(error instanceof Error ? error.message : "Gagal memuat service request");
+      }
     } finally {
-      setLoading(false);
+      if (requestVersion === requestVersionRef.current) {
+        setLoading(false);
+      }
     }
-  }
+  }, [submittedSearch, statusFilter, tradeTypeFilter]);
 
-  useEffect(() => { fetchRequests(); }, [statusFilter, tradeTypeFilter]);
+  useEffect(() => {
+    void fetchRequests();
+    return () => abortControllerRef.current?.abort();
+  }, [fetchRequests]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    fetchRequests();
+    if (search === submittedSearch) {
+      void fetchRequests(search);
+    } else {
+      setSubmittedSearch(search);
+    }
   };
 
   return (
@@ -95,11 +119,13 @@ export default function ServiceRequestsPage() {
               Screening & persetujuan permintaan layanan pelanggan
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={fetchRequests}>
+          <Button variant="outline" size="sm" onClick={() => void fetchRequests()}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         </div>
+
+        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
         <Card>
           <CardContent className="pt-4">

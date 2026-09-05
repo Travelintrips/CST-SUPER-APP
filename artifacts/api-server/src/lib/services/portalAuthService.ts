@@ -9,6 +9,7 @@ import {
   portalCustomersTable,
   portalCustomerServicesTable,
   waOtpCodesTable,
+  portalEmailOtpCodesTable,
   trustedDevicesTable,
   userProfilesTable,
   portalCustomerProfilesTable,
@@ -22,11 +23,17 @@ import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { normalizePhone } from "../phoneUtils.js";
 import { captureSafeDevResetArtifact } from "../safeDevResetCapture.js";
+import { isSafeDevTestMode } from "../safeDev.js";
 import {
   configureCustomerOrganization,
   resolveSelectableCustomerPortalCompany,
 } from "./portalCustomerOrganizationService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
+import {
+  linkPortalEmailIdentity,
+  linkPortalPasswordIdentity,
+  linkPortalWhatsAppIdentity,
+} from "./portalIdentityService.js";
 
 function assertAccountUsable(customer: {
   accountStatus?: string | null;
@@ -170,6 +177,7 @@ export async function emailPasswordLogin(email: string, password: string) {
   if (!valid) {
     throw new AuthServiceError(401, "Email atau password salah.");
   }
+  await linkPortalPasswordIdentity(customer.id, customer.email);
 
   const token = await signPortalJwt({
     sub: String(customer.id),
@@ -200,7 +208,7 @@ export async function emailPasswordLogin(email: string, password: string) {
 export async function sendWaOtp(rawPhone: string) {
   // BLK-02 fix: use REPLIT_DEPLOYMENT as the canonical production signal (per ADR-0001 / envGuard)
   const isDev = !process.env.REPLIT_DEPLOYMENT;
-  const hasFonnte = !!process.env.FONNTE_TOKEN;
+  const hasFonnte = !isSafeDevTestMode() && !!process.env.FONNTE_TOKEN;
 
   const normalized = normalizePhoneID(rawPhone);
   if (normalized.length < 10) {
@@ -435,6 +443,7 @@ export async function waRegister(params: {
     customerId: created.id,
     role: created.role,
   });
+  await linkPortalWhatsAppIdentity(created.id, phone);
 
   return {
     token,
@@ -493,6 +502,7 @@ export async function waLogin(
   }
   const user = matches[0];
   assertAccountUsable(user);
+  await linkPortalWhatsAppIdentity(user.id, otp.phone);
 
   // Invalidate verifyToken — clear both plaintext AND hash, force expiry for true single-use semantics
   await db.update(waOtpCodesTable)
@@ -773,6 +783,7 @@ export async function signup(params: {
     customerId: created.id,
     role: created.role,
   });
+  await linkPortalPasswordIdentity(created.id, created.email);
 
   return {
     token,
@@ -984,37 +995,34 @@ export async function requestEmailOtp(email: string) {
     throw new AuthServiceError(400, "Format email tidak valid.");
   }
 
-  let [customer] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, emailLower));
-  if (!customer) {
-    const [created] = await db
-      .insert(portalCustomersTable)
-      .values({
-        name: emailLower.split("@")[0],
-        email: emailLower,
-        passwordHash: "",
-        role: "customer",
-      })
-      .returning();
-    customer = created;
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  const recent = await db
+    .select({ id: portalEmailOtpCodesTable.id })
+    .from(portalEmailOtpCodesTable)
+    .where(and(
+      eq(portalEmailOtpCodesTable.email, emailLower),
+      gte(portalEmailOtpCodesTable.createdAt, tenMinAgo),
+    ));
+  if (recent.length >= 3) {
+    throw new AuthServiceError(429, "Terlalu banyak permintaan OTP. Coba lagi nanti.");
   }
 
   // Use CSPRNG (crypto.randomInt) — consistent with WA OTP path
   const code = randomInt(100000, 1000000).toString();
-  // Store as "otp2:0:HASH" — "otp2" prefix, attempt counter (0), bcrypt hash
   const codeHash = await bcrypt.hash(code, 10);
   const expiry = new Date(Date.now() + 10 * 60 * 1000);
-  await db
-    .update(portalCustomersTable)
-    .set({ resetPasswordToken: `otp2:0:${codeHash}`, resetPasswordExpiry: expiry })
-    .where(eq(portalCustomersTable.id, customer.id));
+  const [challenge] = await db.insert(portalEmailOtpCodesTable).values({
+    email: emailLower,
+    codeHash,
+    expiresAt: expiry,
+  }).returning({ id: portalEmailOtpCodesTable.id });
 
   const smtpOk = isSmtpConfigured();
 
   // Production: SMTP wajib — langsung 503 agar user tahu email tidak terkirim
   if (!smtpOk && !isDev) {
+    await db.delete(portalEmailOtpCodesTable)
+      .where(eq(portalEmailOtpCodesTable.id, challenge.id));
     throw new AuthServiceError(503, "Layanan email belum dikonfigurasi. Hubungi admin.");
   }
 
@@ -1030,10 +1038,8 @@ export async function requestEmailOtp(email: string) {
       // Production: SMTP failure = hard error agar user tahu email tidak terkirim
       // Dev: non-fatal; _dev_code dikembalikan di bawah
       if (!isDev) {
-        await db
-          .update(portalCustomersTable)
-          .set({ resetPasswordToken: null, resetPasswordExpiry: null })
-          .where(eq(portalCustomersTable.id, customer.id));
+        await db.delete(portalEmailOtpCodesTable)
+          .where(eq(portalEmailOtpCodesTable.id, challenge.id));
         throw new AuthServiceError(500, "Gagal mengirim email OTP. Coba lagi atau hubungi admin.", { cause: smtpErr });
       }
     }
@@ -1058,55 +1064,66 @@ export async function requestEmailOtp(email: string) {
 export async function verifyEmailOtp(email: string, code: string) {
   const emailLower = String(email).toLowerCase().trim();
 
-  const [customer] = await db
+  const [challenge] = await db
     .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, emailLower));
-  if (!customer) throw new AuthServiceError(401, "Email tidak terdaftar.");
-
-  const stored = customer.resetPasswordToken;
-  const expiry = customer.resetPasswordExpiry;
-
-  if (!stored || (!stored.startsWith("otp:") && !stored.startsWith("otp2:"))) {
-    throw new AuthServiceError(401, "Tidak ada OTP aktif. Minta kode baru.");
-  }
-  if (!expiry || expiry < new Date()) {
+    .from(portalEmailOtpCodesTable)
+    .where(and(
+      eq(portalEmailOtpCodesTable.email, emailLower),
+      eq(portalEmailOtpCodesTable.verified, false),
+    ))
+    .orderBy(desc(portalEmailOtpCodesTable.createdAt))
+    .limit(1);
+  if (!challenge) throw new AuthServiceError(401, "Tidak ada OTP aktif. Minta kode baru.");
+  if (challenge.expiresAt < new Date()) {
     throw new AuthServiceError(401, "Kode OTP sudah kadaluarsa.");
   }
-
-  let valid = false;
-
-  if (stored.startsWith("otp2:")) {
-    // New format: "otp2:ATTEMPTS:HASH"
-    const parts = stored.split(":");
-    if (parts.length < 3) throw new AuthServiceError(401, "Format OTP tidak valid.");
-    const attempts = parseInt(parts[1], 10) || 0;
-    if (attempts >= 5) {
-      throw new AuthServiceError(429, "Terlalu banyak percobaan. Minta OTP baru.");
-    }
-    const hash = parts.slice(2).join(":"); // bcrypt hash may contain colons
-    valid = await bcrypt.compare(String(code).trim(), hash);
-    if (!valid) {
-      await db
-        .update(portalCustomersTable)
-        .set({ resetPasswordToken: `otp2:${attempts + 1}:${hash}` })
-        .where(eq(portalCustomersTable.id, customer.id));
-      throw new AuthServiceError(401, "Kode OTP salah.");
-    }
-  } else {
-    // Legacy format: "otp:CODE" (plaintext, for OTPs generated before this fix)
-    if (stored.slice(4) !== String(code).trim()) {
-      throw new AuthServiceError(401, "Kode OTP salah.");
-    }
-    valid = true;
+  if (challenge.attempts >= 5) {
+    throw new AuthServiceError(429, "Terlalu banyak percobaan. Minta OTP baru.");
+  }
+  const valid = await bcrypt.compare(String(code).trim(), challenge.codeHash);
+  if (!valid) {
+    await db.update(portalEmailOtpCodesTable)
+      .set({ attempts: challenge.attempts + 1 })
+      .where(eq(portalEmailOtpCodesTable.id, challenge.id));
+    throw new AuthServiceError(401, "Kode OTP salah.");
   }
 
-  void valid; // consumed above
+  let customer: typeof portalCustomersTable.$inferSelect | undefined;
+  let isNew = false;
+  await db.transaction(async (tx) => {
+    [customer] = await tx
+      .select()
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.email, emailLower))
+      .limit(1);
 
-  await db
-    .update(portalCustomersTable)
-    .set({ resetPasswordToken: null, resetPasswordExpiry: null })
-    .where(eq(portalCustomersTable.id, customer.id));
+    if (!customer) {
+      try {
+        [customer] = await tx.insert(portalCustomersTable).values({
+          name: emailLower.split("@")[0],
+          email: emailLower,
+          passwordHash: "",
+          role: "customer",
+        }).returning();
+        isNew = true;
+      } catch (error) {
+        if ((error as { code?: string })?.code !== "23505") throw error;
+        [customer] = await tx
+          .select()
+          .from(portalCustomersTable)
+          .where(eq(portalCustomersTable.email, emailLower))
+          .limit(1);
+      }
+    }
+
+    await tx.update(portalEmailOtpCodesTable)
+      .set({ verified: true, expiresAt: new Date(0) })
+      .where(eq(portalEmailOtpCodesTable.id, challenge.id));
+  });
+
+  if (!customer) throw new AuthServiceError(500, "Akun portal gagal disiapkan.");
+  assertAccountUsable(customer);
+  await linkPortalEmailIdentity(customer.id, emailLower);
 
   const token = await signPortalJwt({
     sub: String(customer.id),
@@ -1117,6 +1134,7 @@ export async function verifyEmailOtp(email: string, code: string) {
 
   return {
     token,
+    isNew,
     user: {
       id: customer.id,
       name: customer.name,

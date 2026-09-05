@@ -13,6 +13,7 @@ import {
   accountingTaxesTable,
   accountingJournalsTable,
   companiesTable,
+  suppliersTable,
 } from "@workspace/db";
 import { requireAdmin, requireClerkUser } from "../lib/requireAdmin.js";
 import { postEntry } from "../lib/accounting.js";
@@ -20,6 +21,12 @@ import { voidAccountingEntry } from "../lib/accountingPostingService.js";
 import { createIdempotencyMiddleware } from "../lib/financial/idempotency.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import { auditFromReq, writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
+import {
+  allocateExpenseTax,
+  normalizeExpenseLines,
+  roundMoney,
+  type NormalizedExpenseLine,
+} from "../lib/expenseLinePolicy.js";
 
 const _expenseObjectStorage = new ObjectStorageService();
 const router = Router();
@@ -49,10 +56,107 @@ async function ensureExpenseColumns() {
     `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS transaction_type TEXT NOT NULL DEFAULT 'expense';`,
     `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ppn_input_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL;`,
     `ALTER TABLE expense_categories ADD COLUMN IF NOT EXISTS company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE;`,
+    `CREATE TABLE IF NOT EXISTS expense_lines (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      expense_id INTEGER NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+      line_no INTEGER NOT NULL DEFAULT 1,
+      description TEXT NOT NULL,
+      qty NUMERIC(14,4) NOT NULL DEFAULT 1,
+      unit TEXT,
+      unit_price NUMERIC(14,2) NOT NULL DEFAULT 0,
+      subtotal NUMERIC(14,2) NOT NULL DEFAULT 0,
+      tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      total NUMERIC(14,2) NOT NULL DEFAULT 0,
+      coa_account_id INTEGER NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+      coa_resolution_status TEXT NOT NULL DEFAULT 'confirmed',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT expense_lines_expense_line_no_uniq UNIQUE (expense_id, line_no)
+    );`,
+    `CREATE INDEX IF NOT EXISTS expense_lines_company_idx ON expense_lines(company_id);`,
+    `CREATE INDEX IF NOT EXISTS expense_lines_expense_idx ON expense_lines(expense_id);`,
   ];
   for (const stmt of stmts) {
     try { await db.execute(sql.raw(stmt)); } catch {}
   }
+  // Legacy/imported expense lines can leave the serial sequence behind the
+  // current MAX(id), causing the first canonical insert to fail on a line
+  // uniqueness conflict after the parent expense has been allocated.
+  try {
+    await db.execute(sql`
+      SELECT setval(
+        pg_get_serial_sequence('expense_lines', 'id'),
+        GREATEST(COALESCE((SELECT MAX(id) FROM expense_lines), 0) + 1, 1),
+        false
+      )
+    `);
+  } catch {}
+}
+
+async function validateExpenseAccounts(
+  companyId: number | null,
+  lines: NormalizedExpenseLine[],
+  sourceAccountId: number | null,
+) {
+  if (!companyId) throw new Error("Company context wajib tersedia untuk expense.");
+  if (!sourceAccountId || !Number.isInteger(sourceAccountId)) {
+    throw new Error("Akun sumber Bank/Kas wajib dipilih untuk direct expense.");
+  }
+  const ids = [...new Set([...lines.map((line) => line.coaAccountId), sourceAccountId])];
+  const rows = (await db.execute(sql.raw(
+    `SELECT id, type, company_id, is_postable, status
+       FROM chart_of_accounts
+      WHERE id IN (${ids.join(",")})`,
+  ))).rows as any[];
+  const byId = new Map(rows.map((row) => [Number(row.id), row]));
+  for (const line of lines) {
+    const account = byId.get(line.coaAccountId);
+    if (!account || (account.company_id != null && Number(account.company_id) !== companyId) ||
+        account.is_postable === false || String(account.status).toUpperCase() !== "ACTIVE" ||
+        !["expense", "asset"].includes(String(account.type).toLowerCase())) {
+      throw new Error(`COA line ${line.lineNo} tidak valid, tidak postable, atau bukan milik company aktif.`);
+    }
+  }
+  const source = byId.get(sourceAccountId);
+  if (!source || (source.company_id != null && Number(source.company_id) !== companyId) ||
+      source.is_postable === false || String(source.status).toUpperCase() !== "ACTIVE" ||
+      !["asset", "bank", "cash"].includes(String(source.type).toLowerCase())) {
+    throw new Error("Akun sumber harus berupa COA Bank/Kas postable milik company.");
+  }
+}
+
+async function insertExpenseLines(
+  client: any,
+  expenseId: number,
+  companyId: number,
+  lines: NormalizedExpenseLine[],
+  taxAmount: number,
+) {
+  const persisted = allocateExpenseTax(lines, taxAmount);
+  for (const line of persisted) {
+    await client.execute(sql`
+      INSERT INTO expense_lines
+        (company_id, expense_id, line_no, description, qty, unit, unit_price, subtotal, tax_amount, total, coa_account_id, coa_resolution_status)
+      VALUES
+        (${companyId}, ${expenseId}, ${line.lineNo}, ${line.description}, ${String(line.qty)}, ${line.unit},
+         ${String(line.unitPrice)}, ${String(line.subtotal)}, ${String(line.taxAmount)}, ${String(line.total)},
+         ${line.coaAccountId}, 'confirmed')
+    `);
+  }
+  return persisted;
+}
+
+async function replaceExpenseLines(
+  expenseId: number,
+  companyId: number,
+  lines: NormalizedExpenseLine[],
+  taxAmount: number,
+) {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`DELETE FROM expense_lines WHERE expense_id = ${expenseId}`);
+    return insertExpenseLines(tx, expenseId, companyId, lines, taxAmount);
+  });
 }
 
 // ── Boot migration: expense_categories used to be global (no company_id).
@@ -364,15 +468,25 @@ async function nextExpenseNumber(): Promise<string> {
 const MAX_EXPENSE_NUMBER_RETRIES = 5;
 async function insertExpenseWithRetry(
   values: Record<string, unknown>,
+  lineData?: { companyId: number; lines: NormalizedExpenseLine[]; taxAmount: number },
 ): Promise<Record<string, unknown>> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_EXPENSE_NUMBER_RETRIES; attempt++) {
     const expenseNumber = await nextExpenseNumber();
     try {
-      const [created] = await db
-        .insert(expensesTable)
-        .values({ ...values, expenseNumber } as any)
-        .returning();
+      const created = lineData
+        ? await db.transaction(async (tx) => {
+            const [inserted] = await tx
+              .insert(expensesTable)
+              .values({ ...values, expenseNumber } as any)
+              .returning();
+            await insertExpenseLines(tx, Number(inserted.id), lineData.companyId, lineData.lines, lineData.taxAmount);
+            return inserted;
+          })
+        : (await db
+            .insert(expensesTable)
+            .values({ ...values, expenseNumber } as any)
+            .returning())[0];
       return created as Record<string, unknown>;
     } catch (err: any) {
       // PG code 23505 = unique_violation; retry only when expense_number is the culprit.
@@ -628,23 +742,107 @@ router.get("/", async (req: Request, res) => {
   })));
 });
 
+router.get("/:id", async (req: Request, res) => {
+  if (req.params.id === "missing-journals") {
+    const companyId = resolveCompanyId(req);
+    const rows = await db.execute(sql.raw(`
+      SELECT e.id, e.expense_number, e.date, e.description, e.total, e.transaction_type, e.status,
+             ec.name AS category_name
+      FROM expenses e
+      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+      WHERE e.status = 'active' AND e.entry_id IS NULL
+        ${companyId ? `AND e.company_id = ${companyId}` : ""}
+      ORDER BY e.date DESC, e.id DESC
+      LIMIT 500
+    `));
+    return res.json({ count: rows.rows.length, items: rows.rows });
+  }
+  const id = Number(String(req.params.id));
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: "Invalid id" });
+  const row = (await db.execute(sql.raw(`SELECT * FROM expenses WHERE id = ${id}`))).rows[0] as any;
+  if (!row) return res.status(404).json({ message: "Expense tidak ditemukan" });
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(Number(row.company_id) || null, companyId, req, res, { resourceType: "expense", resourceId: id })) return;
+  const lineRows = (await db.execute(sql.raw(
+    `SELECT id, line_no, description, qty, unit, unit_price, subtotal, tax_amount, total, coa_account_id, coa_resolution_status
+       FROM expense_lines WHERE expense_id = ${id} ORDER BY line_no, id`,
+  ))).rows as any[];
+  const attachmentRows = (await db.select().from(expenseAttachmentsTable)
+    .where(eq(expenseAttachmentsTable.expenseId, id))).map((attachment: any) => ({
+      id: Number(attachment.id),
+      expenseId: Number(attachment.expenseId),
+      objectPath: attachment.objectPath,
+      fileName: attachment.fileName,
+      contentType: attachment.contentType,
+      createdAt: attachment.createdAt,
+    }));
+  return res.json({
+    ...serializeExpense(row),
+    lines: lineRows.map((line) => ({
+      id: Number(line.id),
+      lineNo: Number(line.line_no),
+      description: line.description,
+      qty: Number(line.qty),
+      unit: line.unit,
+      unitPrice: Number(line.unit_price),
+      subtotal: Number(line.subtotal),
+      taxAmount: Number(line.tax_amount),
+      total: Number(line.total),
+      coaAccountId: Number(line.coa_account_id),
+      coaResolutionStatus: line.coa_resolution_status,
+    })),
+    attachments: attachmentRows,
+  });
+});
+
 router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res) => {
-  const { date, categoryId, description, qty, unitPrice, taxRateId, expenseAccountId, sourceAccountId, vendorId, userId, expenseType, transactionType, unit, currency, notes, payableAccountId, salesDocId, shipmentId, vendorEmployee } = req.body ?? {};
+  const { date, categoryId, description, qty, unitPrice, taxRateId, expenseAccountId, sourceAccountId, vendorId, userId, expenseType, transactionType, unit, currency, notes, payableAccountId, salesDocId, shipmentId, vendorEmployee, lines: rawLines } = req.body ?? {};
   if (!date) return res.status(400).json({ message: "date required" });
   if (!categoryId) return res.status(400).json({ message: "Kategori wajib dipilih." });
+  if (payableAccountId) {
+    return res.status(400).json({ message: "Direct expense tidak boleh memakai akun hutang. Gunakan Vendor Invoice/AP untuk transaksi kredit." });
+  }
 
-  const qtyN = Number(qty ?? 1);
-  const upN = Number(unitPrice ?? 0);
-  const subtotal = Math.round(qtyN * upN * 100) / 100;
+  const companyIdForInsert = resolveCompanyId(req as Request);
+  const [category] = await db.select().from(expenseCategoriesTable)
+    .where(and(eq(expenseCategoriesTable.id, Number(categoryId)), eq(expenseCategoriesTable.companyId, companyIdForInsert)));
+  if (!category) return res.status(400).json({ message: "Kategori tidak ditemukan untuk company aktif." });
+
+  const vendorIdN = vendorId ? Number(vendorId) : null;
+  if (vendorIdN !== null) {
+    const [vendor] = await db
+      .select({ id: suppliersTable.id, companyId: suppliersTable.companyId })
+      .from(suppliersTable)
+      .where(eq(suppliersTable.id, vendorIdN))
+      .limit(1);
+    if (!vendor) return res.status(400).json({ message: "Vendor tidak ditemukan." });
+    if (vendor.companyId != null && Number(vendor.companyId) !== companyIdForInsert) {
+      return res.status(400).json({ message: "Vendor bukan milik company aktif." });
+    }
+  }
+
+  const fallbackExpenseAccountId = expenseAccountId ? Number(expenseAccountId) : Number((category as any).expenseAccountId ?? 0);
+  let lines: NormalizedExpenseLine[];
+  try {
+    lines = normalizeExpenseLines(rawLines, { description, qty, unit, unitPrice, expenseAccountId: fallbackExpenseAccountId });
+    await validateExpenseAccounts(companyIdForInsert, lines, sourceAccountId ? Number(sourceAccountId) : null);
+  } catch (error: any) {
+    return res.status(400).json({ message: error?.message ?? "Line expense tidak valid." });
+  }
+  const qtyN = lines[0].qty;
+  const upN = lines[0].unitPrice;
+  const subtotal = roundMoney(lines.reduce((sum, line) => sum + line.subtotal, 0));
 
   let taxAmountN = 0;
   if (taxRateId) {
     const [tax] = await db.select().from(accountingTaxesTable).where(eq(accountingTaxesTable.id, Number(taxRateId)));
+    if (tax?.kind === "withholding") {
+      return res.status(400).json({ message: "PPh potong harus diproses melalui Vendor Invoice/AP, bukan direct expense." });
+    }
     if (tax) taxAmountN = Math.round(subtotal * Number(tax.rate) / 100 * 100) / 100;
   }
   const total = subtotal + taxAmountN;
 
-  const companyIdForInsert = resolveCompanyId(req as Request);
   const txType = (transactionType === "income" ? "income" : "expense");
 
   const created = await insertExpenseWithRetry({
@@ -661,10 +859,10 @@ router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res)
     total: String(total),
     currency: currency ? String(currency) : "IDR",
     notes: notes ? String(notes) : null,
-    expenseAccountId: expenseAccountId ? Number(expenseAccountId) : null,
-    payableAccountId: payableAccountId ? Number(payableAccountId) : null,
+    expenseAccountId: lines[0].coaAccountId,
+    payableAccountId: null,
     sourceAccountId: sourceAccountId ? Number(sourceAccountId) : null,
-    vendorId: vendorId ? Number(vendorId) : null,
+    vendorId: vendorIdN,
     userId: userId ? String(userId) : null,
     vendorEmployee: vendorEmployee ? String(vendorEmployee) : null,
     expenseType: expenseType ? String(expenseType) : "vendor_bill",
@@ -672,7 +870,7 @@ router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res)
     shipmentId: shipmentId ? Number(shipmentId) : null,
     status: "draft",
     createdById: (req as { userId?: string }).userId ?? null,
-  });
+  }, { companyId: Number(companyIdForInsert), lines, taxAmount: taxAmountN });
 
   if (txType !== "expense") {
     await db.execute(sql.raw(`UPDATE expenses SET transaction_type = '${txType}' WHERE id = ${(created as any).id}`));
@@ -696,18 +894,7 @@ router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res)
   let autoPostedEntry: { id: number } | null = null;
   const createdId = (created as any).id;
   try {
-    // Resolve expense account: dari field langsung atau dari kategori
-    const resolvedExpAccount = expenseAccountId ? Number(expenseAccountId) : null;
-    // Cek apakah kategori punya akun default
-    let catExpAccount: number | null = null;
-    if (!resolvedExpAccount) {
-      const [cat] = await db.select().from(expenseCategoriesTable)
-        .where(and(eq(expenseCategoriesTable.id, Number(categoryId)), eq(expenseCategoriesTable.companyId, companyIdForInsert)));
-      catExpAccount = (cat as any)?.expense_account_id ? Number((cat as any).expense_account_id) : null;
-    }
-    const hasExpAccount = !!(resolvedExpAccount || catExpAccount);
-    const hasCounter = !!(sourceAccountId || payableAccountId);
-    if (hasExpAccount && hasCounter) {
+    if (sourceAccountId) {
       autoPostedEntry = await postQuickExpenseJournal(createdId);
     }
   } catch (_autoPostErr) {
@@ -840,8 +1027,11 @@ router.patch("/:id", async (req, res) => {
     date, categoryId, description, qty, unitPrice, taxRateId,
     expenseAccountId, payableAccountId, sourceAccountId,
     vendorId, userId, vendorEmployee, expenseType, transactionType,
-    unit, currency, notes, salesDocId, shipmentId,
+    unit, currency, notes, salesDocId, shipmentId, lines: rawLines,
   } = req.body ?? {};
+  if (payableAccountId) {
+    return res.status(400).json({ message: "Direct expense tidak boleh memakai akun hutang. Gunakan Vendor Invoice/AP." });
+  }
 
   const qtyN = qty !== undefined ? Number(qty) : Number(exp.qty ?? 1);
   const upN = unitPrice !== undefined ? Number(unitPrice) : Number(exp.unit_price ?? 0);
@@ -854,6 +1044,24 @@ router.patch("/:id", async (req, res) => {
     if (tax) taxAmountN = Math.round(subtotal * Number(tax.rate) / 100 * 100) / 100;
   }
   const total = subtotal + taxAmountN;
+  let normalizedLines: NormalizedExpenseLine[];
+  try {
+    normalizedLines = normalizeExpenseLines(
+      rawLines,
+      {
+        description: description ?? exp.description,
+        qty: qty ?? exp.qty,
+        unit: unit ?? exp.unit,
+        unitPrice: unitPrice ?? exp.unit_price,
+        expenseAccountId: expenseAccountId ?? exp.expense_account_id,
+      },
+    );
+    await validateExpenseAccounts(companyId, normalizedLines, sourceAccountId !== undefined
+      ? (sourceAccountId ? Number(sourceAccountId) : null)
+      : (exp.source_account_id ? Number(exp.source_account_id) : null));
+  } catch (error: any) {
+    return res.status(400).json({ message: error?.message ?? "Line expense tidak valid." });
+  }
 
   const sets: string[] = [
     `date = '${(date ?? exp.date).toString().replace(/'/g, "''")}'`,
@@ -883,6 +1091,8 @@ router.patch("/:id", async (req, res) => {
   if (shipmentId !== undefined) sets.push(`shipment_id = ${shipmentId ? Number(shipmentId) : "NULL"}`);
 
   await db.execute(sql.raw(`UPDATE expenses SET ${sets.join(", ")} WHERE id = ${id}`));
+  await replaceExpenseLines(Number(id), Number(companyId), normalizedLines, taxAmountN);
+  await replaceExpenseLines(Number(id), Number(companyId), normalizedLines, taxAmountN);
 
   const row = (await db.execute(sql.raw(`SELECT * FROM expenses WHERE id = ${id}`))).rows[0];
 
@@ -976,8 +1186,15 @@ export async function postQuickExpenseJournal(expId: number) {
   `));
   const e = result.rows[0] as any;
   if (!e) throw new Error("Expense tidak ditemukan");
+  if (e.entry_id) {
+    const existingEntry = (await db.execute(sql.raw(
+      `SELECT * FROM accounting_entries WHERE id = ${Number(e.entry_id)} LIMIT 1`,
+    ))).rows[0] as any;
+    if (existingEntry) return existingEntry;
+  }
 
   const companyId: number | null = Number(e.company_id) || null;
+  if (!companyId) throw new Error("Company context wajib tersedia untuk posting expense.");
   const settings = await ensureAccountingSettings(companyId ?? undefined);
   const txType: string = e.transaction_type ?? "expense";
   const amountN = Number(e.total ?? 0);
@@ -989,32 +1206,24 @@ export async function postQuickExpenseJournal(expId: number) {
       ? (Number(e.ppn_input_account_id) || Number(e.cat_ppn_input_account_id) || settings.ppnInputAccountId || null)
       : null;
 
-  // Resolve akun beban/pendapatan — dari expense itu sendiri, fallback ke kategori
-  const expenseAccountId: number | null =
-    Number(e.expense_account_id) || Number(e.cat_expense_account_id) || null;
-  if (!expenseAccountId)
-    throw new Error(
-      "Akun beban/pendapatan belum diset. Harap pilih akun COA di form expense atau kategori."
-    );
-
-  // Resolve akun sumber (kas/bank/hutang)
-  //   expense → credit ke sourceAccountId atau payableAccountId (hutang usaha)
-  //   income  → debit ke sourceAccountId (kas/bank penerimaan)
+  // Direct expense hanya cash/bank. AP/withholding dimiliki Vendor Invoice.
   const sourceAccountId: number | null =
     Number(e.source_account_id) || null;
-  const payableAccountId: number | null =
-    Number(e.payable_account_id) || null;
-  const counterAccountId: number | null =
-    sourceAccountId ??
-    payableAccountId ??
-    settings.defaultBankAccountId ??
-    settings.defaultCashAccountId ??
-    null;
+  if (!sourceAccountId || e.payable_account_id) {
+    throw new Error("Direct expense wajib memiliki akun sumber Bank/Kas dan tidak boleh memiliki akun hutang.");
+  }
 
-  if (!counterAccountId)
-    throw new Error(
-      "Akun kas/bank/hutang belum diset. Harap pilih akun sumber di form expense."
-    );
+  const lineRows = (await db.execute(sql.raw(
+    `SELECT description, qty, unit_price, subtotal, tax_amount, total, coa_account_id
+       FROM expense_lines
+      WHERE expense_id = ${expId}
+      ORDER BY line_no, id`,
+  ))).rows as any[];
+  const expenseAccountId: number | null =
+    Number(e.expense_account_id) || Number(e.cat_expense_account_id) || null;
+  if (!expenseAccountId && lineRows.length === 0) {
+    throw new Error("Setiap line expense wajib memiliki COA existing.");
+  }
 
   // Cari jurnal umum (general) sebagai wadah — cari dulu per company, lalu fallback global
   let journal = companyId
@@ -1039,30 +1248,40 @@ export async function postQuickExpenseJournal(expId: number) {
   if (!journal) throw new Error("Jurnal tidak ditemukan di database.");
 
   const label = e.description ?? e.expense_number;
-  const counterLabel = sourceAccountId
-    ? "Kas/Bank"
-    : payableAccountId
-    ? "Hutang Usaha"
-    : "Kas/Bank";
+  const counterLabel = "Kas/Bank";
 
   const lines =
     txType === "income"
       ? [
           // Penerimaan lain: Debit Kas/Bank → Credit Pendapatan
-          { accountId: counterAccountId, debit: amountN, credit: 0, description: `Penerimaan — ${label}` },
-          { accountId: expenseAccountId, debit: 0, credit: amountN, description: label },
+          { accountId: sourceAccountId, debit: amountN, credit: 0, description: `Penerimaan — ${label}` },
+          { accountId: expenseAccountId ?? lineRows[0]?.coa_account_id, debit: 0, credit: amountN, description: label },
         ]
       : ppnInputAcctId && taxAmountN > 0
         ? [
-            // Expense kena PPN: Debit Beban (DPP) + Debit PPN Masukan → Credit Kas/Bank/Hutang (total)
-            { accountId: expenseAccountId, debit: netAmountN, credit: 0, description: label },
+            // Direct expense: Debit setiap COA line + Debit PPN Masukan → Credit Bank/Kas.
+            ...(lineRows.length > 0
+              ? lineRows.map((line) => ({
+                  accountId: Number(line.coa_account_id),
+                  debit: roundMoney(Number(line.subtotal)),
+                  credit: 0,
+                  description: String(line.description ?? label),
+                }))
+              : [{ accountId: expenseAccountId!, debit: netAmountN, credit: 0, description: label }]),
             { accountId: ppnInputAcctId, debit: taxAmountN, credit: 0, description: `PPN Masukan — ${label}` },
-            { accountId: counterAccountId, debit: 0, credit: amountN, description: counterLabel },
+            { accountId: sourceAccountId, debit: 0, credit: amountN, description: counterLabel },
           ]
         : [
-            // Expense tanpa PPN: Debit Beban → Credit Kas/Bank atau Hutang
-            { accountId: expenseAccountId, debit: amountN, credit: 0, description: label },
-            { accountId: counterAccountId, debit: 0, credit: amountN, description: counterLabel },
+            // Direct expense tanpa PPN: Debit setiap COA line → Credit Bank/Kas.
+            ...(lineRows.length > 0
+              ? lineRows.map((line) => ({
+                  accountId: Number(line.coa_account_id),
+                  debit: roundMoney(Number(line.total)),
+                  credit: 0,
+                  description: String(line.description ?? label),
+                }))
+              : [{ accountId: expenseAccountId!, debit: amountN, credit: 0, description: label }]),
+            { accountId: sourceAccountId, debit: 0, credit: amountN, description: counterLabel },
           ];
 
   const entry = await postEntry(
@@ -1071,7 +1290,10 @@ export async function postQuickExpenseJournal(expId: number) {
       date: new Date(String(e.date)),
       ref: e.expense_number,
       description: `${e.expense_number} — ${label}`,
-      source: "manual",
+      source: "manual_payment",
+      // Negative namespace avoids colliding with positive IDs from other
+      // manual-payment producers while remaining stable for retries.
+      sourceId: -expId,
       companyId,
       lines,
     },
@@ -1144,23 +1366,18 @@ router.post("/:id/pay", async (req: Request, res) => {
   const payableAccountId = expRow.payable_account_id ? Number(expRow.payable_account_id) : null;
   const expenseAccountId = expRow.expense_account_id ? Number(expRow.expense_account_id) : null;
 
-  let drAccountId: number;
-  let drLabel: string;
-  if (hasEntry) {
-    if (!payableAccountId) {
-      return res.status(400).json({
-        message: "Expense ini sudah dijurnal tanpa akun hutang (sudah lunas langsung saat dicatat). Tidak perlu dibayar lagi via Bank Disbursement.",
-      });
-    }
-    drAccountId = payableAccountId;
-    drLabel = "Pelunasan Hutang";
-  } else {
-    if (!expenseAccountId) {
-      return res.status(400).json({ message: "Akun beban belum diset pada expense ini. Tidak dapat memproses pembayaran." });
-    }
-    drAccountId = expenseAccountId;
-    drLabel = "Pembayaran Langsung";
+  if (!hasEntry) {
+    return res.status(400).json({
+      message: "Expense direct harus diposting terlebih dahulu. Pembayaran tidak boleh membuat jurnal debit Expense kedua.",
+    });
   }
+  if (!payableAccountId) {
+    return res.status(400).json({
+      message: "Expense ini sudah lunas melalui jurnal direct cash. Jangan proses ulang sebagai AP/Bank Disbursement.",
+    });
+  }
+  const drAccountId = payableAccountId;
+  const drLabel = "Pelunasan Hutang";
 
   const dateVal = dateBody ? new Date(String(dateBody)) : new Date();
   const label = expRow.description ?? expRow.expense_number;

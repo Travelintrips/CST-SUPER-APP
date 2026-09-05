@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { useCompany } from "@/contexts/CompanyContext";
 import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Upload, FileText, Loader2, CheckCircle2, AlertTriangle, Trash2,
   Plus, ArrowRight, ChevronLeft, Bot, Sparkles, ShieldCheck, Lock,
@@ -81,6 +82,7 @@ interface OcrInvoiceBreakdown {
     withholding_tax_amount: number | null;
     payable_amount: number | null;
   };
+  coa_hint?: string | null;
 }
 
 interface OcrResult {
@@ -98,6 +100,17 @@ interface OcrResult {
   total_amount: number | null;
   line_items: OcrLineItem[];
   invoice_breakdown?: OcrInvoiceBreakdown | null;
+  tax_review?: {
+    required: boolean;
+    status: "required" | "not_required";
+    reasons: string[];
+    withholding_tax_type: string | null;
+    tax_object: string | null;
+    withholding_amount: number | null;
+  };
+  withholding_tax_type?: string | null;
+  tax_object?: string | null;
+  withholding_amount?: number | null;
   payment_status_hint: string | null;
   raw_confidence: number;
   flags: string[];
@@ -140,6 +153,24 @@ interface DisplayLine {
   unit: string;
   unitPrice: string;
   notes: string;
+  coaHint: string;
+  coaAccountId: string;
+}
+
+interface CoaAccount {
+  id: number;
+  code: string;
+  name: string;
+  type?: string | null;
+  isActive?: boolean;
+  isPostable?: boolean;
+}
+
+interface VendorCoaMapping {
+  mappingKey: string;
+  coaAccountId: number;
+  coaCode: string;
+  coaName: string;
 }
 
 function confidenceColor(c: number) {
@@ -152,6 +183,10 @@ function confidenceLabel(c: number) {
   if (c >= 0.85) return "Tinggi";
   if (c >= 0.6) return "Sedang";
   return "Rendah";
+}
+
+function normalizeVendorLineKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 240);
 }
 
 const OCR_AUTO_POST_CONFIDENCE = 0.9;
@@ -186,6 +221,9 @@ function getOcrAutoPostReviewReasons(
   if (sapTax.tax.type === "PPN" && !(typeof vat === "number" && vat > 0)) {
     reasons.push("Invoice PPN tidak memiliki nilai PPN yang terbaca.");
   }
+  if (result.tax_review?.required) {
+    reasons.push(...result.tax_review.reasons);
+  }
   return reasons;
 }
 
@@ -194,6 +232,7 @@ function getOcrAutoPostReviewReasons(
 export default function InvoiceOcrImportPage() {
   const [, navigate] = useLocation();
   const { activeCompanyId } = useCompany();
+  const queryClient = useQueryClient();
 
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -236,22 +275,70 @@ export default function InvoiceOcrImportPage() {
 
   // Fetch supplier list for existence check.
   // limit:1000 — needs the full vendor list, not the paginated default (25).
-  const { data: suppliersResponse } = useListSuppliers({ limit: 1000 });
-  const suppliers = suppliersResponse?.data ?? [];
+  const { data: suppliersResponse } = useListSuppliers({
+    limit: 1000,
+    companyId: activeCompanyId != null ? String(activeCompanyId) : undefined,
+  });
+  const supplierOptions = (suppliersResponse?.data ?? []) as Array<{ id: number; name: string }>;
+  const matchedSupplier = useMemo(() => {
+    const name = form.supplierName.trim().toLowerCase();
+    if (!name) return undefined;
+    return supplierOptions.find((supplier) => supplier.name?.trim().toLowerCase() === name);
+  }, [form.supplierName, supplierOptions]);
+
+  const { data: coaAccounts = [], isLoading: coaAccountsLoading } = useQuery<CoaAccount[]>({
+    queryKey: ["/api/accounting/accounts", activeCompanyId, "vendor-invoice-postable"],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        companyId: String(activeCompanyId),
+        postableOnly: "true",
+      });
+      const response = await fetch(`/api/accounting/accounts?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Gagal memuat Chart of Accounts.");
+      return (await response.json()) as CoaAccount[];
+    },
+    enabled: activeCompanyId != null,
+  });
+
+  const { data: vendorCoaMappings = [] } = useQuery<VendorCoaMapping[]>({
+    queryKey: [
+      "/api/purchase-workflow/vendor-invoices/coa-mappings",
+      activeCompanyId,
+      matchedSupplier?.id,
+    ],
+    queryFn: async () => {
+      const params = new URLSearchParams({ supplierId: String(matchedSupplier!.id) });
+      const response = await fetch(`/api/purchase-workflow/vendor-invoices/coa-mappings?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Gagal memuat referensi COA vendor.");
+      return (await response.json()) as VendorCoaMapping[];
+    },
+    enabled: activeCompanyId != null && matchedSupplier?.id != null,
+  });
+
+  const vendorCoaMap = useMemo(
+    () => new Map(vendorCoaMappings.map((mapping) => [mapping.mappingKey, mapping.coaAccountId])),
+    [vendorCoaMappings],
+  );
 
   // Check if current supplierName matches any existing supplier (case-insensitive)
   const supplierExists = useMemo(() => {
-    const q = form.supplierName?.trim().toLowerCase();
-    if (!q) return true; // no name yet — don't show warning
-    return (suppliers as Array<{ name: string }>).some(
-      (s) => s.name?.toLowerCase() === q
-    );
-  }, [suppliers, form.supplierName]);
+    if (!form.supplierName.trim()) return true; // no name yet — don't show warning
+    return matchedSupplier != null;
+  }, [form.supplierName, matchedSupplier]);
 
   const createSupplierMut = useCreateSupplier({
     mutation: {
-      onSuccess: () => {
+      onSuccess: (createdSupplier) => {
         toast.success(`Supplier "${newSupplierForm.name}" berhasil ditambahkan ke database`);
+        queryClient.invalidateQueries({ queryKey: ["/api/trading/suppliers"] });
+        setForm((current) => ({
+          ...current,
+          supplierName: createdSupplier.name ?? newSupplierForm.name.trim(),
+        }));
         setShowAddSupplier(false);
         setNewSupplierForm({ name: "", phone: "", contactPerson: "", contactEmail: "", country: "Indonesia" });
       },
@@ -282,6 +369,23 @@ export default function InvoiceOcrImportPage() {
    * SAP LOCK ACTIVE: no reduce(), no sum(), no arithmetic on these.
    */
   const [displayLines, setDisplayLines] = useState<DisplayLine[]>([]);
+
+  // Approved vendor mappings are applied as a suggestion only. The user can
+  // still change the account before saving the invoice.
+  useEffect(() => {
+    if (displayLines.length === 0 || vendorCoaMappings.length === 0) return;
+    setDisplayLines((previous) => {
+      let changed = false;
+      const next = previous.map((line) => {
+        if (line.coaAccountId) return line;
+        const mappedAccountId = vendorCoaMap.get(normalizeVendorLineKey(line.description));
+        if (!mappedAccountId) return line;
+        changed = true;
+        return { ...line, coaAccountId: String(mappedAccountId) };
+      });
+      return changed ? next : previous;
+    });
+  }, [displayLines.length, vendorCoaMap, vendorCoaMappings.length]);
 
   const applyOcrToForm = useCallback(
     (ocr: OcrResult, sap: SapTaxResult) => {
@@ -319,6 +423,8 @@ export default function InvoiceOcrImportPage() {
               // SAP LOCK: unit_price is display-only; never multiplied here
               unitPrice: l.unit_price != null ? String(l.unit_price) : "",
               notes: "",
+              coaHint: l.coa_hint ?? "",
+              coaAccountId: "",
             }))
           : [
               {
@@ -327,6 +433,8 @@ export default function InvoiceOcrImportPage() {
                 unit: "ls",
                 unitPrice: "",
                 notes: "",
+                coaHint: "",
+                coaAccountId: "",
               },
             ];
 
@@ -446,10 +554,15 @@ export default function InvoiceOcrImportPage() {
       toast.error("Data SAP Tax belum tersedia. Ekstrak invoice terlebih dahulu.");
       return;
     }
+    if (displayLines.some((line) => line.coaAccountId) && !matchedSupplier?.id) {
+      toast.error("Pilih supplier yang sudah ada di database agar COA dapat disimpan sebagai referensi vendor.");
+      return;
+    }
     setSaving(true);
     try {
       // SAP LOCK: send backend header values — never derived from displayLines
       const payload = {
+        supplierId: matchedSupplier?.id,
         supplierName: form.supplierName,
         vendorInvoiceRef: form.vendorInvoiceRef,
         invoiceDate: form.invoiceDate,
@@ -474,8 +587,17 @@ export default function InvoiceOcrImportPage() {
           unit: l.unit,
           unitCost: Number(l.unitPrice) || 0,
           taxAmount: 0,
+          coaHint: l.coaHint || undefined,
+           coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
+           coaResolutionStatus: l.coaAccountId ? "confirmed" : "unresolved",
+           mappingKey: normalizeVendorLineKey(l.description),
           notes: l.notes,
         })),
+        taxReviewRequired: Boolean(result?.tax_review?.required),
+        taxReviewReason: result?.tax_review?.reasons?.join(" ") || undefined,
+        withholdingTaxType: result?.tax_review?.withholding_tax_type || undefined,
+        taxObject: result?.tax_review?.tax_object || undefined,
+        withholdingTaxAmount: result?.tax_review?.withholding_amount ?? undefined,
       };
       const res = await fetch("/api/purchase-workflow/vendor-invoices", {
         method: "POST",
@@ -492,6 +614,53 @@ export default function InvoiceOcrImportPage() {
         throw new Error(errMsg);
       }
       const data = (await res.json()) as { id: number };
+
+      // Confirm selected COA lines before posting and persist them as
+      // supplier-specific reusable mappings for future invoices.
+      const selectedLines = displayLines
+        .map((line, index) => ({ line, index }))
+        .filter(({ line }) => Boolean(line.coaAccountId));
+      if (selectedLines.length > 0) {
+        const detailRes = await fetch(
+          `/api/purchase-workflow/vendor-invoices/${data.id}?company=${activeCompanyId}`,
+          { credentials: "include" },
+        );
+        if (!detailRes.ok) {
+          throw new Error("Invoice tersimpan, tetapi detail line untuk konfirmasi COA gagal dimuat.");
+        }
+        const detail = (await detailRes.json()) as {
+          lines?: Array<{ id?: number }>;
+        };
+        const reviewLines = selectedLines
+          .map(({ line, index }) => ({
+            lineId: detail.lines?.[index]?.id,
+            coaAccountId: Number(line.coaAccountId),
+            mappingKey: normalizeVendorLineKey(line.description),
+            saveReusableRule: true,
+          }))
+          .filter((line) => Number.isInteger(line.lineId) && line.lineId > 0);
+        if (reviewLines.length !== selectedLines.length) {
+          throw new Error("Invoice tersimpan, tetapi semua line COA belum dapat dikonfirmasi.");
+        }
+        const reviewRes = await fetch(
+          `/api/purchase-workflow/vendor-invoices/${data.id}/finance-review`,
+          {
+            method: "PUT",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lines: reviewLines, taxes: [] }),
+          },
+        );
+        if (!reviewRes.ok) {
+          const reviewError = await reviewRes.json().catch(() => ({})) as {
+            message?: string;
+            error?: string;
+          };
+          throw new Error(
+            reviewError.message ?? reviewError.error ?? "COA gagal dikonfirmasi.",
+          );
+        }
+      }
 
       if (!canAutoPostOcrInvoice) {
         toast.success("Vendor invoice disimpan sebagai draft untuk review — jurnal tidak dibuat otomatis");
@@ -633,11 +802,16 @@ export default function InvoiceOcrImportPage() {
             >
               <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="font-semibold">
+                  <p className="font-semibold">
                   Ekstraksi selesai — Tingkat kepercayaan OCR:{" "}
                   <strong>{confidenceLabel(result.raw_confidence)}</strong> (
                   {Math.round(result.raw_confidence * 100)}%)
                 </p>
+                {result.tax_review?.required && (
+                  <p className="mt-2 text-xs font-semibold text-amber-700">
+                    Tax review wajib — PPh tidak akan auto-post sebelum jenis, tax object, dan bukti pendukung direview.
+                  </p>
+                )}
                 {result.flags?.length > 0 && (
                   <ul className="mt-2 space-y-1">
                     {result.flags.map((f, i) => (
@@ -1025,6 +1199,63 @@ export default function InvoiceOcrImportPage() {
                         </div>
                       )}
                   </>
+            {/* PPh review — visible evidence, never auto-posted */}
+            <Card
+              className={
+                result.tax_review?.required
+                  ? "border-amber-300 bg-amber-50/40"
+                  : "border-slate-200"
+              }
+            >
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-amber-600" />
+                  Review PPh
+                  <Badge
+                    variant="outline"
+                    className={
+                      result.tax_review?.required
+                        ? "ml-auto border-amber-400 text-amber-700"
+                        : "ml-auto text-muted-foreground"
+                    }
+                  >
+                    {result.tax_review?.required ? "Perlu Review" : "Tidak Terdeteksi"}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2">
+                  <span className="text-muted-foreground">Jenis PPh</span>
+                  <span className="font-medium text-right">
+                    {result.tax_review?.withholding_tax_type ?? result.withholding_tax_type ?? "—"}
+                  </span>
+                  <span className="text-muted-foreground">Tax object</span>
+                  <span className="font-medium text-right">
+                    {result.tax_review?.tax_object ?? result.tax_object ?? "—"}
+                  </span>
+                  <span className="text-muted-foreground">Nilai PPh</span>
+                  <span className="font-mono font-medium text-right">
+                    {idr(result.tax_review?.withholding_amount ?? result.withholding_amount)}
+                  </span>
+                </div>
+                {result.tax_review?.required ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-100/60 p-3 text-xs text-amber-800">
+                    <p className="font-semibold">PPh tidak diposting otomatis.</p>
+                    <p className="mt-1">
+                      Pastikan jenis PPh, tax object, nilai, dan bukti potong sudah benar sebelum review
+                      manual di invoice vendor.
+                    </p>
+                    {result.tax_review.reasons.length > 0 && (
+                      <ul className="mt-2 list-disc space-y-0.5 pl-4">
+                        {result.tax_review.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Tidak ada PPh yang disebutkan secara eksplisit pada invoice. Nilai kosong tidak berarti
+                    invoice pasti bebas PPh.
+                  </p>
                 )}
               </CardContent>
             </Card>
@@ -1051,6 +1282,8 @@ export default function InvoiceOcrImportPage() {
                         unit: "ls",
                         unitPrice: "",
                         notes: "",
+                        coaHint: "",
+                        coaAccountId: "",
                       },
                     ])
                   }
@@ -1069,6 +1302,9 @@ export default function InvoiceOcrImportPage() {
                         <th className="text-left py-2 px-2 w-20">Satuan</th>
                         <th className="text-left py-2 px-2 w-36">Harga Satuan</th>
                         <th className="text-left py-2 px-2">Catatan</th>
+                        <th className="text-left py-2 px-2 min-w-64">
+                          COA Akun <span className="text-xs font-normal text-muted-foreground">(Supabase)</span>
+                        </th>
                         <th className="w-10" />
                       </tr>
                     </thead>
@@ -1123,6 +1359,29 @@ export default function InvoiceOcrImportPage() {
                               className="h-8"
                               placeholder="—"
                             />
+                          </td>
+                          <td className="py-1 px-2">
+                            <select
+                              value={line.coaAccountId}
+                              onChange={(e) =>
+                                updateDisplayLine(i, "coaAccountId", e.target.value)
+                              }
+                              className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                              disabled={coaAccountsLoading}
+                              aria-label={`COA akun baris ${i + 1}`}
+                            >
+                              <option value="">
+                                {coaAccountsLoading ? "Memuat COA..." : "Pilih COA dari Supabase"}
+                              </option>
+                              {coaAccounts.map((account) => (
+                                <option key={account.id} value={String(account.id)}>
+                                  {account.code} — {account.name}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="mt-1 truncate text-[11px] text-muted-foreground" title={line.coaHint || undefined}>
+                              AI hint: {line.coaHint || "—"}
+                            </p>
                           </td>
                           <td className="py-1 px-2">
                             <Button

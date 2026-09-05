@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -78,7 +78,7 @@ function ManualTab() {
   const [autoMatching, setAutoMatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadReconciliation() {
+  const loadReconciliation = useCallback(async () => {
     if (!accountId) {
       setRows([]);
       return;
@@ -98,11 +98,11 @@ function ManualTab() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [accountId, from, to]);
 
   useEffect(() => {
     void loadReconciliation();
-  }, [accountId, from, to]);
+  }, [loadReconciliation]);
 
   async function saveStatus(line: ReconLine, status: "unreconciled" | "reconciled", candidate?: ReconCandidate | null) {
     setSavingId(line.id);
