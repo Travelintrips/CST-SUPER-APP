@@ -107,6 +107,7 @@ const OceanFreightQuotePage     = lazy(() => import("@/pages/ocean-freight-quote
 const VendorTrackingFormPage    = lazy(() => import("@/pages/vendor-tracking-form"));
 const CustomerDataFormPage      = lazy(() => import("@/pages/customer-data-form"));
 const ServiceCartPage           = lazy(() => import("@/pages/service-cart"));
+const ServiceRequestTrackPage   = lazy(() => import("@/pages/service-request-track"));
 const PpjkTrackPage             = lazy(() => import("@/pages/ppjk-track"));
 const NotFound                  = lazy(() => import("@/pages/not-found"));
 // Marketplace Phase 2F
@@ -339,6 +340,7 @@ function AppShell() {
         <Route path="/dashboard">{() => <ProtectedRoute component={Dashboard} />}</Route>
         <Route path="/vendor-dashboard">{() => <ProtectedRoute component={VendorDashboard} />}</Route>
         <Route path="/orders">{() => <ProtectedRoute component={Orders} />}</Route>
+        <Route path="/service-request-track">{() => <ProtectedRoute component={ServiceRequestTrackPage} />}</Route>
         <Route path="/admin">{() => <ProtectedRoute component={Admin} />}</Route>
         <Route path="/freight-forwarding" component={FreightForwarding} />
         <Route path="/pabean" component={Pabean} />

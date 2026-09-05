@@ -387,7 +387,7 @@ export async function listPortalServiceOrders(portalCustomerId: number) {
     ? sql`portal_customer_id = ${portalCustomerId} AND company_id IS NULL`
     : sql`company_id = ${context.companyId}`;
 
-  const [logisticRows, oceanRows, airRows, truckingRows] = await Promise.all([
+  const [logisticRows, oceanRows, airRows, truckingRows, serviceRequestRows] = await Promise.all([
     db.execute(sql`
       SELECT id, order_number, shipment_type, origin, destination, status,
              grand_total, created_at
@@ -414,6 +414,15 @@ export async function listPortalServiceOrders(portalCustomerId: number) {
              status, estimasi_total, created_at
         FROM trucking_booking_requests
        WHERE ${ownerWhere}
+       ORDER BY created_at DESC
+    `),
+    db.execute(sql`
+      SELECT id, request_number, trade_type, status,
+             COALESCE(total_quoted_price, total_estimated_price, 0) AS grand_total,
+             created_at
+        FROM customer_service_requests
+       WHERE status <> 'draft'
+         AND ${ownerWhere}
        ORDER BY created_at DESC
     `),
   ]);
@@ -463,6 +472,16 @@ export async function listPortalServiceOrders(portalCustomerId: number) {
       grandTotal: Number(row.estimasi_total ?? 0),
       createdAt: new Date(String(row.created_at)).toISOString(),
       subtitle: `${row.area_pickup ?? "—"} → ${row.area_delivery ?? "—"}`,
+    })),
+    ...(serviceRequestRows.rows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id),
+      orderNumber: String(row.request_number),
+      serviceType: "Customer Service Request",
+      status: String(row.status),
+      grandTotal: Number(row.grand_total ?? 0),
+      createdAt: new Date(String(row.created_at)).toISOString(),
+      subtitle: `${row.trade_type ?? "SERVICE"} · Pabean / custom clearance / layanan`,
+      trackUrl: `/service-request-track?number=${encodeURIComponent(String(row.request_number))}`,
     })),
   ];
 
