@@ -268,7 +268,17 @@ async function cleanup(client) {
     if (created.publicMutationId) await client.query("DELETE FROM public.bank_mutations WHERE id=$1", [created.publicMutationId]);
     if (created.settlementId) await client.query("DELETE FROM customer_portal_settlement_items WHERE settlement_id=$1", [created.settlementId]);
     if (created.settlementId) await client.query("DELETE FROM customer_portal_settlement_batches WHERE id=$1", [created.settlementId]);
-    for (const id of created.accountingEntryIds) {
+    const fixtureEntries = await client.query(`
+      SELECT id
+        FROM accounting_entries
+       WHERE (source='sales_invoice' AND source_id=$1)
+          OR (source='sales_payment' AND source_id=$2)
+    `, [created.documentId, created.paymentId]);
+    const accountingEntryIds = new Set([
+      ...created.accountingEntryIds,
+      ...fixtureEntries.rows.map((row) => Number(row.id)),
+    ]);
+    for (const id of accountingEntryIds) {
       await client.query(`
         UPDATE accounting_entries
            SET status='draft', cancel_reason='CFCP6_E2E fixture cleanup', cancelled_at=NOW()
@@ -277,7 +287,11 @@ async function cleanup(client) {
       await client.query("DELETE FROM accounting_entry_lines WHERE entry_id=$1", [id]);
       await client.query("DELETE FROM accounting_entries WHERE id=$1", [id]);
     }
-    if (created.processingId) await client.query("DELETE FROM customer_finance_processing WHERE id=$1", [created.processingId]);
+    if (created.processingId) {
+      await client.query("DELETE FROM customer_finance_processing WHERE id=$1", [created.processingId]);
+    } else if (created.paymentId) {
+      await client.query("DELETE FROM customer_finance_processing WHERE source_payment_id=$1", [created.paymentId]);
+    }
     if (created.eventId) await client.query("DELETE FROM customer_payment_finance_events WHERE id=$1", [created.eventId]);
     if (created.paymentId) await client.query("DELETE FROM payments WHERE id=$1", [created.paymentId]);
     if (created.lineId) await client.query("DELETE FROM sales_document_lines WHERE id=$1", [created.lineId]);
