@@ -192,11 +192,13 @@ export function requireLedgerRole(allowedRoles: string[]) {
 // - /settings (exact): accounting configuration — not tied to a fiscal period
 // - /accounts and /accounts/:id: chart-of-accounts master data — not a journal
 //   entry and therefore not tied to a fiscal period
+// - /journals and /journals/:id: journal master data — changing a journal's
+//   code, label, type, defaults, or active flag does not mutate a ledger entry
 //   Use exact match to prevent unintended exemption of other routes that happen
 //   to end with "/settings".
 const GOVERNANCE_EXEMPT_SUFFIXES = ["/ocr-extract", "/ocr-preview"];
-const GOVERNANCE_EXEMPT_EXACT   = ["/settings", "/accounts"];
-const GOVERNANCE_EXEMPT_PREFIXES = ["/accounts/"];
+const GOVERNANCE_EXEMPT_EXACT   = ["/settings", "/accounts", "/journals"];
+const GOVERNANCE_EXEMPT_PREFIXES = ["/accounts/", "/journals/"];
 
 export function writeMethodGovernanceGuard(req: Request, res: Response, next: NextFunction): void {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
