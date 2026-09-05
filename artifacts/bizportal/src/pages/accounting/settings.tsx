@@ -12,9 +12,10 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCompany } from "@/contexts/CompanyContext";
+import { apiFetch } from "@/lib/api";
 import {
   useGetAccountingSettings, useUpdateAccountingSettings, useListAccounts, useListJournals, useListTaxes,
-  getGetAccountingSettingsQueryKey,
+  getGetAccountingSettingsQueryKey, getListAccountsQueryKey, getListJournalsQueryKey, getListTaxesQueryKey,
 } from "@workspace/api-client-react";
 import type { UpdateAccountingSettingsBody } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -72,11 +73,47 @@ export default function AccountingSettingsPage() {
   const { toast } = useToast();
   const { t } = useLanguage();
   const { activeCompanyId } = useCompany();
-  const { data: settings, isLoading } = useGetAccountingSettings();
-  const { data: accounts } = useListAccounts();
-  const { data: journals } = useListJournals();
-  const { data: taxes } = useListTaxes();
-  const updateMut = useUpdateAccountingSettings();
+  const companyQuery = typeof activeCompanyId === "number" && activeCompanyId > 0
+    ? `?company=${activeCompanyId}`
+    : "";
+  const queryEnabled = companyQuery.length > 0;
+  const { data: settings, isLoading, error: settingsError } = useGetAccountingSettings({
+    query: {
+      queryKey: [...getGetAccountingSettingsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/settings${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: accounts, error: accountsError } = useListAccounts({
+    query: {
+      queryKey: [...getListAccountsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/accounts${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: journals, error: journalsError } = useListJournals({
+    query: {
+      queryKey: [...getListJournalsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/journals${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: taxes, error: taxesError } = useListTaxes({
+    query: {
+      queryKey: [...getListTaxesQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/taxes${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const updateMut = useUpdateAccountingSettings({
+    mutation: {
+      mutationFn: ({ data }) => apiFetch(`/api/accounting/settings${companyQuery}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    },
+  });
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [logoUploading, setLogoUploading] = useState(false);
 
@@ -183,7 +220,7 @@ export default function AccountingSettingsPage() {
     try {
       await updateMut.mutateAsync({ data: form });
       toast({ title: t.common.success });
-      qc.invalidateQueries({ queryKey: getGetAccountingSettingsQueryKey() });
+      qc.invalidateQueries({ queryKey: [...getGetAccountingSettingsQueryKey(), activeCompanyId] });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast({ title: t.common.error, description: msg, variant: "destructive" });
@@ -326,7 +363,14 @@ export default function AccountingSettingsPage() {
     </div>
   );
 
+  if (!queryEnabled) {
+    return <AppShell><div className="p-6 text-muted-foreground">Pilih satu perusahaan untuk mengatur mapping akunting.</div></AppShell>;
+  }
   if (isLoading) return <AppShell><div className="p-6">Memuat...</div></AppShell>;
+  const loadError = settingsError ?? accountsError ?? journalsError ?? taxesError;
+  if (loadError) {
+    return <AppShell><div className="p-6 text-destructive">Gagal memuat pengaturan akunting: {loadError instanceof Error ? loadError.message : String(loadError)}</div></AppShell>;
+  }
 
   return (
     <AppShell>
