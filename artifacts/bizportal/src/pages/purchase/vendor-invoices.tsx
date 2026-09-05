@@ -19,6 +19,20 @@ const idr = (n: number | string | null | undefined) => {
     .format(Number.isFinite(amount) ? amount : 0);
 };
 const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { credentials: "include", headers: { "Content-Type": "application/json" }, ...opts });
+const formatPostingError = (body: unknown, fallback: string) => {
+  const payload = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const base = String(payload.message ?? payload.error ?? fallback);
+  const reasons = Array.isArray(payload.reasons)
+    ? payload.reasons
+      .map((reason) => {
+        if (!reason || typeof reason !== "object") return String(reason ?? "");
+        const item = reason as Record<string, unknown>;
+        return String(item.message ?? item.code ?? "");
+      })
+      .filter(Boolean)
+    : [];
+  return reasons.length > 0 ? `${base} ${reasons.join(" ")}` : base;
+};
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
 interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null }>; }
@@ -63,11 +77,10 @@ export function VendorInvoicesListPage() {
   const handlePost = async (id: number) => {
     setPostingId(id);
     try {
-      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}/post`, { method: "POST" });
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}/post?company=${activeCompanyId}`, { method: "POST" });
       if (!r.ok) {
         const errJson = await r.json().catch(() => ({}));
-        const msg = (errJson as Record<string, string>).error ?? (errJson as Record<string, string>).message ?? "Gagal posting invoice";
-        throw new Error(msg);
+        throw new Error(formatPostingError(errJson, "Gagal posting invoice"));
       }
       toast.success("Invoice berhasil diposting");
       qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
@@ -349,7 +362,7 @@ export function VendorInvoiceEditorPage() {
   });
 
   const postMut = useMutation({
-    mutationFn: () => apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post`, { method: "POST" }).then(async r => { if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(body.message ?? body.error ?? "Gagal posting"); } return r.json(); }),
+    mutationFn: () => apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" }).then(async r => { if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(formatPostingError(body, "Gagal posting")); } return r.json(); }),
     onSuccess: () => { toast.success("Invoice diposting & jurnal dibuat"); qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id] }); },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal posting"),
   });
