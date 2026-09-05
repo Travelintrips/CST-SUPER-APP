@@ -102,6 +102,22 @@ describe("resolveJournalForEconomicEvent — Universal Journal Reuse Engine", ()
     expect(client.execute).not.toHaveBeenCalled();
   });
 
+  it("treats recon_rule as a direct bank allocation, not a business candidate", async () => {
+    const client = makeClient([posted()]);
+    const result = await resolveJournalForEconomicEvent(client as any, {
+      ...BASE_ARGS,
+      candidateType: "recon_rule",
+      candidateId: 901,
+    });
+
+    expect(result.decision).toBe("CREATE_NEW_JOURNAL");
+    expect(result.safeToCreateJournal).toBe(true);
+    expect(result.requiresHumanReview).toBe(false);
+    expect(result.evidence.ruleBasedDirectAllocation).toBe(true);
+    expect(result.reasons.join(" ")).not.toContain("not mapped");
+    expect(client.execute).not.toHaveBeenCalled();
+  });
+
   it("historical NULL QRIS source is rejected as ambiguous before lookup", async () => {
     const client = makeClient([posted()]);
     const result = await resolveJournalForEconomicEvent(client as any, {

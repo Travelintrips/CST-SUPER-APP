@@ -1001,6 +1001,26 @@ export async function resolveJournalForEconomicEvent(
     };
   }
 
+  if (candidateType === "recon_rule") {
+    return {
+      decision: "CREATE_NEW_JOURNAL",
+      companyId,
+      economicEventType: candidateType,
+      existingJournalId: null,
+      existingJournalNumber: null,
+      sourceDocumentId: candidateId,
+      matchedCandidateType: candidateType,
+      confidence: 100,
+      reasons: [
+        "Rule AI is a direct bank-mutation classification; no source business journal lookup is required",
+      ],
+      evidence: { ...evidence, ruleBasedDirectAllocation: true },
+      duplicateRisk: "none",
+      requiresHumanReview: false,
+      safeToCreateJournal: true,
+    };
+  }
+
   let existingEntry: FoundEntry | null = null;
   let lookupError: string | null = null;
 
