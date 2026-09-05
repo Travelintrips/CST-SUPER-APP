@@ -7,4 +7,4 @@ The canonical production database connection is `SUPABASE_DATABASE_URL` loaded b
 
 **Why:** A missing Replit production database does not necessarily mean the deployed application's external Supabase production database is inaccessible.
 
-**How to apply:** For production read-only audits, use the existing production loader and a dedicated read-only PostgreSQL client, then compare metadata against the DEV bundle. Never substitute DEV or create a new secret contract.
+**How to apply:** For production audits and mutations, use the existing production loader and the canonical `SUPABASE_DATABASE_URL` explicitly. A helper that prioritizes `SUPABASE_MIGRATION_URL` can select a different port/connection path; never substitute DEV or create a new secret contract.
