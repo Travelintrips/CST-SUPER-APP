@@ -4,8 +4,6 @@ export interface PortalAuthCapabilities {
   emailOtp: boolean;
   google: boolean;
   whatsapp: boolean;
-  sms: boolean;
-  wechat: boolean;
   password: boolean;
 }
 
@@ -19,10 +17,6 @@ export function getPortalAuthCapabilities(): PortalAuthCapabilities {
     emailOtp: isDevelopment || isSmtpConfigured(),
     google: Boolean(process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim()),
     whatsapp: isDevelopment || Boolean(process.env.FONNTE_TOKEN?.trim()),
-    // No SMS provider is installed/configured in this project.
-    sms: false,
-    // WeChat OAuth credentials/provider are not configured in this project.
-    wechat: false,
     password: true,
   };
 }

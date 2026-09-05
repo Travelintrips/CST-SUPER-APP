@@ -13,14 +13,12 @@ import { useLanguage } from "@/i18n/LanguageContext";
 type UserRole = "customer" | "vendor";
 type CustomerType = "individual" | "company";
 type Step = "phone" | "otp" | "profile";
-type RegistrationMethod = "email" | "google" | "whatsapp" | "sms" | "wechat" | "password";
+type RegistrationMethod = "email" | "google" | "whatsapp" | "password";
 
 interface AuthCapabilities {
   emailOtp: boolean;
   google: boolean;
   whatsapp: boolean;
-  sms: boolean;
-  wechat: boolean;
   password: boolean;
 }
 
@@ -40,7 +38,7 @@ export default function Register() {
   const [step, setStep] = useState<Step>("phone");
   const [method, setMethod] = useState<RegistrationMethod>("email");
   const [capabilities, setCapabilities] = useState<AuthCapabilities>({
-    emailOtp: false, google: false, whatsapp: false, sms: false, wechat: false, password: true,
+    emailOtp: false, google: false, whatsapp: false, password: true,
   });
   const [errorMsg, setErrorMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -106,7 +104,7 @@ export default function Register() {
       })
       .catch(() => {
         // Keep only the password path visible if the capability contract fails.
-        setCapabilities((current) => ({ ...current, emailOtp: false, google: false, whatsapp: false, sms: false, wechat: false }));
+        setCapabilities((current) => ({ ...current, emailOtp: false, google: false, whatsapp: false }));
         setMethod("password");
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,9 +348,7 @@ export default function Register() {
       ? "Registrasi via Email OTP"
       : method === "google"
         ? "Registrasi via Google"
-        : method === "password"
-          ? "Registrasi dengan Password"
-          : `Registrasi via ${method === "sms" ? "SMS" : "WeChat"}`;
+        : "Registrasi dengan Password";
   const methodDescription = method === "whatsapp"
     ? (step === "phone" ? t("registerPage.stepPhoneDesc") : step === "otp" ? t("registerPage.stepOtpDesc") : t("registerPage.stepProfileDesc"))
     : method === "email"
@@ -361,7 +357,7 @@ export default function Register() {
         ? "Gunakan akun Google terverifikasi untuk membuat akun."
         : method === "password"
           ? "Buat akun dengan email dan password."
-          : "Provider belum tersedia.";
+        : "Registrasi";
   const displayStep = method === "whatsapp" ? stepNumber : method === "email" && emailStep === "code" ? 2 : 1;
   const displayTotal = method === "whatsapp" ? 3 : method === "email" ? 2 : 1;
 
@@ -369,8 +365,6 @@ export default function Register() {
     { id: "email", label: "Email OTP", available: capabilities.emailOtp },
     { id: "google", label: "Google", available: capabilities.google },
     { id: "whatsapp", label: "WhatsApp", available: capabilities.whatsapp },
-    { id: "sms", label: "No. HP / SMS", available: capabilities.sms },
-    { id: "wechat", label: "WeChat", available: capabilities.wechat },
     { id: "password", label: "Password", available: capabilities.password },
   ];
 
@@ -488,13 +482,6 @@ export default function Register() {
                 {passwordLoading ? "Mendaftarkan..." : "Daftar dengan Password"}
               </Button>
             </div>
-          )}
-
-          {step === "phone" && (method === "sms" || method === "wechat") && (
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>Metode ini belum tersedia karena provider belum dikonfigurasi. Pilih Email OTP, Google, WhatsApp, atau Password.</AlertDescription>
-            </Alert>
           )}
 
           {step === "phone" && method === "whatsapp" && (

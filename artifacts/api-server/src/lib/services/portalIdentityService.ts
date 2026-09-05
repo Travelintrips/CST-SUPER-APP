@@ -10,9 +10,7 @@ export type PortalIdentityProvider =
   | "email"
   | "password"
   | "google"
-  | "whatsapp"
-  | "phone"
-  | "wechat";
+  | "whatsapp";
 
 /**
  * Link a verified provider identity to exactly one canonical portal account.

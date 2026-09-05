@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("portal auth capability contract", () => {
-  it("exposes only configured providers and never advertises SMS/WeChat", () => {
+  it("exposes only the active auth methods", () => {
     process.env.APP_ENV = "production";
     process.env.REPLIT_DEPLOYMENT = "1";
     process.env.GOOGLE_CLIENT_ID = "";
@@ -29,11 +29,10 @@ describe("portal auth capability contract", () => {
     expect(capabilities.password).toBe(true);
     expect(capabilities.google).toBe(false);
     expect(capabilities.whatsapp).toBe(false);
-    expect(capabilities.sms).toBe(false);
-    expect(capabilities.wechat).toBe(false);
+    expect(Object.keys(capabilities).sort()).toEqual(["emailOtp", "google", "password", "whatsapp"]);
   });
 
-  it("keeps the safe DEV OTP paths available without enabling unavailable providers", () => {
+  it("keeps the safe DEV OTP paths available", () => {
     process.env.APP_ENV = "development";
     delete process.env.REPLIT_DEPLOYMENT;
     process.env.GOOGLE_CLIENT_ID = "";
@@ -44,7 +43,6 @@ describe("portal auth capability contract", () => {
 
     expect(capabilities.emailOtp).toBe(true);
     expect(capabilities.whatsapp).toBe(true);
-    expect(capabilities.sms).toBe(false);
-    expect(capabilities.wechat).toBe(false);
+    expect(Object.keys(capabilities).sort()).toEqual(["emailOtp", "google", "password", "whatsapp"]);
   });
 });

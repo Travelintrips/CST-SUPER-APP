@@ -32,14 +32,11 @@ function GoogleIcon() {
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 type LoginMode = "password" | "otp" | "wa";
-type ExtendedLoginMode = LoginMode | "sms" | "wechat";
 
 interface AuthCapabilities {
   emailOtp: boolean;
   google: boolean;
   whatsapp: boolean;
-  sms: boolean;
-  wechat: boolean;
   password: boolean;
 }
 
@@ -71,9 +68,9 @@ export default function Login() {
   const { t } = useLanguage();
   const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
 
-  const [mode, setMode] = useState<ExtendedLoginMode>("otp");
+  const [mode, setMode] = useState<LoginMode>("otp");
   const [capabilities, setCapabilities] = useState<AuthCapabilities>({
-    emailOtp: true, google: true, whatsapp: true, sms: false, wechat: false, password: true,
+    emailOtp: true, google: true, whatsapp: true, password: true,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -106,7 +103,7 @@ export default function Login() {
       .then((res) => res.ok ? res.json() : Promise.reject(new Error("capabilities unavailable")))
       .then((data: AuthCapabilities) => setCapabilities(data))
       .catch(() => setCapabilities((current) => ({
-        ...current, emailOtp: false, google: false, whatsapp: false, sms: false, wechat: false,
+        ...current, emailOtp: false, google: false, whatsapp: false,
       })));
   }, []);
 
@@ -453,15 +450,6 @@ export default function Login() {
                 {t("login.password", "Password")}
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 mb-5">
-              <button type="button" disabled={!capabilities.sms} onClick={() => setMode("sms")} className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60">
-                No. HP / SMS — belum tersedia
-              </button>
-              <button type="button" disabled={!capabilities.wechat} onClick={() => setMode("wechat")} className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60">
-                WeChat — belum tersedia
-              </button>
-            </div>
-
             {mode === "otp" && (
               <div className="space-y-4">
                 {otpMsg && (
@@ -654,15 +642,6 @@ export default function Login() {
                   </form>
                 </Form>
               </>
-            )}
-
-            {(mode === "sms" || mode === "wechat") && (
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  Provider untuk metode ini belum dikonfigurasi. Pilih metode login yang aktif di atas.
-                </AlertDescription>
-              </Alert>
             )}
 
             <div className="mt-6 text-center text-sm text-muted-foreground">
