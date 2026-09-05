@@ -59,15 +59,32 @@ export async function getOnboardingStatus(customerId: number) {
     .from(userProfilesTable)
     .where(eq(userProfilesTable.customerId, customerId));
 
+  // portal_customers.role is the canonical account owner. Legacy
+  // user_profiles.account_type can be stale (notably a vendor row left with
+  // the old customer default), so never let it route an existing vendor into
+  // customer organization completion.
+  const [customer] = await db
+    .select({ role: portalCustomersTable.role })
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, customerId))
+    .limit(1);
+  const role = customer?.role ?? profile?.accountType ?? "customer";
+  const accountType = role === "vendor" || role === "driver" || role === "employee"
+    ? role
+    : role === "customer"
+      ? "customer"
+      : profile?.accountType ?? null;
+
   if (!profile) {
-    return { status: "incomplete", accountType: null, hasProfile: false };
+    return { status: "incomplete", accountType, role, hasProfile: false };
   }
 
   const rejectionReason = profile.status === "rejected" ? profile.rejectionReason : undefined;
   return {
     hasProfile: true,
     status: profile.status,
-    accountType: profile.accountType,
+    accountType,
+    role,
     ...(rejectionReason ? { rejectionReason } : {}),
     profile: {
       fullName: profile.fullName,
@@ -247,7 +264,22 @@ export async function completeOnboarding(
     ktpUrl, ocrData, vendor, driver, employee,
   } = input;
 
-  const isCustomer = accountType === "customer";
+  const [existingCustomer] = await db
+    .select({ role: portalCustomersTable.role })
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, customerId))
+    .limit(1);
+  if (!existingCustomer) {
+    throw new OnboardingServiceError(404, "Akun customer tidak ditemukan.");
+  }
+
+  // A persisted non-customer role is authoritative. A stale browser form
+  // must not demote an existing vendor into customer organization onboarding.
+  // A default customer may still choose vendor during first-time onboarding.
+  const effectiveAccountType = existingCustomer.role !== "customer"
+    ? existingCustomer.role
+    : accountType;
+  const isCustomer = effectiveAccountType === "customer";
   if (isCustomer && customerType !== "individual" && customerType !== "company") {
     throw new OnboardingServiceError(400, "Tipe customer wajib dipilih.");
   }
@@ -304,7 +336,7 @@ export async function completeOnboarding(
       .select({ ktpUrl: userProfilesTable.ktpUrl })
       .from(userProfilesTable)
       .where(eq(userProfilesTable.customerId, customerId));
-    const [existingVendorProfile] = accountType === "vendor"
+    const [existingVendorProfile] = effectiveAccountType === "vendor"
       ? await tx
         .select({
           id: vendorProfilesTable.id,
@@ -332,7 +364,7 @@ export async function completeOnboarding(
       fullName: String(fullName),
       phone: normalizedPhone,
       address: String(address),
-      accountType: String(accountType),
+      accountType: String(effectiveAccountType),
       status: effectiveStatus,
       ktpUrl: ktpUrl ? String(ktpUrl) : null,
       completedAt: now,
@@ -343,7 +375,7 @@ export async function completeOnboarding(
         fullName: String(fullName),
         phone: normalizedPhone,
         address: String(address),
-        accountType: String(accountType),
+        accountType: String(effectiveAccountType),
         status: effectiveStatus,
         ktpUrl: ktpUrl ? String(ktpUrl) : null,
         completedAt: now,
@@ -356,11 +388,11 @@ export async function completeOnboarding(
         name: String(fullName),
         phone: normalizedPhone,
         ...(isCustomer ? { customerType } : {}),
-        role: accountType === "vendor"
+        role: effectiveAccountType === "vendor"
           ? "vendor"
-          : accountType === "driver"
+          : effectiveAccountType === "driver"
             ? "driver"
-            : accountType === "employee"
+            : effectiveAccountType === "employee"
               ? "employee"
               : "customer",
       }).where(eq(portalCustomersTable.id, customerId));
@@ -393,7 +425,7 @@ export async function completeOnboarding(
     }
 
     let oldVendorLegalityUrl: string | null = null;
-    if (accountType === "vendor" && vendor) {
+    if (effectiveAccountType === "vendor" && vendor) {
       oldVendorLegalityUrl = existingVendorProfile?.legalityDocUrl ?? null;
       const vendorValues = {
         companyName: vendor.companyName ?? null,
@@ -425,11 +457,11 @@ export async function completeOnboarding(
       }
     }
 
-    if (shouldForceFailure && devFailureStage === "vendor-mid-flow" && accountType === "vendor") {
+    if (shouldForceFailure && devFailureStage === "vendor-mid-flow" && effectiveAccountType === "vendor") {
       throw new OnboardingServiceError(500, "DEV TEST: forced vendor onboarding rollback");
     }
 
-    if (accountType === "driver" && driver) {
+    if (effectiveAccountType === "driver" && driver) {
       const [existingDriverProfile] = await tx
         .select({ simUrl: driverProfilesTable.simUrl, stnkUrl: driverProfilesTable.stnkUrl })
         .from(driverProfilesTable)
@@ -463,7 +495,7 @@ export async function completeOnboarding(
       }
     }
 
-    if (accountType === "employee" && employee) {
+    if (effectiveAccountType === "employee" && employee) {
       await tx.insert(employeeProfilesTable).values({
         customerId,
         companyName: employee.companyName ?? null,
@@ -491,7 +523,7 @@ export async function completeOnboarding(
     if (!isCustomer && !existingApproval) {
       await tx.insert(onboardingApprovalsTable).values({
         customerId,
-        accountType: String(accountType),
+        accountType: String(effectiveAccountType),
         status: "pending",
         updatedAt: now,
       });
@@ -532,11 +564,11 @@ export async function completeOnboarding(
           customerName: fullName,
           companyName:  vendor?.companyName ?? null,
           orderId:      customerId,
-          accountType,
+          accountType: effectiveAccountType,
           email:        transactionResult.customerEmail ?? "-",
           phone: normalizedPhone,
           timestamp,
-          message:      `Permohonan akun baru: ${fullName} (${accountType}) — ${timestamp}`,
+          message:      `Permohonan akun baru: ${fullName} (${effectiveAccountType}) — ${timestamp}`,
         });
 
         const adminWa = await getAdminWa();
@@ -555,7 +587,7 @@ export async function completeOnboarding(
             customerName: fullName,
             customerEmail: transactionResult.customerEmail ?? "-",
             phone,
-            accountType,
+            accountType: effectiveAccountType,
             timestamp,
           });
           await sendWhatsApp(adminWa, msg);

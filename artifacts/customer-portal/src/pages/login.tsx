@@ -119,22 +119,54 @@ export default function Login() {
   });
 
   async function redirectAfterLogin(role: string) {
-    const rt = new URLSearchParams(window.location.search).get("returnTo");
-    if (rt) { setLocation(rt); return; }
-    if (role === "admin") { setLocation("/admin"); return; }
+    const requestedReturnTo = new URLSearchParams(window.location.search).get("returnTo");
+    const savedReturnTo = requestedReturnTo ? safeCustomerReturnTo(requestedReturnTo) : null;
 
     try {
       const res = await fetch(`${BASE}/api/portal/onboarding/status`, {
         credentials: "include",
       });
       if (res.ok) {
-        const d = await res.json() as { status: string };
+        const d = await res.json() as {
+          status: string;
+          role?: string;
+          accountType?: string;
+          customerContext?: { status?: string };
+        };
+        const effectiveRole = d.role ?? d.accountType ?? role;
+        if (effectiveRole === "admin") { setLocation("/admin"); return; }
+        if (
+          effectiveRole === "customer"
+          && d.status === "active"
+          && (d.customerContext?.status === "legacy_unresolved" || d.customerContext?.status === "company_unresolved")
+        ) {
+          setLocation("/onboarding");
+          return;
+        }
+        if (d.customerContext?.status === "company_pending") {
+          setLocation("/pending-approval");
+          return;
+        }
         if (d.status === "incomplete") { setLocation("/onboarding"); return; }
         if (d.status === "pending" || d.status === "rejected") { setLocation("/pending-approval"); return; }
+        if (effectiveRole === "vendor") { setLocation("/vendor-dashboard"); return; }
+        if (
+          savedReturnTo
+          && savedReturnTo !== "/onboarding"
+          && savedReturnTo !== "/pending-approval"
+          && !savedReturnTo.startsWith("/vendor-dashboard")
+          && !savedReturnTo.startsWith("/admin")
+        ) {
+          setLocation(savedReturnTo);
+          return;
+        }
+        setLocation("/dashboard");
+        return;
       }
     } catch { /* fallback */ }
 
-    if (role === "vendor") setLocation("/vendor-dashboard");
+    if (role === "admin") setLocation("/admin");
+    else if (role === "vendor") setLocation("/vendor-dashboard");
     else setLocation("/dashboard");
   }
 

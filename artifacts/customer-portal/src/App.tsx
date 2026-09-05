@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, type ComponentType } from "react";
+import { lazy, Suspense, useEffect, useState, type ComponentType } from "react";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -209,13 +209,10 @@ async function checkOnboardingAndRedirect(
   token: string,
   setLocation: (path: string) => void,
 ) {
-  // Honour returnTo saved before Google OAuth redirect
+  // Keep the return target pending until the server confirms the account is
+  // fully onboarded. A first-login Google account must not bypass this gate.
   const savedReturnTo = sessionStorage.getItem("oauth_return_to");
-  if (savedReturnTo) {
-    sessionStorage.removeItem("oauth_return_to");
-    setLocation(savedReturnTo);
-    return;
-  }
+  sessionStorage.removeItem("oauth_return_to");
 
   if (role === "admin") { setLocation("/admin"); return; }
 
@@ -226,11 +223,15 @@ async function checkOnboardingAndRedirect(
     if (res.ok) {
       const d = await res.json() as {
         status: string;
+        role?: string;
         accountType?: string;
         customerContext?: { status?: string };
       };
+      const effectiveRole = d.role ?? d.accountType ?? role;
       const organizationStatus = d.customerContext?.status;
       if (
+        effectiveRole === "customer"
+        &&
         d.status === "active"
         && (organizationStatus === "legacy_unresolved" || organizationStatus === "company_unresolved")
       ) {
@@ -243,6 +244,18 @@ async function checkOnboardingAndRedirect(
       }
       if (d.status === "incomplete") { setLocation("/onboarding"); return; }
       if (d.status === "pending" || d.status === "rejected") { setLocation("/pending-approval"); return; }
+      if (effectiveRole === "admin") { setLocation("/admin"); return; }
+      if (effectiveRole === "vendor") { setLocation("/vendor-dashboard"); return; }
+      if (
+        savedReturnTo
+        && savedReturnTo !== "/onboarding"
+        && savedReturnTo !== "/pending-approval"
+        && !savedReturnTo.startsWith("/vendor-dashboard")
+        && !savedReturnTo.startsWith("/admin")
+      ) {
+        setLocation(savedReturnTo);
+        return;
+      }
     }
   } catch { /* network error — fall through */ }
 
@@ -297,12 +310,81 @@ function OAuthRedirectHandler() {
 
 // ── Route guard: redirect to /login if not authenticated ────────────────────
 function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const authed = isAuthenticated();
+  const [authorized, setAuthorized] = useState(false);
+
   useEffect(() => {
-    if (!authed) navigate("/login");
-  }, [authed, navigate]);
-  if (!authed) return <PageFallback />;
+    let disposed = false;
+    if (!authed) {
+      navigate("/login");
+      return () => { disposed = true; };
+    }
+
+    (async () => {
+      const profile = await fetchAndStoreProfile();
+      if (disposed) return;
+      if (!profile) {
+        navigate("/login");
+        return;
+      }
+
+      const role = profile.role;
+      const isAdminPath = location === "/admin" || location.startsWith("/admin/");
+      if (role === "admin") {
+        if (!isAdminPath) navigate("/admin");
+        else setAuthorized(true);
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/portal/onboarding/status", { credentials: "include" });
+        if (!res.ok) throw new Error("onboarding status unavailable");
+        const d = await res.json() as {
+          status: string;
+          role?: string;
+          accountType?: string;
+          customerContext?: { status?: string };
+        };
+        const effectiveRole = d.role ?? d.accountType ?? role;
+        if (
+          effectiveRole === "customer"
+          && d.status === "active"
+          && (d.customerContext?.status === "legacy_unresolved" || d.customerContext?.status === "company_unresolved")
+        ) {
+          navigate("/onboarding");
+          return;
+        }
+        if (d.customerContext?.status === "company_pending" || d.status === "pending" || d.status === "rejected") {
+          navigate("/pending-approval");
+          return;
+        }
+        if (d.status === "incomplete") {
+          navigate("/onboarding");
+          return;
+        }
+        if (effectiveRole === "vendor" && location === "/dashboard") {
+          navigate("/vendor-dashboard");
+          return;
+        }
+        if (effectiveRole !== "vendor" && location === "/vendor-dashboard") {
+          navigate("/dashboard");
+          return;
+        }
+        if (effectiveRole === "admin") {
+          navigate("/admin");
+          return;
+        }
+        if (!disposed) setAuthorized(true);
+      } catch {
+        if (!disposed) navigate("/login");
+      }
+    })();
+
+    return () => { disposed = true; };
+  }, [authed, location, navigate]);
+
+  if (!authed || !authorized) return <PageFallback />;
   return <Comp />;
 }
 

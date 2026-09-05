@@ -1122,9 +1122,13 @@ router.get("/callback/google", async (req: Request, res: Response) => {
           result: "customer_portal",
         });
         req.log.info("[Google OAuth] callback succeeded");
-        res.redirect(returnTo);
+        // Always return through the frontend auth gate. Redirecting directly
+        // to returnTo lets a first-time Google account enter /dashboard before
+        // onboarding/status has been evaluated. The gate consumes the
+        // sessionStorage return target only after the account is eligible.
+        res.redirect("/login");
         logGoogleOAuthStage(req, "customer_portal", "FINAL_REDIRECT", "passed", {
-          result: "customer_portal",
+          result: "customer_portal_auth_gate",
         });
       } catch (redirectError) {
         logGoogleOAuthStage(req, "customer_portal", "FINAL_REDIRECT", "failed", {

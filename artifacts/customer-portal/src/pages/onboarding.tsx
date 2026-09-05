@@ -165,6 +165,7 @@ export default function OnboardingPage() {
       .then(r => r.json())
       .then((d: {
         status: string;
+        role?: string;
         accountType?: string;
         hasProfile?: boolean;
         customerType?: CustomerType | null;
@@ -172,6 +173,8 @@ export default function OnboardingPage() {
       }) => {
         const contextStatus = d.customerContext?.status;
         const isExistingCustomerWithUnresolvedOrganization =
+          d.role === "customer"
+          &&
           d.status === "active"
           && d.hasProfile === true
           && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
@@ -408,6 +411,8 @@ export default function OnboardingPage() {
       }
        if (json.status === "pending" || json.status === "company_pending") {
         setLocation("/pending-approval");
+       } else if (accountType === "vendor") {
+         setLocation("/vendor-dashboard");
       } else {
         setLocation("/dashboard");
       }
