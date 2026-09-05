@@ -50,6 +50,7 @@ import {
   BLOCKED_STATUSES,
   type MutationForDecisionStack,
 } from "../lib/reconciliation/reconDecisionStack.js";
+import { resolveRequiredCandidateStatus } from "../lib/reconciliation/candidateRequirementStatus.js";
 import {
   LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
   legacyReferenceCoaReviewReason,
@@ -6556,9 +6557,10 @@ router.post("/run-matching", async (req, res) => {
 
           if (!candidateResult.best) {
             const reason = "Rule AI ini mewajibkan kandidat transaksi sebelum auto-match.";
+            const pendingStatus = resolveRequiredCandidateStatus(candidateResult);
             await db.execute(sql.raw(`
               UPDATE bank_mutations
-              SET status = 'manual_review',
+              SET status = '${pendingStatus}',
                   review_reason = '${reason.replace(/'/g, "''")}',
                   review_code = 'RULE_CANDIDATE_REQUIRED',
                   updated_at = NOW()
