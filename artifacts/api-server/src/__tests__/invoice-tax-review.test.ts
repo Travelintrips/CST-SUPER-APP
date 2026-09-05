@@ -32,4 +32,28 @@ describe("invoice tax review gate", () => {
     expect(result.required).toBe(true);
     expect(result.reasons[0]).toContain("belum boleh ditentukan otomatis");
   });
+
+  it("uses breakdown PPh evidence when top-level OCR fields are empty", () => {
+    const result = buildInvoiceTaxReview({
+      invoiceBreakdown: {
+        withholding_tax: {
+          type: "PPh 23",
+          amount: 1741740,
+          rate: 2,
+          evidence: "Potongan PPh 23",
+        },
+      },
+    });
+    expect(result.required).toBe(true);
+    expect(result.withholding_tax_type).toBe("PPh 23");
+    expect(result.withholding_amount).toBe(1741740);
+  });
+
+  it("forces manual review when the PPh amount was cleared as suspicious evidence", () => {
+    const result = buildInvoiceTaxReview({
+      forcedReviewReason: "Nominal PPh bentrok dengan nilai PPN.",
+    });
+    expect(result.required).toBe(true);
+    expect(result.reasons).toContain("Nominal PPh bentrok dengan nilai PPN.");
+  });
 });

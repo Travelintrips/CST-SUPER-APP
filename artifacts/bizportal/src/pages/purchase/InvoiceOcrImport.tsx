@@ -580,6 +580,7 @@ export default function InvoiceOcrImportPage() {
           result?.invoice_breakdown?.withholding_tax?.amount ??
           result?.invoice_breakdown?.totals?.withholding_tax_amount ??
           result?.tax_review?.withholding_amount ??
+          result?.withholding_amount ??
           undefined,
         // Display-only lines (description/qty/unit for reference, not financial)
         lines: displayLines.map((l) => ({

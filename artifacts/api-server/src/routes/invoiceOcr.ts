@@ -297,14 +297,52 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
     const totals = rawTotals && typeof rawTotals === "object" && !Array.isArray(rawTotals)
       ? rawTotals as Record<string, unknown>
       : {};
+    const rawWithholdingAmount = asNumberOrNull(withholding.amount);
+    const rawTotalsWithholdingAmount = asNumberOrNull(totals.withholding_tax_amount);
+    const componentPphAmounts = components.map((component) => component.withholding_tax_amount);
+    const componentPphRates = components.map((component) => component.withholding_tax_rate);
+    const componentPpnAmounts = components.map((component) => component.ppn);
+    const pphEvidence = typeof withholding.evidence === "string" && withholding.evidence.trim().length > 0;
+    const pphRate = asNumberOrNull(withholding.rate);
+    const allComponentPphAreZeroOrMissing = componentPphAmounts.every(
+      (value) => value == null || value === 0,
+    );
+    const allPphRatesAreZeroOrMissing = (pphRate == null || pphRate === 0) &&
+      componentPphRates.every((value) => value == null || value === 0);
+    const pphAmountsCopiedFromPpn = [rawWithholdingAmount, rawTotalsWithholdingAmount]
+      .filter((value): value is number => value != null && value > 0)
+      .some((amount) => componentPpnAmounts.some((ppn) => ppn != null && ppn === amount));
+    const suspiciousWithholdingAmount =
+      allComponentPphAreZeroOrMissing &&
+      allPphRatesAreZeroOrMissing &&
+      !pphEvidence &&
+      pphAmountsCopiedFromPpn;
+    const sanitizedWithholdingAmount = suspiciousWithholdingAmount
+      ? null
+      : rawWithholdingAmount;
+    const sanitizedTotalsWithholdingAmount = suspiciousWithholdingAmount
+      ? null
+      : rawTotalsWithholdingAmount;
+    const sanitizedFlags = suspiciousWithholdingAmount
+      ? [
+          ...flags,
+          "AUTO-CLEARED: nominal PPh sama dengan nilai PPN komponen sementara seluruh PPh komponen nol; wajib review manual.",
+        ]
+      : flags;
+    const normalizedTopLevelWithholdingAmount = suspiciousWithholdingAmount &&
+      typeof normalizedData.withholding_amount === "number" &&
+      [rawWithholdingAmount, rawTotalsWithholdingAmount].includes(normalizedData.withholding_amount)
+      ? null
+      : normalizedData.withholding_amount;
     return {
       ...normalizedData,
+      withholding_amount: normalizedTopLevelWithholdingAmount,
       invoice_breakdown: {
         components,
         withholding_tax: {
           type: typeof withholding.type === "string" ? withholding.type : null,
-          rate: asNumberOrNull(withholding.rate),
-          amount: asNumberOrNull(withholding.amount),
+          rate: pphRate,
+          amount: sanitizedWithholdingAmount,
           base_amount: asNumberOrNull(withholding.base_amount),
           evidence: typeof withholding.evidence === "string" ? withholding.evidence : null,
         },
@@ -312,11 +350,11 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
           dpp: asNumberOrNull(totals.dpp),
           ppn: asNumberOrNull(totals.ppn),
           gross: asNumberOrNull(totals.gross),
-          withholding_tax_amount: asNumberOrNull(totals.withholding_tax_amount),
+          withholding_tax_amount: sanitizedTotalsWithholdingAmount,
           payable_amount: asNumberOrNull(totals.payable_amount),
         },
       },
-      flags,
+      flags: sanitizedFlags,
     };
   }
 
@@ -538,10 +576,17 @@ router.post(
     const sapTax = runSapTaxEngine(sapInput);
     logger.info({ sapTax }, "[invoiceOcr] SAP tax engine result");
 
+    const breakdown = sanitized.invoice_breakdown;
+    const forcedReviewReason = Array.isArray(sanitized.flags) &&
+      sanitized.flags.some((flag) => typeof flag === "string" && flag.startsWith("AUTO-CLEARED: nominal PPh"))
+      ? "Nominal PPh bentrok dengan nilai PPN pada breakdown dan dikosongkan untuk mencegah salah posting."
+      : null;
     const taxReview = buildInvoiceTaxReview({
       withholdingTaxType: sanitized.withholding_tax_type,
       taxObject: sanitized.tax_object,
       withholdingAmount: sanitized.withholding_amount,
+      invoiceBreakdown: breakdown,
+      forcedReviewReason,
     });
 
     res.json({ ok: true, data: sanitized, tax: taxResult, sap_tax: sapTax, tax_review: taxReview });
