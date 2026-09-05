@@ -12,8 +12,8 @@ import { confirmCustomerPortalPayment } from "../src/lib/customerPortalPaymentFi
 import { processCustomerPortalFinance } from "../src/lib/customerPortalFinanceConsumer.js";
 import { resolveFinanceProjectConfigWithClient } from "../src/lib/financeProjectConfigResolver.js";
 
-const { Pool } = pg;
 const PREFIX = `CFCP6C_${Date.now()}_${process.pid}`;
+const RUN_STARTED_AT = new Date();
 const COMPANY_ID = 1;
 const GROSS = 111_000;
 const SUPPORTED = {
@@ -28,12 +28,19 @@ const DEV_PROJECT_REF = "xssrfshdrtdfupgqwfdw";
 const PROD_PROJECT_REF = "nzdweipzckfszczzqtuw";
 const DEV_DATABASE_URL =
   process.env.SUPABASE_MIGRATION_URL ?? process.env.SUPABASE_DATABASE_URL_DEV;
-const pool = new Pool({
-  connectionString: DEV_DATABASE_URL,
-  max: 8,
+function createClient() {
+  return new pg.Client({
+    connectionString: DEV_DATABASE_URL,
   connectionTimeoutMillis: 20_000,
-  idleTimeoutMillis: 20_000,
-});
+    ssl: { rejectUnauthorized: false },
+  });
+}
+
+async function connectClient() {
+  const client = createClient();
+  await client.connect();
+  return client;
+}
 
 const fixtures = [];
 const ownership = {
@@ -48,10 +55,10 @@ const ownership = {
   mutations: new Set(),
   settlements: new Set(),
   settlementItems: new Set(),
+  fleetLedger: new Set(),
 };
 const MAX_ID_ALLOCATION_ATTEMPTS = 200;
 const allocationCollisions = [];
-let identitySurfaceCache = null;
 
 function assert(condition, message) {
   if (!condition) throw new Error(`CF_CP_6C_ASSERTION_FAILED: ${message}`);
@@ -124,6 +131,47 @@ async function syncSerialSequences(client) {
       [sequence.sequence_name],
     );
   }
+  await client.query(`
+    SELECT setval(
+      pg_get_serial_sequence('public.payments', 'id'),
+      GREATEST(
+        (SELECT COALESCE(MAX(id), 1) FROM public.payments),
+        (SELECT COALESCE(MAX(payment_id), 1) FROM public.customer_portal_settlement_items),
+        (SELECT COALESCE(MAX(source_id), 1)
+           FROM public.accounting_entries
+          WHERE source='sales_payment'),
+        (SELECT COALESCE(MAX(source_id), 1)
+           FROM public.bank_mutations
+          WHERE source='customer_portal_settlement'),
+        (SELECT COALESCE(MAX(source_payment_id), 1)
+           FROM public.customer_payment_finance_events
+          WHERE source_project='customer_portal'),
+        (SELECT COALESCE(MAX(source_payment_id), 1)
+           FROM public.customer_finance_processing
+          WHERE source_project='customer_portal')
+      ),
+      TRUE
+    )
+  `);
+  await client.query(`
+    SELECT setval(
+      pg_get_serial_sequence('public.sales_documents', 'id'),
+      GREATEST(
+        (SELECT COALESCE(MAX(id), 1) FROM public.sales_documents),
+        (SELECT COALESCE(MAX(document_id), 1) FROM public.sales_document_lines),
+        (SELECT COALESCE(MAX(ref_id), 1)
+           FROM public.payments
+          WHERE ref_kind='sales'),
+        (SELECT COALESCE(MAX(source_id), 1)
+           FROM public.accounting_entries
+          WHERE source='sales_invoice'),
+        (SELECT COALESCE(MAX(sales_document_id), 1)
+           FROM public.customer_payment_finance_events
+          WHERE source_project='customer_portal')
+      ),
+      TRUE
+    )
+  `);
 }
 
 async function taxConfig(client, productScope = "jasa") {
@@ -146,53 +194,41 @@ function quoteIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
-async function identitySurfaces(client) {
-  if (identitySurfaceCache) return identitySurfaceCache;
-  const result = await client.query(`
-    SELECT c.table_schema, c.table_name, c.column_name
-      FROM information_schema.columns
-        AS c
-      JOIN information_schema.tables t
-        ON t.table_schema=c.table_schema AND t.table_name=c.table_name
-     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
-       AND t.table_type='BASE TABLE'
-       AND c.table_name <> 'payments'
-       AND c.column_name IN ('payment_id', 'source_payment_id', 'source_id')
-       AND (
-         c.column_name IN ('payment_id', 'source_payment_id')
-         OR c.table_name IN ('accounting_entries', 'bank_mutations', 'accounting_journals')
-         OR c.table_name ~* '(accounting|settlement|finance|payment|tax|journal|mutation|outbox|recon|qris)'
-       )
-     ORDER BY c.table_schema, c.table_name, c.column_name
-  `);
-  identitySurfaceCache = result.rows;
-  return identitySurfaceCache;
-}
-
 async function preflightIdentity(client, paymentId, documentId) {
-  const surfaces = await identitySurfaces(client);
-  if (!surfaces.length) return [];
   const paymentValues = [String(paymentId)];
   const sourceValues = [String(paymentId), String(documentId)];
-  const union = surfaces.map((surface) => {
-    const qualified = `${quoteIdentifier(surface.table_schema)}.${quoteIdentifier(surface.table_name)}`;
-    const column = quoteIdentifier(surface.column_name);
-    const valuesParam = surface.column_name === "source_id" ? "$2" : "$1";
-    const table = `${surface.table_schema}.${surface.table_name}`.replaceAll("'", "''");
-    const field = surface.column_name.replaceAll("'", "''");
-    return `
-      SELECT '${table}' AS table_name, '${field}' AS column_name,
-             ${column}::text AS identity, COUNT(*)::int AS count
-        FROM ${qualified}
-       WHERE ${column}::text = ANY(${valuesParam}::text[])
-       GROUP BY ${column}
-    `;
-  }).join("\nUNION ALL\n");
-  const result = await client.query(union, [paymentValues, sourceValues]);
-  return result.rows.map((row) => ({
+  const canonicalValues = [
+    `customer_portal:payment:${paymentId}`,
+    `CP-PAY-${paymentId}`,
+  ];
+  const checks = [
+    ["customer_payment_finance_events", "source_payment_id", "int", paymentValues],
+    ["customer_finance_processing", "source_payment_id", "int", paymentValues],
+    ["customer_portal_settlement_items", "payment_id", "int", paymentValues],
+    ["accounting_entries", "source_id", "int", paymentValues, "source='sales_payment'"],
+    ["accounting_entries", "source_id", "int", [String(documentId)], "source='sales_invoice'"],
+    ["bank_mutations", "source_id", "int", paymentValues,
+      "source='customer_portal_settlement' AND source_table='payments'"],
+    ["customer_portal_settlement_batches", "canonical_key", "text", canonicalValues],
+    ["bank_mutations", "canonical_key", "text", canonicalValues],
+    ["bank_mutations", "mutation_key", "text", canonicalValues],
+  ];
+  const refs = [];
+  for (const [table, column, type, values, extraPredicate = "TRUE"] of checks) {
+    const result = await client.query(`
+      SELECT $1::text AS table_name, $2::text AS column_name,
+             ${quoteIdentifier(column)}::text AS identity,
+             COUNT(*)::int AS count
+        FROM public.${quoteIdentifier(table)}
+       WHERE ${quoteIdentifier(column)}=ANY($3::${type}[]) AND ${extraPredicate}
+       GROUP BY ${quoteIdentifier(column)}
+    `, [`public.${table}`, column, values]);
+    refs.push(...result.rows);
+  }
+  return refs.map((row) => ({
     table: row.table_name,
     column: row.column_name,
-    identity: Number(row.identity),
+    identity: String(row.identity),
     count: Number(row.count),
   }));
 }
@@ -212,6 +248,12 @@ async function createPayment(client, name, serviceScope, options = {}) {
   const docNumber = options.docNumber ?? `${PREFIX}_${name}_DOC`;
 
   for (let attempt = 1; attempt <= MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+    const reserved = await one(
+      client,
+      "SELECT nextval(pg_get_serial_sequence('public.payments', 'id'))::int AS id",
+    );
+    const paymentId = Number(reserved?.id);
+    assert(paymentId > 0, `${name}: payment sequence did not reserve an ID`);
     await client.query("BEGIN");
     try {
       let documentId = options.documentId;
@@ -237,16 +279,6 @@ async function createPayment(client, name, serviceScope, options = {}) {
           productScope === "jasa" ? serviceScope : null]);
         lineId = Number(line.id);
       }
-      const payment = await one(client, `
-        INSERT INTO payments
-          (ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
-           provider_merchant_trade_no, raw, company_id)
-        VALUES ('sales',$1,$2,$3,'pending','paylabs','qris',$4,$5::jsonb,$6)
-        RETURNING id
-      `, [documentId, docNumber, GROSS, `${PREFIX}_${name}_PAY_${attempt}`,
-        JSON.stringify({ source: "CF-CP-6C", environment: "development" }), COMPANY_ID]);
-      assert(payment, `${name}: payment not created`);
-      const paymentId = Number(payment.id);
       const refs = await preflightIdentity(client, paymentId, documentId);
       if (refs.length) {
         allocationCollisions.push({
@@ -260,6 +292,15 @@ async function createPayment(client, name, serviceScope, options = {}) {
         await client.query("ROLLBACK");
         continue;
       }
+      const payment = await one(client, `
+        INSERT INTO payments
+          (id, ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
+           provider_merchant_trade_no, raw, company_id)
+        VALUES ($1,'sales',$2,$3,$4,'pending','paylabs','qris',$5,$6::jsonb,$7)
+        RETURNING id
+      `, [paymentId, documentId, docNumber, GROSS, `${PREFIX}_${name}_PAY_${attempt}`,
+        JSON.stringify({ source: "CF-CP-6C", environment: "development" }), COMPANY_ID]);
+      assert(payment, `${name}: payment not created`);
       await client.query("COMMIT");
       const fixture = {
         name, serviceScope, documentId, lineId, paymentId, docNumber,
@@ -344,6 +385,39 @@ async function effects(client, fixture) {
       ownership.journals.add(fixture.settlementJournalId);
     }
   }
+  const settlementJournals = await client.query(`
+    SELECT id, entry_number
+      FROM accounting_entries
+     WHERE source='sales_payment'
+       AND source_id=$1
+       AND entry_number=$2
+       AND created_at >= $3
+  `, [fixture.paymentId, `CP-PAY-${fixture.paymentId}`, RUN_STARTED_AT]);
+  for (const row of settlementJournals.rows) {
+    ownership.journals.add(Number(row.id));
+  }
+  const entryIds = [
+    ...new Set([
+      ...(fixture.accountingId ? [fixture.accountingId] : []),
+      ...(fixture.settlementJournalId ? [fixture.settlementJournalId] : []),
+      ...settlementJournals.rows.map((row) => Number(row.id)),
+    ]),
+  ];
+  if (entryIds.length) {
+    const entryNumbers = (await client.query(
+      "SELECT entry_number FROM accounting_entries WHERE id=ANY($1::int[])",
+      [entryIds],
+    )).rows.map((row) => String(row.entry_number)).filter(Boolean);
+    if (entryNumbers.length) {
+      const fleetRows = await client.query(`
+        SELECT id
+          FROM fleet_ledger_entries
+         WHERE source_ref=ANY($1::text[])
+           AND created_at >= $2
+      `, [entryNumbers, RUN_STARTED_AT]);
+      for (const row of fleetRows.rows) ownership.fleetLedger.add(Number(row.id));
+    }
+  }
   return { processing, accounting, mutation, settlement };
 }
 
@@ -415,6 +489,7 @@ async function proveExim(client) {
 }
 
 async function negativeCase(client, name, serviceScope, provider, mutate) {
+  console.log(`[negative] start ${name}`);
   const fixture = await createPayment(client, `NEG_${name}`, serviceScope);
   await confirm(fixture, provider);
   await client.query("BEGIN");
@@ -427,7 +502,9 @@ async function negativeCase(client, name, serviceScope, provider, mutate) {
       sourcePaymentIds: [fixture.paymentId],
       useSavepoints: true,
     });
+    console.log(`[negative] processed ${name}`, JSON.stringify(result));
     const state = await effects(client, fixture);
+    console.log(`[negative] effects ${name}`, JSON.stringify(state));
     assert(
       result.manualReview === 1 && state.processing?.status === "manual_review",
       `${name}: expected manual review, got ${JSON.stringify({ result, state })}`,
@@ -437,6 +514,7 @@ async function negativeCase(client, name, serviceScope, provider, mutate) {
       `${name}: financial effects were created: ${JSON.stringify(state)}`,
     );
     await client.query("ROLLBACK");
+    console.log(`[negative] pass ${name}`);
     return { name, status: "PASS", precondition };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -600,16 +678,16 @@ async function proveTwoPayments(client) {
 }
 
 async function proveRace() {
-  const setup = await pool.connect();
+  const setup = await connectClient();
   let fixture;
   try {
     fixture = await createPayment(setup, "RACE", "trucking");
     await confirm(fixture);
   } finally {
-    setup.release();
+    await setup.end();
   }
-  const a = await pool.connect();
-  const b = await pool.connect();
+  const a = await connectClient();
+  const b = await connectClient();
   try {
     const results = await Promise.all([
       processCustomerPortalFinance({ client: a, limit: 1, sourcePaymentIds: [fixture.paymentId] }),
@@ -621,8 +699,8 @@ async function proveRace() {
     assertPosted("same-payment-race", state);
     return { clientA: claimed[0], clientB: claimed[1], duplicates: 0 };
   } finally {
-    a.release();
-    b.release();
+    await a.end();
+    await b.end();
   }
 }
 
@@ -656,11 +734,12 @@ async function cleanup(client) {
   try {
     const ids = [...ownership.payments];
     const docs = [...ownership.documents];
-    const fleetLedger = (await client.query(`
+    const markerFleetLedger = (await client.query(`
       SELECT id
         FROM fleet_ledger_entries
        WHERE description ILIKE $1 OR source_ref ILIKE $1
     `, [`%${PREFIX}%`])).rows.map((row) => Number(row.id));
+    const fleetLedger = [...new Set([...ownership.fleetLedger, ...markerFleetLedger])];
     const entryIds = [...new Set([...ownership.accounting, ...ownership.journals])];
     for (const [table, triggers] of [
       ["public.fleet_ledger_entries", ["trg_fleet_ledger_immutable"]],
@@ -709,17 +788,23 @@ async function cleanup(client) {
 
 async function main() {
   guard();
-  const client = await pool.connect();
+  const client = await connectClient();
   await syncSerialSequences(client);
   const before = await snapshot(client);
   let proof;
   let failure;
   try {
+    console.log("[proof] mappings");
     const mappings = await proveMappings(client);
+    console.log("[proof] negative matrix");
     const negativeMatrix = await proveNegativeMatrix(client);
+    console.log("[proof] exim");
     const exim = await proveExim(client);
+    console.log("[proof] same document");
     const sameDocument = await proveTwoPayments(client);
+    console.log("[proof] race");
     const race = await proveRace();
+    console.log("[proof] transient");
     const transient = await proveTransient(client);
     proof = { mappings, negativeMatrix, exim, sameDocument, race, transient };
   } catch (error) {
@@ -731,8 +816,7 @@ async function main() {
       failure ||= error;
     }
     const after = await snapshot(client).catch(() => null);
-    client.release();
-    await pool.end();
+    await client.end();
     if (failure) throw failure;
     assert(
       JSON.stringify(before) === JSON.stringify(after),
