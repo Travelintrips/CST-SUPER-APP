@@ -18,6 +18,8 @@ export type ModuleType = "sport_center" | "tenant" | "logistics";
 
 export interface IngestModulePaymentInput {
   moduleType: ModuleType;
+  /** Optional service discriminator; "*" mapping remains the module fallback. */
+  serviceKey?: string | null;
   sourceDocId: number;
   companyId: number;
   amount: number;
@@ -164,7 +166,31 @@ async function resolveJournal(companyId: number, method: string): Promise<number
   return null;
 }
 
-async function resolveRevenueAccount(companyId: number): Promise<number | null> {
+async function resolveRevenueAccount(
+  companyId: number,
+  moduleType: ModuleType,
+  serviceKey?: string | null,
+): Promise<number | null> {
+  const normalizedServiceKey = String(serviceKey ?? "").trim().toLowerCase();
+  const mappingResult = await db.execute(sql`
+    SELECT revenue_account_id
+    FROM accounting_revenue_mappings
+    WHERE company_id = ${companyId}
+      AND module_key = ${moduleType}
+      AND is_active = true
+      AND (
+        service_key = '*'
+        OR (${normalizedServiceKey} <> '' AND service_key = ${normalizedServiceKey})
+      )
+    ORDER BY CASE WHEN service_key = ${normalizedServiceKey} AND ${normalizedServiceKey} <> '' THEN 0 ELSE 1 END,
+             id DESC
+    LIMIT 1
+  `).catch(() => ({ rows: [] as unknown[] }));
+  if (mappingResult.rows.length > 0) {
+    const mappedAccountId = Number((mappingResult.rows[0] as Record<string, unknown>)["revenue_account_id"]);
+    if (Number.isInteger(mappedAccountId) && mappedAccountId > 0) return mappedAccountId;
+  }
+
   const settingsRes = await db.execute(sql`
     SELECT sales_income_account_id FROM accounting_settings
     WHERE company_id = ${companyId} LIMIT 1
@@ -334,7 +360,7 @@ async function updatePostingStatus(
 }
 
 export async function ingestModulePayment(input: IngestModulePaymentInput): Promise<IngestResult> {
-  const { moduleType, sourceDocId, companyId, amount, partnerName, date, ref, description, actorId } = input;
+  const { moduleType, serviceKey, sourceDocId, companyId, amount, partnerName, date, ref, description, actorId } = input;
   const method = normalizePaymentMethod(input.method) ?? "cash";
 
   try {
@@ -417,7 +443,7 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
     }
 
     try {
-      const revenueAccountId = await resolveRevenueAccount(companyId);
+      const revenueAccountId = await resolveRevenueAccount(companyId, moduleType, serviceKey);
 
       if (!revenueAccountId) {
         throw new Error("Akun pendapatan belum dikonfigurasi untuk perusahaan ini");
@@ -537,6 +563,7 @@ export interface BulkIngestResult {
 export async function bulkIngestModule(
   moduleType: ModuleType,
   companyId: number | null,
+  serviceKey?: string | null,
 ): Promise<BulkIngestResult> {
   let rows: Array<Record<string, unknown>> = [];
 
@@ -611,6 +638,7 @@ export async function bulkIngestModule(
     const rowCompanyId = Number(row["company_id"] ?? companyId ?? 1);
     const result = await ingestModulePayment({
       moduleType,
+      serviceKey,
       sourceDocId: rowSourceDocId,
       companyId: rowCompanyId,
       amount: Number(row["amount"] ?? 0),

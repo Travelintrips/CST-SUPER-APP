@@ -25,6 +25,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["customer_portal_settlement", "Customer Portal settlement migration", "schema"],
   ["portal_payment_company_scope", "Portal payment company scope migration", "backfill"],
   ["accounting", "Accounting migration", "schema"],
+  ["accounting_revenue_mapping", "Accounting revenue mapping migration", "schema"],
   ["coa_governance", "COA governance migration", "schema"],
   ["coa_proposal", "COA proposal migration", "schema"],
   ["accounting_hub", "Accounting Hub migration", "schema"],

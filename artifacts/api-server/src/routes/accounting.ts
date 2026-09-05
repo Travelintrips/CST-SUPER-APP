@@ -2662,6 +2662,214 @@ router.post("/entries/bulk-lock", async (req, res) => {
 });
 
 // ============ Settings ============
+type RevenueMappingInput = {
+  moduleKey?: unknown;
+  serviceKey?: unknown;
+  label?: unknown;
+  revenueAccountId?: unknown;
+  isActive?: unknown;
+};
+
+function normalizeRevenueMappingKey(value: unknown, fallback: string): string {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  return normalized || fallback;
+}
+
+function serializeRevenueMapping(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    companyId: Number(row.company_id),
+    moduleKey: String(row.module_key),
+    serviceKey: String(row.service_key),
+    label: String(row.label),
+    revenueAccountId: Number(row.revenue_account_id),
+    revenueAccountCode: row.revenue_account_code == null ? null : String(row.revenue_account_code),
+    revenueAccountName: row.revenue_account_name == null ? null : String(row.revenue_account_name),
+    isActive: row.is_active === true,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+  };
+}
+
+async function validateRevenueAccount(accountId: number, companyId: number): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT id
+    FROM chart_of_accounts
+    WHERE id = ${accountId}
+      AND type = 'revenue'
+      AND is_active = true
+      AND (company_id = ${companyId} OR company_id IS NULL)
+    LIMIT 1
+  `);
+  return result.rows.length === 1;
+}
+
+router.get("/revenue-mappings", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const result = await db.execute(sql`
+    SELECT
+      m.id, m.company_id, m.module_key, m.service_key, m.label,
+      m.revenue_account_id, m.is_active, m.created_at, m.updated_at,
+      a.code AS revenue_account_code, a.name AS revenue_account_name
+    FROM accounting_revenue_mappings m
+    LEFT JOIN chart_of_accounts a ON a.id = m.revenue_account_id
+    WHERE m.company_id = ${companyId}
+    ORDER BY m.module_key, m.service_key, m.label, m.id
+  `);
+  return res.json(result.rows.map((row) => serializeRevenueMapping(row as Record<string, unknown>)));
+});
+
+router.post("/revenue-mappings", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const body = (req.body ?? {}) as RevenueMappingInput;
+  const moduleKey = normalizeRevenueMappingKey(body.moduleKey, "");
+  const serviceKey = normalizeRevenueMappingKey(body.serviceKey, "*");
+  const label = String(body.label ?? "").trim();
+  const revenueAccountId = Number(body.revenueAccountId);
+  const isActive = body.isActive === undefined ? true : Boolean(body.isActive);
+
+  if (!moduleKey || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(moduleKey)) {
+    return res.status(400).json({ message: "moduleKey wajib berupa identifier sederhana" });
+  }
+  if (!serviceKey || serviceKey.length > 100) {
+    return res.status(400).json({ message: "serviceKey wajib diisi dan maksimal 100 karakter" });
+  }
+  if (!label || label.length > 160) {
+    return res.status(400).json({ message: "label wajib diisi dan maksimal 160 karakter" });
+  }
+  if (!Number.isInteger(revenueAccountId) || !(await validateRevenueAccount(revenueAccountId, companyId))) {
+    return res.status(400).json({ message: "Pilih akun pendapatan aktif milik perusahaan ini" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      INSERT INTO accounting_revenue_mappings
+        (company_id, module_key, service_key, label, revenue_account_id, is_active)
+      VALUES
+        (${companyId}, ${moduleKey}, ${serviceKey}, ${label}, ${revenueAccountId}, ${isActive})
+      RETURNING id, company_id, module_key, service_key, label, revenue_account_id,
+                is_active, created_at, updated_at
+    `);
+    audit(req, {
+      action: "create",
+      module: "accounting_revenue_mapping",
+      resourceId: Number((result.rows[0] as Record<string, unknown>).id),
+      companyId,
+      description: `Revenue mapping created: ${moduleKey}/${serviceKey}`,
+      after: { moduleKey, serviceKey, label, revenueAccountId, isActive },
+    });
+    const created = await db.execute(sql`
+      SELECT
+        m.id, m.company_id, m.module_key, m.service_key, m.label,
+        m.revenue_account_id, m.is_active, m.created_at, m.updated_at,
+        a.code AS revenue_account_code, a.name AS revenue_account_name
+      FROM accounting_revenue_mappings m
+      LEFT JOIN chart_of_accounts a ON a.id = m.revenue_account_id
+      WHERE m.id = ${(result.rows[0] as Record<string, unknown>).id}
+        AND m.company_id = ${companyId}
+    `);
+    return res.status(201).json(serializeRevenueMapping(created.rows[0] as Record<string, unknown>));
+  } catch (err) {
+    const message = String((err as Error)?.message ?? err);
+    if (message.includes("accounting_revenue_mapping_scope_uniq")) {
+      return res.status(409).json({ message: "Mapping untuk modul dan layanan tersebut sudah ada" });
+    }
+    throw err;
+  }
+});
+
+router.patch("/revenue-mappings/:id", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ message: "Invalid id" });
+
+  const existing = await db.execute(sql`
+    SELECT id, module_key, service_key, label, revenue_account_id, is_active
+    FROM accounting_revenue_mappings
+    WHERE id = ${id} AND company_id = ${companyId}
+    LIMIT 1
+  `);
+  const current = existing.rows[0] as Record<string, unknown> | undefined;
+  if (!current) return res.status(404).json({ message: "Mapping tidak ditemukan" });
+
+  const body = (req.body ?? {}) as RevenueMappingInput;
+  const moduleKey = normalizeRevenueMappingKey(body.moduleKey, String(current.module_key));
+  const serviceKey = normalizeRevenueMappingKey(body.serviceKey, String(current.service_key));
+  const label = body.label === undefined ? String(current.label) : String(body.label).trim();
+  const revenueAccountId = body.revenueAccountId === undefined
+    ? Number(current.revenue_account_id)
+    : Number(body.revenueAccountId);
+  const isActive = body.isActive === undefined ? current.is_active === true : Boolean(body.isActive);
+
+  if (!moduleKey || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(moduleKey) || !serviceKey || serviceKey.length > 100) {
+    return res.status(400).json({ message: "Module atau service key tidak valid" });
+  }
+  if (!label || label.length > 160) {
+    return res.status(400).json({ message: "label wajib diisi dan maksimal 160 karakter" });
+  }
+  if (!Number.isInteger(revenueAccountId) || !(await validateRevenueAccount(revenueAccountId, companyId))) {
+    return res.status(400).json({ message: "Pilih akun pendapatan aktif milik perusahaan ini" });
+  }
+
+  try {
+    await db.execute(sql`
+      UPDATE accounting_revenue_mappings
+      SET module_key = ${moduleKey},
+          service_key = ${serviceKey},
+          label = ${label},
+          revenue_account_id = ${revenueAccountId},
+          is_active = ${isActive},
+          updated_at = NOW()
+      WHERE id = ${id} AND company_id = ${companyId}
+    `);
+  } catch (err) {
+    const message = String((err as Error)?.message ?? err);
+    if (message.includes("accounting_revenue_mapping_scope_uniq")) {
+      return res.status(409).json({ message: "Mapping untuk modul dan layanan tersebut sudah ada" });
+    }
+    throw err;
+  }
+
+  audit(req, {
+    action: "update",
+    module: "accounting_revenue_mapping",
+    resourceId: id,
+    companyId,
+    description: `Revenue mapping updated: ${moduleKey}/${serviceKey}`,
+    after: { moduleKey, serviceKey, label, revenueAccountId, isActive },
+  });
+  const updated = await db.execute(sql`
+    SELECT
+      m.id, m.company_id, m.module_key, m.service_key, m.label,
+      m.revenue_account_id, m.is_active, m.created_at, m.updated_at,
+      a.code AS revenue_account_code, a.name AS revenue_account_name
+    FROM accounting_revenue_mappings m
+    LEFT JOIN chart_of_accounts a ON a.id = m.revenue_account_id
+    WHERE m.id = ${id} AND m.company_id = ${companyId}
+  `);
+  return res.json(serializeRevenueMapping(updated.rows[0] as Record<string, unknown>));
+});
+
+router.delete("/revenue-mappings/:id", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ message: "Invalid id" });
+  const result = await db.execute(sql`
+    DELETE FROM accounting_revenue_mappings
+    WHERE id = ${id} AND company_id = ${companyId}
+    RETURNING id, module_key, service_key
+  `);
+  if (result.rows.length === 0) return res.status(404).json({ message: "Mapping tidak ditemukan" });
+  audit(req, {
+    action: "delete",
+    module: "accounting_revenue_mapping",
+    resourceId: id,
+    companyId,
+    description: `Revenue mapping deleted: ${String((result.rows[0] as Record<string, unknown>).module_key)}/${String((result.rows[0] as Record<string, unknown>).service_key)}`,
+  });
+  return res.json({ ok: true, id });
+});
+
 router.get("/settings", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const s = await ensureAccountingSettings(companyId);
@@ -6087,7 +6295,11 @@ router.get("/posting-monitor", async (req, res) => {
 router.post("/posting-monitor/post", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   try {
-    const { moduleType, sourceDocId } = req.body as { moduleType: string; sourceDocId: number };
+    const { moduleType, serviceKey, sourceDocId } = req.body as {
+      moduleType: string;
+      serviceKey?: string | null;
+      sourceDocId: number;
+    };
     if (!moduleType || !sourceDocId) {
       return res.status(400).json({ error: "moduleType dan sourceDocId wajib diisi" });
     }
@@ -6132,6 +6344,7 @@ router.post("/posting-monitor/post", async (req, res) => {
 
     const result = await ingestModulePayment({
       moduleType,
+      serviceKey,
       sourceDocId: Number(paymentRow["id"]),
       companyId: Number(paymentRow["company_id"] ?? companyId), // fallback to request company scope, not hardcoded 1
       amount: Number(paymentRow["amount"] ?? 0),
@@ -6152,21 +6365,21 @@ router.post("/posting-monitor/post", async (req, res) => {
 router.post("/posting-monitor/bulk", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   try {
-    const { moduleType } = req.body as { moduleType: string };
+    const { moduleType, serviceKey } = req.body as { moduleType: string; serviceKey?: string | null };
     if (!moduleType || !["sport_center", "tenant", "logistics", "all"].includes(moduleType)) {
       return res.status(400).json({ error: "moduleType tidak valid (sport_center | tenant | logistics | all)" });
     }
 
     const companyId = await resolveCompanyId(req);
     const { bulkIngestModule } = await import("../lib/ingestModulePayment.js") as {
-      bulkIngestModule: (moduleType: string, companyId: number | null) => Promise<import("../lib/ingestModulePayment.js").BulkIngestResult>;
+      bulkIngestModule: (moduleType: string, companyId: number | null, serviceKey?: string | null) => Promise<import("../lib/ingestModulePayment.js").BulkIngestResult>;
     };
 
     const modules = moduleType === "all" ? ["sport_center", "tenant", "logistics"] : [moduleType];
     const results: Record<string, unknown> = {};
 
     for (const m of modules) {
-      results[m] = await bulkIngestModule(m as "sport_center" | "tenant" | "logistics", companyId);
+      results[m] = await bulkIngestModule(m as "sport_center" | "tenant" | "logistics", companyId, serviceKey);
     }
 
     return res.json({ ok: true, results });

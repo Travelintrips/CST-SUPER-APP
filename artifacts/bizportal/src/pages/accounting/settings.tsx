@@ -18,7 +18,7 @@ import {
 } from "@workspace/api-client-react";
 import type { UpdateAccountingSettingsBody } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Settings as SettingsIcon, Upload, X, Send, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, Settings as SettingsIcon, Upload, X, Send, CheckCircle2, Clock, Plus, Pencil, Trash2 } from "lucide-react";
 import { useUpload } from "@workspace/object-storage-web";
 import { Link } from "wouter";
 
@@ -34,6 +34,25 @@ const EMPTY: SettingsForm = {
   defaultSalesTaxId: null, defaultPurchaseTaxId: null,
   companyName: null, companyAddress: null, companyNpwp: null, companyLogoUrl: null,
 };
+
+type RevenueMapping = {
+  id: number;
+  moduleKey: string;
+  serviceKey: string;
+  label: string;
+  revenueAccountId: number;
+  revenueAccountCode: string | null;
+  revenueAccountName: string | null;
+  isActive: boolean;
+};
+
+const REVENUE_MODULES = [
+  { value: "sport_center", label: "Sport Center" },
+  { value: "tenant", label: "Tenant / Rental" },
+  { value: "logistics", label: "Logistics / Freight" },
+  { value: "pos", label: "POS / Produk" },
+  { value: "other", label: "Usaha Lainnya" },
+];
 
 function getLogoServeUrl(objectPath: string) {
   if (objectPath.startsWith("/objects/")) return `/api/storage${objectPath}`;
@@ -109,6 +128,16 @@ export default function AccountingSettingsPage() {
   });
 
   const [form, setForm] = useState<SettingsForm>(EMPTY);
+  const [revenueMappings, setRevenueMappings] = useState<RevenueMapping[]>([]);
+  const [mappingForm, setMappingForm] = useState({
+    moduleKey: "sport_center",
+    serviceKey: "*",
+    label: "",
+    revenueAccountId: null as number | null,
+    isActive: true,
+  });
+  const [editingMappingId, setEditingMappingId] = useState<number | null>(null);
+  const [mappingBusy, setMappingBusy] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -158,6 +187,100 @@ export default function AccountingSettingsPage() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast({ title: t.common.error, description: msg, variant: "destructive" });
+    }
+  };
+
+  const loadRevenueMappings = async () => {
+    if (!activeCompanyId) {
+      setRevenueMappings([]);
+      return;
+    }
+    const res = await fetch(`/api/accounting/revenue-mappings?companyId=${activeCompanyId}`, { credentials: "include" });
+    if (!res.ok) throw new Error("Gagal memuat mapping pendapatan");
+    setRevenueMappings(await res.json() as RevenueMapping[]);
+  };
+
+  useEffect(() => {
+    loadRevenueMappings().catch(() => {});
+  }, [activeCompanyId]);
+
+  const resetMappingForm = () => {
+    setEditingMappingId(null);
+    setMappingForm({
+      moduleKey: "sport_center",
+      serviceKey: "*",
+      label: "",
+      revenueAccountId: null,
+      isActive: true,
+    });
+  };
+
+  const saveRevenueMapping = async () => {
+    if (!activeCompanyId) {
+      toast({ title: "Pilih perusahaan aktif terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    if (!mappingForm.label.trim() || !mappingForm.revenueAccountId) {
+      toast({ title: "Lengkapi label dan akun pendapatan", variant: "destructive" });
+      return;
+    }
+    setMappingBusy(true);
+    try {
+      const path = editingMappingId
+        ? `/api/accounting/revenue-mappings/${editingMappingId}`
+        : "/api/accounting/revenue-mappings";
+      const res = await fetch(path, {
+        method: editingMappingId ? "PATCH" : "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...mappingForm,
+          companyId: activeCompanyId,
+          serviceKey: mappingForm.serviceKey.trim() || "*",
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRevenueMappings();
+      resetMappingForm();
+      toast({ title: "Mapping pendapatan tersimpan" });
+    } catch (e) {
+      toast({ title: "Gagal menyimpan mapping", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setMappingBusy(false);
+    }
+  };
+
+  const editRevenueMapping = (mapping: RevenueMapping) => {
+    setEditingMappingId(mapping.id);
+    setMappingForm({
+      moduleKey: mapping.moduleKey,
+      serviceKey: mapping.serviceKey,
+      label: mapping.label,
+      revenueAccountId: mapping.revenueAccountId,
+      isActive: mapping.isActive,
+    });
+  };
+
+  const deleteRevenueMapping = async (mapping: RevenueMapping) => {
+    if (!window.confirm(`Hapus mapping "${mapping.label}"?`)) return;
+    if (!activeCompanyId) {
+      toast({ title: "Pilih perusahaan aktif terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    setMappingBusy(true);
+    try {
+      const res = await fetch(`/api/accounting/revenue-mappings/${mapping.id}?companyId=${activeCompanyId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRevenueMappings();
+      if (editingMappingId === mapping.id) resetMappingForm();
+      toast({ title: "Mapping pendapatan dihapus" });
+    } catch (e) {
+      toast({ title: "Gagal menghapus mapping", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setMappingBusy(false);
     }
   };
 
@@ -318,10 +441,107 @@ export default function AccountingSettingsPage() {
           <CardContent className="grid grid-cols-2 gap-4">
             {accSelect("arAccountId", "Piutang Usaha (AR)", ["asset"])}
             {accSelect("apAccountId", "Hutang Usaha (AP)", ["liability"])}
-            {accSelect("salesIncomeAccountId", "Pendapatan Penjualan", ["revenue"])}
+            {accSelect("salesIncomeAccountId", "Pendapatan Default / Fallback", ["revenue"])}
             {accSelect("purchaseExpenseAccountId", "Beban Pembelian / HPP", ["expense"])}
             {accSelect("ppnOutputAccountId", "PPN Keluaran", ["liability"])}
             {accSelect("ppnInputAccountId", "PPN Masukan", ["asset"])}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Mapping Pendapatan per Modul / Layanan</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Mapping spesifik diprioritaskan sebelum akun Pendapatan Default / Fallback.
+              Gunakan <span className="font-mono">*</span> untuk semua layanan dalam modul.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+              <div>
+                <Label>Modul</Label>
+                <Select value={mappingForm.moduleKey} onValueChange={(value) => setMappingForm({ ...mappingForm, moduleKey: value })}>
+                  <SelectTrigger data-testid="select-revenue-mapping-module"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {REVENUE_MODULES.map((module) => <SelectItem key={module.value} value={module.value}>{module.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Service Key</Label>
+                <Input
+                  data-testid="input-revenue-mapping-service"
+                  value={mappingForm.serviceKey}
+                  onChange={(e) => setMappingForm({ ...mappingForm, serviceKey: e.target.value })}
+                  placeholder="* atau booking"
+                />
+              </div>
+              <div>
+                <Label>Nama Mapping</Label>
+                <Input
+                  data-testid="input-revenue-mapping-label"
+                  value={mappingForm.label}
+                  onChange={(e) => setMappingForm({ ...mappingForm, label: e.target.value })}
+                  placeholder="Pendapatan Booking Sport Center"
+                />
+              </div>
+              <div>
+                <Label>Akun Pendapatan</Label>
+                <Select
+                  value={mappingForm.revenueAccountId ? String(mappingForm.revenueAccountId) : "none"}
+                  onValueChange={(value) => setMappingForm({ ...mappingForm, revenueAccountId: value === "none" ? null : Number(value) })}
+                >
+                  <SelectTrigger data-testid="select-revenue-mapping-account"><SelectValue placeholder="Pilih akun" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Pilih akun —</SelectItem>
+                    {(accounts ?? []).filter((a) => a.isActive && a.type === "revenue").map((a) => (
+                      <SelectItem key={a.id} value={String(a.id)}>{a.code} {a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end gap-2">
+                <Button onClick={saveRevenueMapping} disabled={mappingBusy} className="flex-1" data-testid="button-save-revenue-mapping">
+                  {editingMappingId ? <Pencil className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
+                  {editingMappingId ? "Update" : "Tambah"}
+                </Button>
+                {editingMappingId && <Button variant="outline" onClick={resetMappingForm} disabled={mappingBusy}>Batal</Button>}
+              </div>
+            </div>
+
+            {revenueMappings.length === 0 ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                Belum ada mapping spesifik. Sistem memakai akun default/fallback.
+              </div>
+            ) : (
+              <div className="divide-y rounded-md border">
+                {revenueMappings.map((mapping) => (
+                  <div key={mapping.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+                    <div className="min-w-0">
+                      <div className="font-medium">{mapping.label}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {REVENUE_MODULES.find((module) => module.value === mapping.moduleKey)?.label ?? mapping.moduleKey}
+                        {" · service: "}
+                        <span className="font-mono">{mapping.serviceKey}</span>
+                        {" · "}
+                        <span className="font-mono">{mapping.revenueAccountCode ?? `#${mapping.revenueAccountId}`}</span>
+                        {" "}
+                        {mapping.revenueAccountName ?? ""}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={mapping.isActive ? "default" : "secondary"}>{mapping.isActive ? "Aktif" : "Nonaktif"}</Badge>
+                      <Button size="icon" variant="ghost" aria-label="Edit mapping" onClick={() => editRevenueMapping(mapping)} disabled={mappingBusy}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" aria-label="Hapus mapping" onClick={() => deleteRevenueMapping(mapping)} disabled={mappingBusy}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

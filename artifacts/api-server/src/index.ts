@@ -42,6 +42,7 @@ import { runMarketplaceLegacyWriteIdempotencyMigration } from "./lib/marketplace
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
+import { runAccountingRevenueMappingMigration } from "./lib/accountingRevenueMappingMigration.js";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
 import { runAccountingHubMigration, runSportCenterPaymentAccountingMetadataBackfill } from "./lib/accountingHubMigration";
@@ -2061,6 +2062,7 @@ async function startServer() {
     .then(() => runWithRetry("Customer Portal settlement migration", runCustomerPortalSettlementMigration))
     .then(() => runWithRetry("Portal payment company scope migration", runPortalPaymentCompanyMigration))
     .then(() => runWithRetry("Accounting migration", runAccountingMigration))
+    .then(() => runWithRetry("Accounting revenue mapping migration", runAccountingRevenueMappingMigration))
     .then(() => runWithRetry("COA governance migration", runCoaGovernanceMigration))
     .then(() => runWithRetry("COA proposal migration", runCoaProposalMigration))
     .then(() => runWithRetry("Accounting Hub migration", runAccountingHubMigration))

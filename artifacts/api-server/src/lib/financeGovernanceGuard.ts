@@ -197,8 +197,8 @@ export function requireLedgerRole(allowedRoles: string[]) {
 //   Use exact match to prevent unintended exemption of other routes that happen
 //   to end with "/settings".
 const GOVERNANCE_EXEMPT_SUFFIXES = ["/ocr-extract", "/ocr-preview"];
-const GOVERNANCE_EXEMPT_EXACT   = ["/settings", "/accounts", "/journals"];
-const GOVERNANCE_EXEMPT_PREFIXES = ["/accounts/", "/journals/"];
+const GOVERNANCE_EXEMPT_EXACT   = ["/settings", "/accounts", "/journals", "/revenue-mappings"];
+const GOVERNANCE_EXEMPT_PREFIXES = ["/accounts/", "/journals/", "/revenue-mappings/"];
 
 export function writeMethodGovernanceGuard(req: Request, res: Response, next: NextFunction): void {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
