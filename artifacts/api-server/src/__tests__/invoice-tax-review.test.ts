@@ -30,7 +30,7 @@ describe("invoice tax review gate", () => {
       withholdingAmount: 2000,
     });
     expect(result.required).toBe(true);
-    expect(result.reasons[0]).toContain("belum boleh ditentukan otomatis");
+    expect(result.reasons[0]).toContain("nominal invoice dapat dihitung");
   });
 
   it("uses breakdown PPh evidence when top-level OCR fields are empty", () => {

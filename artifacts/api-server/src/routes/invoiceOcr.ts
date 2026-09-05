@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { runInvoiceTaxEngine, type InvoiceTaxInput } from "../lib/invoiceTaxEngine.js";
 import { runSapTaxEngine, buildSapTaxInput, type SapTaxInput } from "../lib/sapTaxEngine.js";
 import { buildInvoiceTaxReview } from "../lib/invoiceTaxReview.js";
+import { applyWithholdingCalculations } from "../lib/invoiceWithholdingCalculation.js";
 import { ocrIpRateLimiter, ocrUserRateLimiter, ocrCompanyRateLimiter } from "../middlewares/securityRateLimiter.js";
 
 const execFileAsync = promisify(execFile);
@@ -117,10 +118,12 @@ RULES:
   for associating labels with DPP/PPN/Gross columns. PDF text extraction may flatten columns.
   Do not omit a visible component just because the extracted text order is ambiguous.
 - For withholding_tax, extract PPh type, printed rate, printed amount, and printed tax base.
-  A rate alone is not an amount. Do not calculate PPh or payable_amount when the invoice
-  does not print those values; use null and add a flag for manual verification.
-- payable_amount must only be populated when the invoice explicitly prints the amount payable
-  after withholding. Never derive it from gross minus a tax rate.
+  If the invoice explicitly prints a PPh type and rate alongside a component NET/DPP and
+  GROSS, also return the rate on that component so the backend can calculate an estimated
+  withholding amount from NET/DPP × rate. Never use VAT as a withholding amount or base.
+- payable_amount may be calculated as GROSS minus the calculated withholding amount only when
+  the component NET/DPP, GROSS, and printed PPh rate are all unambiguous. Label this as a
+  calculation from the printed rate; it is still subject to tax review before posting.
 - For every line_item, also return "coa_hint" as a short non-posting classification hint (for example "office supplies", "freight", "professional services"). Never invent a numeric COA code.
 - Detect withholding tax separately from PPN. Return "withholding_tax_type" only when the document explicitly identifies PPh (such as PPh 21, PPh 23, PPh 4(2), PPh 15, PPh 26) and return "tax_object" only when the transaction object is explicit. If either is ambiguous, keep the field null and add a flag.
 - payment_status_hint: "PAID" if marked lunas/paid, "UNPAID" if has due date without payment, "PARTIAL" if partial.
@@ -167,8 +170,10 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
         "dpp": number | null,
         "ppn": number | null,
         "gross": number | null,
-        "withholding_tax_amount": number | null,
+         "withholding_tax_type": string | null,
+         "withholding_tax_amount": number | null,
         "withholding_tax_rate": number | null,
+         "withholding_tax_calculated": boolean,
         "payable_amount": number | null,
         "details": {
           "re_object": string | null,
@@ -188,6 +193,7 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
       "rate": number | null,
       "amount": number | null,
       "base_amount": number | null,
+       "calculation_method": "printed_amount" | "calculated_from_printed_rate" | null,
       "evidence": string | null
     },
     "totals": {
@@ -210,7 +216,10 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
  * Sanity-check and auto-correct common AI extraction errors.
  * Most common mistake: AI sets tax ≈ subtotal (swaps DPP and PPN).
  */
-function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknown> {
+function sanitizeOcrResult(
+  data: Record<string, unknown>,
+  sourceText = "",
+): Record<string, unknown> {
   const subtotal = typeof data.subtotal === "number" ? data.subtotal : null;
   const tax = typeof data.tax === "number" ? data.tax : null;
   const total = typeof data.total_amount === "number" ? data.total_amount : null;
@@ -273,8 +282,12 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
           dpp: asNumberOrNull(component.dpp),
           ppn: asNumberOrNull(component.ppn),
           gross: asNumberOrNull(component.gross),
+          withholding_tax_type: typeof component.withholding_tax_type === "string"
+            ? component.withholding_tax_type
+            : null,
           withholding_tax_amount: asNumberOrNull(component.withholding_tax_amount),
           withholding_tax_rate: asNumberOrNull(component.withholding_tax_rate),
+          withholding_tax_calculated: component.withholding_tax_calculated === true,
           payable_amount: asNumberOrNull(component.payable_amount),
           details: {
             re_object: typeof details.re_object === "string" ? details.re_object : null,
@@ -297,11 +310,26 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
     const totals = rawTotals && typeof rawTotals === "object" && !Array.isArray(rawTotals)
       ? rawTotals as Record<string, unknown>
       : {};
+    const calculation = applyWithholdingCalculations(
+      components,
+      withholding,
+      totals,
+      sourceText,
+    );
+    const calculatedComponents = calculation.components;
+    const calculatedWithholding = calculation.withholding;
+    const calculatedTotals = calculation.totals;
     const rawWithholdingAmount = asNumberOrNull(withholding.amount);
     const rawTotalsWithholdingAmount = asNumberOrNull(totals.withholding_tax_amount);
-    const componentPphAmounts = components.map((component) => component.withholding_tax_amount);
-    const componentPphRates = components.map((component) => component.withholding_tax_rate);
-    const componentPpnAmounts = components.map((component) => component.ppn);
+    const componentPphAmounts = calculatedComponents.map((component) =>
+      asNumberOrNull(component.withholding_tax_amount),
+    );
+    const componentPphRates = calculatedComponents.map((component) =>
+      asNumberOrNull(component.withholding_tax_rate),
+    );
+    const componentPpnAmounts = calculatedComponents.map((component) =>
+      asNumberOrNull(component.ppn),
+    );
     const pphEvidence = typeof withholding.evidence === "string" && withholding.evidence.trim().length > 0;
     const pphRate = asNumberOrNull(withholding.rate);
     const allComponentPphAreZeroOrMissing = componentPphAmounts.every(
@@ -319,39 +347,48 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
       pphAmountsCopiedFromPpn;
     const sanitizedWithholdingAmount = suspiciousWithholdingAmount
       ? null
-      : rawWithholdingAmount;
+      : asNumberOrNull(calculatedWithholding.amount) ?? rawWithholdingAmount;
     const sanitizedTotalsWithholdingAmount = suspiciousWithholdingAmount
       ? null
-      : rawTotalsWithholdingAmount;
+      : asNumberOrNull(calculatedTotals.withholding_tax_amount) ?? rawTotalsWithholdingAmount;
     const sanitizedFlags = suspiciousWithholdingAmount
       ? [
           ...flags,
+          ...calculation.flags,
           "AUTO-CLEARED: nominal PPh sama dengan nilai PPN komponen sementara seluruh PPh komponen nol; wajib review manual.",
         ]
-      : flags;
-    const normalizedTopLevelWithholdingAmount = suspiciousWithholdingAmount &&
-      typeof normalizedData.withholding_amount === "number" &&
-      [rawWithholdingAmount, rawTotalsWithholdingAmount].includes(normalizedData.withholding_amount)
-      ? null
-      : normalizedData.withholding_amount;
+      : [...flags, ...calculation.flags];
+    const normalizedTopLevelWithholdingAmount = suspiciousWithholdingAmount
+      ? typeof normalizedData.withholding_amount === "number" &&
+        [rawWithholdingAmount, rawTotalsWithholdingAmount].includes(normalizedData.withholding_amount)
+        ? null
+        : normalizedData.withholding_amount
+      : asNumberOrNull(calculatedWithholding.amount) ?? normalizedData.withholding_amount;
+    const normalizedWithholding = suspiciousWithholdingAmount
+      ? { ...calculatedWithholding, amount: null }
+      : calculatedWithholding;
     return {
       ...normalizedData,
       withholding_amount: normalizedTopLevelWithholdingAmount,
+      withholding_tax_type:
+        typeof normalizedWithholding.type === "string"
+          ? normalizedWithholding.type
+          : normalizedData.withholding_tax_type,
       invoice_breakdown: {
-        components,
+        components: calculatedComponents,
         withholding_tax: {
-          type: typeof withholding.type === "string" ? withholding.type : null,
-          rate: pphRate,
+          ...normalizedWithholding,
+          rate: asNumberOrNull(normalizedWithholding.rate) ?? pphRate,
           amount: sanitizedWithholdingAmount,
-          base_amount: asNumberOrNull(withholding.base_amount),
-          evidence: typeof withholding.evidence === "string" ? withholding.evidence : null,
         },
         totals: {
           dpp: asNumberOrNull(totals.dpp),
           ppn: asNumberOrNull(totals.ppn),
           gross: asNumberOrNull(totals.gross),
           withholding_tax_amount: sanitizedTotalsWithholdingAmount,
-          payable_amount: asNumberOrNull(totals.payable_amount),
+          payable_amount: suspiciousWithholdingAmount
+            ? asNumberOrNull(totals.payable_amount)
+            : asNumberOrNull(calculatedTotals.payable_amount) ?? asNumberOrNull(totals.payable_amount),
         },
       },
       flags: sanitizedFlags,
@@ -387,6 +424,7 @@ router.post(
 
   try {
     let extractedJson: unknown;
+    let extractionSourceText = "";
 
     if (isPdf) {
       let pdfText = "";
@@ -400,6 +438,7 @@ router.post(
       }
 
       const cleaned = pdfParseOk ? cleanPdfText(pdfText) : "";
+      extractionSourceText = cleaned;
       const useVision = cleaned.length < PDF_TEXT_MIN_CHARS;
 
       logger.info(
@@ -536,7 +575,10 @@ router.post(
       extractedJson = JSON.parse(raw);
     }
 
-    const sanitized = sanitizeOcrResult(extractedJson as Record<string, unknown>);
+    const sanitized = sanitizeOcrResult(
+      extractedJson as Record<string, unknown>,
+      extractionSourceText,
+    );
 
     // ── Build tax engine input ──────────────────────────────────────────────
     // FIX 3: Detect Angkasa Pura / header-based tax pattern.

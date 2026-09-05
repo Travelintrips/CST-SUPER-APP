@@ -60,7 +60,7 @@ export function buildInvoiceTaxReview(input: InvoiceTaxReviewInput): InvoiceTaxR
     input.forcedReviewReason
   ) {
     reasons.push(
-      "PPh terdeteksi; jurnal Utang PPh per jenis dan bukti potong belum boleh ditentukan otomatis.",
+      "PPh terdeteksi; nominal invoice dapat dihitung, tetapi jurnal Utang PPh per jenis dan bukti potong resmi tetap perlu tax review.",
     );
     if (!withholdingTaxType) reasons.push("Jenis PPh belum terbaca dengan pasti.");
     if (!taxObject) reasons.push("Tax object belum terbaca dengan pasti.");

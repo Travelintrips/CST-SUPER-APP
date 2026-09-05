@@ -61,8 +61,10 @@ interface OcrBreakdownComponent {
   dpp: number | null;
   ppn: number | null;
   gross: number | null;
+  withholding_tax_type: string | null;
   withholding_tax_amount: number | null;
   withholding_tax_rate: number | null;
+  withholding_tax_calculated?: boolean;
   payable_amount: number | null;
   details: OcrBreakdownDetails;
 }
@@ -74,6 +76,7 @@ interface OcrInvoiceBreakdown {
     rate: number | null;
     amount: number | null;
     base_amount: number | null;
+    calculation_method?: "printed_amount" | "calculated_from_printed_rate" | null;
     evidence: string | null;
   };
   totals: {
@@ -1084,7 +1087,8 @@ export default function InvoiceOcrImportPage() {
                   </Badge>
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Nilai berikut dibaca dari tabel invoice. PPh hanya diisi jika nominalnya tertulis pada dokumen.
+                  Nilai berikut dibaca dari tabel invoice. Jika NET/DPP, GROSS, dan tarif PPh tercetak jelas,
+                  nominal PPh dan pembayaran vendor dihitung otomatis dari tarif tersebut.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1110,9 +1114,19 @@ export default function InvoiceOcrImportPage() {
                             <td className="py-2 px-2 text-right font-mono">{idr(component.gross)}</td>
                             <td className="py-2 px-2 text-right font-mono">
                               {idr(component.withholding_tax_amount)}
+                              {component.withholding_tax_type && (
+                                <span className="block text-[11px] text-muted-foreground">
+                                  {component.withholding_tax_type}
+                                </span>
+                              )}
                               {component.withholding_tax_rate != null && (
                                 <span className="block text-[11px] text-muted-foreground">
                                   tarif {component.withholding_tax_rate}%
+                                </span>
+                              )}
+                              {component.withholding_tax_calculated && (
+                                <span className="block text-[11px] text-amber-700">
+                                  hasil kalkulasi
                                 </span>
                               )}
                             </td>
@@ -1146,7 +1160,7 @@ export default function InvoiceOcrImportPage() {
                         <p className="font-mono font-semibold">{idr(result.invoice_breakdown.totals.gross)}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">Potongan PPh</p>
+                         <p className="text-xs text-muted-foreground">PPh / Bukti Potong</p>
                         <p className="font-mono font-semibold text-red-700">
                           {idr(
                             result.invoice_breakdown.withholding_tax.amount ??
@@ -1155,7 +1169,7 @@ export default function InvoiceOcrImportPage() {
                         </p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">Total Dibayar</p>
+                         <p className="text-xs text-muted-foreground">Dibayar ke Vendor</p>
                         <p className="font-mono font-bold text-emerald-700">
                           {idr(result.invoice_breakdown.totals.payable_amount)}
                         </p>
@@ -1194,6 +1208,14 @@ export default function InvoiceOcrImportPage() {
                       })}
                     </div>
 
+                    {result.invoice_breakdown.withholding_tax.calculation_method ===
+                      "calculated_from_printed_rate" && (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                        Nilai PPh dan pembayaran vendor dihitung otomatis dari NET/DPP × tarif PPh
+                        yang tercetak pada invoice. Ini adalah hasil kalkulasi invoice, bukan pengganti
+                        dokumen bukti potong resmi; tetap konfirmasi saat tax review.
+                      </div>
+                    )}
                     {result.invoice_breakdown.withholding_tax.amount == null &&
                       (result.invoice_breakdown.withholding_tax.rate != null ||
                         result.invoice_breakdown.withholding_tax.evidence) && (
