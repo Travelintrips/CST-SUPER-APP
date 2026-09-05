@@ -1020,6 +1020,8 @@ export async function requestEmailOtp(email: string) {
 
   // Production: SMTP wajib — langsung 503 agar user tahu email tidak terkirim
   if (!smtpOk && !isDev) {
+    await db.delete(portalEmailOtpCodesTable)
+      .where(eq(portalEmailOtpCodesTable.id, challenge.id));
     throw new AuthServiceError(503, "Layanan email belum dikonfigurasi. Hubungi admin.");
   }
 
