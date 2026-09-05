@@ -220,10 +220,9 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
         secure: true,
       },
       "/api": {
-        // The API server runs on 8080 in the unified Gateway and in the
-        // standalone artifact workflow. Keep explicit overrides for legacy
-        // forwarders, but never fall back to the old unused 18444 port.
-        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 8080}`,
+        // The standalone artifact API runs on 18444. The unified Gateway can
+        // still override this with API_PORT/FORWARDER_PORT when it owns 8080.
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
         ws: true,
       },
