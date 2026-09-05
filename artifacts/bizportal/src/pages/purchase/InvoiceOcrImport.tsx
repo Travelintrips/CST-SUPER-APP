@@ -870,6 +870,67 @@ export default function InvoiceOcrImportPage() {
               </Card>
             </div>
 
+            {/* PPh review — visible evidence, never auto-posted */}
+            <Card
+              className={
+                result.tax_review?.required
+                  ? "border-amber-300 bg-amber-50/40"
+                  : "border-slate-200"
+              }
+            >
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-amber-600" />
+                  Review PPh
+                  <Badge
+                    variant="outline"
+                    className={
+                      result.tax_review?.required
+                        ? "ml-auto border-amber-400 text-amber-700"
+                        : "ml-auto text-muted-foreground"
+                    }
+                  >
+                    {result.tax_review?.required ? "Perlu Review" : "Tidak Terdeteksi"}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2">
+                  <span className="text-muted-foreground">Jenis PPh</span>
+                  <span className="font-medium text-right">
+                    {result.tax_review?.withholding_tax_type ?? result.withholding_tax_type ?? "—"}
+                  </span>
+                  <span className="text-muted-foreground">Tax object</span>
+                  <span className="font-medium text-right">
+                    {result.tax_review?.tax_object ?? result.tax_object ?? "—"}
+                  </span>
+                  <span className="text-muted-foreground">Nilai PPh</span>
+                  <span className="font-mono font-medium text-right">
+                    {idr(result.tax_review?.withholding_amount ?? result.withholding_amount)}
+                  </span>
+                </div>
+                {result.tax_review?.required ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-100/60 p-3 text-xs text-amber-800">
+                    <p className="font-semibold">PPh tidak diposting otomatis.</p>
+                    <p className="mt-1">
+                      Pastikan jenis PPh, tax object, nilai, dan bukti potong sudah benar sebelum review
+                      manual di invoice vendor.
+                    </p>
+                    {result.tax_review.reasons.length > 0 && (
+                      <ul className="mt-2 list-disc space-y-0.5 pl-4">
+                        {result.tax_review.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Tidak ada PPh yang disebutkan secara eksplisit pada invoice. Nilai kosong tidak berarti
+                    invoice pasti bebas PPh.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Items table — DISPLAY ONLY */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -911,6 +972,9 @@ export default function InvoiceOcrImportPage() {
                         <th className="text-left py-2 px-2 w-20">Satuan</th>
                         <th className="text-left py-2 px-2 w-36">Harga Satuan</th>
                         <th className="text-left py-2 px-2">Catatan</th>
+                        <th className="text-left py-2 px-2 min-w-44">
+                          COA Hint <span className="text-xs font-normal text-muted-foreground">(AI)</span>
+                        </th>
                         <th className="w-10" />
                       </tr>
                     </thead>
@@ -966,6 +1030,17 @@ export default function InvoiceOcrImportPage() {
                               placeholder="—"
                             />
                           </td>
+                            <td className="py-1 px-2">
+                              <Input
+                                value={line.coaHint}
+                                onChange={(e) =>
+                                  updateDisplayLine(i, "coaHint", e.target.value)
+                                }
+                                className="h-8"
+                                placeholder="Contoh: jasa, freight"
+                                aria-label={`COA hint baris ${i + 1}`}
+                              />
+                            </td>
                           <td className="py-1 px-2">
                             <Button
                               size="icon"
