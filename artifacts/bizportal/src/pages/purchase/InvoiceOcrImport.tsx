@@ -311,6 +311,7 @@ export default function InvoiceOcrImportPage() {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // OCR raw result/reference. Header financial values remain sourced from SAP Tax.
@@ -592,16 +593,26 @@ export default function InvoiceOcrImportPage() {
   };
 
   const save = async () => {
+    setSaveError(null);
+    const failSave = (message: string) => {
+      setSaveError(message);
+      toast.error(message);
+    };
+
     if (!form.supplierName) {
-      toast.error("Nama supplier wajib diisi");
+      failSave("Nama supplier wajib diisi");
       return;
     }
     if (duplicateWarning) {
-      toast.error(duplicateWarning);
+      failSave(duplicateWarning);
       return;
     }
     if (!sapTax) {
-      toast.error("Data SAP Tax belum tersedia. Ekstrak invoice terlebih dahulu.");
+      failSave("Data SAP Tax belum tersedia. Ekstrak invoice terlebih dahulu.");
+      return;
+    }
+    if (!activeCompanyId) {
+      failSave("Company aktif belum tersedia. Pilih company terlebih dahulu, lalu coba simpan lagi.");
       return;
     }
     setSaving(true);
@@ -733,7 +744,9 @@ export default function InvoiceOcrImportPage() {
       }
       navigate(`/purchase/vendor-invoices/${data.id}`);
     } catch (err) {
-      toast.error(String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[InvoiceOcrImport] gagal menyimpan vendor invoice", err);
+      failSave(message);
     } finally {
       setSaving(false);
     }
@@ -1537,6 +1550,14 @@ export default function InvoiceOcrImportPage() {
               </CardContent>
             </Card>
 
+            {saveError && (
+              <div
+                role="alert"
+                className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800"
+              >
+                <strong>Invoice belum tersimpan:</strong> {saveError}
+              </div>
+            )}
             <div className="flex justify-end gap-3">
               <Button
                 variant="outline"
@@ -1544,7 +1565,7 @@ export default function InvoiceOcrImportPage() {
               >
                 Batal
               </Button>
-              <Button onClick={save} disabled={saving} className="min-w-40">
+              <Button type="button" onClick={() => void save()} disabled={saving} className="min-w-40">
                 {saving ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
