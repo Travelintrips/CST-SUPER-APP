@@ -28,6 +28,8 @@ import { seedProductTemplates } from "./routes/productTemplates.js";
 import {
   runPortalCustomerOrganizationContractMigration,
   runPortalCustomerOrganizationMigration,
+  runPortalAuthIdentityMigration,
+  runPortalEmailOtpMigration,
   runPortalMigration,
 } from "./lib/portalMigration";
 import { runPortalPaymentCompanyMigration } from "./lib/portalPaymentCompanyMigration.js";
@@ -2040,6 +2042,8 @@ async function startServer() {
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
     .then(() => runWithRetry("Portal migration", runPortalMigration))
+    .then(() => runWithRetry("Portal auth identity migration", runPortalAuthIdentityMigration))
+    .then(() => runWithRetry("Portal email OTP migration", runPortalEmailOtpMigration))
     .then(() => runWithRetry("Portal customer organization migration", runPortalCustomerOrganizationMigration))
     .then(() => runWithRetry("Portal customer organization contract migration", runPortalCustomerOrganizationContractMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))

@@ -51,7 +51,7 @@ import { runPhase3aRfqVendorLinksFix } from "./lib/phase3aRfqVendorLinksFix.js";
 import { runUnifiedViewsMigration } from "./lib/unifiedViewsMigration.js";
 import { runOrderLinksMigration } from "./lib/orderLinksMigration.js";
 import { runVendorProfileMigration } from "./lib/vendorProfileMigration.js";
-import { runPortalMigration } from "./lib/portalMigration.js";
+import { runPortalAuthIdentityMigration, runPortalEmailOtpMigration, runPortalMigration } from "./lib/portalMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration.js";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration.js";
 import { runOauthStateMigration } from "./lib/oauthStateMigration.js";
@@ -187,6 +187,8 @@ async function main() {
   await runSafe("orderLinks", runOrderLinksMigration);
   await runSafe("vendorProfile", runVendorProfileMigration);
   await runSafe("portal", runPortalMigration);
+  await runSafe("portal-auth-identities", runPortalAuthIdentityMigration);
+  await runSafe("portal-email-otp", runPortalEmailOtpMigration);
   await runSafe("vendorProfileFields", runVendorProfileFieldsMigration);
   await runSafe("supplierEnhancement", runSupplierEnhancementMigration);
   await runSafe("oauthState", runOauthStateMigration);

@@ -32,6 +32,16 @@ function GoogleIcon() {
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 type LoginMode = "password" | "otp" | "wa";
+type ExtendedLoginMode = LoginMode | "sms" | "wechat";
+
+interface AuthCapabilities {
+  emailOtp: boolean;
+  google: boolean;
+  whatsapp: boolean;
+  sms: boolean;
+  wechat: boolean;
+  password: boolean;
+}
 
 const CUSTOMER_RETURN_PREFIXES = [
   "/login", "/register", "/dashboard", "/vendor-dashboard", "/orders", "/admin",
@@ -61,7 +71,10 @@ export default function Login() {
   const { t } = useLanguage();
   const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
 
-  const [mode, setMode] = useState<LoginMode>("otp");
+  const [mode, setMode] = useState<ExtendedLoginMode>("otp");
+  const [capabilities, setCapabilities] = useState<AuthCapabilities>({
+    emailOtp: true, google: true, whatsapp: true, sms: false, wechat: false, password: true,
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [otpEmail, setOtpEmail] = useState("");
@@ -87,6 +100,15 @@ export default function Login() {
       setErrorMsg(t("login.googleCallbackFailed", "Login Google gagal saat memproses callback. Silakan coba lagi."));
     }
   }, [oauthError, t]);
+
+  useEffect(() => {
+    fetch(`${BASE}/api/portal/auth/capabilities`, { credentials: "include" })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("capabilities unavailable")))
+      .then((data: AuthCapabilities) => setCapabilities(data))
+      .catch(() => setCapabilities((current) => ({
+        ...current, emailOtp: false, google: false, whatsapp: false, sms: false, wechat: false,
+      })));
+  }, []);
 
   const loginSchema = z.object({
     email: z.string().email({ message: t("login.email") }),
@@ -340,6 +362,10 @@ export default function Login() {
   }
 
   function handleGoogleLogin() {
+    if (!capabilities.google) {
+      setErrorMsg("Login Google belum tersedia karena provider belum dikonfigurasi.");
+      return;
+    }
     setErrorMsg("");
     // Preserve returnTo so the portal callback can redirect correctly after OAuth.
     const rt = new URLSearchParams(window.location.search).get("returnTo");
@@ -404,9 +430,9 @@ export default function Login() {
             )}
 
             <div className="mb-5">
-              <button type="button" onClick={handleGoogleLogin} className="flex items-center justify-center gap-3 w-full h-11 rounded-lg border border-border bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors shadow-sm">
+              <button type="button" onClick={handleGoogleLogin} disabled={!capabilities.google} className="flex items-center justify-center gap-3 w-full h-11 rounded-lg border border-border bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
                 <GoogleIcon />
-                {t("login.signIn")} Google
+                {capabilities.google ? `${t("login.signIn")} Google` : "Google (belum tersedia)"}
               </button>
             </div>
             {errorMsg && (
@@ -417,14 +443,22 @@ export default function Login() {
             )}
 
             <div className="flex rounded-lg bg-muted p-1 mb-5">
-              <button type="button" onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              <button type="button" disabled={!capabilities.emailOtp} onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed disabled:opacity-50`}>
                 {t("login.tabEmailOtp")}
               </button>
-              <button type="button" onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              <button type="button" disabled={!capabilities.whatsapp} onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"} disabled:cursor-not-allowed disabled:opacity-50`}>
                 {t("login.tabWa", "No HP / WA")}
               </button>
               <button type="button" onClick={() => { setMode("password"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "password" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                 {t("login.password", "Password")}
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              <button type="button" disabled={!capabilities.sms} onClick={() => setMode("sms")} className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60">
+                No. HP / SMS — belum tersedia
+              </button>
+              <button type="button" disabled={!capabilities.wechat} onClick={() => setMode("wechat")} className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60">
+                WeChat — belum tersedia
               </button>
             </div>
 
@@ -620,6 +654,15 @@ export default function Login() {
                   </form>
                 </Form>
               </>
+            )}
+
+            {(mode === "sms" || mode === "wechat") && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Provider untuk metode ini belum dikonfigurasi. Pilih metode login yang aktif di atas.
+                </AlertDescription>
+              </Alert>
             )}
 
             <div className="mt-6 text-center text-sm text-muted-foreground">
