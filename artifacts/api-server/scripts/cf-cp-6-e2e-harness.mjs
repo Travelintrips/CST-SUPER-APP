@@ -181,13 +181,23 @@ async function prove(client) {
 
   const first = await processCustomerPortalFinance({ client, limit: 1 });
   const firstProcessing = await one(client, `
-    SELECT status, last_error
-      FROM customer_finance_processing
-     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
+    SELECT p.status, p.last_error, p.source_project, p.source_payment_id,
+           e.company_id AS event_company_id, e.tax_rule_id, e.tax_rate,
+           e.tax_treatment, e.product_scope, e.payment_method, e.payment_provider,
+           pay.company_id AS payment_company_id, sd.company_id AS document_company_id,
+           sd.doc_number
+      FROM customer_finance_processing p
+      LEFT JOIN customer_payment_finance_events e
+        ON e.source_project=p.source_project
+       AND e.source_payment_id=p.source_payment_id
+       AND e.event_type=p.event_type
+      LEFT JOIN payments pay ON pay.id=p.source_payment_id
+      LEFT JOIN sales_documents sd ON sd.id=e.sales_document_id
+     WHERE p.source_payment_id=$1 AND p.event_type='payment_confirmed'
   `, [created.paymentId]);
   assert(
     first.claimed === 1 && first.posted === 1,
-    `first consumer run must claim/post 1: ${JSON.stringify(first)} error=${firstProcessing?.last_error ?? "none"}`,
+    `first consumer run must claim/post 1: ${JSON.stringify(first)} debug=${JSON.stringify(firstProcessing)}`,
   );
 
   const retry = await processCustomerPortalFinance({ client, limit: 1 });
