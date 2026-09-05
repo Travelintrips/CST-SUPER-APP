@@ -40,6 +40,7 @@ interface OcrLineItem {
   unit_price: number | null;
   total: number | null;
   tax?: number | null;
+  coa_hint?: string | null;
 }
 
 interface OcrBreakdownDetails {
@@ -279,7 +280,10 @@ export default function InvoiceOcrImportPage() {
     limit: 1000,
     companyId: activeCompanyId != null ? String(activeCompanyId) : undefined,
   });
-  const supplierOptions = (suppliersResponse?.data ?? []) as Array<{ id: number; name: string }>;
+  const supplierOptions = useMemo(
+    () => (suppliersResponse?.data ?? []) as Array<{ id: number; name: string }>,
+    [suppliersResponse?.data],
+  );
   const matchedSupplier = useMemo(() => {
     const name = form.supplierName.trim().toLowerCase();
     if (!name) return undefined;
@@ -575,7 +579,8 @@ export default function InvoiceOcrImportPage() {
         withholdingTaxAmount:
           result?.invoice_breakdown?.withholding_tax?.amount ??
           result?.invoice_breakdown?.totals?.withholding_tax_amount ??
-          0,
+          result?.tax_review?.withholding_amount ??
+          undefined,
         // Display-only lines (description/qty/unit for reference, not financial)
         lines: displayLines.map((l) => ({
           name: l.description,
@@ -593,7 +598,6 @@ export default function InvoiceOcrImportPage() {
         taxReviewReason: result?.tax_review?.reasons?.join(" ") || undefined,
         withholdingTaxType: result?.tax_review?.withholding_tax_type || undefined,
         taxObject: result?.tax_review?.tax_object || undefined,
-        withholdingTaxAmount: result?.tax_review?.withholding_amount ?? undefined,
       };
       const res = await fetch("/api/purchase-workflow/vendor-invoices", {
         method: "POST",
@@ -1201,6 +1205,10 @@ export default function InvoiceOcrImportPage() {
                         </div>
                       )}
                   </>
+                )}
+              </CardContent>
+            </Card>
+
             {/* PPh review — visible evidence, never auto-posted */}
             <Card
               className={
