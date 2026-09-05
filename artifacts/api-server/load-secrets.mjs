@@ -55,6 +55,7 @@
 
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { spawn } from "node:child_process";
+import { resolveProductionSupabaseDatabaseUrl } from "../../scripts/resolve-supabase-db-url.mjs";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
@@ -572,6 +573,17 @@ async function main() {
       for (const w of weak) console.error(`  Weak: ${w}`);
     }
     process.exit(1);
+  }
+
+  // Production approval/maintenance scripts must use the canonical
+  // application database URL. A migration URL is never an implicit fallback.
+  if (appEnv === "production") {
+    try {
+      resolveProductionSupabaseDatabaseUrl(merged);
+    } catch (err) {
+      console.error("[load-secrets] ERROR: Production database target validation failed:", err.message);
+      process.exit(1);
+    }
   }
 
   // ── Phase 8: Log summary (no values, key names only) ────────────────────────

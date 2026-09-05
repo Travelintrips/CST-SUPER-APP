@@ -25,6 +25,7 @@
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
 - [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.
+- [Production database URL selection](production-db-url-selection.md) — approval dan maintenance wajib memakai `SUPABASE_DATABASE_URL`; migration URL tidak boleh menjadi fallback diam-diam.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
@@ -44,8 +45,6 @@
 - [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.
 - [Production Sport settlement schema](production-sport-settlement-schema.md) — production source may lack payment_number/settlement_reference/settlement_date; use verified legacy aliases.
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
-- [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
-- [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.
 - [Vendor invoice detail company context](vendor-invoice-detail-company-context.md) — detail requests need active company scope or admin sessions can render undefined/NaN instead of the invoice.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
@@ -65,12 +64,8 @@
 - [Payment accounting outbox gap](payment-accounting-outbox-gap.md) — failed payment_confirmed outbox events can leave canonical payments/journals without public mirrors or settlement cohort membership.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
-- [Portal CMS media locale](portal-cms-media-locale.md) — hero and branding assets are global; text overrides remain language-specific.
-- [Static artifact browser proof](static-artifact-browser-proof.md) — fetch-based proof gateways must strip compression headers after buffering upstream responses.
-- [Mobile detail sheet layout](qris-detail-mobile-layout.md) — SheetContent bawaan memakai w-3/4; panel mobile harus override ke 100vw dan menumpuk label/nilai agar tidak overflow.
 - [QRIS batch approval UI](qris-batch-approval-ui.md) — pilih dan approve kandidat QRIS sebagai batch utuh; payment-level approval memerlukan kontrak partial-settlement backend.
 - [Marketplace DB connection routing](marketplace-db-connection-routing.md) — pooler dev dapat timeout checkout walau SQL cepat; bandingkan migration/direct URL sebelum optimasi query.
-- [Password reset safe-mode capture](password-reset-safe-mode.md) — safe mode menonaktifkan SMTP; harness reset password perlu capture khusus tanpa mengembalikan token ke API normal.
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS stale settlement reset](qris-stale-settlement-reset.md) — reset status stale hanya pada sumber canonical, wajib audit reason, dan fail-closed bila ada item settlement aktif.
 - [QRIS provider mirror unique key](qris-provider-rule-mirror-unique-key.md) — legacy mirror unik tanpa effective_until; repair boundary harus mendahului insert-if-missing.
