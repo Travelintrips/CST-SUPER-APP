@@ -18,6 +18,16 @@ const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { cr
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
 interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null }>; }
+type VendorInvoiceListItem = Record<string, unknown>;
+
+function parseVendorInvoiceList(payload: unknown): VendorInvoiceListItem[] {
+  if (Array.isArray(payload)) return payload as VendorInvoiceListItem[];
+  if (payload && typeof payload === "object") {
+    const data = (payload as { data?: unknown }).data;
+    if (Array.isArray(data)) return data as VendorInvoiceListItem[];
+  }
+  throw new Error("Format data vendor invoice dari server tidak valid.");
+}
 
 export function VendorInvoicesListPage() {
   const { activeCompanyId } = useCompany();
@@ -26,9 +36,24 @@ export function VendorInvoicesListPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const { data: vis = [], isLoading } = useQuery({
+  const { data: vis = [], isLoading, isError, error } = useQuery({
     queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId],
-    queryFn: () => fetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}`, { credentials: "include" }).then(r => r.json()),
+    queryFn: async () => {
+      const response = await fetch(`/api/purchase-workflow/vendor-invoices?company=${activeCompanyId}`, {
+        credentials: "include",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object"
+          ? String((payload as { error?: unknown; message?: unknown }).error
+            ?? (payload as { message?: unknown }).message
+            ?? "Gagal memuat vendor invoice.")
+          : "Gagal memuat vendor invoice.";
+        throw new Error(message);
+      }
+      return parseVendorInvoiceList(payload);
+    },
+    enabled: activeCompanyId != null,
   });
 
   const handlePost = async (id: number) => {
@@ -116,7 +141,11 @@ export function VendorInvoicesListPage() {
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><FileText className="h-5 w-5" />Daftar Vendor Invoice</CardTitle></CardHeader>
           <CardContent>
-            {isLoading ? <div className="text-center py-8">Loading...</div> : vis.length === 0 ? <div className="text-center py-8 text-muted-foreground">Belum ada vendor invoice</div> : (
+            {isLoading ? <div className="text-center py-8">Loading...</div> : isError ? (
+              <div className="text-center py-8 text-destructive">
+                Gagal memuat vendor invoice: {error instanceof Error ? error.message : "Terjadi kesalahan."}
+              </div>
+            ) : vis.length === 0 ? <div className="text-center py-8 text-muted-foreground">Belum ada vendor invoice</div> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead><tr className="border-b">
