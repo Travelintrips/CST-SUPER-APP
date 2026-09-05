@@ -1327,11 +1327,13 @@ export interface AccountingSettings {
   purchaseExpenseAccountId?: number | null;
   defaultBankAccountId?: number | null;
   defaultCashAccountId?: number | null;
+  qrisAccountId?: number | null;
   ppnOutputAccountId?: number | null;
   ppnInputAccountId?: number | null;
   salesJournalId?: number | null;
   purchaseJournalId?: number | null;
   bankJournalId?: number | null;
+  qrisJournalId?: number | null;
   cashJournalId?: number | null;
   defaultSalesTaxId?: number | null;
   defaultPurchaseTaxId?: number | null;
@@ -1351,11 +1353,13 @@ export interface UpdateAccountingSettingsBody {
   purchaseExpenseAccountId?: number | null;
   defaultBankAccountId?: number | null;
   defaultCashAccountId?: number | null;
+  qrisAccountId?: number | null;
   ppnOutputAccountId?: number | null;
   ppnInputAccountId?: number | null;
   salesJournalId?: number | null;
   purchaseJournalId?: number | null;
   bankJournalId?: number | null;
+  qrisJournalId?: number | null;
   cashJournalId?: number | null;
   defaultSalesTaxId?: number | null;
   defaultPurchaseTaxId?: number | null;

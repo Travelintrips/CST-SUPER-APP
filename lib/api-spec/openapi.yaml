@@ -5393,11 +5393,13 @@ components:
         purchaseExpenseAccountId: { type: integer, nullable: true }
         defaultBankAccountId: { type: integer, nullable: true }
         defaultCashAccountId: { type: integer, nullable: true }
+        qrisAccountId: { type: integer, nullable: true }
         ppnOutputAccountId: { type: integer, nullable: true }
         ppnInputAccountId: { type: integer, nullable: true }
         salesJournalId: { type: integer, nullable: true }
         purchaseJournalId: { type: integer, nullable: true }
         bankJournalId: { type: integer, nullable: true }
+        qrisJournalId: { type: integer, nullable: true }
         cashJournalId: { type: integer, nullable: true }
         defaultSalesTaxId: { type: integer, nullable: true }
         defaultPurchaseTaxId: { type: integer, nullable: true }
@@ -5419,11 +5421,13 @@ components:
         purchaseExpenseAccountId: { type: integer, nullable: true }
         defaultBankAccountId: { type: integer, nullable: true }
         defaultCashAccountId: { type: integer, nullable: true }
+        qrisAccountId: { type: integer, nullable: true }
         ppnOutputAccountId: { type: integer, nullable: true }
         ppnInputAccountId: { type: integer, nullable: true }
         salesJournalId: { type: integer, nullable: true }
         purchaseJournalId: { type: integer, nullable: true }
         bankJournalId: { type: integer, nullable: true }
+        qrisJournalId: { type: integer, nullable: true }
         cashJournalId: { type: integer, nullable: true }
         defaultSalesTaxId: { type: integer, nullable: true }
         defaultPurchaseTaxId: { type: integer, nullable: true }

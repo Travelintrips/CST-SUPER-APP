@@ -28,10 +28,11 @@ type SettingsForm = Required<UpdateAccountingSettingsBody>;
 const EMPTY: SettingsForm = {
   arAccountId: null, apAccountId: null, salesIncomeAccountId: null, purchaseExpenseAccountId: null,
   defaultBankAccountId: null, defaultCashAccountId: null,
+  qrisAccountId: null,
   ppnOutputAccountId: null, ppnInputAccountId: null,
   inventoryAccountId: null, cogsAccountId: null,
   salesJournalId: null, purchaseJournalId: null,
-  bankJournalId: null, cashJournalId: null,
+  bankJournalId: null, qrisJournalId: null, cashJournalId: null,
   defaultSalesTaxId: null, defaultPurchaseTaxId: null,
   companyName: null, companyAddress: null, companyNpwp: null, companyLogoUrl: null,
 };
@@ -185,6 +186,7 @@ export default function AccountingSettingsPage() {
         purchaseExpenseAccountId: settings.purchaseExpenseAccountId ?? null,
         defaultBankAccountId: settings.defaultBankAccountId ?? null,
         defaultCashAccountId: settings.defaultCashAccountId ?? null,
+        qrisAccountId: settings.qrisAccountId ?? null,
         ppnOutputAccountId: settings.ppnOutputAccountId ?? null,
         ppnInputAccountId: settings.ppnInputAccountId ?? null,
         inventoryAccountId: settings.inventoryAccountId ?? null,
@@ -192,6 +194,7 @@ export default function AccountingSettingsPage() {
         salesJournalId: settings.salesJournalId ?? null,
         purchaseJournalId: settings.purchaseJournalId ?? null,
         bankJournalId: settings.bankJournalId ?? null,
+        qrisJournalId: settings.qrisJournalId ?? null,
         cashJournalId: settings.cashJournalId ?? null,
         defaultSalesTaxId: settings.defaultSalesTaxId ?? null,
         defaultPurchaseTaxId: settings.defaultPurchaseTaxId ?? null,
@@ -593,7 +596,8 @@ export default function AccountingSettingsPage() {
           <CardHeader><CardTitle>Akun Default — Kas, Bank &amp; Persediaan</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-4">
             {accSelect("defaultBankAccountId", "Bank Default", ["asset"])}
-            {accSelect("defaultCashAccountId", "Kas Default (POS tunai/QRIS)", ["asset"])}
+            {accSelect("defaultCashAccountId", "Kas Default (POS Tunai)", ["asset"])}
+            {accSelect("qrisAccountId", "Akun Clearing QRIS", ["asset"])}
             {accSelect("inventoryAccountId", "Persediaan Barang (Trading)", ["asset"])}
             {accSelect("cogsAccountId", "HPP / COGS", ["expense"])}
           </CardContent>
@@ -605,7 +609,8 @@ export default function AccountingSettingsPage() {
             {jSelect("salesJournalId", "Jurnal Penjualan", "sales")}
             {jSelect("purchaseJournalId", "Jurnal Pembelian", "purchase")}
             {jSelect("bankJournalId", "Jurnal Bank", "bank")}
-            {jSelect("cashJournalId", "Jurnal Kas (POS tunai/QRIS)", "cash")}
+            {jSelect("qrisJournalId", "Jurnal QRIS", "bank")}
+            {jSelect("cashJournalId", "Jurnal Kas (POS Tunai)", "cash")}
           </CardContent>
         </Card>
 
