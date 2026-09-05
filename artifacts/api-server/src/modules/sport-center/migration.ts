@@ -2941,7 +2941,19 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           v_valid_count;
       END IF;
 
-      SELECT ROUND(SUM(j.gross_amount)::numeric, 2)
+      SELECT ROUND(SUM(
+        j.gross_amount + COALESCE((
+          SELECT SUM(
+            CASE WHEN c.is_reversal THEN -c.gross_amount ELSE c.gross_amount END
+          )
+          FROM sport_center.accounting_journals c
+          WHERE c.payment_id = j.payment_id
+            AND c.journal_type = 'payment_amount_correction'
+            AND c.is_reversal = false
+            AND c.status = 'posted'
+            AND c.reversal_of_id = j.id
+        ), 0)
+      )::numeric, 2)
         INTO v_gross
         FROM unnest(p_payment_ids) x(payment_id)
         JOIN sport_center.accounting_journals j
@@ -3095,7 +3107,17 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_result,
         p.id,
         j.id,
-        j.gross_amount,
+        j.gross_amount + COALESCE((
+          SELECT SUM(
+            CASE WHEN c.is_reversal THEN -c.gross_amount ELSE c.gross_amount END
+          )
+          FROM sport_center.accounting_journals c
+          WHERE c.payment_id = j.payment_id
+            AND c.journal_type = 'payment_amount_correction'
+            AND c.is_reversal = false
+            AND c.status = 'posted'
+            AND c.reversal_of_id = j.id
+        ), 0),
         'active',
         j.source_event_id,
         'sc_settlement_item_' || v_result::text || '_payment_' || p.id::text,
@@ -5330,6 +5352,53 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
     throw new Error(
       `CANONICAL_SETTLEMENT_OWNER_ROUTINES_INCOMPLETE: missing ${missing.join(", ")}`,
     );
+  }
+
+  /*
+   * The legacy batch owner was intentionally retained for compatibility, but
+   * it originally summed only the payment_confirmed header.  Amount repair is
+   * additive and therefore needs the legacy owner to consume its posted
+   * payment_amount_correction row as well.  Patch the live legacy definition
+   * once, without mutating any posted journal.
+   */
+  const legacyBatchDefinition = await db.execute(sql`
+    SELECT pg_get_functiondef(
+      'sport_center.create_payment_settlement_batch_legacy(
+        text,integer,text,text,date,integer[],text
+      )'::regprocedure
+    ) AS definition
+  `);
+  const legacyDefinition = String(
+    (legacyBatchDefinition.rows[0] as { definition?: unknown } | undefined)
+      ?.definition ?? "",
+  );
+  if (legacyDefinition && !legacyDefinition.includes("payment_amount_correction")) {
+    const correctionGrossExpression = `j.gross_amount + COALESCE((
+          SELECT SUM(
+            CASE WHEN c.is_reversal THEN -c.gross_amount ELSE c.gross_amount END
+          )
+          FROM sport_center.accounting_journals c
+          WHERE c.payment_id = j.payment_id
+            AND c.journal_type = 'payment_amount_correction'
+            AND c.is_reversal = false
+            AND c.status = 'posted'
+            AND c.reversal_of_id = j.id
+        ), 0)`;
+    const patchedLegacyDefinition = legacyDefinition
+      .replace(
+        "SUM(j.gross_amount)::numeric",
+        `SUM(${correctionGrossExpression})::numeric`,
+      )
+      .replace(
+        /^\s*j\.gross_amount,\s*$/m,
+        `        ${correctionGrossExpression},`,
+      );
+    if (patchedLegacyDefinition === legacyDefinition) {
+      throw new Error(
+        "CANONICAL_SETTLEMENT_LEGACY_OWNER_PATCH_TARGET_NOT_FOUND",
+      );
+    }
+    await db.execute(sql.raw(patchedLegacyDefinition));
   }
 }
 

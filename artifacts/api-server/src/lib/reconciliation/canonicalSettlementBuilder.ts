@@ -408,7 +408,18 @@ async function lockPaymentJournals(
   const result = await client.execute(sql`
     SELECT
       j.id, j.payment_id, j.status, j.journal_type, j.is_reversal,
-      j.gross_amount, j.source_event_id
+      j.gross_amount,
+      j.gross_amount + COALESCE((
+        SELECT SUM(
+          CASE WHEN c.is_reversal THEN -c.gross_amount ELSE c.gross_amount END
+        )
+        FROM sport_center.accounting_journals c
+        WHERE c.payment_id = j.payment_id
+          AND c.journal_type = 'payment_amount_correction'
+          AND c.status = 'posted'
+          AND c.reversal_of_id = j.id
+      ), 0) AS effective_gross_amount,
+      j.source_event_id
     FROM sport_center.accounting_journals j
       WHERE j.payment_id::text IN (${sql.join(paymentIds.map((id) => sql`${id}::text`), sql`, `)})
       AND j.journal_type = 'payment_confirmed'
@@ -967,7 +978,8 @@ async function buildInTransaction(
       ? 0
       : Number(settlementConfig.fixed_provider_fee ?? 0);
     const grossAmount = paymentIds.reduce(
-      (sum, paymentId) => sum + Number(paymentJournals.get(paymentId)?.gross_amount ?? 0),
+      (sum, paymentId) =>
+        sum + Number(paymentJournals.get(paymentId)?.effective_gross_amount ?? 0),
       0,
     );
     const calculation = rowOrThrow(
@@ -995,7 +1007,9 @@ async function buildInTransaction(
         id: payment.id,
         paymentMethod: payment.payment_method,
         paymentDate: payment.payment_date,
-        grossAmount: Number(paymentJournals.get(payment.id)?.gross_amount ?? 0),
+        grossAmount: Number(
+          paymentJournals.get(payment.id)?.effective_gross_amount ?? 0,
+        ),
         companyId: payment.company_id,
         canonicalMdrAmount: index === 0 ? totalDeduction : 0,
         alreadyReconciled: activeSettlement.length > 0,
