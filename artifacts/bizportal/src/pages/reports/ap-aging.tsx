@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useCompany } from "@/contexts/CompanyContext";
+import { apiFetch } from "@/lib/api";
 import { Link } from "wouter";
 import { ArrowLeft, FileText, Package } from "lucide-react";
 
@@ -18,7 +20,16 @@ const bucketColor = (b: string) => {
 };
 
 export default function ApAgingPage() {
-  const { data, isLoading, error } = useGetApAging({ query: { queryKey: getGetApAgingQueryKey() } });
+  const { activeCompanyId, companyQueryParam, isConsolidated } = useCompany();
+  const { data, isLoading, error } = useGetApAging({
+    query: {
+      queryKey: [...getGetApAgingQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(isConsolidated
+        ? "/api/reports/ap-aging"
+        : `/api/reports/ap-aging?${companyQueryParam}`),
+      enabled: isConsolidated || companyQueryParam.length > 0,
+    },
+  });
 
   return (
     <AppShell>
