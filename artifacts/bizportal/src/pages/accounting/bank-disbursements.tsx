@@ -922,14 +922,17 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
     if (isChecked(inv)) {
       onLinesChange(lines.filter((l) => l.lineKey !== key));
     } else {
-      const { dpp, taxAmount } = computeTaxBreakdown(inv.outstanding, "ppn");
-      const whtAmount = inv.source === "vendor_invoice"
+      const baseBreakdown = computeTaxBreakdown(inv.outstanding, "ppn");
+      const storedWhtAmount = inv.source === "vendor_invoice"
         ? Math.min(inv.withholdingTaxAmount, Math.max(0, inv.outstanding - 1))
         : 0;
-       const withholdingLines = inv.withholdingLines ?? [];
-       const withholdingAmount = withholdingLines.reduce((sum, line) => sum + line.taxAmount, 0);
-       const dpp = Math.max(0, inv.outstanding - withholdingAmount);
-       const taxAmount = withholdingAmount;
+      const withholdingLines = inv.withholdingLines ?? [];
+      const withholdingAmount = withholdingLines.reduce((sum, line) => sum + line.taxAmount, 0);
+      const whtAmount = withholdingLines.length > 0 ? withholdingAmount : storedWhtAmount;
+      const dpp = withholdingLines.length > 0
+        ? Math.max(0, inv.outstanding - withholdingAmount)
+        : baseBreakdown.dpp;
+      const taxAmount = withholdingLines.length > 0 ? withholdingAmount : baseBreakdown.taxAmount;
       onLinesChange([...lines, {
         purchaseDocumentId: inv.source === "purchase_document" ? inv.id : null,
         vendorInvoiceId: inv.source === "vendor_invoice" ? inv.id : null,
@@ -939,20 +942,15 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         outstanding: inv.outstanding,
         paymentAmount: inv.outstanding - whtAmount,
         whtAmount,
-        whtAccountId: null,
-        taxTreatment: "bayar_berikut",
-        taxType: "ppn",
-         paymentAmount: dpp,
-         whtAmount: withholdingAmount,
-         whtAccountId: withholdingLines.length === 1 ? withholdingLines[0]!.liabilityAccountId : null,
-         withholdingAllocations: withholdingLines.map((line) => ({
-           lineTaxId: line.lineTaxId,
-           invoiceLineId: line.invoiceLineId,
-           amount: line.taxAmount,
-           liabilityAccountId: line.liabilityAccountId ?? 0,
-         })),
-         taxTreatment: withholdingAmount > 0 ? "setor_sendiri" : "bayar_berikut",
-         taxType: withholdingLines.map((line) => line.taxType).join(", ") || "ppn",
+        whtAccountId: withholdingLines.length === 1 ? withholdingLines[0]!.liabilityAccountId : null,
+        withholdingAllocations: withholdingLines.map((line) => ({
+          lineTaxId: line.lineTaxId,
+          invoiceLineId: line.invoiceLineId,
+          amount: line.taxAmount,
+          liabilityAccountId: line.liabilityAccountId ?? 0,
+        })),
+        taxTreatment: whtAmount > 0 ? "setor_sendiri" : "bayar_berikut",
+        taxType: withholdingLines.map((line) => line.taxType).join(", ") || "ppn",
         dpp,
         taxAmount,
         expenseAccountId: null,

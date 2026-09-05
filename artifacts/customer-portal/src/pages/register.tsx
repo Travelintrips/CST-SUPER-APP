@@ -206,13 +206,29 @@ export default function Register() {
       setPasswordMsg("Password minimal 8 karakter.");
       return;
     }
+    if (role === "vendor" && !company.trim()) {
+      setPasswordMsg("Nama perusahaan atau armada wajib diisi untuk vendor.");
+      return;
+    }
+    if (role === "customer" && customerType === "company" && !company.trim()) {
+      setPasswordMsg("Nama perusahaan wajib diisi untuk customer perusahaan.");
+      return;
+    }
     setPasswordLoading(true);
     try {
       const res = await fetch(`${BASE}/api/portal/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name: passwordName.trim(), email: passwordEmail.trim(), password: passwordValue, role: "customer" }),
+        body: JSON.stringify({
+          name: passwordName.trim(),
+          email: passwordEmail.trim(),
+          password: passwordValue,
+          role,
+          customerType: role === "customer" ? customerType : undefined,
+          company: company.trim() || undefined,
+          requestedCompanyName: role === "customer" && customerType === "company" ? company.trim() : undefined,
+        }),
       });
       const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
       if (!res.ok || !json.token || !json.user) {
@@ -475,7 +491,54 @@ export default function Register() {
           {step === "phone" && method === "password" && (
             <div className="space-y-4">
               {passwordMsg && <Alert variant="destructive"><AlertCircle className="h-4 w-4" /><AlertDescription>{passwordMsg}</AlertDescription></Alert>}
+              <div className="space-y-2">
+                <Label>Daftar sebagai</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRole("customer")}
+                    className={`rounded-lg border-2 p-3 text-left transition ${role === "customer" ? "border-emerald-500 bg-emerald-50" : "border-border hover:border-emerald-300"}`}
+                  >
+                    <User className={`h-4 w-4 mb-1 ${role === "customer" ? "text-emerald-600" : "text-muted-foreground"}`} />
+                    <p className="font-semibold text-sm">Customer</p>
+                    <p className="text-xs text-muted-foreground">Membeli atau meminta layanan</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRole("vendor")}
+                    className={`rounded-lg border-2 p-3 text-left transition ${role === "vendor" ? "border-emerald-500 bg-emerald-50" : "border-border hover:border-emerald-300"}`}
+                  >
+                    <Truck className={`h-4 w-4 mb-1 ${role === "vendor" ? "text-emerald-600" : "text-muted-foreground"}`} />
+                    <p className="font-semibold text-sm">Vendor</p>
+                    <p className="text-xs text-muted-foreground">Menawarkan jasa atau produk</p>
+                  </button>
+                </div>
+              </div>
               <div className="space-y-2"><Label>Nama lengkap</Label><Input value={passwordName} onChange={(e) => setPasswordName(e.target.value)} placeholder="Budi Santoso" /></div>
+              {role === "customer" && (
+                <div className="space-y-2">
+                  <Label>Tipe customer</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["individual", "company"] as const).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setCustomerType(value)}
+                        className={`rounded-lg border p-2 text-left text-sm transition ${customerType === value ? "border-emerald-500 bg-emerald-50" : "border-border hover:border-emerald-300"}`}
+                      >
+                        <p className="font-medium">{value === "individual" ? "Perorangan" : "Perusahaan"}</p>
+                        <p className="text-xs text-muted-foreground">{value === "individual" ? "Akun pribadi" : "Akun bisnis"}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(role === "vendor" || customerType === "company") && (
+                <div className="space-y-2">
+                  <Label>{role === "vendor" ? "Nama perusahaan / armada" : "Nama perusahaan"}</Label>
+                  <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder={role === "vendor" ? "PT Mitra Logistik" : "PT Nama Perusahaan"} />
+                </div>
+              )}
               <div className="space-y-2"><Label>Email</Label><Input type="email" value={passwordEmail} onChange={(e) => setPasswordEmail(e.target.value)} placeholder="you@company.com" /></div>
               <div className="space-y-2"><Label>Password</Label><div className="relative"><LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="password" className="pl-10" value={passwordValue} onChange={(e) => setPasswordValue(e.target.value)} placeholder="Minimal 8 karakter" /></div></div>
               <Button className="w-full h-12 bg-emerald-600 hover:bg-emerald-700" onClick={registerWithPassword} disabled={passwordLoading}>
