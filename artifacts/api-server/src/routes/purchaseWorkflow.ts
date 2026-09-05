@@ -41,7 +41,7 @@ import {
   whStockTable,
   whMovementsTable,
 } from "@workspace/db";
-import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, or, isNull } from "drizzle-orm";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
 import { getInCodeTemplate, resolveTemplate, type ProductTemplateOverride } from "@workspace/product-templates";
 import {
@@ -1211,13 +1211,48 @@ router.get("/vendor-invoices", async (req, res) => {
   res.json(rows);
 });
 
+// Return approved vendor-specific COA mappings so invoice capture can show the
+// real account from the company's chart instead of only the OCR text hint.
+router.get("/vendor-invoices/coa-mappings", async (req, res) => {
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const supplierId = Number(req.query.supplierId);
+  if (!Number.isInteger(supplierId) || supplierId <= 0) {
+    res.status(400).json({ error: "supplier_id_required", message: "supplierId wajib valid." });
+    return;
+  }
+
+  const rows = await db.select({
+    mappingKey: vendorInvoiceCoaMappingsTable.mappingKey,
+    coaAccountId: vendorInvoiceCoaMappingsTable.coaAccountId,
+    coaCode: chartOfAccountsTable.code,
+    coaName: chartOfAccountsTable.name,
+  })
+    .from(vendorInvoiceCoaMappingsTable)
+    .innerJoin(
+      chartOfAccountsTable,
+      eq(chartOfAccountsTable.id, vendorInvoiceCoaMappingsTable.coaAccountId),
+    )
+    .where(and(
+      eq(vendorInvoiceCoaMappingsTable.companyId, companyId),
+      eq(vendorInvoiceCoaMappingsTable.supplierId, supplierId),
+      eq(vendorInvoiceCoaMappingsTable.status, "approved"),
+      eq(chartOfAccountsTable.isActive, true),
+      eq(chartOfAccountsTable.isPostable, true),
+    ))
+    .orderBy(vendorInvoiceCoaMappingsTable.updatedAt);
+
+  res.json(rows);
+});
+
 router.get("/vendor-invoices/:id", async (req, res) => {
   const id = Number(String(req.params.id));
   const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  const lines = await db.select().from(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
+  const lines = await db.select().from(vendorInvoiceLinesTable)
+    .where(eq(vendorInvoiceLinesTable.invoiceId, id))
+    .orderBy(vendorInvoiceLinesTable.id);
   const lineTaxes = await db.select().from(vendorInvoiceLineTaxesTable).where(
     inArray(vendorInvoiceLineTaxesTable.invoiceLineId, lines.map((line) => line.id)),
   );
@@ -1393,7 +1428,9 @@ router.post("/vendor-invoices", async (req, res) => {
 
   const lineValues = await Promise.all(lines.map(async (l) => {
     const productId = l.productId ? Number(l.productId) : undefined;
-    const mappingKey = normalizeVendorLineMappingKey(l.coaHint ?? l.name);
+    // Reusable mappings follow the vendor's invoice-line description.
+    // coa_hint is only an AI classification and may change between OCR runs.
+    const mappingKey = normalizeVendorLineMappingKey(l.mappingKey ?? l.name);
     const mappedCoaId = await findApprovedVendorCoaMapping({
       companyId,
       supplierId,
@@ -1403,8 +1440,10 @@ router.post("/vendor-invoices", async (req, res) => {
     const explicitCoaId = l.coaAccountId != null && Number.isInteger(Number(l.coaAccountId))
       ? Number(l.coaAccountId)
       : null;
-    const coaAccountId = mappedCoaId ?? explicitCoaId;
-    const coaResolutionStatus = mappedCoaId || l.coaResolutionStatus === "confirmed"
+    // An explicit user selection wins over an older vendor mapping. This lets
+    // Finance intentionally change the vendor's reusable reference.
+    const coaAccountId = explicitCoaId ?? mappedCoaId;
+    const coaResolutionStatus = explicitCoaId || mappedCoaId || l.coaResolutionStatus === "confirmed"
       ? "confirmed"
       : "unresolved";
     return {
@@ -1419,8 +1458,8 @@ router.post("/vendor-invoices", async (req, res) => {
       coaHint: l.coaHint ? String(l.coaHint) : undefined,
       coaAccountId: coaAccountId ?? undefined,
       coaResolutionStatus,
-      coaConfirmedBy: mappedCoaId ? "approved_mapping" : undefined,
-      coaConfirmedAt: mappedCoaId ? new Date() : undefined,
+      coaConfirmedBy: explicitCoaId ? "invoice_capture" : mappedCoaId ? "approved_mapping" : undefined,
+      coaConfirmedAt: explicitCoaId || mappedCoaId ? new Date() : undefined,
       coaMappingKey: mappingKey || undefined,
       notes: l.notes ? String(l.notes) : undefined,
       _withholdingTaxes: (Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []) as Record<string, unknown>[],
@@ -1612,7 +1651,12 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
       res.status(422).json({ error: "line_not_found", message: `Line invoice ${lineId} tidak ditemukan.` });
       return;
     }
-    const [coa] = await db.select({ id: chartOfAccountsTable.id }).from(chartOfAccountsTable).where(eq(chartOfAccountsTable.id, coaAccountId));
+    const [coa] = await db.select({ id: chartOfAccountsTable.id }).from(chartOfAccountsTable).where(and(
+      eq(chartOfAccountsTable.id, coaAccountId),
+      or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, cid)),
+      eq(chartOfAccountsTable.isActive, true),
+      eq(chartOfAccountsTable.isPostable, true),
+    ));
     if (!coa) {
       res.status(422).json({ error: "coa_not_found", message: `COA ${coaAccountId} tidak ditemukan.` });
       return;
