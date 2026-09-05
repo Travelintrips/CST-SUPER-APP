@@ -480,6 +480,10 @@ export default function SportCenterDashboard() {
   });
 
   useEffect(() => {
+    pushBookingsDone.current = false;
+  }, [activeCompanyId]);
+
+  useEffect(() => {
     if (pushBookingsDone.current) return;
     if (!supaData) return;
     const localCount = syncData?.local?.bookings ?? null;
@@ -491,7 +495,7 @@ export default function SportCenterDashboard() {
     void fetchAllBookingsFromSportCenter().then((data) => {
       if (data && data.length > 0) void pushBookings.mutateAsync(data);
     }).catch(() => {});
-  }, [supaData, syncData, pushBookings]);
+  }, [supaData, syncData, activeCompanyId, pushBookings]);
 
   // ── Mutations: trigger resync manual ─────────────────────────────────────
   const resyncFacilities = useMutation({

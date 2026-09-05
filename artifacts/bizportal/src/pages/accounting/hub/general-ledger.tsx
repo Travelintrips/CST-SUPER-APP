@@ -158,7 +158,7 @@ export default function AccountingHubGLPage() {
   // period when the user drills down into General Ledger and goes back.
   const trialBalanceParams = new URLSearchParams();
   for (const key of ["company_id", "date_from", "date_to"]) {
-    const value = filters[key as "company_id" | "date_from" | "date_to"];
+    const value = appliedFilters[key as "company_id" | "date_from" | "date_to"];
     if (value) trialBalanceParams.set(key, value);
   }
   const trialBalanceHref = `/accounting/hub/trial-balance${trialBalanceParams.toString() ? `?${trialBalanceParams}` : ""}`;

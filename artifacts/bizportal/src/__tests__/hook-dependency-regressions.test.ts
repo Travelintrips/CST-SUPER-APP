@@ -24,6 +24,23 @@ describe("hook dependency request boundaries", () => {
     expect(serviceRequests).toMatch(/setSubmittedSearch\(search\)/);
   });
 
+  it("keeps bank reconciliation filters applied until Tampilkan is pressed", () => {
+    const bankRecon = source("pages/accounting/bank-recon.tsx");
+
+    expect(bankRecon).toMatch(/const \[appliedFilters, setAppliedFilters\]/);
+    expect(bankRecon).toMatch(/appliedFilters\.dateFrom/);
+    expect(bankRecon).toMatch(/setAppliedFilters\(\{ dateFrom, dateTo, statusFilter \}\)/);
+    expect(bankRecon).toMatch(/setRefreshKey\(key => key \+ 1\)/);
+  });
+
+  it("cleans up route distance requests after the debounce fires", () => {
+    const preview = source("components/ui/route-map-preview.tsx");
+
+    expect(preview).toMatch(/controller\?\.abort\(\)/);
+    expect(preview).toMatch(/let active = true/);
+    expect(preview).toMatch(/if \(!active\) return/);
+  });
+
   it.each([
     ["balance sheet", "pages/accounting/hub/balance-sheet.tsx", "appliedFilters"],
     ["profit and loss", "pages/accounting/hub/profit-loss.tsx", "appliedFilters"],

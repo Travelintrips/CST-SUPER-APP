@@ -59,6 +59,7 @@ export default function ServiceRequestsPage() {
   const [submittedSearch, setSubmittedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [tradeTypeFilter, setTradeTypeFilter] = useState("all");
+  const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const requestVersionRef = useRef(0);
 
@@ -68,6 +69,7 @@ export default function ServiceRequestsPage() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams();
       if (searchTerm) params.set("search", searchTerm);
@@ -82,8 +84,9 @@ export default function ServiceRequestsPage() {
         setTotal(data.total ?? 0);
       }
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
-        throw error;
+      const errorName = (error as { name?: unknown } | null)?.name;
+      if (errorName !== "AbortError" && requestVersion === requestVersionRef.current) {
+        setError(error instanceof Error ? error.message : "Gagal memuat service request");
       }
     } finally {
       if (requestVersion === requestVersionRef.current) {
@@ -121,6 +124,8 @@ export default function ServiceRequestsPage() {
             Refresh
           </Button>
         </div>
+
+        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
 
         <Card>
           <CardContent className="pt-4">

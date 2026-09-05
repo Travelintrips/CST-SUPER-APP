@@ -17,13 +17,18 @@ export function RouteMapPreview({ origin, destination, onDistanceFetched }: Prop
   const isReady = origin.trim().length > 3 && destination.trim().length > 3;
 
   useEffect(() => {
+    let active = true;
+    let controller: AbortController | null = null;
+    setLoading(false);
+
     if (!isReady) {
       setDistanceKm(null);
       setDurationText(null);
       return;
     }
+
     const timer = setTimeout(() => {
-      const controller = new AbortController();
+      controller = new AbortController();
       setLoading(true);
       const params = new URLSearchParams({
         origin: origin.trim(),
@@ -32,15 +37,22 @@ export function RouteMapPreview({ origin, destination, onDistanceFetched }: Prop
       fetch(`/api/places/distance?${params.toString()}`, { signal: controller.signal })
         .then((r) => r.json())
         .then((d) => {
+          if (!active) return;
           setDistanceKm(d.distanceKm ?? null);
           setDurationText(d.durationText ?? null);
           onDistanceFetched?.(d.distanceKm ?? null);
         })
         .catch(() => {})
-        .finally(() => setLoading(false));
-      return () => controller.abort();
+        .finally(() => {
+          if (active) setLoading(false);
+        });
     }, 600);
-    return () => clearTimeout(timer);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      controller?.abort();
+    };
   }, [origin, destination, isReady, onDistanceFetched]);
 
   if (!isReady) return null;

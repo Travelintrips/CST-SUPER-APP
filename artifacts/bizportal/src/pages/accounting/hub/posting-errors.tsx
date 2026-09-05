@@ -150,7 +150,7 @@ export default function AccountingHubPostingErrorsPage() {
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">
-                {loading ? "Memuat..." : onlyUnresolved ? "🎉 Tidak ada error posting yang belum diselesaikan" : "Tidak ada data"}
+                 {loading ? "Memuat..." : appliedOnlyUnresolved ? "🎉 Tidak ada error posting yang belum diselesaikan" : "Tidak ada data"}
               </td></tr>
             ) : rows.map(r => (
               <tr key={r.id} className="border-t hover:bg-muted/40">

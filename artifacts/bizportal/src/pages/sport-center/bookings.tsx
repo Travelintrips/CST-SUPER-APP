@@ -87,6 +87,11 @@ export default function SportCenterBookings() {
     base_amount: "0", total_amount: "0", notes: "",
   });
 
+  useEffect(() => {
+    pushDoneRef.current = false;
+    syncLegacyDoneRef.current = false;
+  }, [activeCompanyId]);
+
   const { data, isLoading } = useQuery<{ data: Booking[]; total: number }>({
     queryKey: ["sport-center-bookings", activeCompanyId, statusFilter, paymentFilter, dateFilter, searchText, page, pageSize],
     queryFn: async () => {
