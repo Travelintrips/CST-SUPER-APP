@@ -16,6 +16,36 @@ export function normalizePhone(raw: string): string {
   return "62" + digits;
 }
 
+/**
+ * Normalizes a Customer Portal contact number without assuming Indonesia.
+ *
+ * Portal accounts keep the historical digits-only representation (for
+ * example, 6281234567890) so existing identity matches remain compatible.
+ * International numbers must include a country code via + or 00; local
+ * Indonesian 0XXXXXXXXXX input remains supported for legacy accounts.
+ */
+export function normalizePortalPhone(raw: string): string {
+  const input = String(raw ?? "").trim();
+  if (!input) return "";
+
+  const hasInternationalPrefix = input.startsWith("+") || input.startsWith("00");
+  let digits = input.replace(/[^\d]/g, "");
+  if (input.startsWith("00")) digits = digits.slice(2);
+  if (!digits) return "";
+
+  if (!hasInternationalPrefix) {
+    if (digits.startsWith("620")) digits = "62" + digits.slice(3);
+    else if (digits.startsWith("0")) digits = "62" + digits.slice(1);
+    else if (!digits.startsWith("62")) return "";
+  }
+
+  return digits;
+}
+
+export function isValidPortalPhone(phone: string): boolean {
+  return /^[1-9]\d{7,14}$/.test(String(phone ?? ""));
+}
+
 export function isValidIndonesianPhone(phone: string): boolean {
   return /^62\d{8,13}$/.test(phone);
 }

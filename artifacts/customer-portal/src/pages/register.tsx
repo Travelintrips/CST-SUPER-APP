@@ -54,6 +54,7 @@ export default function Register() {
   const [emailMsg, setEmailMsg] = useState("");
   const [emailLoading, setEmailLoading] = useState(false);
   const [passwordName, setPasswordName] = useState("");
+  const [passwordPhone, setPasswordPhone] = useState("");
   const [passwordEmail, setPasswordEmail] = useState("");
   const [passwordValue, setPasswordValue] = useState("");
   const [passwordMsg, setPasswordMsg] = useState("");
@@ -198,6 +199,10 @@ export default function Register() {
       setPasswordMsg("Nama minimal 3 karakter.");
       return;
     }
+    if (!passwordPhone.trim()) {
+      setPasswordMsg("Nomor telepon wajib diisi.");
+      return;
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(passwordEmail.trim())) {
       setPasswordMsg("Masukkan alamat email yang valid.");
       return;
@@ -222,6 +227,7 @@ export default function Register() {
         credentials: "include",
         body: JSON.stringify({
           name: passwordName.trim(),
+          phone: passwordPhone.trim(),
           email: passwordEmail.trim(),
           password: passwordValue,
           role,
@@ -515,6 +521,17 @@ export default function Register() {
                 </div>
               </div>
               <div className="space-y-2"><Label>Nama lengkap</Label><Input value={passwordName} onChange={(e) => setPasswordName(e.target.value)} placeholder="Budi Santoso" /></div>
+              <div className="space-y-2">
+                <Label>Nomor telepon (wajib)</Label>
+                <Input
+                  type="tel"
+                  inputMode="tel"
+                  value={passwordPhone}
+                  onChange={(e) => setPasswordPhone(e.target.value)}
+                  placeholder="+62 812-3456-7890 atau +1 202-555-0123"
+                />
+                <p className="text-xs text-muted-foreground">Gunakan kode negara. Nomor ini hanya disimpan sebagai kontak, bukan untuk SMS OTP.</p>
+              </div>
               {role === "customer" && (
                 <div className="space-y-2">
                   <Label>Tipe customer</Label>

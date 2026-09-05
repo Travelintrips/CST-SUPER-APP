@@ -23,6 +23,54 @@ const VALID_ITEM_STATUSES = [
   "pending", "approved", "rejected", "need_more_data", "quoted", "accepted",
 ] as const;
 
+const ALLOWED_CSR_TRANSITIONS: Record<string, string[]> = {
+  draft: ["submitted", "cancelled"],
+  submitted: ["need_review", "need_more_data", "approved_for_rfq", "rejected", "cancelled"],
+  need_review: ["need_more_data", "approved_for_rfq", "rejected", "cancelled"],
+  need_more_data: ["submitted", "need_review", "approved_for_rfq", "rejected", "cancelled"],
+  approved_for_rfq: ["rejected", "cancelled"],
+  rejected: [],
+  cancelled: [],
+};
+
+async function getPortalCustomerId(requestId: number): Promise<number | null> {
+  const result = await db.execute(sql`
+    SELECT portal_customer_id
+    FROM customer_service_requests
+    WHERE id = ${requestId}
+    LIMIT 1
+  `);
+  const value = Number((result.rows[0] as { portal_customer_id?: unknown } | undefined)?.portal_customer_id);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+async function notifyCsrStatus(
+  requestId: number,
+  requestNumber: string,
+  status: string,
+  eventKey: string,
+  message: string,
+) {
+  const portalCustomerId = await getPortalCustomerId(requestId);
+  if (!portalCustomerId) {
+    logger.warn({ requestId, status }, "[adminCSR] status has no canonical portal_customer_id");
+    return;
+  }
+  await notifyCustomerPortal({
+    portalCustomerId,
+    eventKey,
+    type: "service_request_status_changed",
+    title: "Status permintaan layanan diperbarui",
+    message,
+    payload: {
+      service: "service-request",
+      requestId,
+      orderNumber: requestNumber,
+      status,
+    },
+  });
+}
+
 // ── middleware ────────────────────────────────────────────────────────────────
 adminServiceRequestsRouter.use(async (req, res, next) => {
   const ok = await requireAdmin(req, res);
@@ -69,10 +117,12 @@ adminServiceRequestsRouter.get("/", async (req: Request, res: Response) => {
           .orderBy(desc(customerServiceRequestsTable.createdAt))
           .limit(limit).offset(offset);
 
-    const countResult = await db.execute(
-      sql`SELECT COUNT(*)::int as total FROM customer_service_requests ${conditions.length ? sql`WHERE status = ${status ?? ""}` : sql``}`
-    );
-    const total = Number((countResult.rows[0] as Record<string, unknown>)?.total ?? 0);
+    const [{ total }] = conditions.length
+      ? await db.select({ total: sql<number>`COUNT(*)::int` })
+        .from(customerServiceRequestsTable)
+        .where(and(...conditions))
+      : await db.select({ total: sql<number>`COUNT(*)::int` })
+        .from(customerServiceRequestsTable);
 
     return res.json({ requests, total, limit, offset });
   } catch (err) {
@@ -146,6 +196,16 @@ adminServiceRequestsRouter.put("/:id/status", async (req: Request, res: Response
       return res.status(400).json({ error: `Status tidak valid. Pilihan: ${VALID_CSR_STATUSES.join(", ")}` });
     }
 
+    const [current] = await db
+      .select({ status: customerServiceRequestsTable.status })
+      .from(customerServiceRequestsTable)
+      .where(eq(customerServiceRequestsTable.id, id))
+      .limit(1);
+    if (!current) return res.status(404).json({ error: "Request tidak ditemukan" });
+    if (current.status !== status && !ALLOWED_CSR_TRANSITIONS[current.status]?.includes(status)) {
+      return res.status(409).json({ error: `Transisi ${current.status} ke ${status} tidak diizinkan` });
+    }
+
     const [updated] = await db
       .update(customerServiceRequestsTable)
       .set({
@@ -154,23 +214,32 @@ adminServiceRequestsRouter.put("/:id/status", async (req: Request, res: Response
         handledBy: handledBy ?? undefined,
         updatedAt: new Date(),
       })
-      .where(eq(customerServiceRequestsTable.id, id))
+      .where(and(
+        eq(customerServiceRequestsTable.id, id),
+        eq(customerServiceRequestsTable.status, current.status),
+      ))
       .returning();
 
-    if (!updated) return res.status(404).json({ error: "Request tidak ditemukan" });
-    await notifyCustomerPortal({
-      portalCustomerId: updated.customerId,
-      eventKey: `service-request:${updated.id}:status:${status}`,
-      type: "service_request_status_changed",
-      title: "Status permintaan layanan diperbarui",
-      message: `Request ${updated.requestNumber} sekarang berstatus ${status}.`,
-      payload: {
-        service: "service-request",
-        requestId: updated.id,
-        orderNumber: updated.requestNumber,
-        status: updated.status,
-      },
-    });
+    if (!updated) return res.status(409).json({ error: "Status request berubah bersamaan. Muat ulang lalu coba lagi." });
+    if (current.status !== status) {
+      await db.execute(sql`
+        INSERT INTO erp_audit_logs (action, module, reference_id, user_id, old_data, new_data, created_at)
+        VALUES (
+          ${"status_update"}, ${"customer_portal_service_request"}, ${String(updated.id)},
+          ${handledBy ?? "portal-admin"},
+          ${JSON.stringify({ status: current.status })}::jsonb,
+          ${JSON.stringify({ status, adminNotes: adminNotes ?? null })}::jsonb,
+          NOW()
+        )
+      `);
+      await notifyCsrStatus(
+        updated.id,
+        updated.requestNumber,
+        status,
+        `service-request:${updated.id}:status:${status}`,
+        `Request ${updated.requestNumber} sekarang berstatus ${status}.`,
+      );
+    }
     logger.info({ id, status }, "[adminCSR] status updated");
     return res.json(updated);
   } catch (err) {
@@ -190,6 +259,16 @@ adminServiceRequestsRouter.put("/:id/items/:itemId/status", async (req: Request,
       return res.status(400).json({ error: `Status item tidak valid` });
     }
 
+    const [current] = await db
+      .select({ status: customerServiceRequestItemsTable.status })
+      .from(customerServiceRequestItemsTable)
+      .where(and(
+        eq(customerServiceRequestItemsTable.id, itemId),
+        eq(customerServiceRequestItemsTable.requestId, requestId),
+      ))
+      .limit(1);
+    if (!current) return res.status(404).json({ error: "Item tidak ditemukan" });
+
     const [updated] = await db
       .update(customerServiceRequestItemsTable)
       .set({ status, vendorNotes: vendorNotes ?? undefined, updatedAt: new Date() })
@@ -200,6 +279,25 @@ adminServiceRequestsRouter.put("/:id/items/:itemId/status", async (req: Request,
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Item tidak ditemukan" });
+    if (current.status !== status) {
+      const [request] = await db
+        .select({
+          id: customerServiceRequestsTable.id,
+          requestNumber: customerServiceRequestsTable.requestNumber,
+        })
+        .from(customerServiceRequestsTable)
+        .where(eq(customerServiceRequestsTable.id, requestId))
+        .limit(1);
+      if (request) {
+        await notifyCsrStatus(
+          request.id,
+          request.requestNumber,
+          `item:${status}`,
+          `service-request:${request.id}:item:${itemId}:status:${status}`,
+          `Item pada request ${request.requestNumber} sekarang berstatus ${status}.`,
+        );
+      }
+    }
     logger.info({ requestId, itemId, status }, "[adminCSR] item status updated");
     return res.json(updated);
   } catch (err) {
@@ -214,6 +312,19 @@ adminServiceRequestsRouter.post("/:id/request-more-data", async (req: Request, r
     const id = Number(req.params.id);
     const { message, handledBy } = req.body as Record<string, string>;
 
+    const [current] = await db
+      .select({
+        status: customerServiceRequestsTable.status,
+        requestNumber: customerServiceRequestsTable.requestNumber,
+      })
+      .from(customerServiceRequestsTable)
+      .where(eq(customerServiceRequestsTable.id, id))
+      .limit(1);
+    if (!current) return res.status(404).json({ error: "Request tidak ditemukan" });
+    if (current.status !== "need_more_data" && !["submitted", "need_review", "approved_for_rfq"].includes(current.status)) {
+      return res.status(409).json({ error: `Request berstatus ${current.status} tidak dapat meminta data tambahan` });
+    }
+
     const [updated] = await db
       .update(customerServiceRequestsTable)
       .set({
@@ -222,10 +333,32 @@ adminServiceRequestsRouter.post("/:id/request-more-data", async (req: Request, r
         handledBy: handledBy ?? undefined,
         updatedAt: new Date(),
       })
-      .where(eq(customerServiceRequestsTable.id, id))
+      .where(and(
+        eq(customerServiceRequestsTable.id, id),
+        eq(customerServiceRequestsTable.status, current.status),
+      ))
       .returning();
 
-    if (!updated) return res.status(404).json({ error: "Request tidak ditemukan" });
+    if (!updated) return res.status(409).json({ error: "Status request berubah bersamaan. Muat ulang lalu coba lagi." });
+    if (current.status !== "need_more_data") {
+      await db.execute(sql`
+        INSERT INTO erp_audit_logs (action, module, reference_id, user_id, old_data, new_data, created_at)
+        VALUES (
+          ${"request_revision"}, ${"customer_portal_service_request"}, ${String(updated.id)},
+          ${handledBy ?? "portal-admin"},
+          ${JSON.stringify({ status: current.status })}::jsonb,
+          ${JSON.stringify({ status: "need_more_data", message: message ?? null })}::jsonb,
+          NOW()
+        )
+      `);
+      await notifyCsrStatus(
+        updated.id,
+        updated.requestNumber,
+        "need_more_data",
+        `service-request:${updated.id}:status:need_more_data`,
+        `Request ${updated.requestNumber} memerlukan data tambahan.`,
+      );
+    }
     logger.info({ id }, "[adminCSR] request-more-data sent");
     return res.json(updated);
   } catch (err) {

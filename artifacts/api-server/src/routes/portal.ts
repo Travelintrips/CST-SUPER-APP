@@ -853,12 +853,12 @@ router.post("/auth/signup", signupLimiter, async (req, res) => {
     name, email, password, phone, company, customerType, companyId,
     requestedCompanyName, requestedRegistrationNumber, role, serviceIds,
   } = req.body ?? {};
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: "Nama, email, dan password diperlukan." });
+  if (!name || !email || !password || !phone) {
+    return res.status(400).json({ message: "Nama, email, password, dan nomor HP diperlukan." });
   }
   try {
     const result = await signup({
-      name: String(name), email: String(email), password: String(password), phone, company,
+      name: String(name), email: String(email), password: String(password), phone: String(phone), company,
       customerType,
       companyId: companyId === undefined || companyId === null ? undefined : Number(companyId),
       requestedCompanyName, requestedRegistrationNumber, role, serviceIds,

@@ -21,7 +21,7 @@ import bcrypt from "bcryptjs";
 import { signPortalJwt } from "../portalJwt.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
-import { normalizePhone } from "../phoneUtils.js";
+import { isValidPortalPhone, normalizePortalPhone } from "../phoneUtils.js";
 import { captureSafeDevResetArtifact } from "../safeDevResetCapture.js";
 import { isSafeDevTestMode } from "../safeDev.js";
 import {
@@ -112,20 +112,23 @@ export function hasUsablePortalPassword(passwordHash: string | null | undefined)
   return typeof passwordHash === "string" && passwordHash.trim().length > 0;
 }
 
-// Canonical phone normalizer — single source of truth for all OTP / login flows.
-// Delegates to lib/phoneUtils.normalizePhone which handles: 0XXXXXXX, 62XXXXXXX,
-// +62XXXXXXX, and the malformed 620XXXXXXX (extra leading-0 after country code).
+// Canonical portal phone normalizer — keeps legacy Indonesian identity matching
+// while accepting explicit international country codes.
 export function normalizePhoneID(raw: string): string {
-  return normalizePhone(String(raw));
+  return normalizePortalPhone(String(raw));
 }
 
 function phoneMatchCandidates(normalizedPhone: string): string[] {
+  const digits = String(normalizedPhone).replace(/[^\d]/g, "");
+  if (!digits) return [];
   const candidates = new Set([
-    normalizedPhone,
-    `0${normalizedPhone.slice(2)}`,
-    `+${normalizedPhone}`,
-    `620${normalizedPhone.slice(2)}`,
+    digits,
+    `+${digits}`,
   ]);
+  if (digits.startsWith("62")) {
+    candidates.add(`0${digits.slice(2)}`);
+    candidates.add(`620${digits.slice(2)}`);
+  }
   return [...candidates];
 }
 
@@ -211,7 +214,7 @@ export async function sendWaOtp(rawPhone: string) {
   const hasFonnte = !isSafeDevTestMode() && !!process.env.FONNTE_TOKEN;
 
   const normalized = normalizePhoneID(rawPhone);
-  if (normalized.length < 10) {
+  if (!isValidPortalPhone(normalized)) {
     throw new AuthServiceError(400, "Nomor HP tidak valid.");
   }
 
@@ -687,7 +690,7 @@ export async function signup(params: {
   name: string;
   email: string;
   password: string;
-  phone?: string;
+  phone: string;
   company?: string;
   customerType?: "individual" | "company";
   companyId?: number;
@@ -702,6 +705,9 @@ export async function signup(params: {
     role: requestedRole, serviceIds,
   } = params;
 
+  if (!String(phone ?? "").trim()) {
+    throw new AuthServiceError(400, "Nomor HP wajib diisi.");
+  }
   const emailLower = String(email).toLowerCase().trim();
   const [existing] = await db
     .select({ id: portalCustomersTable.id })
@@ -709,11 +715,12 @@ export async function signup(params: {
     .where(eq(portalCustomersTable.email, emailLower));
   if (existing) throw new AuthServiceError(409, "Email sudah terdaftar.");
 
-  const normalizedPhone = phone ? normalizePhoneID(String(phone)) : null;
-  if (normalizedPhone) {
-    const [phoneExisting] = await findPortalCustomersByPhone(normalizedPhone);
-    if (phoneExisting) throw new AuthServiceError(409, "Nomor HP sudah terdaftar.");
+  const normalizedPhone = normalizePhoneID(String(phone));
+  if (!isValidPortalPhone(normalizedPhone)) {
+    throw new AuthServiceError(400, "Nomor HP tidak valid. Gunakan kode negara, misalnya +62 atau +1.");
   }
+  const [phoneExisting] = await findPortalCustomersByPhone(normalizedPhone);
+  if (phoneExisting) throw new AuthServiceError(409, "Nomor HP sudah terdaftar.");
 
   const ALLOWED_ROLES = ["customer", "vendor"];
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
@@ -912,6 +919,9 @@ export async function syncProfile(
     if (!phone) patch.phone = null;
     else {
       const normalizedPhone = normalizePhoneID(String(phone));
+      if (!isValidPortalPhone(normalizedPhone)) {
+        throw new AuthServiceError(400, "Nomor HP tidak valid. Gunakan kode negara, misalnya +62 atau +1.");
+      }
       const [existing] = await findPortalCustomersByPhone(normalizedPhone, customerId);
       if (existing) throw new AuthServiceError(409, "Nomor HP sudah terdaftar.");
       patch.phone = normalizedPhone;

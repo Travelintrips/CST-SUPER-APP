@@ -4,8 +4,9 @@ import { sql } from "drizzle-orm";
 import { requirePortalAdmin } from "../lib/supabaseAuth.js";
 import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
-import { normalizePhone, isValidIndonesianPhone } from "../lib/phoneUtils.js";
+import { isValidPortalPhone, normalizePortalPhone } from "../lib/phoneUtils.js";
 import { sendViaService } from "../lib/waTransport.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Canonical read-only Customer Portal workload.
@@ -557,14 +558,21 @@ async function sendLifecycleWhatsApp(
   reason: string | null,
 ) {
   if (!phone) return;
-  const normalized = normalizePhone(phone);
-  if (!isValidIndonesianPhone(normalized)) return;
+  const normalized = normalizePortalPhone(phone);
+  if (!isValidPortalPhone(normalized)) return;
   const detail = reason ? `\nCatatan admin: ${reason}` : "";
-  await sendViaService(
-    normalized,
-    `📋 Update layanan Customer Portal\nReferensi: ${reference ?? `${service} #${id}`}\nStatus: ${status}${detail}`,
-    { context: `customer-portal-${service}-status`, refType: service, refId: `${id}:${status}` },
-  );
+  try {
+    await sendViaService(
+      normalized,
+      `📋 Update layanan Customer Portal\nReferensi: ${reference ?? `${service} #${id}`}\nStatus: ${status}${detail}`,
+      { context: `customer-portal-${service}-status`, refType: service, refId: `${id}:${status}` },
+    );
+  } catch (error) {
+    // The canonical transition and durable in-app notification already
+    // succeeded. Provider failure must not turn a successful admin action
+    // into a retryable 500 or duplicate transition.
+    logger.warn({ err: error, service, id, status }, "Customer lifecycle WhatsApp delivery failed");
+  }
 }
 
 async function performDirectAction(
@@ -652,9 +660,9 @@ router.post("/:service/:id/actions", async (req: Request, res: Response) => {
       const record = await loadDirectRecord(service, id);
       if (!record) return res.status(404).json({ error: "Kontak transaksi tidak ditemukan" });
       const phone = await resolveContactPhone(record.portal_customer_id, record.customer_phone);
-      const normalized = phone ? normalizePhone(phone) : "";
-      if (!normalized || !isValidIndonesianPhone(normalized)) {
-        return res.status(422).json({ error: "Nomor WhatsApp customer tidak tersedia atau tidak valid" });
+      const normalized = phone ? normalizePortalPhone(phone) : "";
+      if (!normalized || !isValidPortalPhone(normalized)) {
+        return res.status(422).json({ error: "Nomor kontak customer tidak tersedia atau tidak valid" });
       }
       return res.json({ ok: true, action, reference: record.reference, phone: normalized, contactUrl: `https://wa.me/${normalized}` });
     }
