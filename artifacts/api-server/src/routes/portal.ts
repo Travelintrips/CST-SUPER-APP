@@ -210,6 +210,7 @@ import {
   forgotPasswordCustom,
   resetPasswordWithToken,
 } from "../lib/services/portalAuthService.js";
+import { getPortalAuthCapabilities } from "../lib/portalAuthCapabilities.js";
 import {
   evaluateVendorInvitationEmail,
 } from "../lib/vendorInvitationIdentityGuard.js";
@@ -231,6 +232,11 @@ import {
 } from "../lib/services/portalLogisticOrderService.js";
 
 const router = Router();
+
+// Public, secret-free provider capability contract used by portal auth UI.
+router.get("/auth/capabilities", (_req, res) => {
+  res.json(getPortalAuthCapabilities());
+});
 
 // ── Customer in-app notifications ───────────────────────────────────────────
 // The feed is customer-scoped by the authenticated portal identity. SSE is a

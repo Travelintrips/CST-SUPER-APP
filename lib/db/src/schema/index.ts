@@ -25,6 +25,8 @@ export * from "./expenses";
 export * from "./emailCorrespondences";
 export * from "./freightCustomsDocs";
 export * from "./portalCustomers";
+export * from "./portalAuthIdentities";
+export * from "./portalEmailOtpCodes";
 export * from "./logisticOrders";
 export * from "./vendorRates";
 export * from "./drivers";
