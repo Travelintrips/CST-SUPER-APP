@@ -151,3 +151,4 @@
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
 - [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
 - [Vitest source contract paths](vitest-source-contract-paths.md) — source-reading tests must resolve from the test working directory; import.meta.url is unavailable in this BizPortal Vitest mode.
+- [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.

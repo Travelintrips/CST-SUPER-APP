@@ -554,10 +554,6 @@ export default function InvoiceOcrImportPage() {
       toast.error("Data SAP Tax belum tersedia. Ekstrak invoice terlebih dahulu.");
       return;
     }
-    if (displayLines.some((line) => line.coaAccountId) && !matchedSupplier?.id) {
-      toast.error("Pilih supplier yang sudah ada di database agar COA dapat disimpan sebagai referensi vendor.");
-      return;
-    }
     setSaving(true);
     try {
       // SAP LOCK: send backend header values — never derived from displayLines
@@ -620,7 +616,7 @@ export default function InvoiceOcrImportPage() {
       const selectedLines = displayLines
         .map((line, index) => ({ line, index }))
         .filter(({ line }) => Boolean(line.coaAccountId));
-      if (selectedLines.length > 0) {
+      if (selectedLines.length > 0 && matchedSupplier?.id) {
         const detailRes = await fetch(
           `/api/purchase-workflow/vendor-invoices/${data.id}?company=${activeCompanyId}`,
           { credentials: "include" },
@@ -636,9 +632,15 @@ export default function InvoiceOcrImportPage() {
             lineId: detail.lines?.[index]?.id,
             coaAccountId: Number(line.coaAccountId),
             mappingKey: normalizeVendorLineKey(line.description),
-            saveReusableRule: true,
+            // The selected COA remains valid for this invoice even when the
+            // OCR vendor name does not exactly match a supplier master row.
+            // Only supplier-specific reusable mappings require a supplier ID.
+            saveReusableRule: Boolean(matchedSupplier?.id),
           }))
-          .filter((line) => Number.isInteger(line.lineId) && line.lineId > 0);
+          .filter(
+            (line): line is typeof line & { lineId: number } =>
+              Number.isInteger(line.lineId) && (line.lineId ?? 0) > 0,
+          );
         if (reviewLines.length !== selectedLines.length) {
           throw new Error("Invoice tersimpan, tetapi semua line COA belum dapat dikonfirmasi.");
         }
