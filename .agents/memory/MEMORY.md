@@ -1,4 +1,5 @@
 - [Marketplace RFQ retry idempotency](marketplace-rfq-retry-idempotency.md) — canonical writes need a unique logical key and atomic ledger claim; legacy unkeyed rows stay manual-only during containment.
+- [Vendor invoice OCR tax evidence](vendor-invoice-ocr-tax-evidence.md) — PPh/payable must stay null for rate-only evidence; preserve the printed breakdown and require review before payment.
 - [Marketplace RFQ duplicate cleanup](marketplace-rfq-duplicate-cleanup.md) — exact manifest + locked fail-closed cleanup; preserve dual-write audit ledger and safely de-link activity history.
 - [Marketplace proof ledger cleanup](marketplace-proof-ledger-cleanup.md) — DEV proof cleanup must explicitly remove marker-linked dual-write rows when live FK discovery is incomplete.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.

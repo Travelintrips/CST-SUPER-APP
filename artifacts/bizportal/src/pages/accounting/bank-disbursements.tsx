@@ -211,6 +211,8 @@ interface OutstandingInvoice {
   grandTotal: number;
   amountPaid: number;
   outstanding: number;
+  withholdingTaxAmount: number;
+  payableToSupplier: number;
   dueDate: string | null;
   currency: string;
   source: "purchase_document" | "vendor_invoice";
@@ -911,6 +913,9 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
       onLinesChange(lines.filter((l) => l.lineKey !== key));
     } else {
       const { dpp, taxAmount } = computeTaxBreakdown(inv.outstanding, "ppn");
+      const whtAmount = inv.source === "vendor_invoice"
+        ? Math.min(inv.withholdingTaxAmount, Math.max(0, inv.outstanding - 1))
+        : 0;
       onLinesChange([...lines, {
         purchaseDocumentId: inv.source === "purchase_document" ? inv.id : null,
         vendorInvoiceId: inv.source === "vendor_invoice" ? inv.id : null,
@@ -918,8 +923,8 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         docNumber: inv.billNumber ?? inv.docNumber,
         supplierName: inv.supplierName,
         outstanding: inv.outstanding,
-        paymentAmount: inv.outstanding,
-        whtAmount: 0,
+        paymentAmount: inv.outstanding - whtAmount,
+        whtAmount,
         whtAccountId: null,
         taxTreatment: "bayar_berikut",
         taxType: "ppn",
@@ -1127,6 +1132,9 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
                     {inv.dueDate && <span>Jatuh Tempo: {new Date(inv.dueDate + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</span>}
                     <span>Sisa: <strong style={{ color: "#F59E0B" }}>Rp {fmt(inv.outstanding)}</strong></span>
                     <span>Total: Rp {fmt(inv.grandTotal)}</span>
+                    {inv.source === "vendor_invoice" && inv.withholdingTaxAmount > 0 && (
+                      <span>PPh: <strong style={{ color: "#FCA5A5" }}>Rp {fmt(inv.withholdingTaxAmount)}</strong></span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2096,6 +2104,17 @@ interface BdOcrResult {
   total_amount: number | null;
   description: string | null;
   line_items: Array<{ description: string | null; amount: number | null }>;
+  invoice_breakdown?: {
+    components?: Array<Record<string, unknown>>;
+    withholding_tax?: { amount?: number | null };
+    totals?: {
+      dpp?: number | null;
+      ppn?: number | null;
+      gross?: number | null;
+      withholding_tax_amount?: number | null;
+      payable_amount?: number | null;
+    };
+  } | null;
   confidence: number;
 }
 
@@ -2426,12 +2445,22 @@ function CreateDisbDialog({
   const handleQuickCreateVendorInvoice = async () => {
     if (!ocrResult || !activeCompanyId) return;
 
-    // Derive totals: prefer header total_amount; fall back to summed positive lines
+    // Prefer explicit header totals from the OCR breakdown; fall back to the
+    // legacy header total for invoices that do not have the new structure.
     const positiveLines = (ocrResult.line_items ?? []).filter((li) => (li.amount ?? 0) > 0);
     const derivedFromLines = positiveLines.reduce((s, li) => s + (li.amount ?? 0), 0);
-    const grossTotal = (ocrResult.total_amount != null && ocrResult.total_amount > 0)
-      ? ocrResult.total_amount
-      : derivedFromLines;
+    const breakdownTotals = ocrResult.invoice_breakdown?.totals;
+    const grossTotal = (breakdownTotals?.gross != null && breakdownTotals.gross > 0)
+      ? breakdownTotals.gross
+      : (ocrResult.total_amount != null && ocrResult.total_amount > 0)
+        ? ocrResult.total_amount
+        : derivedFromLines;
+    const headerVat = breakdownTotals?.ppn != null ? breakdownTotals.ppn : 0;
+    const headerNet = breakdownTotals?.dpp != null ? breakdownTotals.dpp : grossTotal;
+    const withholdingTaxAmount =
+      ocrResult.invoice_breakdown?.withholding_tax?.amount ??
+      breakdownTotals?.withholding_tax_amount ??
+      0;
 
     if (grossTotal <= 0) {
       toast({ title: "Total invoice tidak ditemukan", description: "OCR tidak berhasil membaca jumlah invoice. Upload ulang file atau buat invoice manual.", variant: "destructive" });
@@ -2454,10 +2483,14 @@ function CreateDisbDialog({
         invoiceDate: ocrResult.invoice_date ?? new Date().toISOString().split("T")[0],
         paymentTermDays: 30,
         companyId: activeCompanyId,
-        // Use header gross as canonical total (no tax breakdown in BD-OCR)
+        // Header values remain the accounting source of truth; OCR breakdown is
+        // stored as supporting evidence for review and reminders.
         headerGross: grossTotal,
-        headerVat: 0,
-        headerNet: grossTotal,
+        headerVat,
+        headerNet,
+        dueDate: ocrResult.due_date ?? undefined,
+        withholdingTaxAmount,
+        invoiceBreakdown: ocrResult.invoice_breakdown ?? null,
         lines,
       };
       const createRes = await fetch("/api/purchase-workflow/vendor-invoices", {

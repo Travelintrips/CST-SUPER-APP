@@ -38,6 +38,49 @@ interface OcrLineItem {
   quantity: number | null;
   unit_price: number | null;
   total: number | null;
+  tax?: number | null;
+}
+
+interface OcrBreakdownDetails {
+  re_object: string | null;
+  tariff: number | null;
+  uom: string | null;
+  turnover: number | null;
+  mob: number | null;
+  meter_from: number | null;
+  meter_to: number | null;
+  usage: number | null;
+  service_period: string | null;
+}
+
+interface OcrBreakdownComponent {
+  component: "concession" | "electricity" | "water" | "other";
+  label: string;
+  dpp: number | null;
+  ppn: number | null;
+  gross: number | null;
+  withholding_tax_amount: number | null;
+  withholding_tax_rate: number | null;
+  payable_amount: number | null;
+  details: OcrBreakdownDetails;
+}
+
+interface OcrInvoiceBreakdown {
+  components: OcrBreakdownComponent[];
+  withholding_tax: {
+    type: string | null;
+    rate: number | null;
+    amount: number | null;
+    base_amount: number | null;
+    evidence: string | null;
+  };
+  totals: {
+    dpp: number | null;
+    ppn: number | null;
+    gross: number | null;
+    withholding_tax_amount: number | null;
+    payable_amount: number | null;
+  };
 }
 
 interface OcrResult {
@@ -54,6 +97,7 @@ interface OcrResult {
   shipping_cost: number | null;
   total_amount: number | null;
   line_items: OcrLineItem[];
+  invoice_breakdown?: OcrInvoiceBreakdown | null;
   payment_status_hint: string | null;
   raw_confidence: number;
   flags: string[];
@@ -418,6 +462,11 @@ export default function InvoiceOcrImportPage() {
         taxType:     sapTax.tax.type,
         taxMode:     sapTax.tax_mode,
         sapConfidence: sapTax.confidence,
+        invoiceBreakdown: result?.invoice_breakdown ?? null,
+        withholdingTaxAmount:
+          result?.invoice_breakdown?.withholding_tax?.amount ??
+          result?.invoice_breakdown?.totals?.withholding_tax_amount ??
+          0,
         // Display-only lines (description/qty/unit for reference, not financial)
         lines: displayLines.map((l) => ({
           name: l.description,
@@ -842,6 +891,143 @@ export default function InvoiceOcrImportPage() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Explicit component breakdown — values are OCR evidence, never recalculated here. */}
+            <Card className="border-amber-200">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-amber-600" />
+                  Breakdown Tagihan & Pajak
+                  <Badge variant="outline" className="ml-auto text-xs border-amber-400 text-amber-700">
+                    Sumber invoice
+                  </Badge>
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Nilai berikut dibaca dari tabel invoice. PPh hanya diisi jika nominalnya tertulis pada dokumen.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {result.invoice_breakdown?.components?.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left py-2 px-2">Komponen</th>
+                          <th className="text-right py-2 px-2">DPP / Net</th>
+                          <th className="text-right py-2 px-2">PPN</th>
+                          <th className="text-right py-2 px-2">Gross</th>
+                          <th className="text-right py-2 px-2">PPh</th>
+                          <th className="text-right py-2 px-2">Bayar ke Vendor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.invoice_breakdown.components.map((component, index) => (
+                          <tr key={`${component.component}-${index}`} className="border-b align-top">
+                            <td className="py-2 px-2 font-medium">{component.label}</td>
+                            <td className="py-2 px-2 text-right font-mono">{idr(component.dpp)}</td>
+                            <td className="py-2 px-2 text-right font-mono">{idr(component.ppn)}</td>
+                            <td className="py-2 px-2 text-right font-mono">{idr(component.gross)}</td>
+                            <td className="py-2 px-2 text-right font-mono">
+                              {idr(component.withholding_tax_amount)}
+                              {component.withholding_tax_rate != null && (
+                                <span className="block text-[11px] text-muted-foreground">
+                                  tarif {component.withholding_tax_rate}%
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono font-semibold">
+                              {component.payable_amount != null ? idr(component.payable_amount) : "Belum terbaca"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                    Breakdown komponen belum terbaca dari invoice. Silakan review sebelum posting.
+                  </div>
+                )}
+
+                {result.invoice_breakdown && (
+                  <>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 border-t pt-3 text-sm md:grid-cols-5">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total DPP</p>
+                        <p className="font-mono font-semibold">{idr(result.invoice_breakdown.totals.dpp)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total PPN</p>
+                        <p className="font-mono font-semibold">{idr(result.invoice_breakdown.totals.ppn)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Gross</p>
+                        <p className="font-mono font-semibold">{idr(result.invoice_breakdown.totals.gross)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Potongan PPh</p>
+                        <p className="font-mono font-semibold text-red-700">
+                          {idr(
+                            result.invoice_breakdown.withholding_tax.amount ??
+                            result.invoice_breakdown.totals.withholding_tax_amount,
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Dibayar</p>
+                        <p className="font-mono font-bold text-emerald-700">
+                          {idr(result.invoice_breakdown.totals.payable_amount)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {result.invoice_breakdown.components.map((component, index) => {
+                        const detailEntries = [
+                          ["RE Object", component.details.re_object],
+                          ["Tarif", component.details.tariff],
+                          ["UOM", component.details.uom],
+                          ["Omzet", component.details.turnover],
+                          ["MOB", component.details.mob],
+                          ["Meter From", component.details.meter_from],
+                          ["Meter To", component.details.meter_to],
+                          ["Pemakaian", component.details.usage],
+                          ["Masa Jasa", component.details.service_period],
+                        ].filter(([, value]) => value != null && value !== "");
+                        if (detailEntries.length === 0) return null;
+                        return (
+                          <div key={`detail-${component.component}-${index}`} className="rounded-md bg-muted/40 px-3 py-2">
+                            <p className="text-xs font-semibold text-muted-foreground">{component.label}</p>
+                            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                              {detailEntries.map(([label, value]) => (
+                                <span key={label}>
+                                  <span className="text-muted-foreground">{label}: </span>
+                                  <span className="font-medium">
+                                    {typeof value === "number" ? idr(value) : String(value)}
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {result.invoice_breakdown.withholding_tax.amount == null &&
+                      (result.invoice_breakdown.withholding_tax.rate != null ||
+                        result.invoice_breakdown.withholding_tax.evidence) && (
+                        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                          Tarif/bukti PPh terbaca, tetapi nominal potongan PPh belum tercetak atau belum terbaca.
+                          Nominal transfer tidak boleh diposting otomatis sebelum diverifikasi.
+                          {result.invoice_breakdown.withholding_tax.evidence
+                            ? ` Bukti: ${result.invoice_breakdown.withholding_tax.evidence}`
+                            : ""}
+                        </div>
+                      )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
 
             {/* Items table — DISPLAY ONLY */}
             <Card>

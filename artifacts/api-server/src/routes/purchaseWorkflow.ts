@@ -174,6 +174,8 @@ db.execute(sql`
 // Boot migration: SAP Invoice Lock — immutable snapshot column
 db.execute(sql`
   ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS sap_lock_snapshot JSONB;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS invoice_breakdown JSONB;
 `).catch((e: unknown) => console.warn("[vendor_invoices] sap_lock_snapshot boot migration warn:", e));
 
 // Boot migration: SAP DB-LEVEL LOCK — is_locked column only (trigger removed; lock enforced at app level)
@@ -1266,6 +1268,10 @@ router.post("/vendor-invoices", async (req, res) => {
   const headerNet   = body.headerNet   != null && Number.isFinite(Number(body.headerNet))   ? Number(body.headerNet)   : null;
   const headerVat   = body.headerVat   != null && Number.isFinite(Number(body.headerVat))   ? Number(body.headerVat)   : null;
   const headerGross = body.headerGross != null && Number.isFinite(Number(body.headerGross)) ? Number(body.headerGross) : null;
+  const withholdingTaxAmount =
+    body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
+      ? Math.max(0, Number(body.withholdingTaxAmount))
+      : 0;
   const hasSapHeader = headerGross != null;
 
   const totalAmount = hasSapHeader
@@ -1310,8 +1316,12 @@ router.post("/vendor-invoices", async (req, res) => {
     paymentTermDays: body.paymentTermDays ? Number(body.paymentTermDays) : 30,
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
+    withholdingTaxAmount: String(withholdingTaxAmount),
     grandTotal: String(grandTotal),
     notes: body.notes ? String(body.notes) : undefined,
+    invoiceBreakdown: body.invoiceBreakdown && typeof body.invoiceBreakdown === "object"
+      ? body.invoiceBreakdown as Record<string, unknown>
+      : undefined,
     createdBy: body.createdBy ? String(body.createdBy) : undefined,
     ...(poCategoryKey ? { categoryKey: poCategoryKey, templateId: poTemplateId, templateVersion: poTemplateVersion, templateSnapshot: poTemplateSnapshot } : {}),
   }).returning();
@@ -1364,6 +1374,10 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
   const lines = (body.lines as Record<string, unknown>[]) ?? [];
   const totalAmount = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
   const taxAmount = lines.reduce((s, l) => s + num(l.taxAmount), 0);
+  const withholdingTaxAmount =
+    body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
+      ? Math.max(0, Number(body.withholdingTaxAmount))
+      : undefined;
   const [vi] = await db.update(vendorInvoicesTable).set({
     vendorInvoiceRef: body.vendorInvoiceRef ? String(body.vendorInvoiceRef) : undefined,
     supplierName: body.supplierName ? String(body.supplierName) : undefined,
@@ -1375,7 +1389,16 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
     grandTotal: String(totalAmount + taxAmount),
+    ...(withholdingTaxAmount !== undefined ? { withholdingTaxAmount: String(withholdingTaxAmount) } : {}),
     notes: body.notes ? String(body.notes) : undefined,
+    ...(body.invoiceBreakdown !== undefined
+      ? {
+          invoiceBreakdown:
+            body.invoiceBreakdown && typeof body.invoiceBreakdown === "object"
+              ? body.invoiceBreakdown as Record<string, unknown>
+              : null,
+        }
+      : {}),
     updatedAt: new Date(),
   }).where(eq(vendorInvoicesTable.id, id)).returning();
   await db.delete(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));

@@ -23,7 +23,8 @@ const router = Router();
 const upload = imagePdfUpload(20);
 
 const PDF_TEXT_MIN_CHARS = 200;
-const PDF_TEXT_MAX_CHARS = 8000;
+const PDF_TEXT_MAX_CHARS = 24000;
+const PDF_MAX_VISION_PAGES = 8;
 
 // Placeholder lines injected by some PDF generators for whitespace — strip entirely
 const PLACEHOLDER_PATTERNS = [
@@ -105,6 +106,17 @@ RULES:
 - For vendor_name: this is the ISSUING company (sender), NOT the recipient ("Kepada").
   Look for company name in the header/footer/letterhead, NOT under "Kepada".
 - For line_items: if explicit rows are not available, create a single line from the description and total.
+- Read every page and preserve both the summary table and any detailed service tables.
+- For invoice_breakdown, match the same component across pages without recalculating values.
+  Use these component keys when applicable: "concession", "electricity", "water", "other".
+  Extract the exact printed values for Pendapatan/Konsesi, Pemakaian Listrik, and Pemakaian Air.
+  Include the detail fields when printed: re_object, tariff, uom, turnover/omzet, mob,
+  meter_from, meter_to, usage/pemakaian, and service_period.
+- For withholding_tax, extract PPh type, printed rate, printed amount, and printed tax base.
+  A rate alone is not an amount. Do not calculate PPh or payable_amount when the invoice
+  does not print those values; use null and add a flag for manual verification.
+- payable_amount must only be populated when the invoice explicitly prints the amount payable
+  after withholding. Never derive it from gross minus a tax rate.
 - payment_status_hint: "PAID" if marked lunas/paid, "UNPAID" if has due date without payment, "PARTIAL" if partial.
 - raw_confidence: 0.0–1.0. High if text is clear. Low if messy/OCR noise.
 - flags: array of strings noting anomalies, assumptions, or missing data.
@@ -140,6 +152,45 @@ OUTPUT FORMAT — strict JSON only, no markdown, no explanation:
       "tax": number | null
     }
   ],
+  "invoice_breakdown": {
+    "components": [
+      {
+        "component": "concession" | "electricity" | "water" | "other",
+        "label": string,
+        "dpp": number | null,
+        "ppn": number | null,
+        "gross": number | null,
+        "withholding_tax_amount": number | null,
+        "withholding_tax_rate": number | null,
+        "payable_amount": number | null,
+        "details": {
+          "re_object": string | null,
+          "tariff": number | null,
+          "uom": string | null,
+          "turnover": number | null,
+          "mob": number | null,
+          "meter_from": number | null,
+          "meter_to": number | null,
+          "usage": number | null,
+          "service_period": string | null
+        }
+      }
+    ],
+    "withholding_tax": {
+      "type": string | null,
+      "rate": number | null,
+      "amount": number | null,
+      "base_amount": number | null,
+      "evidence": string | null
+    },
+    "totals": {
+      "dpp": number | null,
+      "ppn": number | null,
+      "gross": number | null,
+      "withholding_tax_amount": number | null,
+      "payable_amount": number | null
+    }
+  },
   "payment_status_hint": "PAID" | "UNPAID" | "PARTIAL" | null,
   "raw_confidence": number,
   "flags": [string]
@@ -154,6 +205,7 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
   const tax = typeof data.tax === "number" ? data.tax : null;
   const total = typeof data.total_amount === "number" ? data.total_amount : null;
   const flags: string[] = Array.isArray(data.flags) ? [...data.flags as string[]] : [];
+  let normalizedData = data;
 
   // Case 1: tax is unreasonably large (≥ 50% of subtotal or total).
   // This almost always means the AI swapped DPP (→ subtotal) with PPN (→ tax).
@@ -167,23 +219,98 @@ function sanitizeOcrResult(data: Record<string, unknown>): Record<string, unknow
       "[invoiceOcr] DPP/PPN swap detected — auto-correcting",
     );
     flags.push("AUTO-CORRECTED: DPP/PPN swap detected. Tax was larger than expected; values were swapped.");
-    return { ...data, subtotal: realSubtotal, tax: realTax, flags };
+    normalizedData = { ...normalizedData, subtotal: realSubtotal, tax: realTax };
   }
 
   // Case 2: subtotal equals total_amount and tax is non-null.
   // Means AI set subtotal = grand total instead of the pre-tax base.
   // Correction: subtotal = total_amount - tax.
-  if (subtotal !== null && total !== null && tax !== null && subtotal === total && tax > 0) {
+  if (
+    normalizedData === data &&
+    subtotal !== null &&
+    total !== null &&
+    tax !== null &&
+    subtotal === total &&
+    tax > 0
+  ) {
     const realSubtotal = Math.round(total - tax);
     logger.warn(
       { total, tax, correctedSubtotal: realSubtotal },
       "[invoiceOcr] subtotal=total_amount with non-zero tax — correcting subtotal",
     );
     flags.push("AUTO-CORRECTED: Subtotal was equal to grand total; adjusted to total_amount − tax.");
-    return { ...data, subtotal: realSubtotal, flags };
+    normalizedData = { ...normalizedData, subtotal: realSubtotal };
   }
 
-  return { ...data, flags };
+  const breakdown = normalizedData.invoice_breakdown;
+  if (breakdown && typeof breakdown === "object" && !Array.isArray(breakdown)) {
+    const raw = breakdown as Record<string, unknown>;
+    const asNumberOrNull = (value: unknown): number | null => {
+      const parsed = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const rawComponents = Array.isArray(raw.components) ? raw.components : [];
+    const components = rawComponents
+      .filter((component): component is Record<string, unknown> => Boolean(component && typeof component === "object"))
+      .map((component) => {
+        const rawDetails = component.details;
+        const details = rawDetails && typeof rawDetails === "object" && !Array.isArray(rawDetails)
+          ? rawDetails as Record<string, unknown>
+          : {};
+        return {
+          component: typeof component.component === "string" ? component.component : "other",
+          label: typeof component.label === "string" ? component.label : "Komponen invoice",
+          dpp: asNumberOrNull(component.dpp),
+          ppn: asNumberOrNull(component.ppn),
+          gross: asNumberOrNull(component.gross),
+          withholding_tax_amount: asNumberOrNull(component.withholding_tax_amount),
+          withholding_tax_rate: asNumberOrNull(component.withholding_tax_rate),
+          payable_amount: asNumberOrNull(component.payable_amount),
+          details: {
+            re_object: typeof details.re_object === "string" ? details.re_object : null,
+            tariff: asNumberOrNull(details.tariff),
+            uom: typeof details.uom === "string" ? details.uom : null,
+            turnover: asNumberOrNull(details.turnover),
+            mob: asNumberOrNull(details.mob),
+            meter_from: asNumberOrNull(details.meter_from),
+            meter_to: asNumberOrNull(details.meter_to),
+            usage: asNumberOrNull(details.usage),
+            service_period: typeof details.service_period === "string" ? details.service_period : null,
+          },
+        };
+      });
+    const rawWithholding = raw.withholding_tax;
+    const withholding = rawWithholding && typeof rawWithholding === "object" && !Array.isArray(rawWithholding)
+      ? rawWithholding as Record<string, unknown>
+      : {};
+    const rawTotals = raw.totals;
+    const totals = rawTotals && typeof rawTotals === "object" && !Array.isArray(rawTotals)
+      ? rawTotals as Record<string, unknown>
+      : {};
+    return {
+      ...normalizedData,
+      invoice_breakdown: {
+        components,
+        withholding_tax: {
+          type: typeof withholding.type === "string" ? withholding.type : null,
+          rate: asNumberOrNull(withholding.rate),
+          amount: asNumberOrNull(withholding.amount),
+          base_amount: asNumberOrNull(withholding.base_amount),
+          evidence: typeof withholding.evidence === "string" ? withholding.evidence : null,
+        },
+        totals: {
+          dpp: asNumberOrNull(totals.dpp),
+          ppn: asNumberOrNull(totals.ppn),
+          gross: asNumberOrNull(totals.gross),
+          withholding_tax_amount: asNumberOrNull(totals.withholding_tax_amount),
+          payable_amount: asNumberOrNull(totals.payable_amount),
+        },
+      },
+      flags,
+    };
+  }
+
+  return { ...normalizedData, flags };
 }
 
 router.post(
@@ -235,7 +362,7 @@ router.post(
       if (!useVision) {
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
-          max_tokens: 2000,
+           max_tokens: 6000,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: INVOICE_EXTRACTION_PROMPT },
@@ -244,29 +371,43 @@ router.post(
         });
         const raw = completion.choices[0]?.message?.content ?? "{}";
         extractedJson = JSON.parse(raw);
-      } else {
-        // PDF has no extractable text — render first page to PNG via pdftoppm, then use vision
+        } else {
+          // PDF has no extractable text — render every page (up to the safety limit) and use vision.
         const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "inv-ocr-"));
         const pdfPath = path.join(tmpDir, "invoice.pdf");
         const pngPrefix = path.join(tmpDir, "page");
         try {
           await fs.writeFile(pdfPath, file.buffer);
-          // pdftoppm renders page 1 as <pngPrefix>-1.png (PNG format, 150 DPI)
-          await execFileAsync("pdftoppm", ["-f", "1", "-l", "1", "-r", "150", "-png", "-singlefile", pdfPath, pngPrefix]);
-          const pngPath = `${pngPrefix}.png`;
-          const pngBuffer = await fs.readFile(pngPath);
-          const b64 = pngBuffer.toString("base64");
+            let pageCount = 1;
+            try {
+              const { stdout } = await execFileAsync("pdfinfo", [pdfPath]);
+              const pages = stdout.match(/^\s*Pages:\s*(\d+)/m)?.[1];
+              pageCount = Math.min(PDF_MAX_VISION_PAGES, Math.max(1, Number(pages ?? 1)));
+            } catch {
+              // pdftoppm below still renders the first page when pdfinfo is unavailable.
+            }
+            await execFileAsync("pdftoppm", ["-f", "1", "-l", String(pageCount), "-r", "150", "-png", pdfPath, pngPrefix]);
+            const renderedPages = (await fs.readdir(tmpDir))
+              .filter((name) => /^page-\d+\.png$/.test(name))
+              .sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0));
+            const pageImages = await Promise.all(renderedPages.map(async (pageName) => ({
+              pageName,
+              b64: (await fs.readFile(path.join(tmpDir, pageName))).toString("base64"),
+            })));
           const completion = await openai.chat.completions.create({
             model: "gpt-4o",
-            max_tokens: 2000,
+             max_tokens: 6000,
             response_format: { type: "json_object" },
             messages: [
               { role: "system", content: INVOICE_EXTRACTION_PROMPT },
               {
                 role: "user",
                 content: [
-                  { type: "text", text: "Extract invoice data from this scanned invoice image and return as JSON only." },
-                  { type: "image_url", image_url: { url: `data:image/png;base64,${b64}`, detail: "high" } },
+                   { type: "text", text: `Extract invoice data from all ${pageImages.length} scanned invoice pages and return as JSON only. Preserve the component breakdown and PPh evidence across pages.` },
+                   ...pageImages.map(({ b64 }) => ({
+                     type: "image_url" as const,
+                     image_url: { url: `data:image/png;base64,${b64}`, detail: "high" as const },
+                   })),
                 ],
               },
             ],
@@ -283,7 +424,7 @@ router.post(
       const b64 = file.buffer.toString("base64");
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
-        max_tokens: 2000,
+         max_tokens: 6000,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: INVOICE_EXTRACTION_PROMPT },

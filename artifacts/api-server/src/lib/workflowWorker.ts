@@ -24,6 +24,7 @@ import {
   intelligenceAlertSettingsTable,
   salesDocumentsTable,
   purchaseDocumentsTable,
+  vendorInvoicesTable,
   customersTable,
   suppliersTable,
 } from "@workspace/db";
@@ -646,6 +647,173 @@ async function checkBillOverdue(settings: AlertSettings): Promise<void> {
   }
 }
 
+// ── TASK 8 — Vendor invoice due/overdue reminder with OCR breakdown ───────────
+function formatRp(value: unknown): string {
+  if (value == null || value === "") return "Belum terbaca";
+  const amount = Number(value);
+  return Number.isFinite(amount)
+    ? `Rp ${Math.round(amount).toLocaleString("id-ID")}`
+    : "Belum terbaca";
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function buildVendorInvoiceBreakdownMessage(
+  breakdownValue: unknown,
+  fallbackPph: unknown,
+): { lines: string[]; pph: string; payable: string } {
+  const breakdown = asObject(breakdownValue);
+  const totals = asObject(breakdown?.totals);
+  const withholding = asObject(breakdown?.withholding_tax);
+  const componentValues = Array.isArray(breakdown?.components) ? breakdown.components : [];
+  const componentLines = componentValues
+    .map((value) => asObject(value))
+    .filter((value): value is Record<string, unknown> => Boolean(value))
+    .map((component) => {
+      const label = String(component.label ?? "Komponen invoice");
+      const gross = component.gross != null ? formatRp(component.gross) : "—";
+      const ppn = component.ppn != null ? formatRp(component.ppn) : "—";
+      const pph = component.withholding_tax_amount != null
+        ? formatRp(component.withholding_tax_amount)
+        : "—";
+      const payable = component.payable_amount != null
+        ? formatRp(component.payable_amount)
+        : "Belum terbaca";
+      return `  • ${label}: gross ${gross} | PPN ${ppn} | PPh ${pph} | bayar ${payable}`;
+    });
+
+  const pphValue = withholding?.amount ?? totals?.withholding_tax_amount ?? fallbackPph;
+  const payableValue = totals?.payable_amount;
+  return {
+    lines: componentLines,
+    pph: formatRp(pphValue),
+    payable: formatRp(payableValue),
+  };
+}
+
+async function checkVendorInvoiceDue(settings: AlertSettings): Promise<void> {
+  const today = new Date();
+  const invoices = await db
+    .select({
+      id: vendorInvoicesTable.id,
+      invoiceNumber: vendorInvoicesTable.invoiceNumber,
+      vendorInvoiceRef: vendorInvoicesTable.vendorInvoiceRef,
+      supplierName: vendorInvoicesTable.supplierName,
+      supplierId: vendorInvoicesTable.supplierId,
+      grandTotal: vendorInvoicesTable.grandTotal,
+      taxAmount: vendorInvoicesTable.taxAmount,
+      amountPaid: vendorInvoicesTable.amountPaid,
+      withholdingTaxAmount: vendorInvoicesTable.withholdingTaxAmount,
+      invoiceBreakdown: vendorInvoicesTable.invoiceBreakdown,
+      dueDate: vendorInvoicesTable.dueDate,
+    })
+    .from(vendorInvoicesTable)
+    .where(
+      and(
+        inArray(vendorInvoicesTable.status, ["posted", "matched", "ready_for_ap"]),
+        ne(vendorInvoicesTable.status, "cancelled"),
+        isNotNull(vendorInvoicesTable.dueDate),
+        lte(vendorInvoicesTable.dueDate, today),
+      )
+    );
+
+  if (invoices.length === 0) return;
+
+  const adminGroupWa = await getAdminGroupWa();
+  const alertWindow = isWithinAlertWindow(settings);
+
+  for (const invoice of invoices) {
+    const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
+    if (!dueDate) continue;
+    const daysOverdue = Math.max(
+      0,
+      Math.floor((today.getTime() - dueDate.getTime()) / 86_400_000),
+    );
+    const invoiceRef = invoice.vendorInvoiceRef || invoice.invoiceNumber;
+
+    let supplierPhone: string | null = null;
+    if (invoice.supplierId != null) {
+      const [supplier] = await db
+        .select({ phone: suppliersTable.phone })
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, invoice.supplierId))
+        .limit(1);
+      supplierPhone = supplier?.phone ?? null;
+    }
+    const adminContext = "vendor_invoice_due_reminder_admin";
+    const supplierContext = "vendor_invoice_due_reminder_supplier";
+    const [adminAlreadySent, supplierAlreadySent] = await Promise.all([
+      adminGroupWa
+        ? waAlreadySent(adminContext, invoiceRef)
+        : Promise.resolve(true),
+      supplierPhone
+        ? waAlreadySent(supplierContext, invoiceRef)
+        : Promise.resolve(true),
+    ]);
+    if (adminAlreadySent && supplierAlreadySent) continue;
+
+    const gross = Number(invoice.grandTotal ?? 0);
+    const paid = Number(invoice.amountPaid ?? 0);
+    const remaining = Math.max(0, gross - paid);
+    const breakdown = buildVendorInvoiceBreakdownMessage(
+      invoice.invoiceBreakdown,
+      invoice.withholdingTaxAmount,
+    );
+    const dueDateLabel = dueDate.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    });
+    const timing = daysOverdue === 0
+      ? "jatuh tempo hari ini"
+      : `terlambat ${daysOverdue} hari`;
+    const messageLines = [
+      `🟡 *Vendor Invoice ${timing}*`,
+      ``,
+      `Invoice: *${invoiceRef}*`,
+      `Supplier: ${invoice.supplierName}`,
+      `Jatuh tempo: *${dueDateLabel}*`,
+      ``,
+      `Total gross / kewajiban: *${formatRp(gross)}*`,
+      `PPN: ${formatRp(invoice.taxAmount)}`,
+      `Potongan PPh: ${breakdown.pph}`,
+      `Bayar ke vendor: *${breakdown.payable}*`,
+      `Sisa kewajiban: *${formatRp(remaining)}*`,
+    ];
+    if (breakdown.lines.length > 0) {
+      messageLines.push(``, `*Rincian komponen:*`, ...breakdown.lines);
+    }
+    messageLines.push(``, `Segera proses review dan pembayaran vendor.`);
+    const message = messageLines.join("\n");
+
+    if (alertWindow && adminGroupWa && !adminAlreadySent) {
+      await sendWhatsApp(adminGroupWa, message, {
+        context: adminContext,
+        refType: "vendor_invoice",
+        refId: invoiceRef,
+      });
+    }
+    if (alertWindow && supplierPhone && !supplierAlreadySent) {
+      await sendWhatsApp(supplierPhone, message, {
+        context: supplierContext,
+        refType: "vendor_invoice",
+        refId: invoiceRef,
+      });
+    }
+
+    if ((adminGroupWa || supplierPhone) && alertWindow) {
+      logger.info(
+        { invoiceId: invoice.id, invoiceRef, daysOverdue, remaining },
+        "WorkflowWorker: vendor invoice due reminder sent",
+      );
+    }
+  }
+}
+
 // ── TASK 5: Late order ETA breach ────────────────────────────────────────────
 
 async function checkLateOrders(settings: AlertSettings): Promise<void> {
@@ -723,6 +891,7 @@ async function runWorkflowWorker(): Promise<void> {
       checkLateOrders(settings),
       checkInvoiceOverdue(settings),
       checkBillOverdue(settings),
+      checkVendorInvoiceDue(settings),
       settings.invoiceReminderEnabled
         ? runInvoiceReminders({ isWithinAlertWindow: isWithinAlertWindow(settings) })
         : Promise.resolve(),

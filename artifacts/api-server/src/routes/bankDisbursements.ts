@@ -558,6 +558,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       supplier_name: string | null;
       grand_total: string;
       amount_paid: string | null;
+      withholding_tax_amount: string | null;
       due_date: string | null;
       source: "purchase_document" | "vendor_invoice";
     }>(
@@ -588,6 +589,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.supplier_name,
           vi.grand_total,
           vi.amount_paid,
+           vi.withholding_tax_amount,
           to_char(vi.due_date, 'YYYY-MM-DD') AS due_date,
           'vendor_invoice' AS source
         FROM vendor_invoices vi
@@ -609,6 +611,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       grandTotal: Number(r.grand_total),
       amountPaid: Number(r.amount_paid ?? 0),
       outstanding: Number(r.grand_total) - Number(r.amount_paid ?? 0),
+      withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
+      payableToSupplier: Math.max(0, Number(r.grand_total) - Number(r.withholding_tax_amount ?? 0)),
       dueDate: r.due_date,
       currency: "IDR",
       source: r.source,
