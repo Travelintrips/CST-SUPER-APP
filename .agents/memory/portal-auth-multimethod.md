@@ -7,4 +7,4 @@ The Customer/Vendor Portal must keep `portal_customers` as the single canonical 
 
 **Why:** Different providers can represent the same human or organization, while provider collisions and concurrent signup can otherwise create duplicate profiles or silently take over an existing identity.
 
-**How to apply:** Additive auth persistence needs its own registered startup migration stage because the legacy portal migration marker may already be complete. Frontend login/register controls must consume a public capability contract and keep unconfigured providers disabled/fail-closed.
+**How to apply:** Additive auth persistence needs its own registered startup migration stage because the legacy portal migration marker may already be complete. Frontend login/register controls must consume a public capability contract and keep unconfigured providers disabled/fail-closed. In SAFE_DEV_TEST_MODE, choose the simulated OTP branch before checking provider-token presence; development secret bundles can still contain real provider configuration.

@@ -23,6 +23,7 @@ import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { normalizePhone } from "../phoneUtils.js";
 import { captureSafeDevResetArtifact } from "../safeDevResetCapture.js";
+import { isSafeDevTestMode } from "../safeDev.js";
 import {
   configureCustomerOrganization,
   resolveSelectableCustomerPortalCompany,
@@ -207,7 +208,7 @@ export async function emailPasswordLogin(email: string, password: string) {
 export async function sendWaOtp(rawPhone: string) {
   // BLK-02 fix: use REPLIT_DEPLOYMENT as the canonical production signal (per ADR-0001 / envGuard)
   const isDev = !process.env.REPLIT_DEPLOYMENT;
-  const hasFonnte = !!process.env.FONNTE_TOKEN;
+  const hasFonnte = !isSafeDevTestMode() && !!process.env.FONNTE_TOKEN;
 
   const normalized = normalizePhoneID(rawPhone);
   if (normalized.length < 10) {
