@@ -363,7 +363,13 @@ export function VendorInvoiceEditorPage() {
 
   const postMut = useMutation({
     mutationFn: () => apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" }).then(async r => { if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(formatPostingError(body, "Gagal posting")); } return r.json(); }),
-    onSuccess: () => { toast.success("Invoice diposting & jurnal dibuat"); qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id] }); },
+    onSuccess: async () => {
+      toast.success("Invoice diposting & jurnal dibuat");
+      await qcClient.invalidateQueries({
+        queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId],
+      });
+      navigate("/purchase/vendor-invoices");
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal posting"),
   });
 
