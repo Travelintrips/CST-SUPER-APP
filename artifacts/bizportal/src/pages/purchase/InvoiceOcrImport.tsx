@@ -156,6 +156,7 @@ interface DisplayLine {
   quantity: string;
   unit: string;
   unitPrice: string;
+  taxAmount: string;
   notes: string;
   coaHint: string;
   coaAccountId: string;
@@ -191,6 +192,74 @@ function confidenceLabel(c: number) {
 
 function normalizeVendorLineKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 240);
+}
+
+function buildDisplayLines(ocr: OcrResult): DisplayLine[] {
+  const breakdownComponents = (ocr.invoice_breakdown?.components ?? []).filter(
+    (component) =>
+      component.label.trim().length > 0 &&
+      (component.dpp != null || component.ppn != null || component.gross != null),
+  );
+
+  // The invoice breakdown is the authoritative per-component financial
+  // evidence. OCR line_items often contains descriptions but no unit_price,
+  // which previously caused saved vendor-invoice lines to become zero.
+  if (breakdownComponents.length > 0) {
+    return breakdownComponents.map((component, index) => {
+      const sourceLine = ocr.line_items?.[index];
+      const quantity =
+        sourceLine?.quantity != null && Number(sourceLine.quantity) > 0
+          ? Number(sourceLine.quantity)
+          : 1;
+
+      return {
+        description: component.label,
+        quantity: String(quantity),
+        unit: "ls",
+        unitPrice: component.dpp != null ? String(component.dpp / quantity) : "",
+        taxAmount: component.ppn != null ? String(component.ppn) : "0",
+        notes: component.gross != null ? `Gross: ${component.gross}` : "",
+        coaHint: sourceLine?.coa_hint ?? "",
+        coaAccountId: "",
+      };
+    });
+  }
+
+  if (ocr.line_items?.length > 0) {
+    return ocr.line_items.map((line) => {
+      const quantity =
+        line.quantity != null && Number(line.quantity) > 0
+          ? Number(line.quantity)
+          : 1;
+      const unitPrice =
+        line.unit_price ??
+        (line.total != null ? line.total / quantity : null);
+
+      return {
+        description: line.description ?? "",
+        quantity: String(quantity),
+        unit: "ls",
+        unitPrice: unitPrice != null ? String(unitPrice) : "",
+        taxAmount: line.tax != null ? String(line.tax) : "0",
+        notes: "",
+        coaHint: line.coa_hint ?? "",
+        coaAccountId: "",
+      };
+    });
+  }
+
+  return [
+    {
+      description: "Layanan",
+      quantity: "1",
+      unit: "ls",
+      unitPrice: "",
+      taxAmount: "0",
+      notes: "",
+      coaHint: "",
+      coaAccountId: "",
+    },
+  ];
 }
 
 const OCR_AUTO_POST_CONFIDENCE = 0.9;
@@ -244,7 +313,7 @@ export default function InvoiceOcrImportPage() {
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // OCR raw result (display-only reference)
+  // OCR raw result/reference. Header financial values remain sourced from SAP Tax.
   const [result, setResult] = useState<OcrResult | null>(null);
 
   /**
@@ -371,9 +440,9 @@ export default function InvoiceOcrImportPage() {
   };
 
   /**
-   * Display-only lines — used for rendering the item table.
-   * DO NOT use these for any subtotal/tax/total calculation.
-   * SAP LOCK ACTIVE: no reduce(), no sum(), no arithmetic on these.
+   * OCR component lines used for the item table and persisted as invoice detail.
+   * Header subtotal/tax/total remain sourced from SAP Tax; do not derive header
+   * values from these lines.
    */
   const [displayLines, setDisplayLines] = useState<DisplayLine[]>([]);
 
@@ -419,33 +488,7 @@ export default function InvoiceOcrImportPage() {
         dueDate: ocr.due_date ?? "",
       });
 
-      // Items are DISPLAY ONLY — map to DisplayLine (no tax, no subtotal computation)
-      // SAP LOCK: item-level tax must NOT be carried when header tax is present.
-      const mapped: DisplayLine[] =
-        ocr.line_items?.length > 0
-          ? ocr.line_items.map((l) => ({
-              description: l.description ?? "",
-              quantity: l.quantity != null ? String(l.quantity) : "1",
-              unit: "ls",
-              // SAP LOCK: unit_price is display-only; never multiplied here
-              unitPrice: l.unit_price != null ? String(l.unit_price) : "",
-              notes: "",
-              coaHint: l.coa_hint ?? "",
-              coaAccountId: "",
-            }))
-          : [
-              {
-                description: "Layanan",
-                quantity: "1",
-                unit: "ls",
-                unitPrice: "",
-                notes: "",
-                coaHint: "",
-                coaAccountId: "",
-              },
-            ];
-
-      setDisplayLines(mapped);
+      setDisplayLines(buildDisplayLines(ocr));
     },
     [],
   );
@@ -591,7 +634,7 @@ export default function InvoiceOcrImportPage() {
           quantity: Number(l.quantity) || 1,
           unit: l.unit,
           unitCost: Number(l.unitPrice) || 0,
-          taxAmount: 0,
+          taxAmount: Number(l.taxAmount) || 0,
           coaHint: l.coaHint || undefined,
            coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
            coaResolutionStatus: l.coaAccountId ? "confirmed" : "unresolved",
@@ -1293,14 +1336,14 @@ export default function InvoiceOcrImportPage() {
               </CardContent>
             </Card>
 
-            {/* Items table — DISPLAY ONLY */}
+            {/* Items table — persisted line detail; header totals remain SAP-sourced */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle className="text-base">Item Invoice</CardTitle>
                   <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                     <Lock className="h-3 w-3" />
-                    Display only — tidak digunakan untuk kalkulasi keuangan
+                    Rincian item — total header tetap mengikuti SAP Tax
                   </p>
                 </div>
                 <Button
@@ -1314,6 +1357,7 @@ export default function InvoiceOcrImportPage() {
                         quantity: "1",
                         unit: "ls",
                         unitPrice: "",
+                        taxAmount: "0",
                         notes: "",
                         coaHint: "",
                         coaAccountId: "",
