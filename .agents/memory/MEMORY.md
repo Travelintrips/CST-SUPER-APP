@@ -33,6 +33,7 @@
 - [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
 - [Live SMTP credential drift](live-smtp-credential-drift.md) — production notification logs can show SMTP 535 while the workspace production bundle verifies; compare the live runtime's secret source, not only the current Repl bundle.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
+- [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.

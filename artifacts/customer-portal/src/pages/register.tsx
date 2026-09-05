@@ -344,6 +344,26 @@ export default function Register() {
   };
 
   const stepNumber = step === "phone" ? 1 : step === "otp" ? 2 : 3;
+  const methodTitle = method === "whatsapp"
+    ? t("registerPage.title")
+    : method === "email"
+      ? "Registrasi via Email OTP"
+      : method === "google"
+        ? "Registrasi via Google"
+        : method === "password"
+          ? "Registrasi dengan Password"
+          : `Registrasi via ${method === "sms" ? "SMS" : "WeChat"}`;
+  const methodDescription = method === "whatsapp"
+    ? (step === "phone" ? t("registerPage.stepPhoneDesc") : step === "otp" ? t("registerPage.stepOtpDesc") : t("registerPage.stepProfileDesc"))
+    : method === "email"
+      ? (emailStep === "email" ? "Gunakan email terverifikasi untuk membuat akun." : "Masukkan kode OTP yang dikirim ke email Anda.")
+      : method === "google"
+        ? "Gunakan akun Google terverifikasi untuk membuat akun."
+        : method === "password"
+          ? "Buat akun dengan email dan password."
+          : "Provider belum tersedia.";
+  const displayStep = method === "whatsapp" ? stepNumber : method === "email" && emailStep === "code" ? 2 : 1;
+  const displayTotal = method === "whatsapp" ? 3 : method === "email" ? 2 : 1;
 
   const methodOptions: Array<{ id: RegistrationMethod; label: string; available: boolean }> = [
     { id: "email", label: "Email OTP", available: capabilities.emailOtp },
@@ -365,19 +385,17 @@ export default function Register() {
               </Button>
             </Link>
             <div className="text-xs font-medium bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">
-              Langkah {stepNumber} dari 3
+              Langkah {displayStep} dari {displayTotal}
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-emerald-500 text-white grid place-items-center">
-              <MessageCircle className="h-5 w-5" />
+              {method === "email" ? <Mail className="h-5 w-5" /> : method === "password" ? <LockKeyhole className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
             </div>
             <div>
-              <CardTitle className="text-xl">{t("registerPage.title")}</CardTitle>
+              <CardTitle className="text-xl">{methodTitle}</CardTitle>
               <CardDescription className="text-sm">
-                {step === "phone" && t("registerPage.stepPhoneDesc")}
-                {step === "otp" && t("registerPage.stepOtpDesc")}
-                {step === "profile" && t("registerPage.stepProfileDesc")}
+                {methodDescription}
               </CardDescription>
             </div>
           </div>
