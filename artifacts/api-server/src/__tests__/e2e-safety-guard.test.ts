@@ -184,8 +184,14 @@ describe("safeDev — isSafeDevTestMode / externalIntegrationsDisabled", () => {
   afterEach(() => {
     delete process.env.SAFE_DEV_TEST_MODE;
     delete process.env.ALLOW_DEV_STORAGE_WRITES;
+    delete process.env.ALLOW_DEV_AI_REQUESTS;
     delete process.env.APP_ENV;
     delete process.env.SUPABASE_URL_DEV;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    delete process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    delete process.env.E2E_TEST_MODE;
     vi.resetModules();
   });
 
@@ -226,6 +232,64 @@ describe("safeDev — isSafeDevTestMode / externalIntegrationsDisabled", () => {
         fetch("https://other-project.supabase.co/storage/v1/object/public/public-assets/probe.png"),
       ).rejects.toThrow(/external HTTP is disabled/i);
       expect(passthroughFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("allows only the configured OpenAI endpoint for the development preview", async () => {
+    const originalFetch = globalThis.fetch;
+    const passthroughFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    globalThis.fetch = passthroughFetch as typeof globalThis.fetch;
+    setEnv({
+      SAFE_DEV_TEST_MODE: "true",
+      E2E_TEST_MODE: undefined,
+      APP_ENV: "development",
+      ALLOW_DEV_AI_REQUESTS: "true",
+      OPENAI_API_KEY: "test-openai-key",
+      OPENAI_BASE_URL: undefined,
+      AI_INTEGRATIONS_OPENAI_API_KEY: undefined,
+      AI_INTEGRATIONS_OPENAI_BASE_URL: undefined,
+    });
+
+    try {
+      const safeDev = await import("../lib/safeDev.js");
+      safeDev.installSafeDevOutboundGuard();
+
+      await expect(
+        fetch("https://api.openai.com/v1/chat/completions"),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        fetch("https://api.openai.com/v1/models"),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        fetch("https://example.com/v1/chat/completions"),
+      ).rejects.toThrow(/external HTTP is disabled/i);
+      expect(passthroughFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("keeps the OpenAI exception closed in E2E mode", async () => {
+    const originalFetch = globalThis.fetch;
+    const passthroughFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    globalThis.fetch = passthroughFetch as typeof globalThis.fetch;
+    setEnv({
+      SAFE_DEV_TEST_MODE: "true",
+      E2E_TEST_MODE: "true",
+      APP_ENV: "development",
+      ALLOW_DEV_AI_REQUESTS: "true",
+    });
+
+    try {
+      const safeDev = await import("../lib/safeDev.js");
+      safeDev.installSafeDevOutboundGuard();
+
+      await expect(
+        fetch("https://api.openai.com/v1/chat/completions"),
+      ).rejects.toThrow(/external HTTP is disabled/i);
+      expect(passthroughFetch).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;
     }

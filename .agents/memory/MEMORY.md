@@ -7,6 +7,7 @@
 - [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
+- [Development AI preview allowlist](development-ai-preview-allowlist.md) — OCR preview boleh ke base OpenAI terkonfigurasi saja; arbitrary HTTP dan E2E provider calls tetap diblokir.
 - [DEV storage runtime proof](dev-storage-runtime-proof.md) — proof Node 20 harus memakai workspace package + ws transport; fixture PDF menghindari kompresi gambar saat byte readback.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
