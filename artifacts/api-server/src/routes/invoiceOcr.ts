@@ -113,6 +113,9 @@ RULES:
   Extract the exact printed values for Pendapatan/Konsesi, Pemakaian Listrik, and Pemakaian Air.
   Include the detail fields when printed: re_object, tariff, uom, turnover/omzet, mob,
   meter_from, meter_to, usage/pemakaian, and service_period.
+- When an image of a page is provided, use the visual table layout as the source of truth
+  for associating labels with DPP/PPN/Gross columns. PDF text extraction may flatten columns.
+  Do not omit a visible component just because the extracted text order is ambiguous.
 - For withholding_tax, extract PPh type, printed rate, printed amount, and printed tax base.
   A rate alone is not an amount. Do not calculate PPh or payable_amount when the invoice
   does not print those values; use null and add a flag for manual verification.
@@ -362,69 +365,116 @@ router.post(
       const useVision = cleaned.length < PDF_TEXT_MIN_CHARS;
 
       logger.info(
-        { pdfParseOk, rawLen: pdfText.length, cleanedLen: cleaned.length, useVision },
+        {
+          pdfParseOk,
+          rawLen: pdfText.length,
+          cleanedLen: cleaned.length,
+          useVision,
+          extractionMode: "pdf-hybrid",
+        },
         "[invoiceOcr] PDF analysis",
       );
 
-      if (!useVision) {
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-           max_tokens: 6000,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: INVOICE_EXTRACTION_PROMPT },
-            { role: "user", content: `Extract invoice data from this text and return as JSON only.\n\n${cleaned}` },
-          ],
-        });
-        const raw = completion.choices[0]?.message?.content ?? "{}";
-        extractedJson = JSON.parse(raw);
-        } else {
-          // PDF has no extractable text — render every page (up to the safety limit) and use vision.
-        const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "inv-ocr-"));
-        const pdfPath = path.join(tmpDir, "invoice.pdf");
-        const pngPrefix = path.join(tmpDir, "page");
+      // PDF invoices commonly have a usable text layer whose table columns are flattened
+      // by pdf-parse. Use that text for complete searchable context, but always pair it
+      // with page images so the vision model can recover the original table geometry.
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "inv-ocr-"));
+      const pdfPath = path.join(tmpDir, "invoice.pdf");
+      const pngPrefix = path.join(tmpDir, "page");
+      let renderedPages: string[] = [];
+      let renderError: unknown = null;
+
+      try {
+        await fs.writeFile(pdfPath, file.buffer);
+        let pageCount = 1;
         try {
-          await fs.writeFile(pdfPath, file.buffer);
-            let pageCount = 1;
-            try {
-              const { stdout } = await execFileAsync("pdfinfo", [pdfPath]);
-              const pages = stdout.match(/^\s*Pages:\s*(\d+)/m)?.[1];
-              pageCount = Math.min(PDF_MAX_VISION_PAGES, Math.max(1, Number(pages ?? 1)));
-            } catch {
-              // pdftoppm below still renders the first page when pdfinfo is unavailable.
-            }
-            await execFileAsync("pdftoppm", ["-f", "1", "-l", String(pageCount), "-r", "150", "-png", pdfPath, pngPrefix]);
-            const renderedPages = (await fs.readdir(tmpDir))
-              .filter((name) => /^page-\d+\.png$/.test(name))
-              .sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0));
-            const pageImages = await Promise.all(renderedPages.map(async (pageName) => ({
-              pageName,
-              b64: (await fs.readFile(path.join(tmpDir, pageName))).toString("base64"),
-            })));
+          const { stdout } = await execFileAsync("pdfinfo", [pdfPath]);
+          const pages = stdout.match(/^\s*Pages:\s*(\d+)/m)?.[1];
+          pageCount = Math.min(PDF_MAX_VISION_PAGES, Math.max(1, Number(pages ?? 1)));
+        } catch (e) {
+          logger.warn({ err: e }, "[invoiceOcr] pdfinfo failed; rendering first page");
+        }
+
+        await execFileAsync("pdftoppm", [
+          "-f", "1",
+          "-l", String(pageCount),
+          "-r", "150",
+          "-png",
+          pdfPath,
+          pngPrefix,
+        ]);
+        renderedPages = (await fs.readdir(tmpDir))
+          .filter((name) => /^page-\d+\.png$/.test(name))
+          .sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0));
+      } catch (e) {
+        renderError = e;
+        logger.warn({ err: e }, "[invoiceOcr] PDF page rendering failed");
+      }
+
+      try {
+        if (renderedPages.length > 0) {
+          const pageImages = await Promise.all(renderedPages.map(async (pageName) => ({
+            pageName,
+            b64: (await fs.readFile(path.join(tmpDir, pageName))).toString("base64"),
+          })));
+          const textContext = cleaned
+            ? `The PDF text layer is included for context, but it may have flattened table columns. Use the page images to recover column alignment.\n\nEXTRACTED PDF TEXT:\n${cleaned}`
+            : "No reliable PDF text layer was available. Extract the invoice from the page images.";
+
           const completion = await openai.chat.completions.create({
             model: "gpt-4o",
-             max_tokens: 6000,
+            max_tokens: 6000,
             response_format: { type: "json_object" },
             messages: [
               { role: "system", content: INVOICE_EXTRACTION_PROMPT },
               {
                 role: "user",
                 content: [
-                   { type: "text", text: `Extract invoice data from all ${pageImages.length} scanned invoice pages and return as JSON only. Preserve the component breakdown and PPh evidence across pages.` },
-                   ...pageImages.map(({ b64 }) => ({
-                     type: "image_url" as const,
-                     image_url: { url: `data:image/png;base64,${b64}`, detail: "high" as const },
-                   })),
+                  {
+                    type: "text",
+                    text: `Extract invoice data from all ${pageImages.length} rendered invoice pages and return as JSON only. Preserve the component breakdown and PPh evidence across pages.\n\n${textContext}`,
+                  },
+                  ...pageImages.map(({ pageName, b64 }) => ({
+                    type: "image_url" as const,
+                    image_url: {
+                      url: `data:image/png;base64,${b64}`,
+                      detail: "high" as const,
+                    },
+                  })),
                 ],
               },
             ],
           });
           const raw = completion.choices[0]?.message?.content ?? "{}";
           extractedJson = JSON.parse(raw);
-        } finally {
-          // Clean up temp files
-          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        } else if (cleaned) {
+          // Keep a controlled fallback for environments where pdftoppm is unavailable.
+          // This is less accurate for tables, but preserves the previous text-only behavior.
+          if (renderError) {
+            logger.warn(
+              { err: renderError },
+              "[invoiceOcr] falling back to text-only PDF extraction after render failure",
+            );
+          }
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            max_tokens: 6000,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: INVOICE_EXTRACTION_PROMPT },
+              {
+                role: "user",
+                content: `Extract invoice data from this text and return as JSON only. The PDF page images were unavailable, so flag any table component whose column association is uncertain.\n\n${cleaned}`,
+              },
+            ],
+          });
+          const raw = completion.choices[0]?.message?.content ?? "{}";
+          extractedJson = JSON.parse(raw);
+        } else {
+          throw renderError ?? new Error("PDF tidak memiliki text layer dan halaman tidak dapat dirender");
         }
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
       }
     } else {
       // Image file — always use vision

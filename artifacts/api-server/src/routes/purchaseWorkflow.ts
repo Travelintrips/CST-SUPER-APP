@@ -1382,9 +1382,6 @@ router.post("/vendor-invoices", async (req, res) => {
   const taxReviewReason = body.taxReviewReason ? String(body.taxReviewReason) : null;
   const withholdingTaxType = body.withholdingTaxType ? String(body.withholdingTaxType) : null;
   const taxObject = body.taxObject ? String(body.taxObject) : null;
-  const withholdingTaxAmount = body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
-    ? Number(body.withholdingTaxAmount)
-    : null;
 
   const totalAmount = hasSapHeader
     ? (headerNet ?? (headerGross - (headerVat ?? 0)))
@@ -1492,7 +1489,6 @@ router.post("/vendor-invoices", async (req, res) => {
     withholdingReviewStatus: taxReviewRequired || hasLineWithholding ? "required" : "not_required",
     withholdingTaxType,
     taxObject,
-    withholdingTaxAmount: withholdingTaxAmount == null ? undefined : String(withholdingTaxAmount),
     grandTotal: String(grandTotal),
     notes: body.notes ? String(body.notes) : undefined,
     invoiceBreakdown: body.invoiceBreakdown && typeof body.invoiceBreakdown === "object"
@@ -1787,7 +1783,10 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
     withholdingReviewCompletedAt: new Date(),
     withholdingTaxType: taxReviews.length > 0 ? null : vi.withholdingTaxType,
     taxObject: taxReviews.length > 0 ? null : vi.taxObject,
-    withholdingTaxAmount: taxReviews.length > 0 ? null : vi.withholdingTaxAmount,
+    // Reviewed line-level withholding records become the source of truth.
+    // The legacy header column is non-null, so clear it to zero rather than
+    // writing null and risking a second withholding amount during settlement.
+    withholdingTaxAmount: taxReviews.length > 0 ? "0" : vi.withholdingTaxAmount,
     updatedAt: new Date(),
   }).where(eq(vendorInvoicesTable.id, id));
 

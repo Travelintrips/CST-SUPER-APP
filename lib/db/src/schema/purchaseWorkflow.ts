@@ -306,7 +306,6 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   withholdingReviewCompletedAt: timestamp("withholding_review_completed_at"),
   withholdingTaxType: text("withholding_tax_type"),
   taxObject: text("tax_object"),
-  withholdingTaxAmount: numeric("withholding_tax_amount", { precision: 14, scale: 2 }),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
   amountPaid: numeric("amount_paid", { precision: 14, scale: 2 }).notNull().default("0"),
   threeWayMatchStatus: text("three_way_match_status").notNull().default("unmatched"),
