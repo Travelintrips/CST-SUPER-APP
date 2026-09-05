@@ -13,7 +13,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote } from "lucide-react";
 import { toast } from "sonner";
 
-const idr = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+const idr = (n: number | string | null | undefined) => {
+  const amount = Number(n);
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 })
+    .format(Number.isFinite(amount) ? amount : 0);
+};
 const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { credentials: "include", headers: { "Content-Type": "application/json" }, ...opts });
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
@@ -229,10 +233,22 @@ export function VendorInvoiceEditorPage() {
   const { activeCompanyId } = useCompany();
   const isNew = !id || id === "new";
 
-  const { data: vi, isLoading } = useQuery<VI>({
-    queryKey: ["/api/purchase-workflow/vendor-invoices", id],
-    queryFn: () => apiFetch(`/purchase-workflow/vendor-invoices/${id}`).then(r => r.json()),
-    enabled: !isNew,
+  const { data: vi, isLoading, isError, error } = useQuery<VI>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(`/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload === "object"
+          ? String((payload as { error?: unknown; message?: unknown }).error
+            ?? (payload as { message?: unknown }).message
+            ?? "Gagal memuat detail vendor invoice.")
+          : "Gagal memuat detail vendor invoice.";
+        throw new Error(message);
+      }
+      return payload as VI;
+    },
+    enabled: !isNew && activeCompanyId != null,
   });
 
   const [form, setForm] = useState({ supplierName: "", vendorInvoiceRef: "", poId: sp.get("poId") ?? "", grId: sp.get("grId") ?? "", invoiceDate: new Date().toISOString().substring(0, 10), paymentTermDays: "30", notes: "" });
@@ -339,10 +355,29 @@ export function VendorInvoiceEditorPage() {
   });
 
   const isDraft = !vi || vi.status === "draft";
-  if (!isNew && isLoading) return <AppShell><div className="flex items-center justify-center h-64">Loading...</div></AppShell>;
+  if (!isNew && (activeCompanyId == null || isLoading)) {
+    return <AppShell><div className="flex items-center justify-center h-64">Loading...</div></AppShell>;
+  }
+  if (!isNew && isError) {
+    return (
+      <AppShell>
+        <div className="flex flex-col items-center justify-center gap-3 h-64 text-center">
+          <p className="text-destructive">
+            Gagal memuat detail invoice: {error instanceof Error ? error.message : "Terjadi kesalahan."}
+          </p>
+          <Button variant="outline" onClick={() => navigate("/purchase/vendor-invoices")}>
+            <ChevronLeft className="mr-1 h-4 w-4" />Kembali ke daftar invoice
+          </Button>
+        </div>
+      </AppShell>
+    );
+  }
 
   const totalAmount = lines.reduce((s, l) => s + Number(l.subtotal), 0);
   const taxAmount = lines.reduce((s, l) => s + Number(l.taxAmount), 0);
+  const summarySubtotal = vi ? Number(vi.totalAmount) : totalAmount;
+  const summaryTax = vi ? Number(vi.taxAmount) : taxAmount;
+  const summaryGrandTotal = vi ? Number(vi.grandTotal) : summarySubtotal + summaryTax;
 
   return (
     <AppShell>
@@ -410,9 +445,9 @@ export function VendorInvoiceEditorPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Ringkasan</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(totalAmount)}</span></div>
-              <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(taxAmount)}</span></div>
-              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total</span><span className="font-mono">{idr(totalAmount + taxAmount)}</span></div>
+              <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(summarySubtotal)}</span></div>
+              <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(summaryTax)}</span></div>
+              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
               {vi && <div className="flex justify-between text-green-600"><span>Terbayar</span><span className="font-mono">{idr(Number(vi.amountPaid))}</span></div>}
               {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
             </CardContent>

@@ -44,6 +44,7 @@
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
 - [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
 - [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.
+- [Vendor invoice detail company context](vendor-invoice-detail-company-context.md) — detail requests need active company scope or admin sessions can render undefined/NaN instead of the invoice.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
