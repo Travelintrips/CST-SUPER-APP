@@ -260,14 +260,16 @@ export async function listSalesOrders(portalCustomerId: number) {
   }
 
   // Sales documents created by the portal carry the immutable session identity
-  // in created_by_id. Company members may also see documents owned by their
-  // active canonical company; no email lookup is an authorization step.
-  const ownership = context.customerType === "individual"
-    ? and(
-        eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
-        isNull(salesDocumentsTable.companyId),
-      )
-    : eq(salesDocumentsTable.companyId, context.companyId!);
+  // in created_by_id. Company membership is context for the transaction, not
+  // a substitute for resource ownership: one portal customer must not be able
+  // to mutate or read another customer's order merely because both belong to
+  // the same company.
+  const ownership = and(
+    eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
+    context.customerType === "individual"
+      ? isNull(salesDocumentsTable.companyId)
+      : eq(salesDocumentsTable.companyId, context.companyId!),
+  );
 
   const orders = await db
     .select()
@@ -662,12 +664,12 @@ export async function cancelSalesOrder(portalCustomerId: number, orderId: number
   if (context.customerType === "company" && !context.companyId) {
     throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
   }
-  const ownership = context.customerType === "individual"
-    ? and(
-        eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
-        isNull(salesDocumentsTable.companyId),
-      )
-    : eq(salesDocumentsTable.companyId, context.companyId!);
+  const ownership = and(
+    eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
+    context.customerType === "individual"
+      ? isNull(salesDocumentsTable.companyId)
+      : eq(salesDocumentsTable.companyId, context.companyId!),
+  );
 
   const [doc] = await db
     .select()

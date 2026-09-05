@@ -2046,6 +2046,11 @@ async function startServer() {
     .then(() => runWithRetry("Portal email OTP migration", runPortalEmailOtpMigration))
     .then(() => runWithRetry("Portal customer organization migration", runPortalCustomerOrganizationMigration))
     .then(() => runWithRetry("Portal customer organization contract migration", runPortalCustomerOrganizationContractMigration))
+    // This repair is intentionally after the persistent pre-start gate. The
+    // ownership migration also runs inside that gate, but older environments
+    // may already have a completed marker from before portal_customer_id was
+    // introduced and would otherwise skip the additive DDL forever.
+    .then(() => runWithRetry("Customer portal logistics ownership repair", runLogisticsOwnershipMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
     .then(() => runWithRetry("Customer Portal finance processing migration", runCustomerPortalFinanceProcessingMigration))
     .then(() => runWithRetry("Customer Portal settlement migration", runCustomerPortalSettlementMigration))
