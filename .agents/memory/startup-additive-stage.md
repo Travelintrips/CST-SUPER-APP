@@ -9,6 +9,12 @@ When a persistent startup registry may already mark a legacy migration complete,
 
 **How to apply:** Give the repair its own stable registry name, register every new server-chain stage before startup, wire it into the standalone development runner, backfill only from canonical parents, update registry contract tests when the stage count changes, and leave unresolved legacy ownership NULL so payment paths remain fail-closed. If a marker unexpectedly reports the target version complete, verify the catalog with a DEV-only runner instead of assuming source execution.
 
+Schema required by an active write endpoint must not be installed by fire-and-forget DDL in the route module. Run and await a small idempotent catalog repair before the API is marked ready, outside any stale completion marker that could skip it.
+
+**Why:** Production accepted OCR Vendor Invoice requests while its route-level DDL had failed as a warning, leaving tax-review columns absent and every invoice insert failing at runtime.
+
+**How to apply:** Centralize the required columns in the authoritative migration, run its minimal compatibility subset as a fail-closed pre-start substep, and remove duplicate asynchronous route-level DDL.
+
 The persistent gate resolves server-chain stages by their exact display name, so adding a migration function and chaining its call is insufficient unless the matching registry row is also present.
 
 **Why:** An unregistered display name fails closed before the migration callback runs, leaving the API unready even when the migration implementation itself is valid.

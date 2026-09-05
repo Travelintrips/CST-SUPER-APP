@@ -9,22 +9,41 @@ import { logger } from "./logger.js";
  * records. It does not rewrite historical invoices or the deprecated
  * vendor_payments executor.
  */
-export async function runVendorPaymentHardeningMigration(): Promise<void> {
+export async function ensureVendorInvoiceCaptureSchema(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE vendor_invoices
+      ADD COLUMN IF NOT EXISTS sap_lock_snapshot JSONB,
+      ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS withholding_tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS invoice_breakdown JSONB,
+      ADD COLUMN IF NOT EXISTS tax_review_status TEXT NOT NULL DEFAULT 'not_required',
+      ADD COLUMN IF NOT EXISTS tax_review_reason TEXT,
       ADD COLUMN IF NOT EXISTS withholding_review_status TEXT NOT NULL DEFAULT 'not_required',
       ADD COLUMN IF NOT EXISTS withholding_review_completed_by TEXT,
-      ADD COLUMN IF NOT EXISTS withholding_review_completed_at TIMESTAMPTZ
+      ADD COLUMN IF NOT EXISTS withholding_review_completed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS withholding_tax_type TEXT,
+      ADD COLUMN IF NOT EXISTS tax_object TEXT
   `);
 
   await db.execute(sql`
     ALTER TABLE vendor_invoice_lines
+      ADD COLUMN IF NOT EXISTS coa_hint TEXT,
       ADD COLUMN IF NOT EXISTS coa_account_id INTEGER,
       ADD COLUMN IF NOT EXISTS coa_resolution_status TEXT NOT NULL DEFAULT 'unresolved',
       ADD COLUMN IF NOT EXISTS coa_confirmed_by TEXT,
       ADD COLUMN IF NOT EXISTS coa_confirmed_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS coa_mapping_key TEXT
   `);
+
+  // Locking is enforced by sapInvoiceLockMiddleware. The legacy trigger blocks
+  // legitimate payment tracking updates and must not survive schema repair.
+  await db.execute(sql`
+    DROP TRIGGER IF EXISTS invoice_lock_trigger ON vendor_invoices
+  `);
+}
+
+export async function runVendorPaymentHardeningMigration(): Promise<void> {
+  await ensureVendorInvoiceCaptureSchema();
 
   // Some legacy DEV databases have the id column but lost the declared
   // primary/unique constraint during an earlier schema import. PostgreSQL

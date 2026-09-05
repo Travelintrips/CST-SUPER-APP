@@ -199,7 +199,10 @@ import { runFinanceGovernanceMigration } from "./lib/financeGovernanceMigration.
 import { startDriftMonitorWorker } from "./lib/monitoring/dataDriftDetector.js";
 import { runBankDisbursementMigration, runExpenseDisbursementBridgeMigration } from "./lib/bankDisbursementMigration.js";
 import { runVendorPaymentsMigration } from "./lib/vendorPaymentsMigration.js";
-import { runVendorPaymentHardeningMigration } from "./lib/vendorPaymentHardeningMigration.js";
+import {
+  ensureVendorInvoiceCaptureSchema,
+  runVendorPaymentHardeningMigration,
+} from "./lib/vendorPaymentHardeningMigration.js";
 import { runKasBankMigration } from "./lib/kasBankMigration.js";
 import { runCashBankMigration } from "./lib/cashBankMigration.js";
 import { runFinanceCoreMigration } from "./lib/financeCoreMigration.js";
@@ -2009,6 +2012,12 @@ async function startServer() {
         ensureSportPaymentMirrorTrigger,
       );
       logger.info("Sport Center canonical payment metadata resolver ready");
+      logger.info("Pre-start migration: Vendor Invoice capture schema starting");
+      await runPreStartSubstepWithRetry(
+        "vendor_invoice_capture_schema_v1",
+        ensureVendorInvoiceCaptureSchema,
+      );
+      logger.info("Vendor Invoice capture schema ready");
       return timeStartupStage("Pre-start schema migrations", async () => {
       console.log("[startup] Migration registry initialization complete");
       for (let attempt = 1; attempt <= 10; attempt++) {

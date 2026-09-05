@@ -208,35 +208,6 @@ db.execute(sql`
   ALTER TABLE purchase_requests ADD COLUMN IF NOT EXISTS template_snapshot JSONB;
 `).catch((e: unknown) => console.warn("[purchase_requests] boot migration warn:", e));
 
-// Boot migration: SAP Invoice Lock — immutable snapshot column
-db.execute(sql`
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS sap_lock_snapshot JSONB;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS invoice_breakdown JSONB;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_review_status TEXT NOT NULL DEFAULT 'not_required';
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_review_reason TEXT;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_type TEXT;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_object TEXT;
-  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_amount NUMERIC(14,2);
-  ALTER TABLE vendor_invoice_lines ADD COLUMN IF NOT EXISTS coa_hint TEXT;
-`).catch((e: unknown) => console.warn("[vendor_invoices] sap_lock_snapshot boot migration warn:", e));
-
-// Boot migration: SAP DB-LEVEL LOCK — is_locked column only (trigger removed; lock enforced at app level)
-(async () => {
-  try {
-    await db.execute(sql`
-      ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS is_locked BOOLEAN DEFAULT false;
-    `);
-  } catch (e) { console.warn("[vendor_invoices] is_locked column migration warn:", e); }
-
-  // Drop the DB-level trigger — SAP lock is enforced at application level via sapInvoiceLockEngine.
-  // The trigger caused pgBouncer incompatibility and blocked legitimate payment tracking updates.
-  try {
-    await db.execute(sql`DROP TRIGGER IF EXISTS invoice_lock_trigger ON vendor_invoices;`);
-    console.log("[vendor_invoices] invoice_lock_trigger dropped (SAP lock now app-level only)");
-  } catch (e) { console.warn("[vendor_invoices] drop lock trigger warn:", e); }
-})();
-
 // Boot migration: SAP Approval States table
 db.execute(sql`
   CREATE TABLE IF NOT EXISTS sap_approval_states (
@@ -1246,8 +1217,12 @@ router.get("/vendor-invoices/coa-mappings", async (req, res) => {
   res.json(rows);
 });
 
-router.get("/vendor-invoices/:id", async (req, res) => {
+router.get("/vendor-invoices/:id", async (req, res, next) => {
   const id = Number(String(req.params.id));
+  if (!Number.isInteger(id) || id <= 0) {
+    next();
+    return;
+  }
   const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
