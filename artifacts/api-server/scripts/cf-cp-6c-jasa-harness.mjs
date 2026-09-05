@@ -26,8 +26,10 @@ const SUPPORTED = {
 };
 const DEV_PROJECT_REF = "xssrfshdrtdfupgqwfdw";
 const PROD_PROJECT_REF = "nzdweipzckfszczzqtuw";
+const DEV_DATABASE_URL =
+  process.env.SUPABASE_MIGRATION_URL ?? process.env.SUPABASE_DATABASE_URL_DEV;
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
+  connectionString: DEV_DATABASE_URL,
   max: 8,
   connectionTimeoutMillis: 20_000,
   idleTimeoutMillis: 20_000,
@@ -49,6 +51,7 @@ const ownership = {
 };
 const MAX_ID_ALLOCATION_ATTEMPTS = 200;
 const allocationCollisions = [];
+let identitySurfaceCache = null;
 
 function assert(condition, message) {
   if (!condition) throw new Error(`CF_CP_6C_ASSERTION_FAILED: ${message}`);
@@ -67,6 +70,7 @@ function guard() {
   assert(process.env.SAFE_DEV_TEST_MODE === "true", "SAFE_DEV_TEST_MODE=true is required");
   assert(process.env.CUSTOMER_PORTAL_FINANCE_MODE === "central", "central mode must be harness-only");
   assert(process.env.SPORT_CENTER_FINANCE_MODE !== "central", "Sport Center central mode is disabled");
+  assert(extractProjectRef(DEV_DATABASE_URL) === DEV_PROJECT_REF, "wrong DEV proof connection");
   assert(extractProjectRef(process.env.SUPABASE_DATABASE_URL_DEV) === DEV_PROJECT_REF, "wrong DEV project ref");
   assert(extractProjectRef(process.env.SUPABASE_DATABASE_URL_DEV) !== PROD_PROJECT_REF, "DEV URL is PROD");
   assert(extractProjectRef(process.env.SUPABASE_DATABASE_URL) !== PROD_PROJECT_REF, "canonical URL is PROD");
@@ -83,9 +87,43 @@ async function snapshot(client) {
       (SELECT count(*)::int FROM customer_payment_finance_events) AS events,
       (SELECT count(*)::int FROM customer_finance_processing) AS processing,
       (SELECT count(*)::int FROM accounting_entries) AS accounting,
+      (SELECT count(*)::int FROM fleet_ledger_entries) AS fleet_ledger,
       (SELECT count(*)::int FROM public.bank_mutations) AS mutations,
       (SELECT count(*)::int FROM customer_portal_settlement_batches) AS settlements
   `);
+}
+
+async function syncSerialSequences(client) {
+  const tables = [
+    "sales_documents",
+    "sales_document_lines",
+    "payments",
+    "customer_payment_finance_events",
+    "customer_finance_processing",
+    "accounting_entries",
+    "accounting_entry_lines",
+    "bank_mutations",
+    "customer_portal_settlement_batches",
+    "customer_portal_settlement_items",
+    "fleet_ledger_entries",
+  ];
+
+  for (const tableName of tables) {
+    const sequence = await one(
+      client,
+      "SELECT pg_get_serial_sequence($1, 'id') AS sequence_name",
+      [`public.${tableName}`],
+    );
+    if (!sequence?.sequence_name) continue;
+    const table = quoteIdentifier(tableName);
+    await client.query(
+      `SELECT setval(
+         $1::regclass,
+         GREATEST((SELECT COALESCE(MAX(id), 1) FROM public.${table}), 1)
+       )`,
+      [sequence.sequence_name],
+    );
+  }
 }
 
 async function taxConfig(client, productScope = "jasa") {
@@ -109,6 +147,7 @@ function quoteIdentifier(identifier) {
 }
 
 async function identitySurfaces(client) {
+  if (identitySurfaceCache) return identitySurfaceCache;
   const result = await client.query(`
     SELECT c.table_schema, c.table_name, c.column_name
       FROM information_schema.columns
@@ -126,34 +165,36 @@ async function identitySurfaces(client) {
        )
      ORDER BY c.table_schema, c.table_name, c.column_name
   `);
-  return result.rows;
+  identitySurfaceCache = result.rows;
+  return identitySurfaceCache;
 }
 
 async function preflightIdentity(client, paymentId, documentId) {
-  const refs = [];
-  for (const surface of await identitySurfaces(client)) {
+  const surfaces = await identitySurfaces(client);
+  if (!surfaces.length) return [];
+  const paymentValues = [String(paymentId)];
+  const sourceValues = [String(paymentId), String(documentId)];
+  const union = surfaces.map((surface) => {
     const qualified = `${quoteIdentifier(surface.table_schema)}.${quoteIdentifier(surface.table_name)}`;
     const column = quoteIdentifier(surface.column_name);
-    const values = surface.column_name === "source_id"
-      ? [String(paymentId), String(documentId)]
-      : [String(paymentId)];
-    const result = await client.query(
-      `SELECT ${column}::text AS identity, COUNT(*)::int AS count
-         FROM ${qualified}
-        WHERE ${column}::text = ANY($1::text[])
-        GROUP BY ${column}`,
-      [values],
-    );
-    for (const row of result.rows) {
-      refs.push({
-        table: `${surface.table_schema}.${surface.table_name}`,
-        column: surface.column_name,
-        identity: Number(row.identity),
-        count: Number(row.count),
-      });
-    }
-  }
-  return refs;
+    const valuesParam = surface.column_name === "source_id" ? "$2" : "$1";
+    const table = `${surface.table_schema}.${surface.table_name}`.replaceAll("'", "''");
+    const field = surface.column_name.replaceAll("'", "''");
+    return `
+      SELECT '${table}' AS table_name, '${field}' AS column_name,
+             ${column}::text AS identity, COUNT(*)::int AS count
+        FROM ${qualified}
+       WHERE ${column}::text = ANY(${valuesParam}::text[])
+       GROUP BY ${column}
+    `;
+  }).join("\nUNION ALL\n");
+  const result = await client.query(union, [paymentValues, sourceValues]);
+  return result.rows.map((row) => ({
+    table: row.table_name,
+    column: row.column_name,
+    identity: Number(row.identity),
+    count: Number(row.count),
+  }));
 }
 
 function registerFixture(fixture) {
@@ -615,32 +656,50 @@ async function cleanup(client) {
   try {
     const ids = [...ownership.payments];
     const docs = [...ownership.documents];
+    const fleetLedger = (await client.query(`
+      SELECT id
+        FROM fleet_ledger_entries
+       WHERE description ILIKE $1 OR source_ref ILIKE $1
+    `, [`%${PREFIX}%`])).rows.map((row) => Number(row.id));
+    const entryIds = [...new Set([...ownership.accounting, ...ownership.journals])];
+    for (const [table, triggers] of [
+      ["public.fleet_ledger_entries", ["trg_fleet_ledger_immutable"]],
+      ["public.accounting_entries", ["ae_immutability", "trg_block_posted_delete", "trg_block_posted_update"]],
+      ["public.accounting_entry_lines", ["trg_block_lines_delete", "trg_block_lines_mutation", "trg_block_lines_update"]],
+    ]) {
+      for (const trigger of triggers) {
+        await client.query(`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`);
+      }
+    }
     const deleteByIds = async (table, idColumn, values) => {
       if (values.length) await client.query(
         `DELETE FROM ${table} WHERE ${idColumn}=ANY($1::int[])`,
         [values],
       );
     };
-    await deleteByIds("public.bank_mutations", "id", [...ownership.mutations]);
-    await deleteByIds("customer_portal_settlement_items", "id", [...ownership.settlementItems]);
-    await deleteByIds("customer_portal_settlement_batches", "id", [...ownership.settlements]);
-    for (const id of [...ownership.accounting, ...ownership.journals]) {
-      await client.query(
-        `UPDATE accounting_entries
-            SET status='draft',cancel_reason='CFCP6C fixture cleanup',cancelled_at=NOW()
-          WHERE id=$1 AND status='posted'`,
-        [id],
-      );
+    try {
+      await deleteByIds("public.bank_mutations", "id", [...ownership.mutations]);
+      await deleteByIds("customer_portal_settlement_items", "id", [...ownership.settlementItems]);
+      await deleteByIds("customer_portal_settlement_batches", "id", [...ownership.settlements]);
+      await deleteByIds("fleet_ledger_entries", "id", fleetLedger);
+      await deleteByIds("accounting_entry_lines", "entry_id", entryIds);
+      await deleteByIds("accounting_entries", "id", entryIds);
+      await deleteByIds("customer_finance_processing", "id", [...ownership.processing]);
+      await deleteByIds("customer_payment_finance_events", "id", [...ownership.events]);
+      await deleteByIds("payments", "id", ids);
+      await deleteByIds("sales_document_lines", "id", [...ownership.lines]);
+      await deleteByIds("sales_documents", "id", docs);
+    } finally {
+      for (const [table, triggers] of [
+        ["public.fleet_ledger_entries", ["trg_fleet_ledger_immutable"]],
+        ["public.accounting_entries", ["ae_immutability", "trg_block_posted_delete", "trg_block_posted_update"]],
+        ["public.accounting_entry_lines", ["trg_block_lines_delete", "trg_block_lines_mutation", "trg_block_lines_update"]],
+      ]) {
+        for (const trigger of triggers) {
+          await client.query(`ALTER TABLE ${table} ENABLE TRIGGER ${trigger}`);
+        }
+      }
     }
-    await deleteByIds("accounting_entry_lines", "id", [...ownership.journalLines]);
-    for (const id of [...ownership.accounting, ...ownership.journals]) {
-      await client.query("DELETE FROM accounting_entries WHERE id=$1", [id]);
-    }
-    await deleteByIds("customer_finance_processing", "id", [...ownership.processing]);
-    await deleteByIds("customer_payment_finance_events", "id", [...ownership.events]);
-    await deleteByIds("payments", "id", ids);
-    await deleteByIds("sales_document_lines", "id", [...ownership.lines]);
-    await deleteByIds("sales_documents", "id", docs);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -651,6 +710,7 @@ async function cleanup(client) {
 async function main() {
   guard();
   const client = await pool.connect();
+  await syncSerialSequences(client);
   const before = await snapshot(client);
   let proof;
   let failure;
@@ -674,7 +734,10 @@ async function main() {
     client.release();
     await pool.end();
     if (failure) throw failure;
-    assert(JSON.stringify(before) === JSON.stringify(after), "existing DEV counts changed");
+    assert(
+      JSON.stringify(before) === JSON.stringify(after),
+      `existing DEV counts changed before=${JSON.stringify(before)} after=${JSON.stringify(after)}`,
+    );
     console.log(JSON.stringify({
       status: "PASS",
       jasaMappings: "6/6 PASS",
