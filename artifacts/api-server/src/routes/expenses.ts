@@ -13,6 +13,7 @@ import {
   accountingTaxesTable,
   accountingJournalsTable,
   companiesTable,
+  suppliersTable,
 } from "@workspace/db";
 import { requireAdmin, requireClerkUser } from "../lib/requireAdmin.js";
 import { postEntry } from "../lib/accounting.js";
@@ -807,6 +808,19 @@ router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res)
     .where(and(eq(expenseCategoriesTable.id, Number(categoryId)), eq(expenseCategoriesTable.companyId, companyIdForInsert)));
   if (!category) return res.status(400).json({ message: "Kategori tidak ditemukan untuk company aktif." });
 
+  const vendorIdN = vendorId ? Number(vendorId) : null;
+  if (vendorIdN !== null) {
+    const [vendor] = await db
+      .select({ id: suppliersTable.id, companyId: suppliersTable.companyId })
+      .from(suppliersTable)
+      .where(eq(suppliersTable.id, vendorIdN))
+      .limit(1);
+    if (!vendor) return res.status(400).json({ message: "Vendor tidak ditemukan." });
+    if (vendor.companyId != null && Number(vendor.companyId) !== companyIdForInsert) {
+      return res.status(400).json({ message: "Vendor bukan milik company aktif." });
+    }
+  }
+
   const fallbackExpenseAccountId = expenseAccountId ? Number(expenseAccountId) : Number((category as any).expenseAccountId ?? 0);
   let lines: NormalizedExpenseLine[];
   try {
@@ -848,7 +862,7 @@ router.post("/", createIdempotencyMiddleware("expense:create"), async (req, res)
     expenseAccountId: lines[0].coaAccountId,
     payableAccountId: null,
     sourceAccountId: sourceAccountId ? Number(sourceAccountId) : null,
-    vendorId: vendorId ? Number(vendorId) : null,
+    vendorId: vendorIdN,
     userId: userId ? String(userId) : null,
     vendorEmployee: vendorEmployee ? String(vendorEmployee) : null,
     expenseType: expenseType ? String(expenseType) : "vendor_bill",
