@@ -343,6 +343,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
         { titleKey: "Ekspor DJP",          href: "/tax/export-djp",                     icon: FileText },
         { titleKey: "Bank Recon Config",     href: "/finance/recon-config",               icon: SlidersHorizontal },
         { titleKey: "Settlement Pattern",   href: "/finance/settlement-pattern",         icon: GitBranch },
+         { titleKey: "Pengaturan Akunting", href: "/accounting/settings",                icon: Settings },
       ],
     },
 
