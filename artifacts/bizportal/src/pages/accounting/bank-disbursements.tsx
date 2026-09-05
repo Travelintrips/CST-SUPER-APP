@@ -825,7 +825,7 @@ function getTaxLabel(taxType: string): string {
 interface VendorInvoicePanelProps {
   allInvoices: OutstandingInvoice[];
   allSuppliers?: { id: number; name: string }[];
-  apAccountName: string | null;
+  apAccountName?: string | null;
   lines: InvoicePaymentLine[];
   onLinesChange: (lines: InvoicePaymentLine[]) => void;
   whtAccounts: CoacAccount[];
@@ -992,7 +992,7 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
           <span style={{ color: "#BFDBFE" }} className="font-mono">{apAccountName}</span>
         </div>
       )}
-      {!apAccountName && (
+      {apAccountName === null && (
         <div className="px-3 py-2 rounded-xl text-xs" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", color: "#FCD34D" }}>
           ⚠ Akun AP belum dikonfigurasi di Accounting Settings.
         </div>
@@ -3107,7 +3107,7 @@ function CreateDisbDialog({
                 <VendorInvoicePanel
                   allInvoices={outstandingData?.invoices ?? []}
                   allSuppliers={outstandingData?.suppliers}
-                  apAccountName={outstandingData?.apAccountName ?? null}
+                  apAccountName={outstandingData?.apAccountName}
                   lines={invoiceLines}
                   onLinesChange={setInvoiceLines}
                   whtAccounts={whtAccounts}

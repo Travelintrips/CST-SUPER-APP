@@ -571,6 +571,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           pd.supplier_name,
           pd.grand_total,
           pd.amount_paid,
+          NULL::numeric AS withholding_tax_amount,
           LEFT(pd.due_date, 10) AS due_date,
           'purchase_document' AS source
         FROM purchase_documents pd
