@@ -21,6 +21,7 @@ import {
   isParentCategoryCompatible,
   validatePostableRules,
 } from "../lib/coa/coaValidation.js";
+import { getTaxCoaTargetStructure } from "../lib/coa/coaTaxMigration.js";
 
 describe("Normal balance inference", () => {
   it("ASSET → DEBIT", () => expect(normalBalanceForCategory("ASSET")).toBe("DEBIT"));
@@ -35,6 +36,20 @@ describe("Normal balance inference", () => {
   it("CONTRA_ASSET → CREDIT", () => expect(normalBalanceForCategory("CONTRA_ASSET")).toBe("CREDIT"));
   it("CONTRA_EXPENSE → CREDIT", () => expect(normalBalanceForCategory("CONTRA_EXPENSE")).toBe("CREDIT"));
   it("CLEARING → null (must be explicit)", () => expect(normalBalanceForCategory("CLEARING")).toBeNull());
+});
+
+describe("Tax COA migration definition", () => {
+  it("exposes a complete, collision-free target identity set", () => {
+    const target = getTaxCoaTargetStructure();
+    const headers = target.headers.map((header) => header.baseCode);
+    const subaccounts = target.subaccounts.map((subaccount) => subaccount.baseCode);
+
+    expect(headers).toEqual(["2-1090", "1-1070", "5-3040"]);
+    expect(subaccounts).toHaveLength(26);
+    expect(new Set([...headers, ...subaccounts]).size).toBe(headers.length + subaccounts.length);
+    expect(target.reparenting).toHaveLength(3);
+    expect(target.subaccounts.every((subaccount) => headers.includes(subaccount.headerBaseCode))).toBe(true);
+  });
 });
 
 // ─── Phase 4: Postable / header rules ────────────────────────────────────────

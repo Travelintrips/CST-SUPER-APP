@@ -16,6 +16,8 @@
     "audit:cf-sc-13b:parity": "bash scripts/cf-sc-13b-parity.sh",
     "db:restore:canonical:dev": "node artifacts/api-server/build-migrations.mjs && cd artifacts/api-server && APP_ENV=development node load-secrets.mjs node dist/run-canonical-contract-migration.mjs",
     "db:migrate:test": "RUNTIME_ENV=test node scripts/apply-migrations.mjs",
+    "audit:tax-coa:dev": "APP_ENV=development bash scripts/verify-tax-coa-activation.sh",
+    "audit:tax-coa:prod": "APP_ENV=production bash scripts/verify-tax-coa-activation.sh",
     "audit:customer-runtime-dev": "node scripts/runtime-safe-dev-test.mjs",
     "audit:customer-static": "bash scripts/audit-customer-static.sh",
     "audit:customer-runtime": "bash scripts/audit-customer-runtime.sh",
