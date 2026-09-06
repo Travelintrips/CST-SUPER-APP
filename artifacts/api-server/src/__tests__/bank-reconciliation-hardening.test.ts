@@ -1284,6 +1284,72 @@ describe.skipIf(!hasIsolatedDatabase)("Isolated HTTP partial reversal regression
     });
   });
 
+  it("returns unknown mutation status when restoring the mutation also fails", async () => {
+    await resetFixture();
+
+    const rollbackTriggerName = `trg_http_void_rollback_fail_${marker.replaceAll("-", "")}`;
+    const rollbackFunctionName = `fn_http_void_rollback_fail_${marker.replaceAll("-", "")}`;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION public."${rollbackFunctionName}"()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW.id = ${mutationId}
+           AND OLD.status::text = 'void'
+           AND NEW.status::text = 'posted' THEN
+          RAISE EXCEPTION 'intentional mutation status rollback failure for isolated HTTP regression';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await pool.query(`
+      CREATE TRIGGER "${rollbackTriggerName}"
+      BEFORE UPDATE OF status ON public.bank_mutations
+      FOR EACH ROW EXECUTE FUNCTION public."${rollbackFunctionName}"()
+    `);
+
+    try {
+      const response = await supertest(app)
+        .post(`/api/bank-reconciliation/${mutationId}/void-journal`)
+        .send({ reason: "isolated mutation rollback failure regression" });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toMatchObject({
+        code: "VOID_STATUS_ROLLBACK_FAILED",
+        mutation_status: "unknown",
+        reversal_created: true,
+      });
+
+      const afterFailure = await pool.query(
+        `SELECT
+           (SELECT status::text FROM public.bank_mutations WHERE id = $1) AS mutation_status,
+           (SELECT status::text FROM public.accounting_entries WHERE id = $2) AS original_status,
+           (SELECT void_entry_id FROM public.accounting_entries WHERE id = $2) AS void_entry_id,
+           (SELECT COUNT(*)::integer
+              FROM public.accounting_entries
+             WHERE source::text = 'bank_reconciliation_void'
+               AND source_id = $2
+               AND company_id = (SELECT company_id FROM public.bank_mutations WHERE id = $1)) AS reversal_count,
+           (SELECT COUNT(*)::integer
+              FROM public.bank_reconciliation_audit
+             WHERE mutation_id = $1 AND action = 'JOURNAL_VOIDED') AS void_audit_count`,
+        [mutationId, originalEntryId],
+      );
+      expect(afterFailure.rows[0]).toMatchObject({
+        mutation_status: "void",
+        original_status: "posted",
+        void_entry_id: null,
+        reversal_count: 1,
+        void_audit_count: 0,
+      });
+    } finally {
+      await pool.query(`DROP TRIGGER IF EXISTS "${rollbackTriggerName}" ON public.bank_mutations`).catch(() => {});
+      await pool.query(`DROP FUNCTION IF EXISTS public."${rollbackFunctionName}"()`).catch(() => {});
+    }
+  });
+
   it("concurrent HTTP retries create one reversal and no duplicate JOURNAL_VOIDED audit", async () => {
     await resetFixture();
 
