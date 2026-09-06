@@ -65,6 +65,7 @@ import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.js";
 import { postEntryWithClient } from "../lib/accounting.js";
+import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { extractBankProofOcr } from "../lib/bankProofOcr.js";
@@ -5358,7 +5359,8 @@ router.post(
 
         const { rows: invoiceRows } = await tx.execute(sql`
           SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
-                 status, withholding_tax_amount, withholding_review_status
+                  total_amount, tax_amount, invoice_breakdown, status,
+                  withholding_tax_amount, withholding_review_status
           FROM vendor_invoices
           WHERE id = ${vendorInvoiceId}
             AND company_id = ${companyId}
@@ -5373,7 +5375,13 @@ router.post(
           throw Object.assign(new Error("Invoice vendor harus berstatus posted atau matched sebelum dibayar"), { httpStatus: 422 });
         }
 
-        const grandTotal = Number(invoice.grand_total);
+        const financials = resolveVendorInvoiceFinancialAmounts({
+          totalAmount: invoice.total_amount,
+          taxAmount: invoice.tax_amount,
+          grandTotal: invoice.grand_total,
+          invoiceBreakdown: invoice.invoice_breakdown,
+        });
+        const grandTotal = financials.grandTotal;
         const alreadyPaid = Number(invoice.amount_paid ?? 0);
         const outstanding = Math.max(0, grandTotal - alreadyPaid);
         if (!Number.isFinite(grandTotal) || grandTotal <= 0 || outstanding <= 0.01) {

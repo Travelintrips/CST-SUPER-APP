@@ -61,6 +61,7 @@ import {
 } from "../lib/bankDisbursementRecalc.js";
 import { getOpenAI } from "../lib/openaiClient.js";
 import { imagePdfUpload } from "../lib/uploadMiddleware.js";
+import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { createRequire as _bdCreateRequire } from "node:module";
 import * as _bdFs from "node:fs/promises";
 import * as _bdOs from "node:os";
@@ -560,7 +561,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       tax_amount: string;
       grand_total: string;
       amount_paid: string | null;
-      tax_amount: string | null;
+      invoice_breakdown: Record<string, unknown> | null;
       tax_review_status: string | null;
       withholding_tax_amount: string | null;
       due_date: string | null;
@@ -577,7 +578,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           pd.tax_amount,
           pd.grand_total,
           pd.amount_paid,
-          NULL::numeric AS tax_amount,
+          NULL::jsonb AS invoice_breakdown,
           NULL::text AS tax_review_status,
           NULL::numeric AS withholding_tax_amount,
           LEFT(pd.due_date, 10) AS due_date,
@@ -600,7 +601,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.tax_amount,
           vi.grand_total,
           vi.amount_paid,
-          vi.tax_amount,
+          vi.invoice_breakdown,
           vi.tax_review_status,
            vi.withholding_tax_amount,
           to_char(vi.due_date, 'YYYY-MM-DD') AS due_date,
@@ -665,26 +666,41 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       }
     }
 
-    const invoices = rows.map((r) => ({
-      id: r.id,
-      docNumber: r.doc_number,
-      billNumber: r.bill_number,
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name ?? "—",
-      subtotal: Number(r.total_amount ?? 0),
-      taxAmount: Number(r.tax_amount ?? 0),
-      grandTotal: Number(r.grand_total),
-      amountPaid: Number(r.amount_paid ?? 0),
-      outstanding: Number(r.grand_total) - Number(r.amount_paid ?? 0),
-      taxAmount: Number(r.tax_amount ?? 0),
-      taxReviewStatus: r.tax_review_status ?? "not_required",
-      withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
-      payableToSupplier: Math.max(0, Number(r.grand_total) - Number(r.withholding_tax_amount ?? 0)),
-      dueDate: r.due_date,
-      currency: "IDR",
-      source: r.source,
-      withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],
-    }));
+    const invoices = rows.map((r) => {
+      const financials = r.source === "vendor_invoice"
+        ? resolveVendorInvoiceFinancialAmounts({
+            totalAmount: r.total_amount,
+            taxAmount: r.tax_amount,
+            grandTotal: r.grand_total,
+            invoiceBreakdown: r.invoice_breakdown,
+          })
+        : {
+            subtotal: Number(r.total_amount ?? 0),
+            taxAmount: Number(r.tax_amount ?? 0),
+            grandTotal: Number(r.grand_total),
+          };
+      const amountPaid = Number(r.amount_paid ?? 0);
+
+      return {
+        id: r.id,
+        docNumber: r.doc_number,
+        billNumber: r.bill_number,
+        supplierId: r.supplier_id,
+        supplierName: r.supplier_name ?? "—",
+        subtotal: financials.subtotal,
+        taxAmount: financials.taxAmount,
+        grandTotal: financials.grandTotal,
+        amountPaid,
+        outstanding: financials.grandTotal - amountPaid,
+        taxReviewStatus: r.tax_review_status ?? "not_required",
+        withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
+        payableToSupplier: Math.max(0, financials.grandTotal - Number(r.withholding_tax_amount ?? 0)),
+        dueDate: r.due_date,
+        currency: "IDR",
+        source: r.source,
+        withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],
+      };
+    });
 
     // Fetch all active suppliers for this company (include global suppliers with null company_id)
     const supplierRows = await db.execute(sql`

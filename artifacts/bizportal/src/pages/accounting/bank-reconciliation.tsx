@@ -667,7 +667,6 @@ interface OutstandingVendorInvoice {
   grandTotal: number;
   amountPaid: number;
   outstanding: number;
-  taxAmount?: number;
   taxReviewStatus?: string | null;
   withholdingTaxAmount?: number;
   dueDate?: string | null;
@@ -2914,8 +2913,8 @@ function VendorInvoicePaymentDialog({
               </Select>
               {selected && (
                 <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
-                   <div className="flex justify-between"><span>DPP / subtotal</span><strong>{idr(selected.subtotal)}</strong></div>
-                   <div className="flex justify-between"><span>PPN</span><strong>{idr(selected.taxAmount)}</strong></div>
+                  <div className="flex justify-between"><span>DPP / subtotal</span><strong>{idr(selected.subtotal)}</strong></div>
+                  <div className="flex justify-between"><span>PPN</span><strong>{idr(selected.taxAmount)}</strong></div>
                   <div className="flex justify-between"><span>Total invoice</span><strong>{idr(selected.grandTotal)}</strong></div>
                   <div className="flex justify-between">
                     <span>Nilai sebelum PPN</span>
