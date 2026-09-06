@@ -8,6 +8,7 @@ import { checkSmtpConnection } from "../lib/mailer.js";
 import { getApiRevision } from "../lib/buildMetadata.js";
 import { getSportCenterFinanceMode, shouldRunLegacyFinanceWrites } from "../lib/financeBoundary.js";
 import { isCentralFinancePostingEnabled } from "../lib/centralFinance.js";
+import { getStartupSubstepStatus } from "../lib/startupReadinessState.js";
 
 const router: IRouter = Router();
 const startedAt = Date.now();
@@ -117,12 +118,18 @@ router.get("/healthz", async (_req, res) => {
   const missingIntegrations = runtimeState?.missingIntegrationSecrets ?? [];
 
   const workerAggregate = getWorkerAggregateStatus();
+  const vendorInvoiceCaptureSchema = getStartupSubstepStatus(
+    "vendor_invoice_capture_schema_v1",
+  );
 
-  const criticalFailing = db.status === "error";
+  const criticalSchemaFailed = vendorInvoiceCaptureSchema === "failed";
+  const criticalSchemaPending = vendorInvoiceCaptureSchema !== "completed";
+  const criticalFailing = db.status === "error" || criticalSchemaFailed;
   const anyExternalError = whatsapp.status === "error" || smtp.status === "error";
   const workersDegraded = workerAggregate === "degraded";
 
   const overallStatus = criticalFailing ? "error"
+    : criticalSchemaPending ? "degraded"
     : hasMissingDeps ? "degraded"
     : anyExternalError ? "degraded"
     : workersDegraded ? "degraded"
@@ -156,6 +163,9 @@ router.get("/healthz", async (_req, res) => {
     workers: {
       aggregate: workerAggregate,
       endpoint: "/api/health/workers",
+    },
+    criticalSchemas: {
+      vendorInvoiceCapture: vendorInvoiceCaptureSchema,
     },
     sport_center_finance_mode: getSportCenterFinanceMode(),
     sport_center_shadow_observer: getSportCenterFinanceMode() === "shadow" ? "enabled" : "disabled",

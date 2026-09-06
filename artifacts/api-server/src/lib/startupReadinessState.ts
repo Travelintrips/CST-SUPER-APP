@@ -2,6 +2,9 @@ export type StartupSubstepStatus = "running" | "completed" | "failed";
 export type StartupStageStatus = "running" | "completed" | "failed";
 export type StartupPhaseStatus = "running" | "completed" | "failed";
 export type ModuleReadiness = "ready" | "not_ready" | "not_started";
+export type StartupNamedSubstepStatus =
+  | "pending"
+  | StartupSubstepStatus;
 
 export type StartupReadinessSnapshot = {
   current_stage: string | null;
@@ -67,6 +70,7 @@ type MutableState = {
   completedStageNames: Set<string>;
   failedStageNames: Set<string>;
   coreDatabaseReady: boolean;
+  namedSubstepStatuses: Map<string, StartupSubstepStatus>;
 };
 
 const state: MutableState = {
@@ -93,6 +97,7 @@ const state: MutableState = {
   completedStageNames: new Set(),
   failedStageNames: new Set(),
   coreDatabaseReady: false,
+  namedSubstepStatuses: new Map(),
 };
 
 function elapsedSince(startedAt: number): number {
@@ -138,6 +143,7 @@ function safeErrorCode(error: unknown): string | null {
 }
 
 export function markStartupSubstepStarting(substep: string): void {
+  state.namedSubstepStatuses.set(substep, "running");
   state.currentSubstep = substep;
   state.currentSubstepStartedAt = Date.now();
   state.currentSubstepStatus = "running";
@@ -266,6 +272,7 @@ export function markMigrationFinalizeFailed(): void {
 }
 
 export function markStartupSubstepCompleted(substep: string): void {
+  state.namedSubstepStatuses.set(substep, "completed");
   const startedAt = state.currentSubstep === substep ? state.currentSubstepStartedAt : null;
   state.lastCompletedSubstep = substep;
   state.currentSubstep = null;
@@ -278,6 +285,7 @@ export function markStartupSubstepCompleted(substep: string): void {
 }
 
 export function markStartupSubstepFailed(substep: string, error: unknown): void {
+  state.namedSubstepStatuses.set(substep, "failed");
   const startedAt = state.currentSubstep === substep ? state.currentSubstepStartedAt : null;
   state.currentSubstep = substep;
   state.currentSubstepStatus = "failed";
@@ -290,6 +298,12 @@ export function markStartupSubstepFailed(substep: string, error: unknown): void 
     error_code: safeErrorCode(error),
     operation: substep,
   };
+}
+
+export function getStartupSubstepStatus(
+  substep: string,
+): StartupNamedSubstepStatus {
+  return state.namedSubstepStatuses.get(substep) ?? "pending";
 }
 
 export function getStartupReadinessSnapshot(): StartupReadinessSnapshot {
