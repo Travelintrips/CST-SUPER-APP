@@ -2563,7 +2563,29 @@ export async function approveAndCreateJournal(
          }
          contraCoaId     = manualId;
          contraLabel     = `Akun dipilih manual: ${manualCoaCode}`;
-          if (selectedType === "recon_rule" && selectedCandidateId != null) {
+           if (selectedCandidateType === "internal_transfer") {
+             const { rows: targetRows } = await tx.execute(sql.raw(`
+               SELECT id, name, type, subtype, is_active
+               FROM chart_of_accounts
+               WHERE id = ${manualId}
+                 AND company_id = ${companyId}
+               LIMIT 1
+             `));
+             const target = targetRows[0] as any;
+             const targetName = String(target?.name ?? "").toLowerCase();
+             const isCashBankTarget =
+               target?.is_active === true
+               && target?.type === "asset"
+               && (target?.subtype === "cash_bank" || /kas besar|kas kecil|cash|petty cash|bank/.test(targetName));
+             if (!isCashBankTarget) {
+               throw new JournalMappingError(
+                 "COA_NOT_FOUND",
+                 "Transfer internal hanya boleh diarahkan ke COA Kas Besar, Kas Kecil, bank, atau akun cash_bank.",
+                 { mutationId, manualCoaCode },
+               );
+             }
+             contraTreatment = "asset";
+           } else if (selectedType === "recon_rule" && selectedCandidateId != null) {
             const ruleTarget = await loadReconRuleTarget(
               tx as unknown as DbClient,
               companyId,

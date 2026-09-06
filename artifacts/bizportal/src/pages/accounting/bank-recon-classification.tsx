@@ -102,6 +102,14 @@ interface ExpenseItem {
   categoryName?: string;
 }
 
+interface CashBankAccount {
+  id: number;
+  code: string;
+  name: string;
+  type: string;
+  subtype: string | null;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const idr = (n: number | string) =>
@@ -1005,10 +1013,34 @@ export default function BankReconClassificationPage() {
   const [reasonTarget, setReasonTarget] = useState<BankMutation | null>(null);
   const [linkExpenseTarget, setLinkExpenseTarget] = useState<BankMutation | null>(null);
   const [createDraftTarget, setCreateDraftTarget] = useState<BankMutation | null>(null);
+  const [transferTarget, setTransferTarget] = useState<BankMutation | null>(null);
+  const [transferAccountId, setTransferAccountId] = useState("");
+  const [cashBankAccounts, setCashBankAccounts] = useState<CashBankAccount[]>([]);
+  const [loadingCashBankAccounts, setLoadingCashBankAccounts] = useState(false);
 
   // ── Per-row loading states ────────────────────────────────────────────────────
   const [accepting, setAccepting] = useState<Record<number, boolean>>({});
   const [markingTransfer, setMarkingTransfer] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingCashBankAccounts(true);
+    fetch("/api/accounting/bank-disbursements/meta/accounts?subtype=cash_bank", { credentials: "include" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Gagal memuat akun kas dan bank");
+        return r.json() as Promise<CashBankAccount[]>;
+      })
+      .then((accounts) => {
+        if (!cancelled) setCashBankAccounts(accounts);
+      })
+      .catch(() => {
+        if (!cancelled) setCashBankAccounts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCashBankAccounts(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["bank-recon-classification"] });
@@ -1078,28 +1110,33 @@ export default function BankReconClassificationPage() {
     }
   };
 
-  const handleInternalTransfer = async (m: BankMutation) => {
-    if (!confirm(`Tandai "${m.description.slice(0, 60)}" sebagai internal transfer?`)) return;
+  const openInternalTransfer = (m: BankMutation) => {
+    setTransferTarget(m);
+    setTransferAccountId("");
+  };
+
+  const handleInternalTransfer = async () => {
+    if (!transferTarget || !transferAccountId) return;
+    const selectedAccount = cashBankAccounts.find((account) => String(account.id) === transferAccountId);
+    if (!selectedAccount) return;
+    const m = transferTarget;
     setMarkingTransfer(s => ({ ...s, [m.id]: true }));
     try {
-      // Approve with internal_transfer candidate_type to mark it
       const r = await fetch(`/api/bank-reconciliation/${m.id}/approve`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate_type: "internal_transfer", candidate_id: 0 }),
+        body: JSON.stringify({
+          candidate_type: "internal_transfer",
+          candidate_id: 0,
+          manual_coa_code: selectedAccount.code,
+          note: `Transfer internal ke ${selectedAccount.name}`,
+        }),
       });
       const data = await r.json();
-      if (!r.ok) {
-        // If approve fails (no candidate), try reject with note
-        await fetch(`/api/bank-reconciliation/${m.id}/reject`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ note: "internal_transfer" }),
-        });
-      }
-      toast({ title: "Ditandai sebagai internal transfer" });
+      if (!r.ok) throw new Error(data.error ?? "Gagal menyimpan transfer internal");
+      toast({ title: "Transfer internal disimpan", description: `${m.amount ? `Rp${idr(m.amount)} ke ` : ""}${selectedAccount.name}` });
+      setTransferTarget(null);
       invalidate();
     } catch (e: any) {
       toast({ title: "Gagal", description: e.message, variant: "destructive" });
@@ -1138,6 +1175,67 @@ export default function BankReconClassificationPage() {
         onClose={() => setLinkExpenseTarget(null)}
         onSuccess={invalidate}
       />
+      <Dialog open={!!transferTarget} onOpenChange={(open) => !open && setTransferTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowRightLeft className="h-5 w-5 text-purple-600" />
+              Alokasikan Transfer Internal
+            </DialogTitle>
+            <DialogDescription>
+              Pilih rekening kas tujuan untuk mutasi bank ini. Transaksi akan dibuat sebagai transfer internal, bukan biaya atau invoice vendor.
+            </DialogDescription>
+          </DialogHeader>
+          {transferTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                <p className="font-medium">{transferTarget.description}</p>
+                <p className="text-muted-foreground mt-1">
+                  {fmtDate(transferTarget.transaction_date)} · Rp{idr(transferTarget.amount)}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="internal-transfer-target">Akun tujuan</Label>
+                <Select value={transferAccountId} onValueChange={setTransferAccountId}>
+                  <SelectTrigger id="internal-transfer-target">
+                    <SelectValue placeholder={loadingCashBankAccounts ? "Memuat akun..." : "Pilih Kas Besar atau Kas Kecil"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {cashBankAccounts
+                      .filter((account) => /kas besar|kas kecil/i.test(account.name))
+                      .map((account) => (
+                        <SelectItem key={account.id} value={String(account.id)}>
+                          {account.name} ({account.code})
+                        </SelectItem>
+                      ))}
+                    {cashBankAccounts.filter((account) => /kas besar|kas kecil/i.test(account.name)).length === 0 && (
+                      <SelectItem value="__none__" disabled>
+                        COA Kas Besar/Kas Kecil belum tersedia
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                {!loadingCashBankAccounts && cashBankAccounts.filter((account) => /kas besar|kas kecil/i.test(account.name)).length === 0 && (
+                  <p className="text-xs text-amber-600">
+                    Buat atau aktifkan COA dengan subtype cash_bank bernama Kas Besar atau Kas Kecil terlebih dahulu.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferTarget(null)}>Batal</Button>
+            <Button
+              onClick={() => void handleInternalTransfer()}
+              disabled={!transferAccountId || transferAccountId === "__none__" || loadingCashBankAccounts || !!(transferTarget && markingTransfer[transferTarget.id])}
+              className="gap-2"
+            >
+              {transferTarget && markingTransfer[transferTarget.id] && <Loader2 className="h-4 w-4 animate-spin" />}
+              Simpan Transfer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <CreateExpenseDraftDialog
         mutation={createDraftTarget}
         open={!!createDraftTarget}
@@ -1347,7 +1445,7 @@ export default function BankReconClassificationPage() {
                                   mutation={m}
                                   onAccept={() => handleAccept(m)}
                                   onCorrect={() => setCorrectTarget(m)}
-                                  onInternalTransfer={() => handleInternalTransfer(m)}
+                                  onInternalTransfer={() => openInternalTransfer(m)}
                                   onLinkExpense={() => setLinkExpenseTarget(m)}
                                   onCreateDraft={() => setCreateDraftTarget(m)}
                                   onViewReasons={() => setReasonTarget(m)}
