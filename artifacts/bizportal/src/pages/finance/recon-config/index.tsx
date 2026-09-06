@@ -1512,14 +1512,20 @@ function AiRulesTab() {
 
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <Label className="text-slate-300 text-xs">Kode COA</Label>
+                        <Label className="text-slate-300 text-xs">Nomor / Kode COA</Label>
                         <Input
                           value={newCoaForm.code}
                           onChange={(event) => setNewCoaForm((current) => ({ ...current, code: event.target.value }))}
-                          readOnly={quickCreateChild}
                           placeholder="Contoh: 4-1050"
-                          className={`bg-slate-800 border-slate-600 text-white text-xs ${quickCreateChild ? "cursor-not-allowed opacity-70" : ""}`}
+                          inputMode="text"
+                          aria-label="Nomor atau kode COA"
+                          className="bg-slate-800 border-slate-600 text-white text-xs"
                         />
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {quickCreateChild
+                            ? "Nomor diisi otomatis berdasarkan urutan child, tetapi masih bisa diedit."
+                            : "Isi nomor/kode COA sesuai struktur akun perusahaan."}
+                        </p>
                       </div>
                       <div className="space-y-1">
                         <Label className="text-slate-300 text-xs">Nama COA</Label>
