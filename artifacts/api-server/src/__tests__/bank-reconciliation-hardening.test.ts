@@ -1175,6 +1175,51 @@ describe.skipIf(!hasIsolatedDatabase)("Isolated HTTP partial reversal regression
     await pool.end();
   });
 
+  async function resetFixture() {
+    await pool.query("BEGIN");
+    try {
+      // This test owns every row identified by the marker. Remove only the
+      // reversal and audit rows so the original posted fixture can be retried.
+      await pool.query("SET LOCAL session_replication_role = replica");
+      await pool.query(
+        `DELETE FROM public.bank_reconciliation_audit WHERE mutation_id = $1`,
+        [mutationId],
+      );
+      await pool.query(
+        `DELETE FROM public.accounting_entry_lines
+          WHERE entry_id IN (
+            SELECT id
+              FROM public.accounting_entries
+             WHERE source::text = 'bank_reconciliation_void'
+               AND source_id = $1
+          )`,
+        [originalEntryId],
+      );
+      await pool.query(
+        `DELETE FROM public.accounting_entries
+          WHERE source::text = 'bank_reconciliation_void'
+            AND source_id = $1`,
+        [originalEntryId],
+      );
+      await pool.query(
+        `UPDATE public.accounting_entries
+            SET status = 'posted', void_entry_id = NULL, void_reason = NULL
+          WHERE id = $1`,
+        [originalEntryId],
+      );
+      await pool.query(
+        `UPDATE public.bank_mutations
+            SET status = 'posted', updated_at = NOW()
+          WHERE id = $1`,
+        [mutationId],
+      );
+      await pool.query("COMMIT");
+    } catch (error) {
+      await pool.query("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  }
+
   it("returns failure, restores the mutation, and does not duplicate the reversal on retry", async () => {
     const endpoint = `/api/bank-reconciliation/${mutationId}/void-journal`;
 
@@ -1234,6 +1279,47 @@ describe.skipIf(!hasIsolatedDatabase)("Isolated HTTP partial reversal regression
     );
     expect(afterRetry.rows[0]).toMatchObject({
       mutation_status: "posted",
+      reversal_count: 1,
+      void_audit_count: 0,
+    });
+  });
+
+  it("concurrent HTTP retries create one reversal and no duplicate JOURNAL_VOIDED audit", async () => {
+    await resetFixture();
+
+    const endpoint = `/api/bank-reconciliation/${mutationId}/void-journal`;
+    const responses = await Promise.all([
+      supertest(app).post(endpoint).send({ reason: "concurrent isolated retry A" }),
+      supertest(app).post(endpoint).send({ reason: "concurrent isolated retry B" }),
+    ]);
+
+    // The fixture intentionally makes the original metadata update fail. Both
+    // HTTP attempts therefore remain non-success responses; neither may claim
+    // that the mutation was successfully voided.
+    expect(responses).toHaveLength(2);
+    expect(responses.every((response) => response.status >= 400)).toBe(true);
+    expect(responses.every((response) => Boolean(response.body))).toBe(true);
+    expect(responses.every((response) => response.body.ok !== true)).toBe(true);
+
+    const afterConcurrent = await pool.query(
+      `SELECT
+         (SELECT status::text FROM public.bank_mutations WHERE id = $1) AS mutation_status,
+         (SELECT status::text FROM public.accounting_entries WHERE id = $2) AS original_status,
+         (SELECT void_entry_id FROM public.accounting_entries WHERE id = $2) AS void_entry_id,
+         (SELECT COUNT(*)::integer
+            FROM public.accounting_entries
+           WHERE source::text = 'bank_reconciliation_void'
+             AND source_id = $2
+             AND company_id = (SELECT company_id FROM public.bank_mutations WHERE id = $1)) AS reversal_count,
+         (SELECT COUNT(*)::integer
+            FROM public.bank_reconciliation_audit
+           WHERE mutation_id = $1 AND action = 'JOURNAL_VOIDED') AS void_audit_count`,
+      [mutationId, originalEntryId],
+    );
+    expect(afterConcurrent.rows[0]).toMatchObject({
+      mutation_status: "posted",
+      original_status: "posted",
+      void_entry_id: null,
       reversal_count: 1,
       void_audit_count: 0,
     });
