@@ -20,3 +20,9 @@ Canonical settlement detail resolution has two read states: pending `posted` + u
 **Why:** The production settlement source transitions to `reconciled` and stores its bank mutation link after approval; that is valid evidence, not a second approval opportunity.
 
 **How to apply:** Keep approval eligibility strict, but let the display resolver load finalized details only when the approved match and canonical batch point to the same mutation.
+
+The QRIS review endpoint defaults to `MATCHED` for approval-oriented callers; the review dashboard must explicitly request all review states so `REVIEW` and `UNMATCHED` evidence remains visible without becoming approvable.
+
+**Why:** A dashboard that used the endpoint default showed only generic bank-transfer matches and hid the QRIS candidates whose amount/provider evidence still needed review.
+
+**How to apply:** Use an explicit all-status review query for the QRIS evidence panel, while retaining strict `MATCHED` plus live-evidence checks for the approval action.

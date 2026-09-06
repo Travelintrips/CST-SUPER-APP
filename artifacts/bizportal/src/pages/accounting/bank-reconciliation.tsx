@@ -6597,7 +6597,14 @@ export default function BankReconciliationPage() {
   } = useQuery({
     queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
+       // The API defaults to MATCHED for approval-oriented callers. This
+       // review panel must also show REVIEW/UNMATCHED candidates so the
+       // operator can see why QRIS is not yet approvable.
+       const params = new URLSearchParams({
+         limit: "50",
+         companyId: String(qrisCompanyId),
+         status: "ALL",
+       });
       params.set("includeCompleted", "true");
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
