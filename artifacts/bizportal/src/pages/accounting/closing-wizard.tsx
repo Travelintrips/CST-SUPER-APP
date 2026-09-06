@@ -243,6 +243,7 @@ export default function ClosingWizardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reason: reversalReason,
+          companyId: activeCompanyId,
           // date wajib untuk validasi period lock (governance guard)
           date: new Date().toISOString().split("T")[0],
         }),

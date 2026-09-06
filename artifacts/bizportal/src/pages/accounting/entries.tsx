@@ -72,7 +72,11 @@ async function deleteEntry(id: number) {
   }
 }
 
-function ReverseDialog({ entry, onDone }: { entry: AccountingEntry; onDone: () => void }) {
+function ReverseDialog({ entry, companyId, onDone }: {
+  entry: AccountingEntry;
+  companyId: number | null | undefined;
+  onDone: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
@@ -86,6 +90,7 @@ function ReverseDialog({ entry, onDone }: { entry: AccountingEntry; onDone: () =
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reason: reason.trim() || undefined,
+          ...(Number.isInteger(companyId) && (companyId as number) > 0 ? { companyId } : {}),
           // date wajib dikirim untuk validasi period lock (governance guard)
           // gunakan hari ini karena reversal diposting di periode berjalan
           date: new Date().toISOString().split("T")[0],
@@ -643,7 +648,11 @@ export default function EntriesPage() {
                     <div className="flex flex-col items-end gap-1">
                       <div className="flex gap-1 justify-end">
                         <PostDraftButton entry={e} onDone={refreshEntries} />
-                        <ReverseDialog entry={e} onDone={refreshEntries} />
+                        <ReverseDialog
+                          entry={e}
+                          companyId={isConsolidated ? null : activeCompanyId}
+                          onDone={refreshEntries}
+                        />
                         <ResetDraftDialog entry={e} onDone={refreshEntries} />
                         <DeleteEntryDialog entry={e} onDone={refreshEntries} />
                       </div>

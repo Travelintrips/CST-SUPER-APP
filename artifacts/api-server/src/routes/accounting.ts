@@ -2546,6 +2546,7 @@ router.post("/other-transactions/:id/void", async (req, res) => {
 router.post("/entries/:id/reverse", async (req, res) => {
   const id = Number(String(req.params.id));
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+  const companyId = resolveCompanyId(req);
 
   const [entry] = await db
     .select()
@@ -2553,7 +2554,7 @@ router.post("/entries/:id/reverse", async (req, res) => {
     .where(eq(accountingEntriesTable.id, id));
   if (!entry) return res.status(404).json({ message: "Entri tidak ditemukan" });
   // IDOR guard
-  { const cid = resolveCompanyId(req); if (!await assertCompanyAccess(entry.companyId, cid, req, res, { resourceType: "accounting_entry", resourceId: id })) return; }
+  if (!await assertCompanyAccess(entry.companyId, companyId, req, res, { resourceType: "accounting_entry", resourceId: id })) return;
   if (entry.status !== "posted")
     return res
       .status(400)
@@ -2607,6 +2608,7 @@ router.post("/entries/:id/reverse", async (req, res) => {
         description: desc,
         source: "reversal" as "manual",
         sourceId: entry.id,
+        companyId: entry.companyId ?? companyId,
         lines: reversalLines,
       },
       journal.code,

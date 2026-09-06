@@ -193,7 +193,14 @@ export default function AccountingHubGLPage() {
     setFilters(f => ({ ...f, date_from: firstDay, date_to: lastDay }));
   };
 
-  const [voidDialog, setVoidDialog] = useState<{ open: boolean; entryId: number; entryNumber: string; description: string; date: string } | null>(null);
+  const [voidDialog, setVoidDialog] = useState<{
+    open: boolean;
+    entryId: number;
+    entryNumber: string;
+    description: string;
+    date: string;
+    companyId: number;
+  } | null>(null);
   const [voidLoading, setVoidLoading] = useState(false);
   const [voidError, setVoidError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -271,6 +278,7 @@ export default function AccountingHubGLPage() {
       entryNumber: row.entry_number,
       description: row.entry_description ?? row.line_description ?? "-",
       date: row.date,
+      companyId: row.company_id,
     });
   };
 
@@ -285,6 +293,7 @@ export default function AccountingHubGLPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           reason: "Dibatalkan oleh admin — entry tidak valid",
+          companyId: voidDialog.companyId,
           // gunakan hari ini (bukan tanggal entri asli) agar reversal diposting
           // di periode berjalan — bukan periode yang mungkin sudah ditutup
           date: new Date().toISOString().split("T")[0],
