@@ -20,15 +20,30 @@ const router = Router();
 // Query raw ledger entries
 router.get("/", async (req, res) => {
   try {
-    const companyId  = req.query.company_id ? Number(req.query.company_id) : null;
+    const companyIdParam = req.query.company_id;
+    const accountIdParam = req.query.account_id;
+    const companyId  = companyIdParam ? Number(companyIdParam) : null;
     const period     = req.query.period     ? String(req.query.period)     : null;
-    const accountId  = req.query.account_id ? Number(req.query.account_id) : null;
+    const accountId  = accountIdParam ? Number(accountIdParam) : null;
     const sourceType = req.query.source_type ? String(req.query.source_type) : null;
     const from       = req.query.from ? String(req.query.from) : null;
     const to         = req.query.to ? String(req.query.to) : null;
     const isVoided   = req.query.is_voided === "true";
-    const limit      = Math.min(Number(req.query.limit  ?? 500), 2000);
-    const offset     = Number(req.query.offset ?? 0);
+    const limitParam = Number(req.query.limit ?? 500);
+    const offsetParam = Number(req.query.offset ?? 0);
+    const limit      = Number.isInteger(limitParam) && limitParam > 0
+      ? Math.min(limitParam, 2000)
+      : 500;
+    const offset     = Number.isInteger(offsetParam) && offsetParam >= 0
+      ? offsetParam
+      : 0;
+
+    if (companyIdParam && (!Number.isInteger(companyId) || companyId! <= 0)) {
+      return res.status(400).json({ message: "company_id harus berupa bilangan bulat positif" });
+    }
+    if (accountIdParam && (!Number.isInteger(accountId) || accountId! <= 0)) {
+      return res.status(400).json({ message: "account_id harus berupa bilangan bulat positif" });
+    }
 
     const conditions: string[] = ["1=1"];
     if (companyId)  conditions.push(`fle.company_id = ${companyId}`);
@@ -42,6 +57,10 @@ router.get("/", async (req, res) => {
     const { rows } = await db.execute(sql.raw(`
       SELECT fle.*
       FROM fleet_ledger_entries fle
+      JOIN accounting_entries ae
+        ON ae.entry_number = fle.source_ref
+       AND ae.company_id = fle.company_id
+       AND ae.status = 'posted'
       WHERE ${conditions.join(" AND ")}
       ORDER BY fle.ledger_date DESC, fle.id DESC
       LIMIT ${limit} OFFSET ${offset}
