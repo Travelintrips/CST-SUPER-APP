@@ -1064,6 +1064,7 @@ export async function resolveJournalForEconomicEvent(
       "payroll",
       "ppjk",
       "payment_gateway",
+      "internal_transfer",
     ]);
     if (!knownTypes.has(candidateType)) {
       reasons.push(`Candidate type '${candidateType}' not mapped — cannot verify existing journal`);

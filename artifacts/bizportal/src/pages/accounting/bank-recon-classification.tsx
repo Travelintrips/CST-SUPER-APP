@@ -1125,7 +1125,10 @@ export default function BankReconClassificationPage() {
       const r = await fetch(`/api/bank-reconciliation/${m.id}/approve`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-idempotency-key": `bank-recon-internal-transfer-${m.id}-${selectedAccount.id}`,
+        },
         body: JSON.stringify({
           candidate_type: "internal_transfer",
           candidate_id: 0,

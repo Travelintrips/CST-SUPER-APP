@@ -417,6 +417,58 @@ function canonicalCandidateType(value: string | null | undefined): string | null
   return aliases[value] ?? value;
 }
 
+type InternalTransferTarget = {
+  type?: unknown;
+  subtype?: unknown;
+  name?: unknown;
+  code?: unknown;
+  is_active?: unknown;
+  is_header?: unknown;
+  is_postable?: unknown;
+};
+
+export function isValidInternalTransferTarget(account: InternalTransferTarget): boolean {
+  const type = String(account.type ?? "").toLowerCase();
+  const subtype = String(account.subtype ?? "").toLowerCase();
+  const name = String(account.name ?? "").toLowerCase();
+  const code = String(account.code ?? "").toLowerCase();
+  const legacyCashBankName =
+    /\bkas\b/.test(name) ||
+    name.includes("cash") ||
+    name.includes("petty") ||
+    /\bbank\b/.test(name) ||
+    name.includes("giro") ||
+    name.includes("tabungan") ||
+    name.includes("kliring");
+  const legacyCashBankCode = /^1-101[0-9]/.test(code) || /^1-102[0-9]/.test(code);
+
+  return (
+    account.is_active === true &&
+    account.is_header === false &&
+    account.is_postable === true &&
+    type === "asset" &&
+    (subtype === "cash_bank" || (subtype === "" && (legacyCashBankName || legacyCashBankCode)))
+  );
+}
+
+export function buildBankMutationJournalLines(
+  direction: string,
+  bankCoaId: number,
+  contraCoaId: number,
+  amount: number,
+  description: string,
+): PostingLine[] {
+  return direction === "IN"
+    ? [
+        { accountId: bankCoaId, debit: amount, credit: 0, description },
+        { accountId: contraCoaId, debit: 0, credit: amount, description },
+      ]
+    : [
+        { accountId: contraCoaId, debit: amount, credit: 0, description },
+        { accountId: bankCoaId, debit: 0, credit: amount, description },
+      ];
+}
+
 function treatmentForReconRuleTarget(targetType: string | null | undefined): ContraResolution["treatment"] {
   switch (String(targetType ?? "").toLowerCase()) {
     case "internal_transfer":
@@ -2296,6 +2348,7 @@ export async function approveAndCreateJournal(
         "qris_settlement",
          "tenant_invoice",
           "recon_rule",
+          "internal_transfer",
        ]);
        if (selectedType && !allowedCandidateTypes.has(selectedType)) {
          throw Object.assign(new Error("Tipe kandidat rekonsiliasi tidak valid"), { code: "INVALID_MATCH" });
@@ -2307,6 +2360,13 @@ export async function approveAndCreateJournal(
            candidate_source: selectedCandidateSource,
          });
        }
+
+        if (selectedType === "internal_transfer" && direction !== "OUT") {
+          throw Object.assign(
+            new Error("Transfer internal hanya dapat dialokasikan dari mutasi bank keluar"),
+            { code: "INVALID_MATCH" },
+          );
+        }
 
        // Never approve a QRIS source against an ordinary bank mutation.
        // This protects older/stale match rows that were created before the
@@ -2361,7 +2421,11 @@ export async function approveAndCreateJournal(
        }
 
        // ── Step 2: Guard — idempotency and conflicting approved match ────────
-       if (mut["status"] === "approved" || mut["status"] === "posted") {
+        if (
+          mut["status"] === "approved" ||
+          mut["status"] === "approved_pending_posting" ||
+          mut["status"] === "posted"
+        ) {
          throw Object.assign(new Error("Mutasi sudah diproses sebelumnya"), { code: "CONFLICT" });
        }
        const { rows: existingApproval } = await tx.execute(sql.raw(`
@@ -2516,7 +2580,7 @@ export async function approveAndCreateJournal(
              SET status = 'approved'
              WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
            `));
-         } else if (selectedCandidateType && selectedCandidateId) {
+         } else if (selectedCandidateType && selectedCandidateId != null) {
            await tx.execute(sql.raw(`
              INSERT INTO bank_reconciliation_matches
                (mutation_id, candidate_type, candidate_id, match_score, match_reason,
@@ -2563,21 +2627,16 @@ export async function approveAndCreateJournal(
          }
          contraCoaId     = manualId;
          contraLabel     = `Akun dipilih manual: ${manualCoaCode}`;
-           if (selectedCandidateType === "internal_transfer") {
+            if (selectedType === "internal_transfer") {
              const { rows: targetRows } = await tx.execute(sql.raw(`
-               SELECT id, name, type, subtype, is_active
+                SELECT id, code, name, type, subtype, is_active, is_header, is_postable
                FROM chart_of_accounts
                WHERE id = ${manualId}
-                 AND company_id = ${companyId}
+                  AND (company_id = ${companyId} OR company_id IS NULL)
                LIMIT 1
              `));
              const target = targetRows[0] as any;
-             const targetName = String(target?.name ?? "").toLowerCase();
-             const isCashBankTarget =
-               target?.is_active === true
-               && target?.type === "asset"
-               && (target?.subtype === "cash_bank" || /kas besar|kas kecil|cash|petty cash|bank/.test(targetName));
-             if (!isCashBankTarget) {
+              if (!target || !isValidInternalTransferTarget(target)) {
                throw new JournalMappingError(
                  "COA_NOT_FOUND",
                  "Transfer internal hanya boleh diarahkan ke COA Kas Besar, Kas Kecil, bank, atau akun cash_bank.",
@@ -2652,15 +2711,13 @@ export async function approveAndCreateJournal(
        //   Bank IN:  DEBIT bank COA,   CREDIT AR/revenue
        //   Bank OUT: DEBIT expense/AP, CREDIT bank COA
       const lineDesc = note ?? `Rekon ${direction} ${String(mut["mutation_key"] ?? "").slice(0, 60)}`;
-      const lines: PostingLine[] = direction === "IN"
-        ? [
-            { accountId: bankCoaId,   debit: amount, credit: 0,      description: lineDesc },
-            { accountId: contraCoaId, debit: 0,      credit: amount,  description: lineDesc },
-          ]
-        : [
-            { accountId: contraCoaId, debit: amount, credit: 0,      description: lineDesc },
-            { accountId: bankCoaId,   debit: 0,      credit: amount,  description: lineDesc },
-          ];
+       const lines = buildBankMutationJournalLines(
+         direction,
+         bankCoaId,
+         contraCoaId,
+         amount,
+         lineDesc,
+       );
 
       // postEntryWithClient handles: period lock (throws PERIOD_CLOSED if closed),
       // balance validation (throws if debit ≠ credit), sequence number, header+lines
@@ -2723,7 +2780,7 @@ export async function approveAndCreateJournal(
           SET status = 'approved'
           WHERE id = ${matchId} AND mutation_id = ${mutationId}
         `));
-       } else if (selectedCandidateType && selectedCandidateId) {
+       } else if (selectedCandidateType && selectedCandidateId != null) {
         await tx.execute(sql.raw(`
           INSERT INTO bank_reconciliation_matches
             (mutation_id, candidate_type, candidate_id, match_score, match_reason,

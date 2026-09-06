@@ -5564,6 +5564,11 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
     manual_override, override_reason, rule_ai,
   } = req.body;
+  const parsedCandidateId =
+    candidate_id == null || candidate_id === "" ? null : Number(candidate_id);
+  if (parsedCandidateId != null && !Number.isSafeInteger(parsedCandidateId)) {
+    return res.status(400).json({ error: "ID kandidat tidak valid" });
+  }
   const actor = (req as any).user?.email ?? "admin";
   if (rule_ai != null && (typeof rule_ai !== "object" || Array.isArray(rule_ai))) {
     return res.status(400).json({ error: "Payload Rule AI tidak valid." });
@@ -5683,7 +5688,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         mutationId: resolvedMutId,
         matchId: match_id ? Number(match_id) : null,
         candidateType: candidate_type ?? null,
-        candidateId: candidate_id ? Number(candidate_id) : null,
+        candidateId: parsedCandidateId,
         candidateSource: candidate_source === CANONICAL_SETTLEMENT_SOURCE
           ? CANONICAL_SETTLEMENT_SOURCE
           : null,
@@ -5722,7 +5727,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     resolvedMutId,
     match_id ? Number(match_id) : null,
     candidate_type ?? null,
-    candidate_id ? Number(candidate_id) : null,
+    parsedCandidateId,
     actor,
     note,
     manual_coa_code ? String(manual_coa_code) : null,
