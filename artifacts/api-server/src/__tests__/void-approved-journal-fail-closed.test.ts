@@ -33,6 +33,7 @@ vi.mock("../lib/logger.js", () => ({
 
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.js";
+import { reverseJournal } from "../lib/sapInvoiceLockEngine.js";
 
 describe("voidApprovedJournal metadata failure", () => {
   beforeEach(() => {
@@ -134,5 +135,28 @@ describe("voidApprovedJournal metadata failure", () => {
       code: "JOURNAL_ALREADY_VOIDED",
     });
     expect(mockPostEntry).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a posted vendor correction is attempted twice", () => {
+    const original = {
+      journal_id: "vendor-journal-1",
+      invoice_id: 42,
+      entries: [
+        { account: "Expense", debit: 28_553_506, credit: 0 },
+        { account: "PPN Masukan", debit: 3_140_886, credit: 0 },
+        { account: "Accounts Payable", debit: 0, credit: 31_694_392 },
+      ],
+      status: "POSTED" as const,
+      created_at: "2026-09-06T00:00:00.000Z",
+    };
+
+    const reversal = reverseJournal(original);
+
+    expect(reversal).toMatchObject({
+      invoice_id: 42,
+      reversed_from: "vendor-journal-1",
+      status: "REVERSED",
+    });
+    expect(() => reverseJournal(reversal)).toThrow("ONLY_POSTED_JOURNAL_CAN_BE_REVERSED");
   });
 });

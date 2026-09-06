@@ -5,6 +5,7 @@ import {
   evaluateThreeWayMatchLines,
   evaluateVendorInvoicePostingGate,
 } from "../lib/vendorPaymentHardening.js";
+import { buildSapTaxInput } from "../lib/sapTaxEngine.js";
 
 describe("vendor payment hardening", () => {
   it("requires a Finance-confirmed COA on every invoice line", () => {
@@ -114,4 +115,57 @@ describe("vendor payment hardening", () => {
       expect.objectContaining({ accountId: 49_108, credit: 31_694_392 }),
     ]));
   });
+
+  it("recovers posted PPN evidence when the persisted header tax is zero", () => {
+    const invoice = {
+      status: "posted",
+      totalAmount: 28_553_506,
+      taxAmount: 0,
+      grandTotal: 28_553_506,
+      invoiceBreakdown: {
+        totals: { dpp: 26_174_048, ppn: 3_140_886, gross: 29_314_934 },
+        components: [
+          { gross: 1_756_710 },
+          { gross: 10_962_796 },
+          { gross: 15_834_000 },
+        ],
+      },
+    };
+    const resolved = buildSapTaxInput({
+      subtotal: invoice.totalAmount,
+      tax: invoice.taxAmount,
+      total_amount: invoice.grandTotal,
+      invoice_breakdown: invoice.invoiceBreakdown,
+    });
+    const lines = buildGrossVendorInvoicePostingLines({
+      lines: [
+        { coaAccountId: 76_110, subtotal: 1_756_710, description: "PEMAKAIAN AIR" },
+        { coaAccountId: 76_112, subtotal: 10_962_796, description: "PEMAKAIAN LISTRIK" },
+        { coaAccountId: 76_111, subtotal: 15_834_000, description: "PENDAPATAN KONSESI" },
+      ],
+      taxAmount: resolved.vat ?? 0,
+      ppnInputAccountId: 49_104,
+      apAccountId: 49_108,
+      grandTotal: resolved.gross ?? 0,
+    });
+
+    expect(resolved.vat).toBe(3_140_886);
+    expect(lines.filter((line) => line.accountId === 76_110)).toEqual([
+      expect.objectContaining({ debit: 1_756_710 }),
+    ]);
+    expect(lines.filter((line) => line.accountId === 76_112)).toEqual([
+      expect.objectContaining({ debit: 10_962_796 }),
+    ]);
+    expect(lines.filter((line) => line.accountId === 76_111)).toEqual([
+      expect.objectContaining({ debit: 15_834_000 }),
+    ]);
+    expect(lines.filter((line) => line.accountId === 49_104 && line.debit > 0)).toHaveLength(1);
+    expect(lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 49_104, debit: 3_140_886, description: "PPN Masukan" }),
+      expect.objectContaining({ accountId: 49_108, credit: 31_694_392 }),
+    ]));
+    expect(lines.reduce((sum, line) => sum + line.debit, 0))
+      .toBe(lines.reduce((sum, line) => sum + line.credit, 0));
+  });
+
 });

@@ -1957,12 +1957,23 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   try {
     const invoiceCompanyId = vi.companyId ?? resolveCompanyId(req);
     const settings = await ensureAccountingSettings(invoiceCompanyId);
-    const grandTotal = num(vi.grandTotal);
-    const taxAmount = num(vi.taxAmount);
-    // total_amount is the persisted OCR/manual DPP. Do not derive it from
-    // grand_total here, otherwise a mismatched OCR header would self-heal
-    // silently and pass the posting gate.
-    const netAmount = num(vi.totalAmount);
+    // Re-resolve explicit invoice breakdown evidence at the final posting
+    // boundary. Older OCR drafts may have persisted a zero header tax even
+    // though the breakdown contains a reconciled PPN amount.
+    const resolvedSapHeader = buildSapTaxInput({
+      subtotal: num(vi.totalAmount),
+      tax: num(vi.taxAmount),
+      total_amount: num(vi.grandTotal),
+      invoice_breakdown: vi.invoiceBreakdown,
+    });
+    const netAmount = resolvedSapHeader.net ?? num(vi.totalAmount);
+    const taxAmount = resolvedSapHeader.vat ?? num(vi.taxAmount);
+    const grandTotal = resolvedSapHeader.gross ?? num(vi.grandTotal);
+    const postedFinancialValues = {
+      totalAmount: String(netAmount),
+      taxAmount: String(taxAmount),
+      grandTotal: String(grandTotal),
+    };
     const lines: Array<{ accountId: number; debit: number; credit: number; description: string }> = [];
 
     // Header values are the financial source of truth. Never create a
@@ -2052,9 +2063,9 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
           expenseCategory,
           lines,
         }, "PUR");
-        await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
+        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       } else {
-        await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
+        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       }
     } else {
       // Standard purchase bill posting: every invoice line keeps its own
@@ -2069,9 +2080,9 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       })));
       if (lines.length >= 2) {
          const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: invoiceCompanyId, lines }, "PUR");
-        await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
+         await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       } else {
-        await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
+        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       }
     }
   } catch (e) {
