@@ -1,10 +1,16 @@
 # CF-CP-6 — Customer Portal Paylabs Settlement (Development Only)
 
-**Status:** `PASS / DEVELOPMENT_ONLY / READY_FOR_CF_CP_7`
+**Status:** `PARTIAL / DEVELOPMENT_ONLY / API_TYPECHECK_BASELINE_BLOCKED`
 
 Dokumen ini mencatat proof Customer Portal Central Finance yang aman untuk
 development. Tidak ada jalur CF-CP-6 yang mengaktifkan central mode di
 production; API normal tetap memakai `legacy`.
+
+> **Catatan verifikasi (2026-09-06):** `git diff --check` berhasil tanpa
+> whitespace error. Full API typecheck masih menemukan **51 error lama** pada
+> modul lain di luar scope CF-CP-6. Error tersebut dicatat sebagai baseline
+> blocker dan tidak dianggap sebagai regresi pada jalur Customer Portal
+> Paylabs yang diverifikasi di dokumen ini.
 
 ## Harness packaging
 
@@ -77,8 +83,9 @@ melaporkan `executed=1`, `failed=0`.
 The canonical workspace order was executed on 2026-08-22:
 
 1. shared/generated declaration build: `pnpm run typecheck:libs` — **PASS**;
-2. API typecheck: `pnpm --filter @workspace/api-server typecheck` —
-   **PASS**;
+2. API typecheck: checkpoint CF-CP-6 sebelumnya **PASS**, tetapi full
+   typecheck saat ini **BASELINE-BLOCKED** oleh 51 error lama di modul lain
+   di luar scope CF-CP-6;
 3. workspace typecheck: `pnpm run typecheck` — **PASS**;
 4. API build: `pnpm --filter @workspace/api-server build` — **PASS**;
 5. focused CF-CP tests — **14/14 PASS**;
@@ -150,7 +157,7 @@ cannot be hidden by direct inserts.
 | Harness packaging | PASS |
 | PG module resolution | PASS |
 | Shared declaration build | PASS |
-| API typecheck | PASS |
+| API typecheck | BASELINE-BLOCKED (51 pre-existing errors di modul lain) |
 | Workspace typecheck | PASS |
 | Bundle syntax check | PASS |
 | API build | PASS |
@@ -193,7 +200,7 @@ ROLLBACK/CLEANUP = PASS
 EXISTING DEV DATA CHANGED = 0
 SPORT CENTER DIRECT EFFECTS = 0
 SHARED DECLARATION BUILD = PASS
-API TYPECHECK = PASS
+API TYPECHECK = BASELINE-BLOCKED (51 pre-existing errors di modul lain)
 WORKSPACE TYPECHECK = PASS
 API BUILD = PASS
 FOCUSED TESTS = 14/14 PASS
@@ -205,8 +212,8 @@ SPORT CENTER READY = YES
 NORMAL CUSTOMER PORTAL MODE = LEGACY
 PROD WRITES = 0
 PROD CUTOVER = NO
-READY FOR CF-CP-7 = YES
-BLOCKER = NONE
+READY FOR CF-CP-7 = NO (menunggu baseline API typecheck)
+BLOCKER = 51 pre-existing API typecheck errors di modul lain; bukan regresi CF-CP-6
 ```
 
 The DEV bootstrap secret is available and readiness is proven. The DEV mapping
@@ -257,7 +264,7 @@ Fixture persistence         = 0
 Existing DEV business change = 0
 Sport Center direct effects  = 0
 Focused tests               = 14/14 PASS
-API typecheck/build          = PASS / PASS
+API typecheck/build          = BASELINE-BLOCKED (51 legacy errors) / PASS
 Workspace typecheck         = PASS
 git diff --check             = PASS
 Readiness                    = HTTP 200, ready=true
