@@ -558,6 +558,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       supplier_name: string | null;
       grand_total: string;
       amount_paid: string | null;
+      tax_amount: string | null;
+      tax_review_status: string | null;
       withholding_tax_amount: string | null;
       due_date: string | null;
       source: "purchase_document" | "vendor_invoice";
@@ -571,6 +573,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           pd.supplier_name,
           pd.grand_total,
           pd.amount_paid,
+          NULL::numeric AS tax_amount,
+          NULL::text AS tax_review_status,
           NULL::numeric AS withholding_tax_amount,
           LEFT(pd.due_date, 10) AS due_date,
           'purchase_document' AS source
@@ -590,6 +594,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.supplier_name,
           vi.grand_total,
           vi.amount_paid,
+          vi.tax_amount,
+          vi.tax_review_status,
            vi.withholding_tax_amount,
           to_char(vi.due_date, 'YYYY-MM-DD') AS due_date,
           'vendor_invoice' AS source
@@ -662,6 +668,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       grandTotal: Number(r.grand_total),
       amountPaid: Number(r.amount_paid ?? 0),
       outstanding: Number(r.grand_total) - Number(r.amount_paid ?? 0),
+      taxAmount: Number(r.tax_amount ?? 0),
+      taxReviewStatus: r.tax_review_status ?? "not_required",
       withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
       payableToSupplier: Math.max(0, Number(r.grand_total) - Number(r.withholding_tax_amount ?? 0)),
       dueDate: r.due_date,

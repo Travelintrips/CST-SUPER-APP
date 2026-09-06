@@ -665,6 +665,8 @@ interface OutstandingVendorInvoice {
   grandTotal: number;
   amountPaid: number;
   outstanding: number;
+  taxAmount?: number;
+  taxReviewStatus?: string | null;
   withholdingTaxAmount?: number;
   dueDate?: string | null;
   source?: string;
@@ -2903,7 +2905,7 @@ function VendorInvoicePaymentDialog({
                 <SelectContent>
                   {invoices.map((invoice) => (
                     <SelectItem key={invoice.id} value={String(invoice.id)}>
-                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — sisa {idr(invoice.outstanding)}
+                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — sisa {idr(invoice.outstanding)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2911,8 +2913,21 @@ function VendorInvoicePaymentDialog({
               {selected && (
                 <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
                   <div className="flex justify-between"><span>Total invoice</span><strong>{idr(selected.grandTotal)}</strong></div>
+                  <div className="flex justify-between">
+                    <span>Nilai sebelum PPN</span>
+                    <strong>{idr(Math.max(0, selected.grandTotal - Number(selected.taxAmount ?? 0)))}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>PPN Masukan</span>
+                    <strong>{idr(Number(selected.taxAmount ?? 0))}</strong>
+                  </div>
                   <div className="flex justify-between"><span>Sudah dibayar</span><strong>{idr(selected.amountPaid)}</strong></div>
                   <div className="flex justify-between"><span>Sisa</span><strong>{idr(selected.outstanding)}</strong></div>
+                  {selected.taxReviewStatus && selected.taxReviewStatus !== "not_required" && (
+                    <p className="mt-2 text-amber-700">
+                      Status review PPN: {selected.taxReviewStatus}. Nilai PPN ditampilkan sebagai rincian, bukan pembayaran terpisah.
+                    </p>
+                  )}
                   {(selected.withholdingTaxAmount ?? 0) > 0 && (
                     <p className="mt-2 text-amber-700">Invoice memiliki withholding tax; gunakan Bank Disbursement.</p>
                   )}
