@@ -4758,15 +4758,12 @@ router.get("/mutations", async (req, res) => {
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
            AND ${currentReconciliationMatchResultSql("m")}
-            -- Generic non-Sport candidates must be same-day. QRIS candidates
-            -- use the exact H-1 settlement-date contract; ordinary non-QRIS
-            -- Sport Center payments remain reviewable for manual confirmation.
+            -- Keep regular bank-transfer candidates visible as reviewer
+            -- evidence even when the candidate date differs from the bank
+            -- mutation date. QRIS keeps its stricter settlement-date contract.
            AND (
-             ${qrisCandidateHMinusOneSql}
-              OR (
-                m.candidate_type NOT IN ('qris_settlement', 'sport_payment')
-                AND ${genericCandidateSameDaySql("m", "bm")}
-              )
+              m.candidate_type <> 'qris_settlement'
+              OR ${qrisCandidateHMinusOneSql}
            )
             -- Hanya tampilkan dokumen yang sudah benar-benar dibayar.
             -- Invoice/tenant invoice yang belum paid bukan bukti penerimaan bank.
