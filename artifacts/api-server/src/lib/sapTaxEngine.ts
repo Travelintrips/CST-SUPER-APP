@@ -33,6 +33,13 @@ export interface SapTaxInput {
   vat:   number | null;
   /** GROSS / TOTAL — grand total read from invoice header */
   gross: number | null;
+
+  /**
+   * Evidence-normalization notes generated before the strict engine runs.
+   * The engine never invents values; this records when explicit invoice
+   * breakdown evidence was selected over an incomplete header extraction.
+   */
+  normalizationFlags?: string[];
 }
 
 // ─── Output ───────────────────────────────────────────────────────────────────
@@ -100,7 +107,7 @@ const CONFIDENCE_FLAG = 0.05;
  * does NOT fix values, and does NOT infer missing fields.
  */
 export function runSapTaxEngine(input: SapTaxInput): SapTaxResult {
-  const flags: string[] = [];
+  const flags: string[] = [...(input.normalizationFlags ?? [])];
 
   // ── STEP 0: Tax Mode Detection ─────────────────────────────────────────────
   // HEADER_TAX_ONLY if the invoice carries ANY of: NET/DPP, VAT/PPN, GROSS/TOTAL
@@ -247,7 +254,7 @@ export function buildSapTaxInput(ocr: Record<string, unknown>): SapTaxInput {
     return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
   }
 
-  return {
+  const header = {
     vendor_name:    toStr(ocr.vendor_name),
     invoice_number: toStr(ocr.invoice_number),
     invoice_date:   toStr(ocr.invoice_date),
@@ -256,4 +263,68 @@ export function buildSapTaxInput(ocr: Record<string, unknown>): SapTaxInput {
     vat:            toNum(ocr.tax),          // tax = PPN/VAT
     gross:          toNum(ocr.total_amount), // total_amount = GROSS
   };
+
+  /**
+   * Some Indonesian tax invoices use DPP Nilai Lain (for example 11/12 of
+   * the commercial selling price). In that format the printed component
+   * prices are the accounting net amount, while the header tax table carries
+   * the authoritative PPN. Older OCR commonly maps the component total to
+   * both subtotal and total_amount and leaves tax at zero.
+   *
+   * Only use this repair when the evidence is explicit and independently
+   * consistent: a positive breakdown PPN, complete component gross values,
+   * and component gross total matching the extracted commercial total.
+   * Otherwise preserve the strict header-only values and let review block
+   * posting.
+   */
+  const rawBreakdown = ocr.invoice_breakdown;
+  const breakdown = rawBreakdown && typeof rawBreakdown === "object" && !Array.isArray(rawBreakdown)
+    ? rawBreakdown as Record<string, unknown>
+    : null;
+  const rawTotals = breakdown?.totals;
+  const totals = rawTotals && typeof rawTotals === "object" && !Array.isArray(rawTotals)
+    ? rawTotals as Record<string, unknown>
+    : null;
+  const rawComponents = breakdown?.components;
+  const components = Array.isArray(rawComponents)
+    ? rawComponents.filter((component): component is Record<string, unknown> =>
+        Boolean(component && typeof component === "object" && !Array.isArray(component)),
+      )
+    : [];
+  const breakdownVat = toNum(totals?.ppn);
+  const componentGrossValues = components.map((component) => toNum(component.gross));
+  const componentGrossTotal = componentGrossValues.every((value) => value != null) && componentGrossValues.length > 0
+    ? componentGrossValues.reduce((sum, value) => sum + (value ?? 0), 0)
+    : null;
+  const topLevelCommercialTotal = header.gross ?? header.net;
+  const headerHasDroppedTax =
+    (header.vat == null || header.vat <= 0) &&
+    header.net != null &&
+    header.gross != null &&
+    Math.abs(header.net - header.gross) <= 100;
+  const breakdownMatchesCommercialTotal =
+    componentGrossTotal != null &&
+    topLevelCommercialTotal != null &&
+    Math.abs(componentGrossTotal - topLevelCommercialTotal) <= 100;
+
+  if (
+    headerHasDroppedTax &&
+    breakdownVat != null &&
+    breakdownVat > 0 &&
+    breakdownMatchesCommercialTotal
+  ) {
+    const normalizedNet = Math.round(componentGrossTotal! * 100) / 100;
+    const normalizedGross = Math.round((normalizedNet + breakdownVat) * 100) / 100;
+    return {
+      ...header,
+      net: normalizedNet,
+      vat: breakdownVat,
+      gross: normalizedGross,
+      normalizationFlags: [
+        `TAX_RESOLVED_FROM_BREAKDOWN: explicit invoice_breakdown PPN ${breakdownVat} was recovered after header tax extraction returned zero.`,
+      ],
+    };
+  }
+
+  return header;
 }

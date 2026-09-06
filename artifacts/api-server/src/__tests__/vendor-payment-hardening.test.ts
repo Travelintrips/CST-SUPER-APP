@@ -91,4 +91,27 @@ describe("vendor payment hardening", () => {
       expect.objectContaining({ accountId: 501, credit: 1_080 }),
     ]));
   });
+
+  it("creates a separate PPN Masukan debit for the Angkasa Pura tax amount", () => {
+    const lines = buildGrossVendorInvoicePostingLines({
+      lines: [
+        { coaAccountId: 76110, subtotal: 1_756_710, description: "PEMAKAIAN AIR" },
+        { coaAccountId: 76112, subtotal: 10_962_796, description: "PEMAKAIAN LISTRIK" },
+        { coaAccountId: 76111, subtotal: 15_834_000, description: "PENDAPATAN KONSESI" },
+      ],
+      taxAmount: 3_140_886,
+      ppnInputAccountId: 49_104,
+      apAccountId: 49_108,
+      grandTotal: 31_694_392,
+    });
+
+    expect(lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        accountId: 49_104,
+        debit: 3_140_886,
+        description: "PPN Masukan",
+      }),
+      expect.objectContaining({ accountId: 49_108, credit: 31_694_392 }),
+    ]));
+  });
 });

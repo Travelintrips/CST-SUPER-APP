@@ -56,6 +56,7 @@ import {
 import { sapInvoiceLockMiddleware } from "../middlewares/sapInvoiceLockMiddleware.js";
 import { sapAuditMiddleware } from "../middlewares/sapAuditMiddleware.js";
 import { isInvoiceTaxBalanced } from "../lib/invoiceTaxPostingPolicy.js";
+import { buildSapTaxInput } from "../lib/sapTaxEngine.js";
 import {
   buildGrossVendorInvoicePostingLines,
   evaluateThreeWayMatchLines,
@@ -1358,14 +1359,23 @@ router.post("/vendor-invoices", async (req, res) => {
   const withholdingTaxType = body.withholdingTaxType ? String(body.withholdingTaxType) : null;
   const taxObject = body.taxObject ? String(body.taxObject) : null;
 
+  const lineCommercialTotal = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
+  const resolvedSapHeader = hasSapHeader
+    ? buildSapTaxInput({
+        subtotal: headerNet,
+        tax: headerVat,
+        total_amount: headerGross,
+        invoice_breakdown: body.invoiceBreakdown,
+      })
+    : null;
   const totalAmount = hasSapHeader
-    ? (headerNet ?? (headerGross - (headerVat ?? 0)))
-    : lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
+    ? (resolvedSapHeader?.net ?? (headerNet ?? (headerGross - (headerVat ?? 0))))
+    : lineCommercialTotal;
   const taxAmount = hasSapHeader
-    ? (headerVat ?? 0)
+    ? (resolvedSapHeader?.vat ?? (headerVat ?? 0))
     : lines.reduce((s, l) => s + num(l.taxAmount), 0);
   const grandTotal = hasSapHeader
-    ? headerGross
+    ? (resolvedSapHeader?.gross ?? headerGross)
     : (totalAmount + taxAmount);
 
   const dueDate = body.dueDate
