@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -58,6 +59,27 @@ interface SheetConfig {
   last_synced_at: string | null;
   last_sync_status: string | null;
   last_sync_error: string | null;
+}
+
+interface CashMutationAccount {
+  id: number;
+  code: string;
+  name: string;
+  type: string;
+  subtype: string | null;
+}
+
+interface LedgerMutationRow {
+  id: number;
+  ledger_date: string;
+  source_type: string | null;
+  source_id: number | null;
+  source_ref: string | null;
+  account_code: string;
+  account_name: string;
+  debit: string | number | null;
+  credit: string | number | null;
+  description: string | null;
 }
 
 interface Company {
@@ -6407,6 +6429,203 @@ function SheetConfigCollapsed() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Cash account mutation view
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CashAccountMutationView() {
+  const { activeCompanyId, isConsolidated } = useCompany();
+  const [accountId, setAccountId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+
+  const accountsQ = useQuery({
+    queryKey: ["cash-mutation-accounts", activeCompanyId],
+    queryFn: async () => {
+      const response = await fetch(
+        "/api/accounting/bank-disbursements/meta/accounts?subtype=cash_bank",
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      return response.json() as Promise<CashMutationAccount[]>;
+    },
+    enabled: !isConsolidated && Number(activeCompanyId) > 0,
+  });
+
+  const accounts = (accountsQ.data ?? [])
+    .filter((account) => /kas besar|kas kecil/i.test(account.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  useEffect(() => {
+    if (!accounts.some((account) => String(account.id) === accountId)) {
+      setAccountId("");
+    }
+  }, [accounts, accountId]);
+
+  const ledgerQ = useQuery({
+    queryKey: ["cash-account-mutations", activeCompanyId, accountId, from, to],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        company_id: String(activeCompanyId),
+        account_id: accountId,
+        limit: "500",
+      });
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      const response = await fetch(`/api/accounting/ledger?${params}`, { credentials: "include" });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json() as Promise<LedgerMutationRow[]>;
+    },
+    enabled: !isConsolidated && Number(activeCompanyId) > 0 && !!accountId,
+  });
+
+  const rows = ledgerQ.data ?? [];
+  const totalIn = rows.reduce((sum, row) => sum + Number(row.debit ?? 0), 0);
+  const totalOut = rows.reduce((sum, row) => sum + Number(row.credit ?? 0), 0);
+  const net = totalIn - totalOut;
+  const selectedAccount = accounts.find((account) => String(account.id) === accountId);
+
+  const formatAmount = (amount: number) =>
+    new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.abs(amount));
+  const formatDate = (value: string) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("id-ID");
+  };
+
+  return (
+    <Card className="border-emerald-200 dark:border-emerald-900">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ArrowUpRight className="h-4 w-4 text-emerald-600" />
+          Mutasi Kas Besar / Kas Kecil
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Pilih akun untuk melihat seluruh transaksi masuk dan keluar dari ledger akun tersebut.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isConsolidated ? (
+          <Alert>
+            <AlertDescription className="text-sm">
+              Pilih satu perusahaan untuk melihat mutasi Kas Besar atau Kas Kecil.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[230px] flex-1 space-y-1.5">
+                <Label htmlFor="cash-mutation-account">Akun mutasi</Label>
+                <Select value={accountId} onValueChange={setAccountId}>
+                  <SelectTrigger id="cash-mutation-account">
+                    <SelectValue placeholder={accountsQ.isLoading ? "Memuat akun..." : "Pilih Kas Besar atau Kas Kecil"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((account) => (
+                      <SelectItem key={account.id} value={String(account.id)}>
+                        {account.name} ({account.code})
+                      </SelectItem>
+                    ))}
+                    {!accountsQ.isLoading && accounts.length === 0 && (
+                      <SelectItem value="__none__" disabled>
+                        COA Kas Besar/Kas Kecil belum tersedia
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cash-mutation-from">Dari</Label>
+                <Input id="cash-mutation-from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cash-mutation-to">Sampai</Label>
+                <Input id="cash-mutation-to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+              </div>
+            </div>
+
+            {!accountId ? (
+              <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                Pilih Kas Besar atau Kas Kecil untuk menampilkan mutasinya.
+              </div>
+            ) : ledgerQ.isLoading ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Memuat mutasi akun...
+              </div>
+            ) : ledgerQ.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>Mutasi akun gagal dimuat. Silakan coba lagi.</AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+                    <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+                      <ArrowDownLeft className="h-3.5 w-3.5" /> Total Masuk
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-emerald-800 dark:text-emerald-200">Rp {formatAmount(totalIn)}</div>
+                  </div>
+                  <div className="rounded-md border border-red-200 bg-red-50/60 p-3 dark:border-red-900 dark:bg-red-950/30">
+                    <div className="flex items-center gap-1.5 text-xs text-red-700 dark:text-red-300">
+                      <ArrowUpRight className="h-3.5 w-3.5" /> Total Keluar
+                    </div>
+                    <div className="mt-1 text-lg font-semibold text-red-800 dark:text-red-200">Rp {formatAmount(totalOut)}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="text-xs text-muted-foreground">Selisih mutasi</div>
+                    <div className={`mt-1 text-lg font-semibold ${net >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                      {net < 0 ? "-" : ""}Rp {formatAmount(net)}
+                    </div>
+                  </div>
+                </div>
+
+                {rows.length === 0 ? (
+                  <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                    Belum ada jurnal posted untuk {selectedAccount?.name ?? "akun ini"} pada periode tersebut.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/30">
+                          <TableHead>Tanggal</TableHead>
+                          <TableHead>Keterangan</TableHead>
+                          <TableHead>Sumber</TableHead>
+                          <TableHead className="text-right">Masuk</TableHead>
+                          <TableHead className="text-right">Keluar</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rows.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell className="whitespace-nowrap text-xs">{formatDate(row.ledger_date)}</TableCell>
+                            <TableCell className="min-w-[240px] text-sm">{row.description || "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {row.source_type || "—"}{row.source_id != null ? ` #${row.source_id}` : ""}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs text-emerald-700">
+                              {Number(row.debit ?? 0) > 0 ? `Rp ${formatAmount(Number(row.debit))}` : "—"}
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs text-red-700">
+                              {Number(row.credit ?? 0) > 0 ? `Rp ${formatAmount(Number(row.credit))}` : "—"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Tampilan ini memakai ledger immutable dan hanya menampilkan jurnal yang sudah diposting. Transfer yang masih berstatus draft akan muncul setelah proses <strong>Post ke Accounting</strong>.
+                </p>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Onboarding Modal
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -8060,6 +8279,8 @@ export default function BankReconciliationPage() {
             </Button>
           </div>
         </div>
+
+        <CashAccountMutationView />
 
         {/* ── Step Progress ─────────────────────────────────── */}
         <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />

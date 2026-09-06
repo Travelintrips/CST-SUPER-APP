@@ -24,6 +24,8 @@ router.get("/", async (req, res) => {
     const period     = req.query.period     ? String(req.query.period)     : null;
     const accountId  = req.query.account_id ? Number(req.query.account_id) : null;
     const sourceType = req.query.source_type ? String(req.query.source_type) : null;
+    const from       = req.query.from ? String(req.query.from) : null;
+    const to         = req.query.to ? String(req.query.to) : null;
     const isVoided   = req.query.is_voided === "true";
     const limit      = Math.min(Number(req.query.limit  ?? 500), 2000);
     const offset     = Number(req.query.offset ?? 0);
@@ -33,6 +35,8 @@ router.get("/", async (req, res) => {
     if (period)     conditions.push(`fle.period = '${period.replace(/'/g, "''")}'`);
     if (accountId)  conditions.push(`fle.account_id = ${accountId}`);
     if (sourceType) conditions.push(`fle.source_type = '${sourceType.replace(/'/g, "''")}'`);
+    if (from)       conditions.push(`fle.ledger_date >= '${from.replace(/'/g, "''")}'`);
+    if (to)         conditions.push(`fle.ledger_date < ('${to.replace(/'/g, "''")}'::date + INTERVAL '1 day')`);
     if (!isVoided)  conditions.push(`fle.is_voided = false`);
 
     const { rows } = await db.execute(sql.raw(`
