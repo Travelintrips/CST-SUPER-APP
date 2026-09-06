@@ -657,6 +657,19 @@ interface CoaAccountReference {
   companyId?: number | null;
 }
 
+interface OutstandingVendorInvoice {
+  id: number;
+  docNumber: string;
+  billNumber?: string | null;
+  supplierName: string;
+  grandTotal: number;
+  amountPaid: number;
+  outstanding: number;
+  withholdingTaxAmount?: number;
+  dueDate?: string | null;
+  source?: string;
+}
+
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
 
 interface QrisCandidateAudit {
@@ -2752,6 +2765,178 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
+// ── Vendor invoice payment dialog ───────────────────────────────────────────
+// This is deliberately separate from COA selection. Selecting a vendor
+// invoice posts DR AP / CR Bank and updates the invoice payment state.
+function VendorInvoicePaymentDialog({
+  mutation,
+  open,
+  onClose,
+  onSaved,
+}: {
+  mutation: BankMutation | null;
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const { toast } = useToast();
+  const [selectedId, setSelectedId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const companyId = mutation?.company_id ?? null;
+  const mutationAmount = Number(mutation?.amount ?? 0);
+
+  const invoicesQuery = useQuery({
+    queryKey: ["bank-reconciliation-vendor-invoices", companyId],
+    enabled: open && Number.isInteger(companyId) && Number(companyId) > 0,
+    queryFn: async () => {
+      const params = new URLSearchParams({ company: String(companyId) });
+      const response = await fetch(`/api/accounting/bank-disbursements/vendor-invoices/outstanding?${params}`, {
+        credentials: "include",
+        headers: { "x-company-id": String(companyId) },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message ?? body.error ?? "Gagal memuat invoice vendor");
+      return (body.invoices ?? []) as OutstandingVendorInvoice[];
+    },
+    staleTime: 0,
+  });
+
+  const invoices = (invoicesQuery.data ?? []).filter((invoice) => invoice.source === "vendor_invoice");
+  const selected = invoices.find((invoice) => String(invoice.id) === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedId("");
+      setSaving(false);
+    }
+  }, [open, mutation?.id]);
+
+  const save = async () => {
+    if (!mutation || !selected) {
+      toast({ title: "Pilih invoice vendor terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+            "x-company-id": String(companyId ?? ""),
+          },
+          body: JSON.stringify({
+            vendor_invoice_id: selected.id,
+            amount: mutationAmount,
+          }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error ?? "Pembayaran invoice vendor gagal diproses");
+        toast({
+          title: "Pembayaran invoice berhasil dialokasikan",
+          description: `${selected.billNumber ?? selected.docNumber} — ${idr(mutationAmount)} masuk ke Hutang Vendor/AP.`,
+        });
+        onClose();
+        await onSaved();
+      } catch (error) {
+        toast({
+          title: "Gagal mengalokasikan pembayaran",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setSaving(false);
+      }
+    } else {
+      toast({
+        title: "Nominal melebihi sisa invoice",
+        description: `Sisa invoice ${idr(selected.outstanding)} sedangkan mutasi ${idr(mutationAmount)}.`,
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Match ke Invoice Vendor</DialogTitle>
+          <DialogDescription>
+            Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+            <div className="flex justify-between gap-3">
+              <span>Nominal mutasi</span>
+              <strong>{idr(mutationAmount)}</strong>
+            </div>
+            <div className="mt-1 text-xs">
+              Jurnal: <strong>Debit Hutang Vendor/AP</strong> — <strong>Kredit Bank</strong>
+            </div>
+          </div>
+
+          {invoicesQuery.isLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Memuat invoice outstanding…
+            </div>
+          )}
+          {invoicesQuery.error && (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {invoicesQuery.error instanceof Error ? invoicesQuery.error.message : "Gagal memuat invoice vendor"}
+            </p>
+          )}
+          {!invoicesQuery.isLoading && !invoicesQuery.error && invoices.length === 0 && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Tidak ada invoice vendor outstanding pada perusahaan aktif.
+            </p>
+          )}
+          {invoices.length > 0 && (
+            <div className="space-y-2">
+              <Label>Invoice vendor</Label>
+              <Select value={selectedId} onValueChange={setSelectedId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih invoice vendor…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {invoices.map((invoice) => (
+                    <SelectItem key={invoice.id} value={String(invoice.id)}>
+                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — sisa {idr(invoice.outstanding)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selected && (
+                <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
+                  <div className="flex justify-between"><span>Total invoice</span><strong>{idr(selected.grandTotal)}</strong></div>
+                  <div className="flex justify-between"><span>Sudah dibayar</span><strong>{idr(selected.amountPaid)}</strong></div>
+                  <div className="flex justify-between"><span>Sisa</span><strong>{idr(selected.outstanding)}</strong></div>
+                  {(selected.withholdingTaxAmount ?? 0) > 0 && (
+                    <p className="mt-2 text-amber-700">Invoice memiliki withholding tax; gunakan Bank Disbursement.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Batal</Button>
+          <Button
+            className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
+            onClick={save}
+            disabled={saving || !selected || (selected.withholdingTaxAmount ?? 0) > 0}
+          >
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {saving ? "Memproses…" : "Match & Bayar Invoice"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── COA Selection Dialog ─────────────────────────────────────────────────────
 // The selected account is applied only to the current approval request.
 function CoaReferenceDialog({
@@ -4210,6 +4395,7 @@ function QrisMutationCard({
 function MutationCard({
   m,
   onMapCoa,
+  onMatchVendorInvoice,
   onRetryReferenceCoa,
   onApprove,
   onPost,
@@ -4246,6 +4432,7 @@ function MutationCard({
 }: {
   m: BankMutation;
   onMapCoa: (m: BankMutation) => void;
+  onMatchVendorInvoice?: (m: BankMutation) => void;
   onRetryReferenceCoa?: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
@@ -4642,6 +4829,22 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
+            {!isQris
+              && m.direction === "OUT"
+              && onMatchVendorInvoice
+              && !["approved", "posted", "approved_pending_posting"].includes(m.status)
+              && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-emerald-300 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300"
+                onClick={() => onMatchVendorInvoice(m)}
+                title="Hubungkan mutasi ini ke invoice vendor tanpa membuat beban kedua"
+              >
+                <ReceiptText className="h-3.5 w-3.5" />
+                Match Invoice Vendor
+              </Button>
+            )}
             {!isQris && !isClosedQrisSettlement && !isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
               <Button
                 size="sm"
@@ -6295,6 +6498,7 @@ export default function BankReconciliationPage() {
   const [matchingBackgroundPending, setMatchingBackgroundPending] = useState(false);
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [coaReferenceTarget,  setCoaReferenceTarget]  = useState<BankMutation | null>(null);
+  const [vendorPaymentTarget, setVendorPaymentTarget] = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
   const [selectedQrisCandidateIds, setSelectedQrisCandidateIds] = useState<number[]>([]);
@@ -8604,6 +8808,7 @@ export default function BankReconciliationPage() {
                   key={m.id}
                   m={m}
                   onMapCoa={setCoaReferenceTarget}
+                  onMatchVendorInvoice={setVendorPaymentTarget}
                   onRetryReferenceCoa={mutation => retryReferenceCoaMut.mutate(mutation.id)}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
@@ -8949,6 +9154,16 @@ export default function BankReconciliationPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VendorInvoicePaymentDialog
+        mutation={vendorPaymentTarget}
+        open={vendorPaymentTarget != null}
+        onClose={() => setVendorPaymentTarget(null)}
+        onSaved={async () => {
+          await invalidate();
+          qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+        }}
+      />
 
       <CoaReferenceDialog
         mutation={coaReferenceTarget}
