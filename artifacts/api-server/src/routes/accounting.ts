@@ -357,6 +357,159 @@ router.post("/accounts", async (req, res) => {
   }
 });
 
+// Add a child account from the hierarchy view. The account number is derived
+// from the parent's numeric segment and the existing sibling sequence so the
+// user only needs to provide the account description.
+router.post("/accounts/:id/child", async (req, res) => {
+  const parentId = Number(String(req.params.id));
+  if (!Number.isInteger(parentId) || parentId <= 0) {
+    return res.status(400).json({ message: "Invalid parent account id" });
+  }
+
+  const name = String(req.body?.name ?? "").trim();
+  if (!name) {
+    return res.status(400).json({ message: "Deskripsi akun wajib diisi." });
+  }
+
+  const companyId = resolveCompanyId(req);
+
+  try {
+    const created = await db.transaction(async (tx) => {
+      const parentResult = await tx.execute(sql`
+        SELECT
+          coa.id,
+          coa.company_id,
+          coa.code,
+          coa.type,
+          coa.account_category,
+          coa.normal_balance,
+          coa.status,
+          c.company_code
+        FROM chart_of_accounts coa
+        LEFT JOIN companies c ON c.id = ${companyId}
+        WHERE coa.id = ${parentId}
+        FOR UPDATE
+      `);
+      const parent = (parentResult as any).rows?.[0] as {
+        id: number;
+        company_id: number | null;
+        code: string;
+        type: "asset" | "liability" | "equity" | "revenue" | "expense";
+        account_category: typeof chartOfAccountsTable.$inferInsert.accountCategory;
+        normal_balance: typeof chartOfAccountsTable.$inferInsert.normalBalance;
+        status: string;
+        company_code: string | null;
+      } | undefined;
+
+      if (!parent) {
+        const error = new Error("Parent account not found");
+        (error as Error & { status?: number }).status = 404;
+        throw error;
+      }
+      if (parent.company_id !== null && Number(parent.company_id) !== companyId) {
+        const error = new Error("Parent akun harus dari perusahaan yang sama.");
+        (error as Error & { status?: number }).status = 403;
+        throw error;
+      }
+      if (!["ACTIVE", "DRAFT", "PENDING_APPROVAL"].includes(parent.status)) {
+        const error = new Error("Parent akun tidak aktif dan tidak dapat menerima akun child.");
+        (error as Error & { status?: number }).status = 422;
+        throw error;
+      }
+
+      const codeMatch = String(parent.code).match(/^(.*-)(\d+)(?:-([A-Za-z0-9]+))?$/);
+      if (!codeMatch) {
+        const error = new Error(`Format kode parent "${parent.code}" tidak mendukung penomoran otomatis.`);
+        (error as Error & { status?: number }).status = 422;
+        throw error;
+      }
+
+      const [, prefix, numericPart, parentSuffix] = codeMatch;
+      const suffix = parentSuffix
+        ? `-${parentSuffix}`
+        : parent.company_code
+          ? `-${String(parent.company_code).trim().toUpperCase()}`
+          : "";
+      const siblingResult = await tx.execute(sql`
+        SELECT code
+        FROM chart_of_accounts
+        WHERE company_id = ${companyId}
+          AND parent_id = ${parentId}
+      `);
+      const siblingCodes = ((siblingResult as any).rows ?? [])
+        .map((row: { code?: unknown }) => String(row.code ?? ""))
+        .filter(Boolean);
+      const siblingNumbers = siblingCodes
+        .map((code: string) => {
+          const match = code.match(
+            new RegExp(`^${String(prefix).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\d+)(?:-[A-Za-z0-9]+)?$`),
+          );
+          return match ? Number(match[1]) : null;
+        })
+        .filter((value: number | null): value is number => Number.isInteger(value));
+
+      const baseNumber = Number(numericPart);
+      const maxNumber = siblingNumbers.length > 0
+        ? Math.max(baseNumber, ...siblingNumbers)
+        : baseNumber;
+      const usesTensSequence = siblingNumbers.length > 0 &&
+        siblingNumbers.every((value: number) => (value - baseNumber) % 10 === 0);
+      const increment = siblingNumbers.length === 0 || usesTensSequence ? 10 : 1;
+      const usedCodesResult = await tx.execute(sql`
+        SELECT code
+        FROM chart_of_accounts
+        WHERE (company_id IS NULL OR company_id = ${companyId})
+          AND code LIKE ${`${prefix}%`}
+      `);
+      const usedCodes = new Set(
+        ((usedCodesResult as any).rows ?? []).map((row: { code?: unknown }) => String(row.code ?? "")),
+      );
+
+      let nextNumber = siblingNumbers.length === 0 ? baseNumber + 10 : maxNumber + increment;
+      let code = `${prefix}${String(nextNumber).padStart(numericPart.length, "0")}${suffix}`;
+      while (usedCodes.has(code)) {
+        nextNumber += increment;
+        code = `${prefix}${String(nextNumber).padStart(numericPart.length, "0")}${suffix}`;
+      }
+
+      const [inserted] = await tx
+        .insert(chartOfAccountsTable)
+        .values({
+          companyId,
+          code,
+          name,
+          type: parent.type,
+          subtype: null,
+          parentId,
+          isActive: true,
+          accountCategory: parent.account_category,
+          normalBalance: parent.normal_balance,
+          isPostable: true,
+          isHeader: false,
+          effectiveFrom: null,
+          effectiveTo: null,
+          status: "ACTIVE",
+          version: 1,
+          createdBy: String((req as any).user?.id ?? (req as any).user?.email ?? "system"),
+        })
+        .returning();
+
+      return inserted;
+    });
+
+    return res.status(201).json(serializeAccount(created!));
+  } catch (err: unknown) {
+    const status = Number((err as Error & { status?: number }).status);
+    if (status >= 400 && status < 500) {
+      return res.status(status).json({ message: (err as Error).message });
+    }
+    return res.status(409).json({
+      message: "Nomor COA otomatis bentrok. Silakan coba lagi.",
+      error: String((err as Error)?.message ?? err),
+    });
+  }
+});
+
 router.patch("/accounts/:id", async (req, res) => {
   const id = Number(String(req.params.id));
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });

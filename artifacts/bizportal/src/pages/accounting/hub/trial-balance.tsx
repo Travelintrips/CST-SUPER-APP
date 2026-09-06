@@ -4,8 +4,12 @@ import type { ReactNode } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RefreshCw, ArrowLeft, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { RefreshCw, ArrowLeft, ExternalLink, ChevronDown, ChevronRight, Plus, Loader2 } from "lucide-react";
 
 interface TBRow {
   account_id: number; code: string; name: string; type: string;
@@ -48,6 +52,10 @@ export default function AccountingHubTrialBalancePage() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [, navigate] = useLocation();
   const requestVersion = useRef(0);
+  const [childParent, setChildParent] = useState<TBRow | null>(null);
+  const [childName, setChildName] = useState("");
+  const [childSaving, setChildSaving] = useState(false);
+  const [childError, setChildError] = useState<string | null>(null);
 
   // Load company list for dropdown
   useEffect(() => {
@@ -146,10 +154,42 @@ export default function AccountingHubTrialBalancePage() {
     navigate(`/accounting/hub/general-ledger?${params}`);
   }
 
+  async function addChildAccount() {
+    const name = childName.trim();
+    if (!childParent || !name) {
+      setChildError("Deskripsi akun wajib diisi.");
+      return;
+    }
+    setChildSaving(true);
+    setChildError(null);
+    try {
+      const response = await fetch(`/api/accounting/accounts/${childParent.account_id}/child`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message ?? body.error ?? "Gagal menambahkan COA.");
+      }
+      const parentForRefresh = childParent;
+      setChildParent(null);
+      setChildName("");
+      await load();
+      setExpandedRows(new Set([rowKey(parentForRefresh)]));
+    } catch (error) {
+      setChildError(error instanceof Error ? error.message : "Gagal menambahkan COA.");
+    } finally {
+      setChildSaving(false);
+    }
+  }
+
   function renderAccountRows(r: TBRow, depth = 0): ReactNode[] {
     const key = rowKey(r);
     const children = childrenByParentKey.get(key) ?? [];
     const canExpand = children.length > 0;
+    const canAddChild = r.is_header || canExpand;
     const isExpanded = expandedRows.has(key);
 
     return [
@@ -218,11 +258,29 @@ export default function AccountingHubTrialBalancePage() {
         <td className="px-3 py-2 text-right font-mono text-xs">{fmt(r.total_credit)}</td>
         <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${Number(r.balance) < 0 ? "text-red-600" : ""}`}>{fmt(r.balance)}</td>
         <td className="px-3 py-2 text-center">
-          {canExpand
-            ? (isExpanded
-              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground mx-auto" />
-              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground mx-auto" />)
-            : <ExternalLink className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary mx-auto" />}
+          <div className="flex items-center justify-center gap-1">
+            {canAddChild && filters.company_id && (
+              <button
+                type="button"
+                className="inline-flex h-6 w-6 items-center justify-center rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                title={`Tambah COA di bawah ${r.code} — ${r.name}`}
+                aria-label={`Tambah COA di bawah ${r.code}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setChildError(null);
+                  setChildName("");
+                  setChildParent(r);
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {canExpand
+              ? (isExpanded
+                ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />)
+              : <ExternalLink className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary" />}
+          </div>
         </td>
       </tr>,
       ...(canExpand && isExpanded
@@ -260,6 +318,64 @@ export default function AccountingHubTrialBalancePage() {
           <span>⚠</span> {error}
         </div>
       )}
+
+      <Dialog
+        open={childParent !== null}
+        onOpenChange={(open) => {
+          if (!open && !childSaving) {
+            setChildParent(null);
+            setChildName("");
+            setChildError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tambah COA di bawah parent</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+              <div className="text-xs text-muted-foreground">Parent</div>
+              <div className="font-mono font-semibold">
+                {childParent?.code} — {childParent?.name}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Nomor COA dibuat otomatis dan mengikuti urutan child yang sudah ada.
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="trial-balance-child-name" className="text-sm font-medium">
+                Deskripsi / Nama COA
+              </label>
+              <Input
+                id="trial-balance-child-name"
+                value={childName}
+                onChange={(event) => setChildName(event.target.value)}
+                placeholder="Contoh: Beban Internet"
+                autoFocus
+                disabled={childSaving}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void addChildAccount();
+                }}
+              />
+            </div>
+            {childError && <p className="text-sm text-destructive">{childError}</p>}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={childSaving}
+              onClick={() => setChildParent(null)}
+            >
+              Batal
+            </Button>
+            <Button disabled={childSaving || !childName.trim()} onClick={() => void addChildAccount()}>
+              {childSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Simpan COA
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Filters */}
       <Card>
