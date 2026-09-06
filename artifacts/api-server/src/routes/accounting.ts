@@ -153,7 +153,7 @@ function parseDateRange(req: {
   return { from, to, error: null };
 }
 
-// ============ Companies ============
+// ---- Companies ----
 router.post("/companies", async (req, res) => {
   const {
     name,
@@ -223,7 +223,7 @@ router.delete("/companies/:id", async (req, res) => {
   return res.json({ message: "Deleted", id });
 });
 
-// ============ Chart of Accounts ============
+// ---- Chart of Accounts ----
 router.get("/accounts/check-code", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const code = String(req.query.code ?? "").trim();
@@ -638,7 +638,7 @@ router.delete("/accounts/:id", async (req, res) => {
   return res.json({ message: "Deleted", id });
 });
 
-// ============ Journals ============
+// ---- Journals ----
 router.get("/journals", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const rows = await db
@@ -719,7 +719,7 @@ router.patch("/journals/:id", async (req, res) => {
   return res.json(serializeJournal(updated));
 });
 
-// ============ Taxes ============
+// ---- Taxes ----
 router.get("/taxes", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const rows = await db
@@ -784,7 +784,7 @@ router.patch("/taxes/:id", async (req, res) => {
   return res.json(serializeTax(updated));
 });
 
-// ============ Cost Centers ============
+// ---- Cost Centers ----
 router.get("/cost-centers", async (req, res) => {
   const companyId = resolveCompanyScope(req);
   const conds: SQL<unknown>[] = [];
@@ -853,7 +853,7 @@ router.delete("/cost-centers/:id", async (req, res) => {
   return res.json({ ok: true });
 });
 
-// ============ Journal Entries ============
+// ---- Journal Entries ----
 router.get("/entries", async (req, res) => {
   const scope = resolveCompanyScope(req);
   const range = parseDateRange(req);
@@ -1057,7 +1057,7 @@ router.get("/entry-lines", async (req, res) => {
   );
 });
 
-// ============ Ledger reconciliation ===========================================
+// ---- Ledger reconciliation ----
 //
 // This flow reconciles posted ledger lines. Sport Center payments are sourced
 // from sport_payments only; accounting_payments rows with source_type
@@ -1446,7 +1446,7 @@ router.post("/reconciliation/auto-match", async (req, res) => {
   }
 });
 
-// ============ Payments & Receipts ============
+// ---- Payments & Receipts ----
 function serializePayment(p: typeof accountingPaymentsTable.$inferSelect) {
   return {
     ...p,
@@ -1958,7 +1958,7 @@ router.post("/payments", async (req, res) => {
   }
 });
 
-// ============ Partner Balances ============
+// ---- Partner Balances ----
 router.get("/partner-balances", async (_req, res) => {
   // Document-level query: each open invoice/bill is a separate entry.
   // Uses grandTotal - amountPaid so settled docs naturally disappear
@@ -2342,7 +2342,7 @@ router.post("/historical-duplicate-reversal", async (req, res) => {
   }
 });
 
-// ============ Penerimaan & Pengeluaran Lain (Other Transactions) ==================
+// ---- Penerimaan & Pengeluaran Lain (Other Transactions) ----
 
 router.get("/other-transactions/monthly-summary", async (req, res) => {
   const companyId = resolveCompanyId(req);
@@ -2540,7 +2540,7 @@ router.post("/other-transactions/:id/void", async (req, res) => {
   }
 });
 
-// ============ Journal Entry Locking (Reverse / Reset-Draft / Cancel) ============
+// ---- Journal Entry Locking (Reverse / Reset-Draft / Cancel) ----
 
 /** POST /accounting/entries/:id/reverse — buat jurnal pembalik untuk entry yang sudah diposting */
 router.post("/entries/:id/reverse", async (req, res) => {
@@ -2608,7 +2608,7 @@ router.post("/entries/:id/reverse", async (req, res) => {
         description: desc,
         source: "reversal" as "manual",
         sourceId: entry.id,
-        companyId: entry.companyId ?? companyId,
+        companyId,
         lines: reversalLines,
       },
       journal.code,
@@ -2816,7 +2816,7 @@ router.post("/entries/bulk-lock", async (req, res) => {
   return res.json({ ok: true, lockedCount: count, companyId: targetCid, periodBefore: periodBefore ?? null });
 });
 
-// ============ Settings ============
+// ---- Settings ----
 type RevenueMappingInput = {
   moduleKey?: unknown;
   serviceKey?: unknown;
@@ -3087,7 +3087,7 @@ router.patch("/settings", async (req, res) => {
   return res.json(serializeSettings(updated!));
 });
 
-// ============ Reports ============
+// ---- Reports ----
 async function buildLedgerWindow(
   from: Date | null,
   to: Date | null,
@@ -3496,7 +3496,7 @@ router.get("/reports/balance-sheet", async (req, res) => {
   });
 });
 
-// ============ Cash Flow Report ============
+// ---- Cash Flow Report ----
 
 /**
  * GET /accounting/reports/cash-flow
@@ -3599,7 +3599,7 @@ router.get("/reports/cash-flow", async (req, res) => {
   });
 });
 
-// ============ Freight Profitability Report ============
+// ---- Freight Profitability Report ----
 
 /**
  * GET /accounting/reports/freight-profitability
@@ -3717,7 +3717,7 @@ router.get("/reports/freight-profitability", async (req, res) => {
   });
 });
 
-// ============ Holding / Consolidated View ============
+// ---- Holding / Consolidated View ----
 
 /** GET /accounting/holding/groups — daftar holding group beserta member companies */
 router.get("/holding/groups", async (_req, res) => {
