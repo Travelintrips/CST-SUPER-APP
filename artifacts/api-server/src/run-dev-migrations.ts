@@ -117,7 +117,8 @@ import { runFreightDocVerifyMigration } from "./routes/freightDocVerify.js";
 import { runLogisticsRatesMigration } from "./lib/logisticsRatesMigration.js";
 import { runProductVolumeCbmMigration } from "./routes/ecommerce.js";
 import { runProductMediaMigration } from "./lib/productMediaMigration.js";
-import { runAdvanceMigration } from "./routes/advances.js";
+import { runAdvanceMigration, runAdvancePayrollAllocationMigration } from "./routes/advances.js";
+import { runPayrollPostingClaimMigration } from "./routes/payroll.js";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration.js";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
 import { syncDevCoaToFixture } from "./lib/coaDevSync.js";
@@ -266,6 +267,8 @@ async function main() {
   await runSafe("productVolumeCbm", runProductVolumeCbmMigration);
   await runSafe("productMedia", runProductMediaMigration);
   await runSafe("advance", runAdvanceMigration);
+  await runSafe("advancePayrollAllocation", runAdvancePayrollAllocationMigration);
+  await runSafe("payrollPostingClaim", runPayrollPostingClaimMigration);
   await runSafe("coaGovernance", runCoaGovernanceMigration);
   await runSafe("coaProposal", runCoaProposalMigration);
   await runSafe("freightAudit", runFreightAuditMigration);

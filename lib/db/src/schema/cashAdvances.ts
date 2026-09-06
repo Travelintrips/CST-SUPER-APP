@@ -24,6 +24,7 @@ export const cashAdvancesTable = pgTable("cash_advances", {
   ),
   vendorId: integer("vendor_id"),
   userId: text("user_id"),
+  employeeId: integer("employee_id"),
   entryId: integer("entry_id"),
   createdById: text("created_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

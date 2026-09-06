@@ -2,14 +2,15 @@
  * Payroll — Cash Advance & Payroll Accounting Automation.
  *
  * Tables reused as-is: employees, payroll_runs, payroll_items (pre-existing).
- * Kasbon (cash_advances) has no employee_id FK — matched to employees at
- * calculate-time by normalized full name (party_name vs first_name+last_name).
+ * Employee-linked advances use employee_id first; normalized party_name matching
+ * remains only as a compatibility fallback for legacy rows.
  * All journal postings go through PayrollJournalService — never postEntry() directly.
  */
 import { Router } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import {
   db, cashAdvancesTable, cashAdvanceRepaymentsTable, employeesTable, payrollRunsTable, payrollItemsTable,
+  payrollCashAdvanceAllocationsTable,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
@@ -18,11 +19,64 @@ import {
   PayrollJournalService, resolvePayrollAccountMapping,
 } from "../lib/payroll/PayrollJournalService.js";
 import { AccountingConfigError } from "../lib/advance/AdvanceErrors.js";
-import { deriveStatusAfterPayment } from "../lib/advance/AdvanceStateMachine.js";
+import { deriveStatusAfterPayment, mapToLegacyStatus } from "../lib/advance/AdvanceStateMachine.js";
 
 const router = Router();
 
 const MAPPING_ERROR = "Accounting Mapping belum lengkap. Lengkapi pemetaan akun payroll di Pengaturan Akuntansi (Salary Expense, Allowance Expense, Salary Payable, Tax Payable, BPJS Payable).";
+const PAYROLL_CLAIM_TIMEOUT_MINUTES = 15;
+
+export async function runPayrollPostingClaimMigration(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE payroll_runs
+    ADD COLUMN IF NOT EXISTS posting_claimed_at TIMESTAMP
+  `);
+}
+
+type PayrollPostingPhase = "approval" | "payment";
+
+/**
+ * A process can die after claiming a run but before persisting the entry id.
+ * The accounting hub is idempotent by (source, source_id), so a stale claim
+ * can be reopened safely after checking whether that journal already exists.
+ */
+export async function recoverStalePayrollClaim(
+  companyId: number,
+  runId: number,
+  phase: PayrollPostingPhase,
+): Promise<void> {
+  const status = phase === "approval" ? "calculated" : "approved";
+  const source = phase === "approval" ? "payroll" : "hrd_salary_payment";
+  const staleMessage = phase === "approval"
+    ? "Payroll approval claim expired; retry will reuse any existing accrual journal."
+    : "Payroll payment claim expired; retry will reuse any existing payment journal.";
+
+  await db.execute(sql`
+    UPDATE payroll_runs
+    SET posting_status = 'error',
+        posting_error = CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM accounting_entries ae
+            WHERE ae.company_id = ${companyId}
+              AND ae.source = ${source}
+              AND ae.source_id = ${runId}
+          )
+          THEN ${`${staleMessage} Existing journal detected.`}
+          ELSE ${staleMessage}
+        END,
+        posting_claimed_at = NULL
+    WHERE id = ${runId}
+      AND company_id = ${companyId}
+      AND status = ${status}
+      AND posting_status = 'processing'
+      AND posting_claimed_at IS NOT NULL
+      AND posting_claimed_at < NOW() - (${PAYROLL_CLAIM_TIMEOUT_MINUTES} * INTERVAL '1 minute')
+      AND ${phase === "approval"
+        ? sql`accounting_entry_id IS NULL`
+        : sql`payment_entry_id IS NULL`}
+  `);
+}
 
 function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -150,7 +204,7 @@ router.patch("/runs/:id/items/:itemId", async (req, res) => {
   res.json({ item: updated });
 });
 
-// ── POST /api/payroll/runs/:id/calculate — match outstanding kasbon per employee ─
+// ── POST /api/payroll/runs/:id/calculate — allocate outstanding kasbon FIFO ────
 router.post("/runs/:id/calculate", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const companyId = resolveCompanyId(req);
@@ -168,8 +222,7 @@ router.post("/runs/:id/calculate", async (req, res) => {
     .leftJoin(employeesTable, eq(payrollItemsTable.employeeId, employeesTable.id))
     .where(eq(payrollItemsTable.runId, runId));
 
-  // Bug fix: sertakan kasbon lifecycle baru (outstanding/partially_settled/disbursed)
-  // agar tidak terlewat saat calculate
+  // Sertakan status legacy dan canonical agar data lama tetap terbaca.
   const outstanding = await db.select().from(cashAdvancesTable)
     .where(and(
       eq(cashAdvancesTable.companyId, companyId),
@@ -177,42 +230,115 @@ router.post("/runs/:id/calculate", async (req, res) => {
         OR lifecycle_status IN ('outstanding', 'partially_settled', 'disbursed'))`,
     ));
 
-  const results = [];
-  for (const { item, employee } of items) {
-    if (!employee) { results.push({ itemId: item.id, matched: false }); continue; }
-    const fullName = normalizeName(`${employee.firstName} ${employee.lastName}`);
-    const adv = outstanding.find((a) => normalizeName(a.partyName) === fullName && n(a.remainingAmount) > 0);
-
-    const gross = n(item.baseSalary) + n(item.allowance);
-    const nonKasbonDeductions = n(item.bpjsJhtEmployee) + n(item.bpjsKesEmployee) + n(item.pph21) + n(item.otherDeductions);
-    const payCapacity = Math.max(0, gross - nonKasbonDeductions);
-
-    let deduction = 0;
-    let cashAdvanceId: number | null = null;
-    let kasbonBalanceAfter = 0;
-    if (adv) {
-      const remaining = n(adv.remainingAmount);
-      const planned = adv.repaymentMethod === "installment" && adv.installmentAmount != null
-        ? Number(adv.installmentAmount)
-        : remaining; // one_time: pay off in full this run
-      deduction = Math.min(planned, remaining, payCapacity);
-      cashAdvanceId = adv.id;
-      kasbonBalanceAfter = remaining - deduction;
-    }
-
-    const totalDeductions = nonKasbonDeductions + deduction;
-    const netSalary = gross - totalDeductions;
-
-    await db.update(payrollItemsTable).set({
-      kasbonDeduction: String(deduction),
-      cashAdvanceId,
-      totalDeductions: String(totalDeductions),
-      netSalary: String(netSalary),
-      kasbonBalanceAfter: String(kasbonBalanceAfter),
-    }).where(eq(payrollItemsTable.id, item.id));
-
-    results.push({ itemId: item.id, matched: !!adv, deduction, cashAdvanceId });
+  const schedules = outstanding.length
+    ? await db.execute<{
+        id: number; advance_id: number; installment_number: number; amount: string; status: string;
+      }>(sql`
+        SELECT id, advance_id, installment_number, amount, status
+        FROM cash_advance_installment_schedules
+        WHERE advance_id IN ${outstanding.map((a) => a.id)}
+          AND status IN ('pending', 'overdue')
+        ORDER BY advance_id, installment_number
+      `).then((r) => r.rows)
+    : [];
+  const schedulesByAdvance = new Map<number, typeof schedules>();
+  for (const schedule of schedules) {
+    const list = schedulesByAdvance.get(schedule.advance_id) ?? [];
+    list.push(schedule);
+    schedulesByAdvance.set(schedule.advance_id, list);
   }
+
+  const results: Array<{
+    itemId: number; matched: boolean; deduction: number; cashAdvanceId: number | null;
+    allocations: Array<{ cashAdvanceId: number; amount: number; installmentScheduleId: number | null }>;
+  }> = [];
+
+  // Recalculation is authoritative for a draft/calculated run. Remove the
+  // previous allocation snapshot before writing the new one.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      DELETE FROM payroll_cash_advance_allocations
+      WHERE payroll_item_id IN (SELECT id FROM payroll_items WHERE run_id = ${runId})
+    `);
+
+    for (const { item, employee } of items) {
+      const gross = n(item.baseSalary) + n(item.allowance);
+      const nonKasbonDeductions = n(item.bpjsJhtEmployee) + n(item.bpjsKesEmployee) + n(item.otherDeductions) + n(item.pph21);
+      let capacity = Math.max(0, gross - nonKasbonDeductions);
+      const allocations: Array<{ cashAdvanceId: number; amount: number; installmentScheduleId: number | null }> = [];
+
+      if (employee && capacity > 0) {
+        const fullName = normalizeName(`${employee.firstName} ${employee.lastName}`);
+        // Prefer the durable employee_id link. Name matching is retained only
+        // for historical rows that predate the relational link.
+        const direct = outstanding.filter((a) => a.employeeId === employee.id);
+        const candidates = (direct.length
+          ? direct
+          : outstanding.filter((a) => !a.employeeId && normalizeName(a.partyName) === fullName))
+          .filter((a) => n(a.remainingAmount) > 0)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.id - b.id);
+
+        for (const adv of candidates) {
+          if (capacity <= 0) break;
+          const remaining = n(adv.remainingAmount);
+          const schedule = schedulesByAdvance.get(adv.id)?.[0] ?? null;
+          const planned = schedule
+            ? n(schedule.amount)
+            : adv.repaymentMethod === "installment" && adv.installmentAmount != null
+              ? Number(adv.installmentAmount)
+              : remaining;
+          const amount = Math.min(planned, remaining, capacity);
+          if (amount <= 0) continue;
+          allocations.push({
+            cashAdvanceId: adv.id,
+            amount,
+            installmentScheduleId: schedule?.id ?? null,
+          });
+          capacity -= amount;
+        }
+      }
+
+      const deduction = allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+      const totalDeductions = nonKasbonDeductions + deduction;
+      const netSalary = gross - totalDeductions;
+      const allocatedIds = new Set(allocations.map((allocation) => allocation.cashAdvanceId));
+      const balanceAfter = outstanding
+        .filter((advance) => allocatedIds.has(advance.id))
+        .reduce((sum, advance) => {
+          const allocated = allocations
+            .filter((allocation) => allocation.cashAdvanceId === advance.id)
+            .reduce((inner, allocation) => inner + allocation.amount, 0);
+          return sum + Math.max(0, n(advance.remainingAmount) - allocated);
+        }, 0);
+
+      await tx.update(payrollItemsTable).set({
+        kasbonDeduction: String(deduction),
+        cashAdvanceId: allocations[0]?.cashAdvanceId ?? null,
+        totalDeductions: String(totalDeductions),
+        netSalary: String(netSalary),
+        kasbonBalanceAfter: String(balanceAfter),
+      }).where(eq(payrollItemsTable.id, item.id));
+
+      if (allocations.length) {
+        await tx.insert(payrollCashAdvanceAllocationsTable).values(
+          allocations.map((allocation) => ({
+            payrollItemId: item.id,
+            cashAdvanceId: allocation.cashAdvanceId,
+            installmentScheduleId: allocation.installmentScheduleId,
+            amount: String(allocation.amount),
+          })),
+        );
+      }
+
+      results.push({
+        itemId: item.id,
+        matched: allocations.length > 0,
+        deduction,
+        cashAdvanceId: allocations[0]?.cashAdvanceId ?? null,
+        allocations,
+      });
+    }
+  });
 
   await db.update(payrollRunsTable).set({ status: "calculated" }).where(eq(payrollRunsTable.id, runId));
   auditFromReq(req, { action: "payroll_run_calculated", module: "payroll", referenceId: String(runId), newData: { results } });
@@ -225,6 +351,7 @@ router.post("/runs/:id/approve", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const companyId = resolveCompanyId(req);
   const runId = Number(req.params.id);
+  await recoverStalePayrollClaim(companyId, runId, "approval");
   const [run] = await db.select().from(payrollRunsTable)
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
   if (!run) { res.status(404).json({ message: "Payroll run tidak ditemukan" }); return; }
@@ -242,19 +369,87 @@ router.post("/runs/:id/approve", async (req, res) => {
   const totalBpjs = items.reduce((s, i) => s + n(i.bpjsJhtEmployee) + n(i.bpjsKesEmployee), 0);
   const totalSalaryPayable = items.reduce((s, i) => s + n(i.netSalary), 0);
 
-  const kasbonItems = items.filter((i) => n(i.kasbonDeduction) > 0 && i.cashAdvanceId);
-  const advanceIds = [...new Set(kasbonItems.map((i) => i.cashAdvanceId!))];
+  const allocationRows = await db.execute<{
+    payroll_item_id: number;
+    cash_advance_id: number;
+    installment_schedule_id: number | null;
+    amount: string;
+  }>(sql`
+    SELECT a.payroll_item_id, a.cash_advance_id, a.installment_schedule_id, a.amount
+    FROM payroll_cash_advance_allocations a
+    JOIN payroll_items pi ON pi.id = a.payroll_item_id
+    JOIN cash_advances ca ON ca.id = a.cash_advance_id AND ca.company_id = ${companyId}
+    WHERE pi.run_id = ${runId}
+    ORDER BY a.payroll_item_id, a.id
+  `).then((r) => r.rows);
+
+  // Compatibility for runs calculated before the allocation ledger existed.
+  const allocationsByItem = new Map<number, typeof allocationRows>();
+  for (const allocation of allocationRows) {
+    const list = allocationsByItem.get(allocation.payroll_item_id) ?? [];
+    list.push(allocation);
+    allocationsByItem.set(allocation.payroll_item_id, list);
+  }
+  for (const item of items) {
+    if (n(item.kasbonDeduction) > 0 && item.cashAdvanceId && !allocationsByItem.has(item.id)) {
+      allocationsByItem.set(item.id, [{
+        payroll_item_id: item.id,
+        cash_advance_id: item.cashAdvanceId,
+        installment_schedule_id: null,
+        amount: String(item.kasbonDeduction),
+      }]);
+    }
+  }
+
+  const allAllocations = [...allocationsByItem.values()].flat();
+  const advanceIds = [...new Set(allAllocations.map((allocation) => allocation.cash_advance_id))];
   const advances = advanceIds.length
-    ? await db.select().from(cashAdvancesTable).where(sql`${cashAdvancesTable.id} IN ${advanceIds}`)
+    ? await db.select().from(cashAdvancesTable).where(sql`
+        ${cashAdvancesTable.companyId} = ${companyId}
+        AND ${cashAdvancesTable.id} IN ${advanceIds}
+      `)
     : [];
+  if (allAllocations.length && advances.length !== advanceIds.length) {
+    res.status(400).json({ message: "Alokasi kasbon payroll mengacu pada kasbon yang tidak ditemukan dalam perusahaan aktif.", code: "INVALID_CASH_ADVANCE_ALLOCATION" });
+    return;
+  }
   const advanceById = new Map(advances.map((a) => [a.id, a]));
+  const invalidAllocation = allAllocations.find((allocation) => {
+    const advance = advanceById.get(allocation.cash_advance_id);
+    return !advance || n(allocation.amount) <= 0 || n(allocation.amount) > n(advance.remainingAmount) + 0.01;
+  });
+  if (invalidAllocation) {
+    res.status(409).json({ message: "Potongan kasbon melebihi saldo outstanding saat approval payroll.", code: "CASH_ADVANCE_BALANCE_CHANGED" });
+    return;
+  }
   const kasbonByAccountMap = new Map<number, number>();
-  for (const i of kasbonItems) {
-    const adv = advanceById.get(i.cashAdvanceId!);
+  for (const allocation of allAllocations) {
+    const adv = advanceById.get(allocation.cash_advance_id);
     if (!adv?.receivableAccountId) continue;
-    kasbonByAccountMap.set(adv.receivableAccountId, (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(i.kasbonDeduction));
+    kasbonByAccountMap.set(
+      adv.receivableAccountId,
+      (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(allocation.amount),
+    );
   }
   const kasbonByAccount = [...kasbonByAccountMap.entries()].map(([accountId, amount]) => ({ accountId, amount }));
+
+  // Claim only after all read-only validation has passed; a rejected request
+  // must not leave the run stuck in a transient processing state.
+  const [approvalClaim] = await db.update(payrollRunsTable).set({
+    postingStatus: "processing",
+    postingError: null,
+    postingClaimedAt: new Date(),
+  }).where(and(
+    eq(payrollRunsTable.id, runId),
+    eq(payrollRunsTable.companyId, companyId),
+    eq(payrollRunsTable.status, "calculated"),
+    sql`${payrollRunsTable.accountingEntryId} IS NULL`,
+    sql`${payrollRunsTable.postingStatus} <> 'processing'`,
+  )).returning({ id: payrollRunsTable.id });
+  if (!approvalClaim) {
+    res.status(409).json({ message: "Payroll run sedang diproses atau sudah memiliki jurnal accrual.", code: "PAYROLL_APPROVAL_IN_PROGRESS" });
+    return;
+  }
 
   const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
 
@@ -266,7 +461,8 @@ router.post("/runs/:id/approve", async (req, res) => {
 
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
-        status: "approved", accountingEntryId: entryId, approvedAt: new Date(), postingStatus: "posted", postingError: null,
+        status: "approved", accountingEntryId: entryId, approvedAt: new Date(),
+        postingStatus: "posted", postingError: null, postingClaimedAt: null,
       }).where(eq(payrollRunsTable.id, runId));
 
       const now = new Date();
@@ -274,23 +470,28 @@ router.post("/runs/:id/approve", async (req, res) => {
       // agar cocok dengan tanggal journal entry dan tidak mismatch di rekonsiliasi
       const repaymentDate = now.toISOString().slice(0, 10);
 
-      for (const i of kasbonItems) {
-        const adv = advanceById.get(i.cashAdvanceId!);
-        if (!adv) continue;
-        const deduction = n(i.kasbonDeduction);
-        const newPaid = n(adv.paidAmount) + deduction;
-        const newSettled = n(adv.settledAmount) + deduction;
-        const newRemaining = Math.max(0, n(adv.remainingAmount) - deduction);
+       for (const allocation of allAllocations) {
+         const [lockedAdvance] = await tx.execute<any>(sql`
+           SELECT id, paid_amount, settled_amount, remaining_amount, repaid_at
+           FROM cash_advances
+           WHERE id = ${allocation.cash_advance_id} AND company_id = ${companyId}
+           FOR UPDATE
+         `).then((r) => r.rows);
+         if (!lockedAdvance) throw new Error("Kasbon payroll tidak ditemukan dalam company scope.");
+         const deduction = n(allocation.amount);
+         const currentRemaining = n(lockedAdvance.remaining_amount);
+         if (deduction > currentRemaining + 0.01) {
+           throw new Error("Saldo kasbon berubah sebelum approval payroll.");
+         }
+         const newPaid = n(lockedAdvance.paid_amount) + deduction;
+         const newSettled = n(lockedAdvance.settled_amount) + deduction;
+         const newRemaining = Math.max(0, currentRemaining - deduction);
 
         // Pakai threshold yang sama dengan AdvanceStateMachine.deriveStatusAfterPayment (<= 0.005)
         const newLifecycleStatus = deriveStatusAfterPayment(newRemaining);
         const isFullyRepaid = newLifecycleStatus === "settled";
-        // Legacy status (backward compat dengan konsumer lama)
-        const newStatus = isFullyRepaid ? "repaid" : "partial";
+         const newStatus = mapToLegacyStatus(newLifecycleStatus);
 
-        // Perbaikan 1: lifecycle_status canonical + repayment_journal_id = entryId sekarang
-        // (bukan COALESCE — tiap payroll run bisa punya entryId berbeda; consumer harus
-        //  melihat cash_advance_repayments untuk riwayat lengkap)
         await tx.execute(sql`
           UPDATE cash_advances SET
             paid_amount          = ${String(newPaid)},
@@ -299,20 +500,38 @@ router.post("/runs/:id/approve", async (req, res) => {
             status               = ${newStatus},
             lifecycle_status     = ${newLifecycleStatus},
             repayment_journal_id = ${entryId},
-            repaid_at            = ${isFullyRepaid ? now : (adv.repaidAt ?? null)},
+             repaid_at            = ${isFullyRepaid ? now : (lockedAdvance.repaid_at ?? null)},
             updated_at           = ${now}
-          WHERE id = ${adv.id}
+           WHERE id = ${allocation.cash_advance_id} AND company_id = ${companyId}
         `);
 
-        // Perbaikan 2: catat repayment di cash_advance_repayments — riwayat per-kasbon
-        await tx.insert(cashAdvanceRepaymentsTable).values({
-          advanceId:     adv.id,
+         const repayment = await tx.insert(cashAdvanceRepaymentsTable).values({
+           advanceId:     allocation.cash_advance_id,
           amount:        String(deduction),
           paymentMethod: "payroll",
           date:          repaymentDate,
           notes:         `Potongan Payroll ${period}`,
           entryId,
-        });
+         }).returning({ id: cashAdvanceRepaymentsTable.id });
+
+         if (allocation.installment_schedule_id) {
+           const scheduleUpdate = await tx.execute(sql`
+             UPDATE cash_advance_installment_schedules
+             SET status = 'paid',
+                 repayment_id = ${repayment[0]?.id ?? null},
+                 paid_date = ${repaymentDate},
+                 paid_amount = ${deduction},
+                 accounting_entry_id = ${entryId},
+                 payroll_item_id = ${allocation.payroll_item_id},
+                 updated_at = NOW()
+             WHERE id = ${allocation.installment_schedule_id}
+               AND advance_id = ${allocation.cash_advance_id}
+               AND status IN ('pending', 'overdue')
+           `);
+           if ((scheduleUpdate.rowCount ?? 0) !== 1) {
+             throw new Error("Jadwal cicilan kasbon sudah berubah sebelum approval payroll.");
+           }
+         }
       }
     });
 
@@ -321,7 +540,9 @@ router.post("/runs/:id/approve", async (req, res) => {
     res.json({ entryId, ...data });
   } catch (err) {
     const message = err instanceof AccountingConfigError ? err.message : "Gagal memposting jurnal payroll.";
-    await db.update(payrollRunsTable).set({ postingStatus: "error", postingError: message }).where(eq(payrollRunsTable.id, runId));
+    await db.update(payrollRunsTable).set({
+      postingStatus: "error", postingError: message, postingClaimedAt: null,
+    }).where(eq(payrollRunsTable.id, runId));
     res.status(400).json({ message });
   }
 });
@@ -331,6 +552,7 @@ router.post("/runs/:id/pay", async (req, res) => {
   if (!(await requireAdmin(req, res))) return;
   const companyId = resolveCompanyId(req);
   const runId = Number(req.params.id);
+  await recoverStalePayrollClaim(companyId, runId, "payment");
   const [run] = await db.select().from(payrollRunsTable)
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
   if (!run) { res.status(404).json({ message: "Payroll run tidak ditemukan" }); return; }
@@ -347,6 +569,22 @@ router.post("/runs/:id/pay", async (req, res) => {
   if (!cashBankAccountId) { res.status(400).json({ message: "Akun Kas/Bank belum dikonfigurasi." }); return; }
 
   const items = await db.select().from(payrollItemsTable).where(eq(payrollItemsTable.runId, runId));
+  if (!items.length) { res.status(400).json({ message: "Payroll run tidak memiliki item." }); return; }
+  const [paymentClaim] = await db.update(payrollRunsTable).set({
+    postingStatus: "processing",
+    postingError: null,
+    postingClaimedAt: new Date(),
+  }).where(and(
+    eq(payrollRunsTable.id, runId),
+    eq(payrollRunsTable.companyId, companyId),
+    eq(payrollRunsTable.status, "approved"),
+    sql`${payrollRunsTable.paymentEntryId} IS NULL`,
+    sql`${payrollRunsTable.postingStatus} <> 'processing'`,
+  )).returning({ id: payrollRunsTable.id });
+  if (!paymentClaim) {
+    res.status(409).json({ message: "Payroll run sedang dibayar atau sudah memiliki jurnal pembayaran.", code: "PAYROLL_PAYMENT_IN_PROGRESS" });
+    return;
+  }
   const amount = items.reduce((s, i) => s + n(i.netSalary), 0);
   const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
 
@@ -359,9 +597,25 @@ router.post("/runs/:id/pay", async (req, res) => {
     const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
-        status: "paid", paymentEntryId: entryId, postedAt: new Date(), postingStatus: "posted", postingError: null, paymentMethod,
+        status: "paid", paymentEntryId: entryId, postedAt: new Date(),
+        postingStatus: "posted", postingError: null, postingClaimedAt: null, paymentMethod,
       }).where(eq(payrollRunsTable.id, runId));
       await tx.update(payrollItemsTable).set({ isPaid: true, paidAt: new Date(), paidBy }).where(eq(payrollItemsTable.runId, runId));
+       // Keep the per-employee salary history in the existing salary_payments
+       // table. The NOT EXISTS guard makes a retry after a partial request
+       // idempotent for each payroll item.
+       await tx.execute(sql`
+         INSERT INTO salary_payments
+           (payroll_item_id, amount, payment_method, paid_at, paid_by, notes)
+         SELECT pi.id, pi.net_salary, ${paymentMethod}, NOW(), ${paidBy},
+                ${`Payroll ${period}`}
+         FROM payroll_items pi
+         WHERE pi.run_id = ${runId}
+           AND NOT EXISTS (
+             SELECT 1 FROM salary_payments sp
+             WHERE sp.payroll_item_id = pi.id
+           )
+       `);
     });
 
     auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, amount } });
@@ -369,7 +623,9 @@ router.post("/runs/:id/pay", async (req, res) => {
     res.json({ entryId, ...data });
   } catch (err) {
     const message = err instanceof AccountingConfigError ? err.message : "Gagal memposting jurnal pembayaran payroll.";
-    await db.update(payrollRunsTable).set({ postingStatus: "error", postingError: message }).where(eq(payrollRunsTable.id, runId));
+    await db.update(payrollRunsTable).set({
+      postingStatus: "error", postingError: message, postingClaimedAt: null,
+    }).where(eq(payrollRunsTable.id, runId));
     res.status(400).json({ message });
   }
 });

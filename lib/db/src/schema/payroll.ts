@@ -44,6 +44,7 @@ export const payrollRunsTable = pgTable("payroll_runs", {
   paymentEntryId: integer("payment_entry_id"),
   postingStatus: text("posting_status").notNull().default("pending"), // 'pending'|'posted'|'error'
   postingError: text("posting_error"),
+  postingClaimedAt: timestamp("posting_claimed_at"),
   paymentMethod: text("payment_method").notNull().default("bank"), // 'cash'|'bank'
 }, (t) => [
   index("payroll_runs_company_idx2").on(t.companyId),
@@ -79,3 +80,36 @@ export const payrollItemsTable = pgTable("payroll_items", {
 export type Employee = typeof employeesTable.$inferSelect;
 export type PayrollRun = typeof payrollRunsTable.$inferSelect;
 export type PayrollItem = typeof payrollItemsTable.$inferSelect;
+
+/**
+ * One payroll item may repay more than one employee advance.  The legacy
+ * payroll_items.cash_advance_id column remains as a compatibility pointer to
+ * the first FIFO allocation; this table is the canonical allocation ledger.
+ */
+export const payrollCashAdvanceAllocationsTable = pgTable("payroll_cash_advance_allocations", {
+  id: serial("id").primaryKey(),
+  payrollItemId: integer("payroll_item_id").notNull(),
+  cashAdvanceId: integer("cash_advance_id").notNull(),
+  installmentScheduleId: integer("installment_schedule_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("payroll_cash_adv_alloc_item_idx").on(t.payrollItemId),
+  index("payroll_cash_adv_alloc_advance_idx").on(t.cashAdvanceId),
+]);
+
+export const salaryPaymentsTable = pgTable("salary_payments", {
+  id: serial("id").primaryKey(),
+  payrollItemId: integer("payroll_item_id").notNull(),
+  amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+  paymentMethod: text("payment_method").notNull(),
+  paidAt: timestamp("paid_at").notNull(),
+  paidBy: text("paid_by"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  bankAccountName: text("bank_account_name"),
+  bankAccountCode: text("bank_account_code"),
+});
+
+export type PayrollCashAdvanceAllocation = typeof payrollCashAdvanceAllocationsTable.$inferSelect;
+export type SalaryPayment = typeof salaryPaymentsTable.$inferSelect;

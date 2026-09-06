@@ -6,8 +6,7 @@
 --
 -- Existing tables reused as-is (no rename): employees, payroll_runs, payroll_items.
 -- Kasbon/talangan lives in cash_advances (party_name is free text; matched to
--- employees.first_name+last_name at runtime — there is no employee_id FK on
--- cash_advances by design, to avoid a data-migration of historical records).
+-- employees.first_name+last_name only for legacy rows; new rows use employee_id.
 
 -- ── 1. cash_advances: payroll deduction plan + posting tracking columns ─────
 ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS repayment_method TEXT NOT NULL DEFAULT 'one_time';
@@ -16,6 +15,7 @@ ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS installment_amount NUMERIC(14
 ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS posting_status TEXT NOT NULL DEFAULT 'posted';
 ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS posting_error TEXT;
 ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS accounting_payment_id INTEGER;
+ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS employee_id INTEGER;
 
 -- ── 2. accounting_settings: payroll account mapping ──────────────────────────
 ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL;
@@ -28,6 +28,7 @@ ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS bpjs_payable_account_id
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS payment_entry_id INTEGER;
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS posting_status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS posting_error TEXT;
+ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS posting_claimed_at TIMESTAMP;
 ALTER TABLE payroll_runs ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'bank';
 
 -- ── 4. payroll_items: link back to the cash_advances row being deducted ──────
@@ -35,4 +36,18 @@ ALTER TABLE payroll_items ADD COLUMN IF NOT EXISTS cash_advance_id INTEGER;
 CREATE INDEX IF NOT EXISTS payroll_items_cash_advance_idx ON payroll_items(cash_advance_id);
 CREATE INDEX IF NOT EXISTS payroll_items_run_idx2 ON payroll_items(run_id);
 CREATE INDEX IF NOT EXISTS payroll_items_employee_idx ON payroll_items(employee_id);
+CREATE INDEX IF NOT EXISTS cash_advances_employee_idx ON cash_advances(employee_id);
+
+-- A payslip can settle multiple employee advances in FIFO order. The legacy
+-- payroll_items.cash_advance_id column remains a compatibility pointer.
+CREATE TABLE IF NOT EXISTS payroll_cash_advance_allocations (
+  id                      SERIAL PRIMARY KEY,
+  payroll_item_id         INTEGER NOT NULL REFERENCES payroll_items(id) ON DELETE CASCADE,
+  cash_advance_id         INTEGER NOT NULL REFERENCES cash_advances(id) ON DELETE RESTRICT,
+  installment_schedule_id INTEGER,
+  amount                  NUMERIC(12,2) NOT NULL,
+  created_at              TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_item_idx ON payroll_cash_advance_allocations(payroll_item_id);
+CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_advance_idx ON payroll_cash_advance_allocations(cash_advance_id);
 CREATE INDEX IF NOT EXISTS employees_company_idx ON employees(company_id);

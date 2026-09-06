@@ -207,7 +207,8 @@ import { runKasBankMigration } from "./lib/kasBankMigration.js";
 import { runCashBankMigration } from "./lib/cashBankMigration.js";
 import { runFinanceCoreMigration } from "./lib/financeCoreMigration.js";
 import { runBankReceiptMigration } from "./lib/bankReceiptMigration.js";
-import { runAdvanceMigration } from "./routes/advances.js";
+import { runAdvanceMigration, runAdvancePayrollAllocationMigration } from "./routes/advances.js";
+import { runPayrollPostingClaimMigration } from "./routes/payroll.js";
 import { runAllocationMigration } from "./lib/allocationMigration.js";
 import { runTreasuryMigration } from "./lib/treasury/treasuryMigration.js";
 import { runBankMutationAllocationLineageMigration } from "./lib/reconciliation/bankMutationAllocationLineageMigration.js";
@@ -2182,6 +2183,8 @@ async function startServer() {
     .then(() => runWithRetry("Finance core migration", runFinanceCoreMigration))
     .then(() => runWithRetry("Bank receipt migration", runBankReceiptMigration))
     .then(() => runWithRetry("Advance Management migration", runAdvanceMigration))
+    .then(() => runWithRetry("Advance payroll allocation migration", runAdvancePayrollAllocationMigration))
+    .then(() => runWithRetry("Payroll posting claim migration", runPayrollPostingClaimMigration))
     .then(() => runWithRetry("Allocation Engine migration", runAllocationMigration))
     .then(() => runWithRetry("Treasury Batch 4 migration", runTreasuryMigration))
     .then(() => runWithRetry("Bank mutation allocation lineage migration", runBankMutationAllocationLineageMigration))

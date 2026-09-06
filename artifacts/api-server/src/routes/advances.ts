@@ -100,6 +100,7 @@ export async function runAdvanceMigration(): Promise<void> {
   const newColumns: Array<[string, string]> = [
     ["advance_type",      "TEXT"],
     ["lifecycle_status",  "TEXT"],
+    ["employee_id",       "INTEGER"],
     ["counterparty_type", "TEXT"],
     ["project_id",        "INTEGER"],
     ["purpose",           "TEXT"],
@@ -362,6 +363,43 @@ export async function runAdvanceMigration(): Promise<void> {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS car_receiver_co_idx ON cash_advance_repayments(receiver_company_id)`).catch(() => {});
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS car_idempotency_idx ON cash_advance_repayments(idempotency_key) WHERE idempotency_key IS NOT NULL`).catch(() => {});
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS cash_advances_ic_ref_idx ON cash_advances(intercompany_reference) WHERE intercompany_reference IS NOT NULL`).catch(() => {});
+
+  // Payroll can allocate one payslip across multiple FIFO advances. Keep this
+  // ledger separate from the legacy one-advance pointer on payroll_items.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS payroll_cash_advance_allocations (
+      id                    SERIAL PRIMARY KEY,
+      payroll_item_id       INTEGER NOT NULL REFERENCES payroll_items(id) ON DELETE CASCADE,
+      cash_advance_id       INTEGER NOT NULL REFERENCES cash_advances(id) ON DELETE RESTRICT,
+      installment_schedule_id INTEGER,
+      amount                NUMERIC(12,2) NOT NULL,
+      created_at            TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_item_idx ON payroll_cash_advance_allocations(payroll_item_id)`).catch(() => {});
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_advance_idx ON payroll_cash_advance_allocations(cash_advance_id)`).catch(() => {});
+}
+
+/**
+ * Additive follow-up for databases where the original advance migration marker
+ * is already complete. Never rely on re-running that marker for new payroll
+ * allocation DDL.
+ */
+export async function runAdvancePayrollAllocationMigration(): Promise<void> {
+  await db.execute(sql`ALTER TABLE cash_advances ADD COLUMN IF NOT EXISTS employee_id INTEGER`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS cash_advances_employee_idx ON cash_advances(employee_id)`);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS payroll_cash_advance_allocations (
+      id                      SERIAL PRIMARY KEY,
+      payroll_item_id         INTEGER NOT NULL REFERENCES payroll_items(id) ON DELETE CASCADE,
+      cash_advance_id         INTEGER NOT NULL REFERENCES cash_advances(id) ON DELETE RESTRICT,
+      installment_schedule_id INTEGER,
+      amount                  NUMERIC(12,2) NOT NULL,
+      created_at              TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_item_idx ON payroll_cash_advance_allocations(payroll_item_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS payroll_cash_adv_alloc_advance_idx ON payroll_cash_advance_allocations(cash_advance_id)`);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1348,6 +1386,7 @@ router.post("/", async (req: Request, res) => {
         receivable_account_id, cash_bank_account_id,
         counterparty_type, vendor_id, user_id, project_id,
         department_id, division_id, purpose,
+        employee_id,
         currency, exchange_rate, source_system,
         status, created_by_id, created_at, updated_at
       ) VALUES (
@@ -1359,6 +1398,7 @@ router.post("/", async (req: Request, res) => {
         ${receivable_account_id ?? null}, ${cash_bank_account_id ?? null},
         ${counterparty_type ?? null}, ${vendor_id ?? null}, ${user_id ?? null}, ${project_id ?? null},
         ${department_id ?? null}, ${division_id ?? null}, ${purpose ?? null},
+        ${user_id ? null : (req.body.employee_id ?? null)},
         ${currency ?? "IDR"}, ${exchange_rate ?? 1}, 'advance_management',
         ${initialStatus === "pending_approval" ? "pending_approval" : "active"},
         ${(req as any).user?.id ?? null}, NOW(), NOW()
