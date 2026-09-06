@@ -556,6 +556,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       bill_number: string | null;
       supplier_id: number | null;
       supplier_name: string | null;
+      total_amount: string;
+      tax_amount: string;
       grand_total: string;
       amount_paid: string | null;
       tax_amount: string | null;
@@ -571,6 +573,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           pd.bill_number,
           pd.supplier_id,
           pd.supplier_name,
+          pd.total_amount,
+          pd.tax_amount,
           pd.grand_total,
           pd.amount_paid,
           NULL::numeric AS tax_amount,
@@ -592,6 +596,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.invoice_number AS bill_number,
           vi.supplier_id,
           vi.supplier_name,
+          vi.total_amount,
+          vi.tax_amount,
           vi.grand_total,
           vi.amount_paid,
           vi.tax_amount,
@@ -665,6 +671,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       billNumber: r.bill_number,
       supplierId: r.supplier_id,
       supplierName: r.supplier_name ?? "—",
+      subtotal: Number(r.total_amount ?? 0),
+      taxAmount: Number(r.tax_amount ?? 0),
       grandTotal: Number(r.grand_total),
       amountPaid: Number(r.amount_paid ?? 0),
       outstanding: Number(r.grand_total) - Number(r.amount_paid ?? 0),
