@@ -79,4 +79,60 @@ describe("voidApprovedJournal metadata failure", () => {
     });
     expect(result.error).toContain("LEDGER IMMUTABILITY VIOLATION");
   });
+
+  it("does not create a duplicate reversal when retrying the partial state", async () => {
+    mockExecute
+      // First attempt: original lookup, reversal lookup, original lines,
+      // then the metadata update fails after postEntry has committed.
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 10,
+          company_id: 1,
+          status: "posted",
+          void_entry_id: null,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { account_id: 101, debit: "100", credit: "0", description: "Bank" },
+          { account_id: 201, debit: "0", credit: "100", description: "Revenue" },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("LEDGER IMMUTABILITY VIOLATION"))
+      // Retry: the committed reversal is found before postEntry can run.
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 10,
+          company_id: 1,
+          status: "posted",
+          void_entry_id: null,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 20 }] });
+    mockPostEntry.mockResolvedValueOnce({ id: 20 });
+
+    const input = {
+      entryId: 10,
+      companyId: 1,
+      journalId: 7,
+      journalCode: "BANK",
+      actor: "admin@example.com",
+      reason: "test metadata failure",
+    };
+
+    const firstResult = await voidApprovedJournal(input);
+    const retryResult = await voidApprovedJournal(input);
+
+    expect(firstResult).toMatchObject({
+      ok: false,
+      voidEntryId: 20,
+      code: ORIGINAL_VOID_UPDATE_FAILED,
+    });
+    expect(retryResult).toMatchObject({
+      ok: false,
+      code: "JOURNAL_ALREADY_VOIDED",
+    });
+    expect(mockPostEntry).toHaveBeenCalledOnce();
+  });
 });

@@ -18,6 +18,8 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import {
   canonicalMutationKey,
   canonicalNormalizeDesc,
@@ -28,6 +30,11 @@ import {
   parseCSVText,
   type ParsedBankRow,
 } from "../lib/reconciliation/bankFormatParsers.js";
+
+const bankReconciliationRouteSource = readFileSync(
+  new URL("../routes/bankReconciliation.ts", import.meta.url),
+  "utf8",
+);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -937,7 +944,39 @@ describe("Double-void guard — concurrent and sequential", () => {
   });
 });
 
-// ─── 16. Failure-path tests (Phase 9) ─────────────────────────────────────────
+// ─── 16. Partial reversal endpoint contract ───────────────────────────────────
+
+describe("Void-journal partial reversal — fail-closed endpoint contract", () => {
+  const voidJournalStart = bankReconciliationRouteSource.indexOf(
+    'router.post("/:mutationId/void-journal"',
+  );
+  const reopenStart = bankReconciliationRouteSource.indexOf(
+    'router.post("/:mutationId/reopen"',
+  );
+  const voidJournalSource = bankReconciliationRouteSource.slice(voidJournalStart, reopenStart);
+
+  it("restores posted mutation state and returns failure before JOURNAL_VOIDED audit", () => {
+    const failureStart = voidJournalSource.indexOf("if (!voidResult.ok)");
+    const successAuditStart = voidJournalSource.indexOf('await auditLog(mutId, "JOURNAL_VOIDED"');
+    const failurePath = voidJournalSource.slice(failureStart, successAuditStart);
+
+    expect(voidJournalStart).toBeGreaterThanOrEqual(0);
+    expect(reopenStart).toBeGreaterThan(voidJournalStart);
+    expect(failureStart).toBeGreaterThanOrEqual(0);
+    expect(failurePath).toContain("SET status = 'posted'");
+    expect(failurePath).toContain("mutation_status: \"posted\"");
+    expect(failurePath).toContain("return res.status(partialReversal ? 409 : 400)");
+    expect(failurePath).not.toContain('auditLog(mutId, "JOURNAL_VOIDED"');
+  });
+
+  it("exposes the partial reversal code and does not hide rollback failure", () => {
+    expect(voidJournalSource).toContain("ORIGINAL_VOID_UPDATE_FAILED");
+    expect(voidJournalSource).toContain('code: "VOID_STATUS_ROLLBACK_FAILED"');
+    expect(voidJournalSource).toContain("reversal_created: Boolean(voidResult.voidEntryId)");
+  });
+});
+
+// ─── 17. Failure-path tests (Phase 9) ─────────────────────────────────────────
 //
 // Verifies that partial state is impossible: no orphan lines, no false success,
 // no duplicate journals regardless of which step in the multi-step flow fails.

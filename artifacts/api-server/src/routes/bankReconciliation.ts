@@ -63,6 +63,7 @@ import { detectDrift } from "../lib/monitoring/dataDriftDetector.js";
 import { triggerWritebackForMutation, syncOneSheetConfig } from "../lib/sheetSyncService.js";
 import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey.js";
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
+import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { extractBankProofOcr } from "../lib/bankProofOcr.js";
@@ -5948,7 +5949,8 @@ router.post("/:mutationId/post", async (req, res) => {
 // ─── POST /api/bank-reconciliation/:mutationId/void-journal ──────────────────
 // Void a POSTED reconciliation journal via reversal entry.
 // Creates a bank_reconciliation_void entry that reverses the original.
-// Mutation status → 'void'. Original journal status → 'voided'.
+// On success, mutation status → 'void' and original journal status → 'voided'.
+// Any reversal/metadata failure restores mutation status to 'posted'.
 // Only allowed when mutation.status == 'posted'.
 router.post("/:mutationId/void-journal", async (req, res) => {
   await runBankReconciliationCoreMigration();
@@ -6041,13 +6043,43 @@ router.post("/:mutationId/void-journal", async (req, res) => {
     });
 
     if (!voidResult.ok) {
-      // Compensating rollback: restore mutation status to 'posted'
-      await db.execute(sql.raw(`
-        UPDATE bank_mutations
-        SET status = 'posted', updated_at = NOW()
-        WHERE id = ${mutId} AND status = 'void'
-      `)).catch(() => {});
-      return res.status(400).json({ error: voidResult.error });
+      // A reversal can be committed before the original entry metadata is
+      // updated. This is not a successful void and must not leave the bank
+      // mutation looking voided or emit JOURNAL_VOIDED.
+      let rollbackError: unknown = null;
+      try {
+        const rollback = await db.execute(sql.raw(`
+          UPDATE bank_mutations
+          SET status = 'posted', updated_at = NOW()
+          WHERE id = ${mutId} AND status = 'void'
+        `)) as any;
+        if (Number(rollback?.rowCount ?? 0) !== 1) {
+          throw new Error(`status rollback affected ${Number(rollback?.rowCount ?? 0)} row(s)`);
+        }
+      } catch (error) {
+        rollbackError = error;
+        logger.error(
+          { err: error, mutationId: mutId, voidEntryId: voidResult.voidEntryId },
+          "[bankRecon] CRITICAL: failed to restore mutation status after void failure",
+        );
+      }
+
+      if (rollbackError) {
+        return res.status(500).json({
+          error: "Void jurnal gagal dan status mutasi tidak dapat dipastikan; perlu rekonsiliasi manual.",
+          code: "VOID_STATUS_ROLLBACK_FAILED",
+          reversal_created: Boolean(voidResult.voidEntryId),
+          mutation_status: "unknown",
+        });
+      }
+
+      const partialReversal = voidResult.code === ORIGINAL_VOID_UPDATE_FAILED;
+      return res.status(partialReversal ? 409 : 400).json({
+        error: voidResult.error,
+        ...(voidResult.code ? { code: voidResult.code } : {}),
+        reversal_created: Boolean(voidResult.voidEntryId),
+        mutation_status: "posted",
+      });
     }
 
     await auditLog(mutId, "JOURNAL_VOIDED", actor, {
