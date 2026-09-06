@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
 import { execSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
@@ -184,6 +184,20 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     const kb = (bytes / 1024).toFixed(1).padStart(7);
     console.log(`  ${file.padEnd(pad)}  ${kb} kb`);
   }
+
+  // The artifact manifest still starts the historical index.mjs entrypoint.
+  // Keep it as a byte-for-byte alias of the current bundled bootstrap so
+  // clean publish builds cannot leave the runtime entrypoint missing.
+  const indexPath = path.join(distDir, "index.mjs");
+  const hasIndexOutput = outputs.some(([file]) => file.endsWith("/index.mjs"));
+  if (hasIndexOutput) {
+    console.log(`  ${indexPath}  generated entrypoint`);
+  } else {
+    const bootstrapPath = path.join(distDir, "bootstrap.mjs");
+    await copyFile(bootstrapPath, indexPath);
+    console.log(`  ${indexPath}  alias of bootstrap.mjs`);
+  }
+
   console.log(`\n⚡ Done in ${elapsed}s`);
 }
 
