@@ -32,6 +32,41 @@ function n(v: unknown): number {
   return v == null ? 0 : Number(v);
 }
 
+function payrollRunIntegrityError(run: {
+  status: string;
+  postingStatus: string;
+  accountingEntryId: number | null;
+  paymentEntryId: number | null;
+}): string | null {
+  if (run.postingStatus === "posted" && !run.accountingEntryId) {
+    return "Payroll ditandai posted tetapi journal accrual belum terhubung.";
+  }
+  if (run.status === "approved" && !run.accountingEntryId) {
+    return "Payroll approved tetapi journal accrual belum terhubung.";
+  }
+  if (run.status === "paid" && (!run.accountingEntryId || !run.paymentEntryId)) {
+    return "Payroll paid tetapi journal accrual atau journal pembayaran belum lengkap.";
+  }
+  return null;
+}
+
+async function assertPostedAccountingEntry(entryId: number | null | undefined, companyId: number, label: string): Promise<void> {
+  if (!Number.isInteger(entryId) || Number(entryId) <= 0) {
+    throw new Error(`${label}: journal entry belum terhubung.`);
+  }
+  const result = await db.execute<{ id: number }>(sql`
+    SELECT id
+    FROM accounting_entries
+    WHERE id = ${Number(entryId)}
+      AND company_id = ${companyId}
+      AND status = 'posted'
+    LIMIT 1
+  `);
+  if (!result.rows.length) {
+    throw new Error(`${label}: journal entry tidak ditemukan atau belum posted.`);
+  }
+}
+
 async function loadRunWithItems(runId: number, companyId: number) {
   const [run] = await db.select().from(payrollRunsTable)
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
@@ -42,7 +77,7 @@ async function loadRunWithItems(runId: number, companyId: number) {
   }).from(payrollItemsTable)
     .leftJoin(employeesTable, eq(payrollItemsTable.employeeId, employeesTable.id))
     .where(eq(payrollItemsTable.runId, runId));
-  return { run, items };
+  return { run, items, integrityError: payrollRunIntegrityError(run) };
 }
 
 // ── GET /api/payroll/runs ──────────────────────────────────────────────────────
@@ -52,7 +87,12 @@ router.get("/runs", async (req, res) => {
   const runs = await db.select().from(payrollRunsTable)
     .where(eq(payrollRunsTable.companyId, companyId))
     .orderBy(sql`year desc, month desc, id desc`);
-  res.json({ runs });
+  res.json({
+    runs: runs.map((run) => ({
+      ...run,
+      integrityError: payrollRunIntegrityError(run),
+    })),
+  });
 });
 
 // ── POST /api/payroll/runs — create draft run ─────────────────────────────────
@@ -263,6 +303,7 @@ router.post("/runs/:id/approve", async (req, res) => {
       companyId, payrollRunId: runId, period, date: new Date(),
       totalSalary, totalAllowance, totalTax, totalBpjs, kasbonByAccount, totalSalaryPayable,
     });
+    await assertPostedAccountingEntry(entryId, companyId, "Journal accrual payroll");
 
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
@@ -335,6 +376,19 @@ router.post("/runs/:id/pay", async (req, res) => {
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
   if (!run) { res.status(404).json({ message: "Payroll run tidak ditemukan" }); return; }
   if (run.status !== "approved") { res.status(400).json({ message: "Payroll run harus diapprove sebelum dibayar." }); return; }
+  const integrityError = payrollRunIntegrityError(run);
+  if (integrityError || run.postingStatus !== "posted" || !run.accountingEntryId) {
+    res.status(409).json({
+      message: integrityError ?? "Payroll belum memiliki journal accrual yang posted.",
+    });
+    return;
+  }
+  try {
+    await assertPostedAccountingEntry(run.accountingEntryId, companyId, "Journal accrual payroll");
+  } catch (err) {
+    res.status(409).json({ message: err instanceof Error ? err.message : "Journal accrual payroll tidak valid." });
+    return;
+  }
 
   const mapping = await resolvePayrollAccountMapping(companyId);
   if (!mapping) { res.status(400).json({ message: MAPPING_ERROR }); return; }
@@ -355,6 +409,7 @@ router.post("/runs/:id/pay", async (req, res) => {
       companyId, payrollRunId: runId, period, date: new Date(), amount,
       salaryPayableAccountId: mapping.salaryPayableAccountId, cashBankAccountId, paymentMethod,
     });
+    await assertPostedAccountingEntry(entryId, companyId, "Journal pembayaran payroll");
 
     const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
     await db.transaction(async (tx) => {

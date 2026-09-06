@@ -318,6 +318,38 @@ function sourceLabel(moduleType: ModuleType): string {
   }
 }
 
+function sourceTable(moduleType: ModuleType): string {
+  switch (moduleType) {
+    case "sport_center": return "sport_payments";
+    case "tenant": return "tenant_payments";
+    case "logistics": return "logistics_payments";
+  }
+}
+
+/**
+ * accounting_payments is deliberately draft-first. A source payment is not
+ * posted until the canonical accounting entry has been created and linked.
+ * This prevents a failed journal write from becoming a false posted payment.
+ */
+async function linkAndPostAccountingPayment(
+  accountingPaymentId: number,
+  accountingEntryId: number | undefined,
+): Promise<void> {
+  const entryId = Number(accountingEntryId ?? 0);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    throw new Error("ACCOUNTING_ENTRY_LINK_MISSING: journal entry tidak tersedia");
+  }
+
+  await db.execute(sql`
+    UPDATE accounting_payments
+    SET entry_id = ${entryId},
+        status = 'posted',
+        posted_at = COALESCE(posted_at, NOW())
+    WHERE id = ${accountingPaymentId}
+      AND status = 'draft'
+  `);
+}
+
 async function updatePostingStatus(
   moduleType: ModuleType,
   sourceDocId: number,
@@ -385,19 +417,38 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
       }
     } else {
       const existing = await db.execute(sql`
-        SELECT id FROM accounting_payments
-        WHERE source_type = ${moduleType}
+        SELECT id, status::text AS status, entry_id
+        FROM accounting_payments
+        WHERE (
+          source_type = ${moduleType}
           AND source_doc_id = ${sourceDocId}
+        ) OR (
+          source_table = ${sourceTable(moduleType)}
+          AND source_id = ${sourceDocId}
+        )
         LIMIT 1
       `);
       if (existing.rows.length === 0) {
         // Continue into the normal posting flow.
       } else {
-      return {
-        ok: true,
-        alreadyPosted: true,
-        accountingPaymentId: Number((existing.rows[0] as Record<string, unknown>)["id"]),
-      };
+        const existingRow = existing.rows[0] as Record<string, unknown>;
+        const existingId = Number(existingRow["id"]);
+        const existingEntryId = Number(existingRow["entry_id"] ?? 0) || null;
+        const existingStatus = String(existingRow["status"] ?? "").toLowerCase();
+        if (existingStatus === "posted" && existingEntryId) {
+          return {
+            ok: true,
+            alreadyPosted: true,
+            accountingPaymentId: existingId,
+            accountingEntryId: existingEntryId,
+          };
+        }
+
+        const error =
+          `ACCOUNTING_PAYMENT_INCOMPLETE: payment ${existingId} sudah ada ` +
+          "tetapi belum memiliki journal entry yang valid; perlu rekonsiliasi manual";
+        await updatePostingStatus(moduleType, sourceDocId, existingId, "error", error);
+        return { ok: false, accountingPaymentId: existingId, error };
       }
     }
 
@@ -415,7 +466,7 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
         (company_id, payment_number, payment_type, status, amount, journal_id,
          partner_name, date, ref, memo, payment_method, source_type, source_doc_id, created_by_id, created_at)
       VALUES
-        (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${amountStr}, ${journalId},
+        (${companyId}, ${paymentNumber}, 'inbound', 'draft', ${amountStr}, ${journalId},
          ${partnerName ?? null}, ${date}::date, ${ref ?? null},
          ${description ?? `Pembayaran ${moduleType.replace("_", " ")}`},
          ${method},
@@ -461,7 +512,6 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
         `);
         if (existingEntryRes.rows.length > 0) {
           accountingEntryId = Number((existingEntryRes.rows[0] as Record<string, unknown>)["id"]);
-          await db.execute(sql`UPDATE accounting_payments SET entry_id = ${accountingEntryId} WHERE id = ${accountingPaymentId}`).catch(() => {});
           logger.info({ moduleType, sourceDocId, existingEntryRef, accountingEntryId }, "[ingestModulePayment] JNL entry sudah ada (by ref) — skip duplikasi, link ke payment");
         } else {
           // Tahap 3 (Canonical Posting Engine): dulu ini adalah raw SQL
@@ -491,11 +541,6 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
               const recovered = await findExistingPostedSportPayment(sourceDocId, amount);
               if (recovered) {
                 accountingEntryId = recovered.accountingEntryId ?? undefined;
-                await db.execute(sql`
-                  UPDATE accounting_payments
-                  SET entry_id = ${accountingEntryId}
-                  WHERE id = ${accountingPaymentId}
-                `);
                 recoveredExisting = true;
                 logger.info(
                   { moduleType, sourceDocId, accountingEntryId },
@@ -514,11 +559,10 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
           } else {
             accountingEntryId = postResult.entryId;
           }
-          await db.execute(sql`
-            UPDATE accounting_payments SET entry_id = ${accountingEntryId} WHERE id = ${accountingPaymentId}
-          `);
         } // end else (buat JNL baru)
       }
+
+      await linkAndPostAccountingPayment(accountingPaymentId, accountingEntryId);
     } catch (entryErr) {
       logger.warn({ entryErr, moduleType, sourceDocId }, "[ingestModulePayment] accounting_entry creation failed (non-fatal, payment still recorded)");
       const error = entryErr instanceof Error ? entryErr.message : String(entryErr);
