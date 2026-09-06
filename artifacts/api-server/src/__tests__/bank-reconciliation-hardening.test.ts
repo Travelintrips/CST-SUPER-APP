@@ -17,9 +17,14 @@
  * Pure-logic tests (sections 1–9) always run.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
+import express from "express";
+import supertest from "supertest";
+import pg from "pg";
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
+import { getIsolatedTestDatabaseUrl } from "../test-setup.js";
 import {
   canonicalMutationKey,
   canonicalNormalizeDesc,
@@ -973,6 +978,265 @@ describe("Void-journal partial reversal — fail-closed endpoint contract", () =
     expect(voidJournalSource).toContain("ORIGINAL_VOID_UPDATE_FAILED");
     expect(voidJournalSource).toContain('code: "VOID_STATUS_ROLLBACK_FAILED"');
     expect(voidJournalSource).toContain("reversal_created: Boolean(voidResult.voidEntryId)");
+  });
+});
+
+// ─── 17. Isolated HTTP partial reversal regression ────────────────────────────
+//
+// This deliberately uses the real bank-reconciliation router and the real
+// accounting database pool. Only the session layer is injected, so the test
+// exercises the HTTP guard, mutation CAS/rollback, reversal creation, and
+// audit boundary together.
+
+const hasIsolatedDatabase =
+  Boolean(process.env.TEST_DATABASE_URL || process.env.STAGING_DATABASE_URL);
+
+describe.skipIf(!hasIsolatedDatabase)("Isolated HTTP partial reversal regression", () => {
+  const { Pool } = pg;
+  const marker = randomUUID();
+  const actor = `partial-reversal-${marker}@test.invalid`;
+  const testUserId = `partial-reversal-${marker}`;
+  let pool: pg.Pool;
+  let app: express.Express;
+  let mutationId: number;
+  let originalEntryId: number;
+  let triggerName: string;
+  let functionName: string;
+
+  beforeAll(async () => {
+    const dbUrl = getIsolatedTestDatabaseUrl();
+    pool = new Pool({
+      connectionString: dbUrl,
+      ssl: { rejectUnauthorized: false },
+      max: 2,
+      connectionTimeoutMillis: 15_000,
+    });
+
+    const { bankReconciliationRouter, runBankReconciliationCoreMigration } =
+      await import("../routes/bankReconciliation.js");
+    await runBankReconciliationCoreMigration();
+
+    app = express();
+    app.use(express.json());
+    app.use((req: any, _res, next) => {
+      req.user = {
+        id: testUserId,
+        email: actor,
+        role: "admin",
+        companyId: 1,
+      };
+      req.isAuthenticated = () => true;
+      req.isInternalSession = true;
+      next();
+    });
+    app.use("/api/bank-reconciliation", bankReconciliationRouter);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Fixture rows intentionally bypass seed-time ledger triggers. The real
+      // reversal path below runs with all database safeguards enabled.
+      await client.query("SET LOCAL session_replication_role = replica");
+
+      const company = await client.query(
+        "SELECT id FROM public.companies ORDER BY id LIMIT 1",
+      );
+      const companyId = Number(company.rows[0]?.id);
+      if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+        throw new Error("Isolated HTTP fixture requires at least one company row");
+      }
+
+      const journal = await client.query(
+        `INSERT INTO public.accounting_journals
+           (company_id, code, name, type, is_active)
+         VALUES ($1, $2, $3, 'bank', TRUE)
+         RETURNING id`,
+        [companyId, `HTTP-VOID-${marker}`, `HTTP partial reversal ${marker}`],
+      );
+      const journalId = Number(journal.rows[0]?.id);
+
+      const accounts = await client.query(
+        `INSERT INTO public.chart_of_accounts
+           (company_id, code, name)
+         VALUES
+           ($1, $2, $3),
+           ($1, $4, $5)
+         RETURNING id
+        `,
+        [
+          companyId,
+          `HTTP-VOID-BANK-${marker}`,
+          `HTTP void bank ${marker}`,
+          `HTTP-VOID-CONTRA-${marker}`,
+          `HTTP void contra ${marker}`,
+        ],
+      );
+      const bankAccountId = Number(accounts.rows[0]?.id);
+      const contraAccountId = Number(accounts.rows[1]?.id);
+
+      const entry = await client.query(
+        `INSERT INTO public.accounting_entries
+           (company_id, entry_number, journal_id, date, ref, description,
+            status, source, total_debit, total_credit, created_by_id)
+         VALUES ($1, $2, $3, CURRENT_DATE, $4, $5,
+                 'posted', 'bank_reconciliation', 100.00, 100.00, $6)
+         RETURNING id`,
+        [
+          companyId,
+          `HTTP-VOID-ENTRY-${marker}`,
+          journalId,
+          `HTTP-VOID-REF-${marker}`,
+          `HTTP partial reversal original ${marker}`,
+          actor,
+        ],
+      );
+      originalEntryId = Number(entry.rows[0]?.id);
+
+      await client.query(
+        `INSERT INTO public.accounting_entry_lines
+           (entry_id, account_id, description, debit, credit)
+         VALUES
+           ($1, $2, 'Bank', 100.00, 0),
+           ($1, $3, 'Contra', 0, 100.00)`,
+        [originalEntryId, bankAccountId, contraAccountId],
+      );
+
+      const mutation = await client.query(
+        `INSERT INTO public.bank_mutations
+           (bank_account_id, transaction_date, description, credit_amount,
+            debit_amount, amount, direction, mutation_key,
+            normalized_description, status, journal_entry_id, company_id)
+         VALUES
+           (NULL, CURRENT_DATE, $1, 100.00, 0, 100.00, 'IN', $2,
+            $1, 'posted', $3, $4)
+         RETURNING id`,
+        [
+          `HTTP partial reversal mutation ${marker}`,
+          `HTTP-VOID-MUTATION-${marker}`,
+          originalEntryId,
+          companyId,
+        ],
+      );
+      mutationId = Number(mutation.rows[0]?.id);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    triggerName = `trg_http_void_fail_${marker.replaceAll("-", "")}`;
+    functionName = `fn_http_void_fail_${marker.replaceAll("-", "")}`;
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION public."${functionName}"()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        IF NEW.id = ${originalEntryId} AND NEW.status::text = 'voided' THEN
+          RAISE EXCEPTION 'intentional original metadata failure for isolated HTTP regression';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+    `);
+    await pool.query(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE UPDATE OF status, void_entry_id ON public.accounting_entries
+      FOR EACH ROW EXECUTE FUNCTION public."${functionName}"()
+    `);
+  });
+
+  afterAll(async () => {
+    if (!pool) return;
+    await pool.query(`DROP TRIGGER IF EXISTS "${triggerName}" ON public.accounting_entries`).catch(() => {});
+    await pool.query(`DROP FUNCTION IF EXISTS public."${functionName}"()`).catch(() => {});
+    await pool.query("BEGIN").catch(() => {});
+    try {
+      await pool.query("SET LOCAL session_replication_role = replica");
+      await pool.query(
+        `DELETE FROM public.bank_reconciliation_audit WHERE mutation_id = $1`,
+        [mutationId],
+      );
+      await pool.query(
+        `DELETE FROM public.bank_mutations WHERE id = $1`,
+        [mutationId],
+      );
+      await pool.query(
+        `DELETE FROM public.accounting_entries
+         WHERE entry_number LIKE $1 OR entry_number = $2`,
+        [`HTTP-VOID-%${marker}`, `HTTP-VOID-ENTRY-${marker}`],
+      );
+      await pool.query("COMMIT");
+    } catch {
+      await pool.query("ROLLBACK").catch(() => {});
+    }
+    await pool.end();
+  });
+
+  it("returns failure, restores the mutation, and does not duplicate the reversal on retry", async () => {
+    const endpoint = `/api/bank-reconciliation/${mutationId}/void-journal`;
+
+    const first = await supertest(app)
+      .post(endpoint)
+      .send({ reason: "isolated metadata failure regression" });
+
+    expect(first.status).toBeGreaterThanOrEqual(400);
+    expect(first.status).toBeLessThan(500);
+    expect(first.body).toMatchObject({
+      code: "ORIGINAL_VOID_UPDATE_FAILED",
+      reversal_created: true,
+      mutation_status: "posted",
+    });
+
+    const afterFirst = await pool.query(
+      `SELECT
+         (SELECT status::text FROM public.bank_mutations WHERE id = $1) AS mutation_status,
+         (SELECT status::text FROM public.accounting_entries WHERE id = $2) AS original_status,
+         (SELECT void_entry_id FROM public.accounting_entries WHERE id = $2) AS void_entry_id,
+         (SELECT COUNT(*)::integer
+            FROM public.accounting_entries
+           WHERE source::text = 'bank_reconciliation_void'
+             AND source_id = $2
+             AND company_id = (SELECT company_id FROM public.bank_mutations WHERE id = $1)) AS reversal_count,
+         (SELECT COUNT(*)::integer
+            FROM public.bank_reconciliation_audit
+           WHERE mutation_id = $1 AND action = 'JOURNAL_VOIDED') AS void_audit_count`,
+      [mutationId, originalEntryId],
+    );
+    expect(afterFirst.rows[0]).toMatchObject({
+      mutation_status: "posted",
+      original_status: "posted",
+      void_entry_id: null,
+      reversal_count: 1,
+      void_audit_count: 0,
+    });
+
+    const retry = await supertest(app)
+      .post(endpoint)
+      .send({ reason: "isolated metadata failure retry" });
+
+    expect(retry.status).toBeGreaterThanOrEqual(400);
+    expect(retry.body).not.toHaveProperty("ok", true);
+
+    const afterRetry = await pool.query(
+      `SELECT
+         (SELECT status::text FROM public.bank_mutations WHERE id = $1) AS mutation_status,
+         (SELECT COUNT(*)::integer
+            FROM public.accounting_entries
+           WHERE source::text = 'bank_reconciliation_void'
+             AND source_id = $2) AS reversal_count,
+         (SELECT COUNT(*)::integer
+            FROM public.bank_reconciliation_audit
+           WHERE mutation_id = $1 AND action = 'JOURNAL_VOIDED') AS void_audit_count`,
+      [mutationId, originalEntryId],
+    );
+    expect(afterRetry.rows[0]).toMatchObject({
+      mutation_status: "posted",
+      reversal_count: 1,
+      void_audit_count: 0,
+    });
   });
 });
 
