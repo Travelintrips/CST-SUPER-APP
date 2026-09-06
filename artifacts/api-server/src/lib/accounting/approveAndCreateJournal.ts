@@ -23,6 +23,10 @@ import { emitJournalCreated } from "../events/financialEventBus.js";
 import { autoMapJournalTax } from "../taxEngineCore.js";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import {
+  ORIGINAL_VOID_UPDATE_FAILED,
+  buildOriginalVoidUpdateFailureResult,
+} from "./reversalFailure.js";
 
 function currentPeriod(): string {
   const d = new Date();
@@ -183,7 +187,12 @@ export interface VoidApprovedJournalResult {
   ok:           boolean;
   voidEntryId?: number;
   error?:       string;
-  code?:        "JOURNAL_ALREADY_VOIDED" | "ALREADY_VOIDED_BY_CONCURRENT" | "NOT_FOUND" | "NO_LINES";
+  code?:
+    | "JOURNAL_ALREADY_VOIDED"
+    | "ALREADY_VOIDED_BY_CONCURRENT"
+    | "NOT_FOUND"
+    | "NO_LINES"
+    | typeof ORIGINAL_VOID_UPDATE_FAILED;
 }
 
 /**
@@ -340,30 +349,44 @@ export async function voidApprovedJournal(
 
   // ── Phase 8, Step 5: Mark original entry as voided — explicit error, not silent ─
   try {
-    await db.execute(sql`
+    const metadataUpdate = await db.execute(sql`
       UPDATE accounting_entries
       SET status        = 'voided',
           void_entry_id = ${voidEntry.id},
           void_reason   = ${reason ?? null},
           updated_at    = NOW()
-      WHERE id = ${entryId}
+      WHERE id = ${entryId} AND status = 'posted'
+      RETURNING status, void_entry_id
     `);
+
+    const updatedMetadata = metadataUpdate.rows[0] as
+      | { status?: unknown; void_entry_id?: unknown }
+      | undefined;
+    if (
+      metadataUpdate.rows.length !== 1 ||
+      updatedMetadata?.status !== "voided" ||
+      Number(updatedMetadata.void_entry_id) !== voidEntry.id
+    ) {
+      throw new Error(
+        `metadata update affected ${metadataUpdate.rows.length} row(s) or returned unexpected void metadata`,
+      );
+    }
+
     logger.info({ entryId, voidEntryId: voidEntry.id }, "[voidApprovedJournal] Original entry marked voided");
   } catch (e: unknown) {
     // Status update failed — reversal entry already committed (postEntry succeeded).
-    // Log explicitly — this is NOT silent. The reversal balances the ledger,
-    // but status inconsistency must be flagged for manual review.
+    // Log explicitly — this is NOT a successful void. The reversal balances
+    // the ledger, but status inconsistency must block downstream cleanup.
     logger.error(
       { err: (e as Error).message, entryId, voidEntryId: voidEntry.id },
       "[voidApprovedJournal] CRITICAL: void entry created but original status NOT updated — " +
       "run scripts/remediate-historical-void-status.mjs to fix",
     );
-    // Still return success (reversal IS committed), but include the warning
-    return {
-      ok: true,
+    return buildOriginalVoidUpdateFailureResult({
+      entryId,
       voidEntryId: voidEntry.id,
-      error: "Reversal created but original status update failed — manual remediation needed",
-    };
+      cause: e,
+    });
   }
 
   import("../events/financialEventBus.js").then(({ emitJournalVoided }) => {
