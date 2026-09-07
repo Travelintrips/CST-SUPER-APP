@@ -156,3 +156,4 @@
 - [QRIS journal gross mismatch](qris-journal-gross-mismatch.md) — canonical approval can reject an exact-net candidate when live payment gross and payment-journal gross diverge; surface the source mismatch first.
 - [Reversal status fail-closed](reversal-status-fail-closed.md) — reversal creation can commit while the original remains posted; verify and atomically persist void metadata before any destructive cleanup.
 - [Vendor payment runtime proof](vendor-payment-runtime-proof.md) — development loader aliases shared DB keys; wait for async idempotency persistence before asserting cached retry replay.
+- [Payroll kasbon linkage](payroll-kasbon-linkage.md) — deduction-only payroll rows without a source advance ID cannot safely settle or reduce kasbon balances.
