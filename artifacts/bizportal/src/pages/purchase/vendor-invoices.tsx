@@ -35,7 +35,11 @@ const formatPostingError = (body: unknown, fallback: string) => {
 };
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
-interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null }>; }
+interface VIInvoiceBreakdownComponent {
+  withholding_tax_type?: string | null;
+  withholding_tax_amount?: number | null;
+}
+interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null }>; }
 type VendorInvoiceListItem = Record<string, unknown>;
 
 function parseVendorInvoiceList(payload: unknown): VendorInvoiceListItem[] {
@@ -271,8 +275,14 @@ export function VendorInvoiceEditorPage() {
   useEffect(() => {
     if (vi) {
       setForm({ supplierName: vi.supplierName, vendorInvoiceRef: vi.vendorInvoiceRef ?? "", poId: String(vi.poId ?? ""), grId: String(vi.grId ?? ""), invoiceDate: vi.invoiceDate?.substring(0, 10) ?? new Date().toISOString().substring(0, 10), paymentTermDays: String(vi.paymentTermDays ?? 30), notes: "" });
-      setLines(vi.lines?.length ? vi.lines.map(l => {
-        const tax = vi.lineTaxes?.find((candidate) => candidate.invoiceLineId === l.id);
+       setLines(vi.lines?.length ? vi.lines.map((l, lineIndex) => {
+         const tax = vi.lineTaxes?.find((candidate) => candidate.invoiceLineId === l.id);
+         const breakdownTax = vi.invoiceBreakdown?.components?.[lineIndex];
+         const withholdingAmount = tax && Number(tax.taxAmount) > 0
+           ? String(tax.taxAmount)
+           : breakdownTax?.withholding_tax_amount != null
+             ? String(breakdownTax.withholding_tax_amount)
+             : "0";
         return {
           ...l,
           quantity: String(l.quantity),
@@ -280,9 +290,9 @@ export function VendorInvoiceEditorPage() {
           subtotal: String(l.subtotal),
           taxAmount: String(l.taxAmount),
           coaAccountId: l.coaAccountId ? String(l.coaAccountId) : "",
-          taxType: tax?.taxType ?? "",
-          taxObject: tax?.taxObject ?? "",
-          withholdingAmount: tax?.taxAmount ? String(tax.taxAmount) : "0",
+           taxType: tax?.taxType ?? breakdownTax?.withholding_tax_type ?? "",
+           taxObject: tax?.taxObject ?? breakdownTax?.withholding_tax_type ?? "",
+           withholdingAmount,
           liabilityAccountId: tax?.liabilityAccountId ? String(tax.liabilityAccountId) : "",
         };
       }) : []);
@@ -397,6 +407,10 @@ export function VendorInvoiceEditorPage() {
   const summarySubtotal = vi ? Number(vi.totalAmount) : totalAmount;
   const summaryTax = vi ? Number(vi.taxAmount) : taxAmount;
   const summaryGrandTotal = vi ? Number(vi.grandTotal) : summarySubtotal + summaryTax;
+  const lineWithholding = lines.reduce((sum, line) => sum + Number(line.withholdingAmount ?? 0), 0);
+  const summaryWithholding = vi
+    ? Math.max(Number(vi.withholdingTaxAmount ?? 0), lineWithholding)
+    : lineWithholding;
 
   return (
     <AppShell>
@@ -466,6 +480,7 @@ export function VendorInvoiceEditorPage() {
             <CardContent className="space-y-2">
               <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(summarySubtotal)}</span></div>
               <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(summaryTax)}</span></div>
+               <div className="flex justify-between text-amber-600"><span>PPh (Withholding)</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
               <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
               {vi && <div className="flex justify-between text-green-600"><span>Terbayar</span><span className="font-mono">{idr(Number(vi.amountPaid))}</span></div>}
               {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
