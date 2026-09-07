@@ -77,7 +77,7 @@ type PortalCustomerContextCustomer = {
   name: string;
   email: string;
   phone: string | null;
-  customerType: PortalCustomerType | null;
+  customerType: string | null;
   legacyCompany: string | null;
 };
 
@@ -85,7 +85,7 @@ async function buildPortalCustomerContext(
   customerId: number,
   customer: PortalCustomerContextCustomer,
 ): Promise<PortalCustomerContext> {
-  const [[memberships], [pendingRequest]] = await Promise.all([
+  const [memberships, pendingRequests] = await Promise.all([
     db
       .select({
         id: portalCompanyMembersTable.id,
@@ -123,6 +123,7 @@ async function buildPortalCustomerContext(
       .orderBy(desc(portalCompanyRequestsTable.createdAt))
       .limit(1),
   ]);
+  const [pendingRequest] = pendingRequests;
 
   const customerType = customer.customerType as PortalCustomerType | null;
   // A NULL customer_type is an explicitly unresolved legacy identity. Do not

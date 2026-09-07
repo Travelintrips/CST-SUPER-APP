@@ -86,10 +86,11 @@ export function resolveOnboardingStatus(
     return { status: "incomplete", accountType, role, hasProfile: false };
   }
 
-  const rejectionReason = profile.status === "rejected" ? profile.rejectionReason : undefined;
+  const status = profile.status ?? "incomplete";
+  const rejectionReason = status === "rejected" ? profile.rejectionReason : undefined;
   return {
     hasProfile: true,
-    status: profile.status,
+    status,
     accountType,
     role,
     ...(rejectionReason ? { rejectionReason } : {}),
