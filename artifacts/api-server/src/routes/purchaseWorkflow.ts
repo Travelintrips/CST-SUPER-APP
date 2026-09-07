@@ -1218,6 +1218,28 @@ router.get("/vendor-invoices/coa-mappings", async (req, res) => {
   res.json(rows);
 });
 
+// Accounts that Finance may select when confirming withholding tax per line.
+// Keep this scoped and typed so the UI cannot accidentally submit an expense
+// or asset account as a PPh liability.
+router.get("/vendor-invoices/liability-accounts", async (req, res) => {
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const rows = await db.select({
+    id: chartOfAccountsTable.id,
+    code: chartOfAccountsTable.code,
+    name: chartOfAccountsTable.name,
+  })
+    .from(chartOfAccountsTable)
+    .where(and(
+      or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, companyId)),
+      eq(chartOfAccountsTable.type, "liability"),
+      eq(chartOfAccountsTable.isActive, true),
+      eq(chartOfAccountsTable.isPostable, true),
+    ))
+    .orderBy(chartOfAccountsTable.code);
+
+  res.json(rows);
+});
+
 router.get("/vendor-invoices/:id", async (req, res, next) => {
   const id = Number(String(req.params.id));
   if (!Number.isInteger(id) || id <= 0) {
