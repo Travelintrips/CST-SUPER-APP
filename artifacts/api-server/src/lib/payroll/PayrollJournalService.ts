@@ -14,12 +14,14 @@ import { postEntry, postEntryWithClient, type DbClient, type PostingInput } from
 import { AccountingConfigError } from "../advance/AdvanceErrors.js";
 import {
   assertSettlementAccounts,
+  assertPayrollPaymentEvidence,
   assertSettlementPeriodOpen,
   assertSettlementRows,
   repaymentIdempotencyKey,
   settlementReference,
   settlementSourceId,
   type KasbonRepaymentValidationRow,
+  type PayrollPaymentEvidenceRow,
 } from "./payrollSettlementGuards.js";
 
 export interface PayrollAccountMapping {
@@ -98,6 +100,14 @@ export interface KasbonSettlementResult {
   reference: string;
 }
 
+export interface PayrollPaymentResult {
+  entryId: number;
+  paymentId: number;
+  bankMutationId: number;
+  reused: boolean;
+  reference: string;
+}
+
 type KasbonRepaymentRow = KasbonRepaymentValidationRow & {
   id: number;
   advance_id: number;
@@ -150,35 +160,247 @@ export const PayrollJournalService = {
   async postPaymentJournal(p: {
     companyId: number;
     payrollRunId: number;
-    period: string;
     date: Date | string;
-    amount: number;
+    bankMutationId: number;
+    accountingPaymentId: number;
     salaryPayableAccountId: number;
     cashBankAccountId: number;
-    paymentMethod?: "cash" | "bank";
-  }): Promise<AccrualJournalResult> {
-    const pm = p.paymentMethod ?? "bank";
-    const j = await requireJournal(p.companyId, pm === "cash" ? "cash" : "bank");
-    const ref = `PAYROLL-PAY-${p.payrollRunId}`;
+    actor: string;
+    paidBy?: string | null;
+  }): Promise<PayrollPaymentResult> {
+    return PayrollJournalService.postVerifiedPaymentJournal(p);
+  },
 
-    const entry = await postEntry(
-      {
-        journalId: j.id,
-        date: new Date(p.date),
-        ref,
-        description: `${ref} — Pembayaran Gaji ${p.period}`,
-        source: "hrd_salary_payment",
-        sourceModule: "hrd",
-        sourceId: p.payrollRunId,
-        companyId: p.companyId,
-        lines: [
-          { accountId: p.salaryPayableAccountId, debit: p.amount, credit: 0, description: "Utang Gaji" },
-          { accountId: p.cashBankAccountId, debit: 0, credit: p.amount, description: pm === "cash" ? "Kas" : "Bank" },
-        ],
-      } as PostingInput,
-      j.code,
-    );
-    return { entryId: entry.id };
+  /**
+   * Post the remaining salary only from an approved, exact bank reconciliation.
+   *
+   * The bank mutation and accounting payment are the source evidence. The
+   * payroll run, payment source, bank mutation, and journal are locked and
+   * updated in one transaction so a retry cannot create a second payment.
+   */
+  async postVerifiedPaymentJournal(p: {
+    companyId: number;
+    payrollRunId: number;
+    bankMutationId: number;
+    accountingPaymentId: number;
+    salaryPayableAccountId: number;
+    cashBankAccountId: number;
+    date?: Date | string;
+    actor: string;
+    paidBy?: string | null;
+  }): Promise<PayrollPaymentResult> {
+    if (!Number.isInteger(p.companyId) || p.companyId <= 0) {
+      throw new Error("PAYROLL_PAYMENT_COMPANY_REQUIRED: companyId must be positive.");
+    }
+    if (!Number.isInteger(p.payrollRunId) || p.payrollRunId <= 0) {
+      throw new Error("PAYROLL_PAYMENT_RUN_REQUIRED: payrollRunId must be positive.");
+    }
+    if (!Number.isInteger(p.bankMutationId) || p.bankMutationId <= 0 ||
+        !Number.isInteger(p.accountingPaymentId) || p.accountingPaymentId <= 0) {
+      throw new Error("PAYROLL_PAYMENT_EVIDENCE_REQUIRED: bank mutation and accounting payment are required.");
+    }
+    if (!Number.isInteger(p.salaryPayableAccountId) || p.salaryPayableAccountId <= 0 ||
+        !Number.isInteger(p.cashBankAccountId) || p.cashBankAccountId <= 0) {
+      throw new Error("PAYROLL_PAYMENT_ACCOUNTS_REQUIRED: salary payable and bank accounts are required.");
+    }
+
+    return db.transaction(async (tx) => {
+      const runResult = await tx.execute<{
+        id: number;
+        company_id: number;
+        month: number;
+        year: number;
+        status: string;
+        payment_entry_id: number | null;
+        accounting_entry_id: number | null;
+        net_total: string;
+      }>(sql`
+        SELECT pr.id, pr.company_id, pr.month, pr.year, pr.status,
+               pr.payment_entry_id, pr.accounting_entry_id,
+               (
+                 SELECT COALESCE(SUM(pi.net_salary), 0)::text
+                 FROM payroll_items pi
+                 WHERE pi.run_id = pr.id
+               ) AS net_total
+        FROM payroll_runs pr
+        WHERE pr.id = ${p.payrollRunId} AND pr.company_id = ${p.companyId}
+        FOR UPDATE
+      `);
+      const run = runResult.rows[0];
+      if (!run) throw new Error("PAYROLL_PAYMENT_RUN_NOT_FOUND: payroll run is not in the requested company.");
+      if (!["approved", "paid"].includes(run.status)) {
+        throw new Error(`PAYROLL_PAYMENT_RUN_STATUS_INVALID: run status '${run.status}' is not approved/paid.`);
+      }
+      const amount = Number(run.net_total);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("PAYROLL_PAYMENT_AMOUNT_INVALID: payroll net amount must be positive.");
+      }
+
+      const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
+      const date = new Date(p.date ?? new Date());
+      if (Number.isNaN(date.getTime())) throw new Error("PAYROLL_PAYMENT_DATE_INVALID: posting date is invalid.");
+      const periodRows = await tx.execute<{ is_closed: boolean; override_allowed: boolean }>(sql`
+        SELECT is_closed, override_allowed
+        FROM financial_periods
+        WHERE company_id = ${p.companyId}
+          AND year = ${date.getUTCFullYear()}
+          AND month = ${date.getUTCMonth() + 1}
+        LIMIT 1
+      `);
+      assertSettlementPeriodOpen(periodRows.rows[0], date.toISOString().slice(0, 7));
+
+      const evidenceResult = await tx.execute<PayrollPaymentEvidenceRow>(sql`
+        SELECT
+          bm.id AS mutation_id,
+          bm.company_id AS mutation_company_id,
+          bm.amount AS mutation_amount,
+          bm.direction AS mutation_direction,
+          bm.status AS mutation_status,
+          bm.linked_transaction_type AS mutation_linked_type,
+          bm.linked_transaction_id AS mutation_linked_id,
+          bm.reconciliation_status AS mutation_reconciliation_status,
+          bm.journal_entry_id AS mutation_journal_entry_id,
+          ap.id AS payment_id,
+          ap.company_id AS payment_company_id,
+          ap.amount AS payment_amount,
+          ap.status AS payment_status,
+          ap.entry_id AS payment_entry_id,
+          ap.source_type AS payment_source_type,
+          ap.source_doc_id AS payment_source_doc_id,
+          ap.source_id AS payment_source_id,
+          brm.id AS match_id,
+          brm.status AS match_status,
+          brm.candidate_type AS match_candidate_type,
+          brm.candidate_id AS match_candidate_id
+        FROM bank_mutations bm
+        JOIN accounting_payments ap ON ap.id = ${p.accountingPaymentId}
+        JOIN bank_reconciliation_matches brm
+          ON brm.mutation_id = bm.id
+         AND brm.candidate_type = 'accounting_payment'
+         AND brm.candidate_id = ap.id
+         AND brm.status = 'approved'
+        WHERE bm.id = ${p.bankMutationId}
+          AND bm.company_id = ${p.companyId}
+          AND bm.matched_payment_id = ap.id
+        FOR UPDATE OF bm, ap, brm
+      `);
+      const evidence = assertPayrollPaymentEvidence(evidenceResult.rows, p.companyId, p.payrollRunId, amount);
+
+      const ref = `PAYROLL-PAY-${p.payrollRunId}`;
+      const existingResult = await tx.execute<{
+        id: number;
+        status: string;
+        total_debit: string;
+        total_credit: string;
+      }>(sql`
+        SELECT id, status, total_debit, total_credit
+        FROM accounting_entries
+        WHERE company_id = ${p.companyId}
+          AND (source = 'hrd_salary_payment' AND source_id = ${p.payrollRunId} OR ref = ${ref})
+        ORDER BY id
+        FOR UPDATE
+      `);
+      if (existingResult.rows.length > 1) {
+        throw new Error("PAYROLL_PAYMENT_DUPLICATE: more than one equivalent payment journal exists.");
+      }
+
+      if (run.payment_entry_id != null) {
+        if (existingResult.rows.length !== 1 || existingResult.rows[0]!.id !== run.payment_entry_id) {
+          throw new Error("PAYROLL_PAYMENT_LINKAGE_MISMATCH: payroll run payment_entry_id is inconsistent.");
+        }
+        const existing = existingResult.rows[0]!;
+        if (
+          existing.status !== "posted" ||
+          Math.abs(Number(existing.total_debit) - amount) > 0.01 ||
+          Math.abs(Number(existing.total_credit) - amount) > 0.01
+        ) {
+          throw new Error("PAYROLL_PAYMENT_EXISTING_MISMATCH: existing payment journal is not exact and posted.");
+        }
+        if (evidence.payment_entry_id !== run.payment_entry_id || evidence.mutation_journal_entry_id !== run.payment_entry_id) {
+          throw new Error("PAYROLL_PAYMENT_LINKAGE_MISMATCH: source payment and bank evidence do not point to the run journal.");
+        }
+        return {
+          entryId: run.payment_entry_id,
+          paymentId: evidence.payment_id,
+          bankMutationId: evidence.mutation_id,
+          reused: true,
+          reference: ref,
+        };
+      }
+
+      if (existingResult.rows.length === 1 || evidence.payment_entry_id != null || evidence.mutation_journal_entry_id != null) {
+        throw new Error("PAYROLL_PAYMENT_EXISTING_UNLINKED: equivalent payment journal exists without payroll linkage.");
+      }
+
+      const journal = await requireJournal(p.companyId, "bank");
+      const entry = await postEntryWithClient(
+        tx as unknown as DbClient,
+        {
+          journalId: journal.id,
+          date,
+          ref,
+          description: `${ref} — Pembayaran Gaji ${period}`,
+          source: "hrd_salary_payment",
+          sourceModule: "hrd",
+          sourceId: p.payrollRunId,
+          companyId: p.companyId,
+          createdById: p.actor,
+          lines: [
+            { accountId: p.salaryPayableAccountId, debit: amount, credit: 0, description: "Utang Gaji" },
+            { accountId: p.cashBankAccountId, debit: 0, credit: amount, description: "Bank" },
+          ],
+        } as PostingInput,
+        journal.code,
+      );
+
+      await tx.execute(sql`
+        UPDATE accounting_payments
+        SET entry_id = ${entry.id},
+            posted_at = COALESCE(posted_at, NOW()),
+            paid_at = COALESCE(paid_at, NOW()),
+            status = 'posted'
+        WHERE id = ${evidence.payment_id}
+          AND company_id = ${p.companyId}
+          AND entry_id IS NULL
+      `);
+      await tx.execute(sql`
+        UPDATE bank_mutations
+        SET status = 'posted',
+            journal_entry_id = ${entry.id},
+            accounting_posted = TRUE,
+            updated_at = NOW()
+        WHERE id = ${evidence.mutation_id}
+          AND company_id = ${p.companyId}
+          AND matched_payment_id = ${evidence.payment_id}
+      `);
+      await tx.execute(sql`
+        UPDATE payroll_runs
+        SET payment_entry_id = ${entry.id},
+            status = 'paid',
+            posting_status = 'posted',
+            posting_error = NULL,
+            payment_method = 'bank',
+            posted_at = COALESCE(posted_at, NOW())
+        WHERE id = ${p.payrollRunId}
+          AND company_id = ${p.companyId}
+          AND payment_entry_id IS NULL
+      `);
+      await tx.execute(sql`
+        UPDATE payroll_items
+        SET is_paid = TRUE,
+            paid_at = NOW(),
+            paid_by = ${p.paidBy ?? null}
+        WHERE run_id = ${p.payrollRunId}
+      `);
+
+      return {
+        entryId: entry.id,
+        paymentId: evidence.payment_id,
+        bankMutationId: evidence.mutation_id,
+        reused: false,
+        reference: ref,
+      };
+    });
   },
 
   /**

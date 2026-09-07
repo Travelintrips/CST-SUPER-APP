@@ -456,33 +456,74 @@ router.post("/runs/:id/pay", async (req, res) => {
   const mapping = await resolvePayrollAccountMapping(companyId);
   if (!mapping) { res.status(400).json({ message: MAPPING_ERROR }); return; }
 
-  const [settings] = await db.execute<{ default_cash_account_id: number | null; default_bank_account_id: number | null }>(sql`
-    SELECT default_cash_account_id, default_bank_account_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+  const [settings] = await db.execute<{ default_bank_account_id: number | null }>(sql`
+    SELECT default_bank_account_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).then((r) => r.rows);
-  const paymentMethod: "cash" | "bank" = req.body?.paymentMethod === "cash" ? "cash" : "bank";
-  const cashBankAccountId = paymentMethod === "cash" ? settings?.default_cash_account_id : settings?.default_bank_account_id;
+  const cashBankAccountId = settings?.default_bank_account_id;
   if (!cashBankAccountId) { res.status(400).json({ message: "Akun Kas/Bank belum dikonfigurasi." }); return; }
 
-  const items = await db.select().from(payrollItemsTable).where(eq(payrollItemsTable.runId, runId));
-  const amount = items.reduce((s, i) => s + n(i.netSalary), 0);
-  const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
+  const evidenceResult = await db.execute<{
+    mutation_id: number;
+    payment_id: number;
+    transaction_date: string;
+  }>(sql`
+    SELECT bm.id AS mutation_id, ap.id AS payment_id, bm.transaction_date
+    FROM bank_mutations bm
+    JOIN accounting_payments ap ON ap.id = bm.matched_payment_id
+    JOIN bank_reconciliation_matches brm
+      ON brm.mutation_id = bm.id
+     AND brm.candidate_type = 'accounting_payment'
+     AND brm.candidate_id = ap.id
+     AND brm.status = 'approved'
+    WHERE bm.company_id = ${companyId}
+      AND bm.direction = 'OUT'
+      AND bm.status IN ('matched', 'posted')
+      AND bm.linked_transaction_type = 'accounting_payment'
+      AND bm.linked_transaction_id = ap.id
+      AND ap.company_id = ${companyId}
+      AND ap.status = 'posted'
+      AND (
+        (ap.source_type = 'payroll' AND ap.source_doc_id = ${runId})
+        OR (ap.source_type = 'hrd_salary_payment' AND ap.source_id = ${runId})
+      )
+      AND bm.amount::numeric = (
+        SELECT COALESCE(SUM(pi.net_salary), 0)::numeric
+        FROM payroll_items pi
+        WHERE pi.run_id = ${runId}
+      )
+      AND ap.amount::numeric = (
+        SELECT COALESCE(SUM(pi.net_salary), 0)::numeric
+        FROM payroll_items pi
+        WHERE pi.run_id = ${runId}
+      )
+    ORDER BY bm.id
+  `);
+  if (evidenceResult.rows.length !== 1) {
+    res.status(409).json({
+      message: "Pembayaran payroll ditahan: harus ada tepat satu bank/payment evidence yang approved, linked ke run, dan nominalnya sama persis.",
+      code: "PAYROLL_PAYMENT_EVIDENCE_NOT_UNIQUE",
+      evidenceCount: evidenceResult.rows.length,
+    });
+    return;
+  }
 
   try {
-    const { entryId } = await PayrollJournalService.postPaymentJournal({
-      companyId, payrollRunId: runId, period, date: new Date(), amount,
-      salaryPayableAccountId: mapping.salaryPayableAccountId, cashBankAccountId, paymentMethod,
+    const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
+    const result = await PayrollJournalService.postPaymentJournal({
+      companyId,
+      payrollRunId: runId,
+      bankMutationId: evidenceResult.rows[0]!.mutation_id,
+      accountingPaymentId: evidenceResult.rows[0]!.payment_id,
+      date: evidenceResult.rows[0]!.transaction_date,
+      salaryPayableAccountId: mapping.salaryPayableAccountId,
+      cashBankAccountId,
+      actor: paidBy ?? "payroll-payment",
+      paidBy,
     });
+    const { entryId } = result;
     await assertPostedAccountingEntry(entryId, companyId, "Journal pembayaran payroll");
 
-    const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
-    await db.transaction(async (tx) => {
-      await tx.update(payrollRunsTable).set({
-        status: "paid", paymentEntryId: entryId, postedAt: new Date(), postingStatus: "posted", postingError: null, paymentMethod,
-      }).where(eq(payrollRunsTable.id, runId));
-      await tx.update(payrollItemsTable).set({ isPaid: true, paidAt: new Date(), paidBy }).where(eq(payrollItemsTable.runId, runId));
-    });
-
-    auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, amount } });
+    auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, payment: result } });
     const data = await loadRunWithItems(runId, companyId);
     res.json({ entryId, ...data });
   } catch (err) {
