@@ -203,6 +203,7 @@ db.execute(sql`
   ALTER TABLE portal_product_orders
     ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'standard',
     ADD COLUMN IF NOT EXISTS product_approve_token TEXT,
+    ADD COLUMN IF NOT EXISTS shipment_selection_token TEXT,
     ADD COLUMN IF NOT EXISTS shipment_mode TEXT,
     ADD COLUMN IF NOT EXISTS vendor_quoted_price NUMERIC(14,2),
     ADD COLUMN IF NOT EXISTS vendor_name_selected TEXT,
@@ -1468,7 +1469,7 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
       ppo.id, ppo.order_number, ppo.customer_name, ppo.shipping_address,
       ppo.status, ppo.grand_total, ppo.created_at, ppo.product_category,
       ppo.invoice_token, ppo.payment_status, ppo.paid_at,
-      ppo.order_type, ppo.product_approve_token
+       ppo.order_type, ppo.product_approve_token, ppo.shipment_selection_token
     FROM portal_product_orders ppo
     WHERE ppo.tracking_token = ${token}
     LIMIT 1
@@ -1492,8 +1493,8 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
   const productApproveUrl = (orderType === "product_first") && row.product_approve_token && domain
     ? `https://${domain}/product-approve/${row.product_approve_token}`
     : null;
-  const shipmentSelectionUrl = (orderType === "product_first") && row.product_approve_token && domain
-    ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+  const shipmentSelectionUrl = (orderType === "product_first") && row.shipment_selection_token && domain
+    ? `https://${domain}/shipment-selection/${row.shipment_selection_token}`
     : null;
 
   const PRODUCT_FIRST_TIMELINE = [
@@ -1784,23 +1785,28 @@ portalProductOrdersRouter.post("/admin/orders/:id/set-shipment-cost", async (req
     return res.status(422).json({ error: "Biaya shipment dan truck harus berupa angka positif atau nol." });
   }
 
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
-  if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
-  if ((order as any).invoiceToken) {
+  // The invoice creator locks the same order row and checks invoice_token.
+  // Keep this predicate in the write itself so a stale pre-check cannot mutate
+  // amounts after invoice issuance wins a concurrent race.
+  const changed = await db.execute(sql`
+    UPDATE portal_product_orders
+       SET shipment_cost = ${shipCostNum},
+           truck_cost = ${truckCostNum},
+           updated_at = NOW()
+     WHERE id = ${id}
+       AND invoice_token IS NULL
+     RETURNING id
+  `);
+  if (changed.rows.length === 0) {
+    const [order] = await db.select({ id: portalProductOrdersTable.id })
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, id));
+    if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
     return res.status(409).json({
       error: "Invoice sudah diterbitkan dan immutable; biaya shipment tidak dapat diubah lagi.",
       code: "INVOICE_IMMUTABLE",
     });
   }
-
-  // Update kolom biaya di order
-  await db.update(portalProductOrdersTable)
-    .set({
-      shipmentCost: String(shipCostNum),
-      truckCost: String(truckCostNum),
-      updatedAt: new Date(),
-    })
-    .where(eq(portalProductOrdersTable.id, id));
 
   return res.json({
     success: true,
@@ -2134,7 +2140,8 @@ portalProductOrdersRouter.get("/product-approve/:token", async (req: Request, re
   const result = await db.execute(sql`
     SELECT
       id, order_number, customer_name, status, order_type,
-      product_approve_token, vendor_name_selected, vendor_quoted_price,
+      product_approve_token, shipment_selection_token,
+      vendor_name_selected, vendor_quoted_price,
       ready_date, pickup_location, notes, created_at
     FROM portal_product_orders
     WHERE product_approve_token = ${token}
@@ -2194,7 +2201,8 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
   if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "action harus approve atau reject" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, status, customer_name, phone, order_type
+    SELECT id, order_number, status, customer_name, phone, order_type,
+           product_approve_token, shipment_selection_token
     FROM portal_product_orders
     WHERE product_approve_token = ${token}
     LIMIT 1
@@ -2207,12 +2215,22 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
   }
 
   const newStatus = action === "approve" ? "Shipment Selection Pending" : "Admin Review";
-  const changed = await db.execute(sql`
-    UPDATE portal_product_orders
-    SET status = ${newStatus}, updated_at = NOW()
-    WHERE id = ${row.id} AND status = 'Customer Product Approval'
-    RETURNING id
-  `);
+  const selectionToken = row.shipment_selection_token ?? generateToken();
+  const changed = action === "approve"
+    ? await db.execute(sql`
+        UPDATE portal_product_orders
+        SET status = ${newStatus},
+            shipment_selection_token = COALESCE(shipment_selection_token, ${selectionToken}),
+            updated_at = NOW()
+        WHERE id = ${row.id} AND status = 'Customer Product Approval'
+        RETURNING id, shipment_selection_token
+      `)
+    : await db.execute(sql`
+        UPDATE portal_product_orders
+        SET status = ${newStatus}, updated_at = NOW()
+        WHERE id = ${row.id} AND status = 'Customer Product Approval'
+        RETURNING id
+      `);
   if (changed.rows.length === 0) {
     return res.status(409).json({ error: "Order berubah oleh request lain; status persetujuan sudah diproses." });
   }
@@ -2228,8 +2246,8 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
     if (action === "approve") {
       // WA ke customer dengan link pilih pengiriman
       const domain = getPreferredDomain();
-      const selectionUrl = domain && row.product_approve_token
-        ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+      const selectionUrl = domain && selectionToken
+        ? `https://${domain}/shipment-selection/${selectionToken}`
         : null;
       sendShipmentSelectionCustomerWa({
         customerPhone: String(row.phone),
@@ -2261,7 +2279,7 @@ portalProductOrdersRouter.get("/shipment-selection/:token", async (req: Request,
   const result = await db.execute(sql`
     SELECT id, order_number, customer_name, status, shipment_mode, grand_total
     FROM portal_product_orders
-    WHERE product_approve_token = ${token}
+    WHERE shipment_selection_token = ${token}
     LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -2307,7 +2325,7 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
   const result = await db.execute(sql`
     SELECT id, order_number, status, customer_name, phone
     FROM portal_product_orders
-    WHERE product_approve_token = ${token}
+    WHERE shipment_selection_token = ${token}
     LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -2464,6 +2482,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
 
   const result = await db.execute(sql`
     SELECT id, order_number, customer_name, phone, status, product_approve_token,
+           shipment_selection_token,
            vendor_name_selected, vendor_quoted_price, ready_date
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
   `);
@@ -2471,10 +2490,15 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
   if (!row) return res.status(404).json({ error: "Order tidak ditemukan" });
   if (!row.product_approve_token) return res.status(400).json({ error: "Order ini bukan tipe product_first" });
 
+  const shipmentSelectionToken = row.shipment_selection_token ?? generateToken();
   const changed = await db.execute(sql`
-    UPDATE portal_product_orders SET status = 'Customer Product Approval', updated_at = NOW() WHERE id = ${id}
-      AND status = 'Product Vendor Selected'
-    RETURNING id
+    UPDATE portal_product_orders
+       SET status = 'Customer Product Approval',
+           shipment_selection_token = COALESCE(shipment_selection_token, ${shipmentSelectionToken}),
+           updated_at = NOW()
+     WHERE id = ${id}
+       AND status = 'Product Vendor Selected'
+    RETURNING id, shipment_selection_token
   `);
   if (changed.rows.length === 0) {
     return res.status(409).json({ error: "Vendor produk sudah diproses atau order belum siap untuk persetujuan customer." });
@@ -2664,7 +2688,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-shipment-reminder", async
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, customer_name, phone, product_approve_token
+    SELECT id, order_number, customer_name, phone, shipment_selection_token
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -2672,8 +2696,8 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-shipment-reminder", async
   if (!row.phone) return res.status(400).json({ error: "Nomor telepon customer tidak tersedia" });
 
   const domain = getPreferredDomain();
-  const selUrl = domain && row.product_approve_token
-    ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+  const selUrl = domain && row.shipment_selection_token
+    ? `https://${domain}/shipment-selection/${row.shipment_selection_token}`
     : null;
 
   const { sendViaService } = await import("../lib/waTransport.js");

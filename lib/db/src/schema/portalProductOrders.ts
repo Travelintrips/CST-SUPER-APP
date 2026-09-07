@@ -44,6 +44,7 @@ export const portalProductOrdersTable = pgTable("portal_product_orders", {
   // Product-first order fields (Phase 2B)
   orderType: text("order_type").default("standard"),
   productApproveToken: text("product_approve_token"),
+  shipmentSelectionToken: text("shipment_selection_token"),
   shipmentMode: text("shipment_mode"),
   vendorQuotedPrice: numeric("vendor_quoted_price", { precision: 14, scale: 2 }),
   vendorNameSelected: text("vendor_name_selected"),
