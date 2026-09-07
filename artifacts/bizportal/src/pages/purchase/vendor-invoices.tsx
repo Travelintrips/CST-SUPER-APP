@@ -40,7 +40,7 @@ interface VIInvoiceBreakdownComponent {
   withholding_tax_type?: string | null;
   withholding_tax_amount?: number | null;
 }
-interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; }
+interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ id?: number; invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>; }
 interface LiabilityAccount { id: number; code: string; name: string; }
 type VendorInvoiceListItem = Record<string, unknown>;
 
@@ -410,7 +410,21 @@ export function VendorInvoiceEditorPage() {
       // Users commonly edit the imported values and click Post directly.
       // Persist the current form and its Finance Review first so posting reads
       // the same values and confirmed tax accounts visible on screen.
-      await saveMut.mutateAsync();
+      const reviewedTaxes = vi?.lineTaxes?.filter((tax) => Number(tax.taxAmount) > 0) ?? [];
+      const financeReviewComplete = reviewedTaxes.length > 0 && reviewedTaxes.every((tax) => {
+        const record = vi?.withholdingRecords?.find((candidate) =>
+          (tax.id != null && candidate.lineTaxId === tax.id) ||
+          candidate.invoiceLineId === tax.invoiceLineId,
+        );
+        return Boolean(
+          tax.liabilityAccountId &&
+          ["confirmed", "approved"].includes(String(tax.resolutionStatus)) &&
+          ["proof_pending", "proof_received", "posted"].includes(String(record?.status)),
+        );
+      });
+      if (!financeReviewComplete) {
+        await saveMut.mutateAsync();
+      }
       const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));

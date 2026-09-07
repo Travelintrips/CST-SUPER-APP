@@ -1559,6 +1559,22 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
   }
   // ── END SAP LOCK GUARD ─────────────────────────────────────────────────────
 
+  // Withholding records are immutable lifecycle evidence. Reject the edit
+  // before touching the invoice header; the previous order updated the header
+  // to "required" and only then returned 409, leaving reviewed invoices in a
+  // contradictory partial state.
+  const existingWithholding = await db.select({ id: vendorWithholdingRecordsTable.id })
+    .from(vendorWithholdingRecordsTable)
+    .where(eq(vendorWithholdingRecordsTable.vendorInvoiceId, id))
+    .limit(1);
+  if (existingWithholding.length > 0) {
+    res.status(409).json({
+      error: "withholding_review_locked",
+      message: "Invoice memiliki lifecycle withholding. Selesaikan atau batalkan review sebelum mengubah line.",
+    });
+    return;
+  }
+
   const lines = (body.lines as Record<string, unknown>[]) ?? [];
   const totalAmount = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
   const taxAmount = lines.reduce((s, l) => s + num(l.taxAmount), 0);
@@ -1607,17 +1623,6 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
       : {}),
     updatedAt: new Date(),
   }).where(eq(vendorInvoicesTable.id, id)).returning();
-  const existingWithholding = await db.select({ id: vendorWithholdingRecordsTable.id })
-    .from(vendorWithholdingRecordsTable)
-    .where(eq(vendorWithholdingRecordsTable.vendorInvoiceId, id))
-    .limit(1);
-  if (existingWithholding.length > 0) {
-    res.status(409).json({
-      error: "withholding_review_locked",
-      message: "Invoice memiliki lifecycle withholding. Selesaikan atau batalkan review sebelum mengubah line.",
-    });
-    return;
-  }
   await db.delete(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
   if (lines.length > 0) {
     const insertedLines = await db.insert(vendorInvoiceLinesTable).values(
