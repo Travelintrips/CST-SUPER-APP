@@ -293,10 +293,14 @@ export async function verifyWaOtp(rawPhone: string, code: string) {
   const verifyToken = randomUUID();
   // Phase 1B: store HMAC-SHA256 hash; raw verifyToken only returned to client
   const verifyTokenHash = hashToken(verifyToken);
-  await db
+  const [consumed] = await db
     .update(waOtpCodesTable)
     .set({ verified: true, verifyToken, verifyTokenHash, expiresAt: new Date(Date.now() + 15 * 60 * 1000) })
-    .where(eq(waOtpCodesTable.id, otp.id));
+    .where(and(eq(waOtpCodesTable.id, otp.id), eq(waOtpCodesTable.verified, false)))
+    .returning({ id: waOtpCodesTable.id });
+  if (!consumed) {
+    throw new AuthServiceError(400, "OTP sudah digunakan. Minta OTP baru.");
+  }
 
   return { verifyToken, phone: normalized };
 }
@@ -416,9 +420,18 @@ export async function waRegister(params: {
       }
 
       // Consume the verified token in the same transaction as account creation.
-      await tx.update(waOtpCodesTable)
+      const [consumed] = await tx.update(waOtpCodesTable)
         .set({ verifyToken: null, verifyTokenHash: null, expiresAt: new Date(0) })
-        .where(eq(waOtpCodesTable.id, otp.id));
+        .where(and(
+          eq(waOtpCodesTable.id, otp.id),
+          eq(waOtpCodesTable.verified, true),
+          or(
+            eq(waOtpCodesTable.verifyTokenHash, hashToken(String(verifyToken))),
+            and(isNull(waOtpCodesTable.verifyTokenHash), eq(waOtpCodesTable.verifyToken, String(verifyToken))),
+          ),
+        ))
+        .returning({ id: waOtpCodesTable.id });
+      if (!consumed) throw new AuthServiceError(400, "Token verifikasi sudah digunakan.");
 
       if (daysForTrustedDevice(rememberDays) && account.phone) {
         deviceToken = randomUUID();
@@ -508,9 +521,18 @@ export async function waLogin(
   await linkPortalWhatsAppIdentity(user.id, otp.phone);
 
   // Invalidate verifyToken — clear both plaintext AND hash, force expiry for true single-use semantics
-  await db.update(waOtpCodesTable)
+  const [consumed] = await db.update(waOtpCodesTable)
     .set({ verifyToken: null, verifyTokenHash: null, expiresAt: new Date(0) })
-    .where(eq(waOtpCodesTable.id, otp.id));
+    .where(and(
+      eq(waOtpCodesTable.id, otp.id),
+      eq(waOtpCodesTable.verified, true),
+      or(
+        eq(waOtpCodesTable.verifyTokenHash, hashToken(String(verifyToken))),
+        and(isNull(waOtpCodesTable.verifyTokenHash), eq(waOtpCodesTable.verifyToken, String(verifyToken))),
+      ),
+    ))
+    .returning({ id: waOtpCodesTable.id });
+  if (!consumed) throw new AuthServiceError(400, "Token verifikasi sudah digunakan.");
 
   const token = await signPortalJwt({
     sub: String(user.id),
@@ -1126,9 +1148,14 @@ export async function verifyEmailOtp(email: string, code: string) {
       }
     }
 
-    await tx.update(portalEmailOtpCodesTable)
+    const [consumed] = await tx.update(portalEmailOtpCodesTable)
       .set({ verified: true, expiresAt: new Date(0) })
-      .where(eq(portalEmailOtpCodesTable.id, challenge.id));
+      .where(and(
+        eq(portalEmailOtpCodesTable.id, challenge.id),
+        eq(portalEmailOtpCodesTable.verified, false),
+      ))
+      .returning({ id: portalEmailOtpCodesTable.id });
+    if (!consumed) throw new AuthServiceError(401, "OTP sudah digunakan. Minta kode baru.");
   });
 
   if (!customer) throw new AuthServiceError(500, "Akun portal gagal disiapkan.");
@@ -1253,35 +1280,40 @@ export async function resetPasswordWithToken(email: string, token: string, newPa
     throw new AuthServiceError(400, "Password minimal 8 karakter.");
   }
 
-  const [customer] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, emailLower))
-    .limit(1);
-
-  if (!customer) throw new AuthServiceError(400, "Link reset tidak valid atau sudah kadaluarsa.");
-
-  const stored = customer.resetPasswordToken;
-  const expiry = customer.resetPasswordExpiry;
-
-  if (!stored || !stored.startsWith("pwreset:")) {
-    throw new AuthServiceError(400, "Link reset tidak valid. Silakan minta link baru.");
-  }
-  if (!expiry || expiry < new Date()) {
-    throw new AuthServiceError(400, "Link reset sudah kadaluarsa. Silakan minta link baru.");
-  }
-
-  const storedHash = stored.slice("pwreset:".length);
-  const valid = await bcrypt.compare(String(token).trim(), storedHash);
-  if (!valid) {
-    throw new AuthServiceError(400, "Link reset tidak valid atau sudah digunakan.");
-  }
-
   const passwordHash = await bcrypt.hash(newPassword, 12);
-  await db
-    .update(portalCustomersTable)
-    .set({ passwordHash, resetPasswordToken: null, resetPasswordExpiry: null })
-    .where(eq(portalCustomersTable.id, customer.id));
+  // Lock the account row while checking and consuming the bcrypt-backed token.
+  // This prevents two concurrent reset requests from both using the same link.
+  const customer = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.email, emailLower))
+      .for("update")
+      .limit(1);
+    if (!locked) throw new AuthServiceError(400, "Link reset tidak valid atau sudah kadaluarsa.");
+
+    const stored = locked.resetPasswordToken;
+    const expiry = locked.resetPasswordExpiry;
+    if (!stored || !stored.startsWith("pwreset:")) {
+      throw new AuthServiceError(400, "Link reset tidak valid. Silakan minta link baru.");
+    }
+    if (!expiry || expiry < new Date()) {
+      throw new AuthServiceError(400, "Link reset sudah kadaluarsa. Silakan minta link baru.");
+    }
+    const valid = await bcrypt.compare(String(token).trim(), stored.slice("pwreset:".length));
+    if (!valid) throw new AuthServiceError(400, "Link reset tidak valid atau sudah digunakan.");
+
+    const [updated] = await tx
+      .update(portalCustomersTable)
+      .set({ passwordHash, resetPasswordToken: null, resetPasswordExpiry: null })
+      .where(and(
+        eq(portalCustomersTable.id, locked.id),
+        eq(portalCustomersTable.resetPasswordToken, stored),
+      ))
+      .returning({ id: portalCustomersTable.id });
+    if (!updated) throw new AuthServiceError(400, "Link reset tidak valid atau sudah digunakan.");
+    return locked;
+  });
 
   return { ok: true, message: "Password berhasil diubah. Silakan login." };
 }

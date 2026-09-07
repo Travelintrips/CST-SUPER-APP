@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";
 import {
   optionalCustomerPortalAuth,
@@ -19,9 +19,10 @@ import {
   driverJobsTable,
   driversTable,
 } from "@workspace/db";
-import { eq, ilike, and, or, sql } from "drizzle-orm";
+import { eq, ilike, and, or, sql, inArray } from "drizzle-orm";
 import { resolveTemplate, resolveAllTemplates, validateTemplatePayload, CATEGORY_LABELS } from "@workspace/product-templates";
-import { requireClerkUser } from "../lib/requireAdmin.js";
+import { requireRole } from "../lib/requireAdmin.js";
+import { logOrderStatusChange } from "../lib/auditTrail.js";
 import { getPreferredDomain } from "../lib/domain";
 import {
   sendProductOrderWaNotification,
@@ -79,6 +80,18 @@ async function resolveCustomerPortalTaxSnapshot(productScope: "goods" | "jasa") 
 }
 
 export const portalProductOrdersRouter = Router();
+
+const PRODUCT_ORDER_ADMIN_ROLES = ["admin", "owner", "manager"];
+
+async function requirePortalProductAdmin(req: Request, res: Response): Promise<boolean> {
+  return requireRole(req, res, PRODUCT_ORDER_ADMIN_ROLES);
+}
+
+function requirePortalProductAdminMiddleware(req: Request, res: Response, next: () => void): void {
+  requirePortalProductAdmin(req, res).then((allowed) => {
+    if (allowed) next();
+  });
+}
 
 // ── Idempotent migrations ────────────────────────────────────────────────────
 // Add shipping spec columns to products table
@@ -215,6 +228,99 @@ async function nextSoNumber(): Promise<string> {
 
 type OrderRow = typeof portalProductOrdersTable.$inferSelect;
 
+type SubmittedProductItem = {
+  productId?: number;
+  productName?: string;
+  productSku?: string;
+  unit?: string;
+  unitPrice?: number;
+  qty?: number;
+  subtotal?: number;
+  weightKg?: number | null;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  goodsType?: string | null;
+  productScope?: string | null;
+  serviceScope?: string | null;
+  serviceType?: string | null;
+};
+
+type CanonicalProductItem = {
+  productId: number;
+  productName: string;
+  productSku: string;
+  unit: string;
+  unitPrice: number;
+  qty: number;
+  subtotal: number;
+  weightKg: number | null;
+  lengthCm: number | null;
+  widthCm: number | null;
+  heightCm: number | null;
+  goodsType: string | null;
+  productScope: string;
+};
+
+const MAX_PORTAL_PRODUCT_QTY = 100_000;
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+async function resolveCanonicalProductItems(
+  submitted: unknown,
+): Promise<CanonicalProductItem[]> {
+  if (!Array.isArray(submitted) || submitted.length === 0 || submitted.length > 100) {
+    throw new Error("Daftar produk tidak valid.");
+  }
+
+  const items = submitted as SubmittedProductItem[];
+  const productIds = items.map((item) => Number(item?.productId));
+  if (productIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw new Error("Setiap item wajib memiliki productId yang valid.");
+  }
+
+  const products = await db
+    .select()
+    .from(productsTable)
+    .where(and(inArray(productsTable.id, productIds), eq(productsTable.isActive, true)));
+  const byId = new Map(products.map((product) => [product.id, product]));
+
+  return items.map((item, index) => {
+    const productId = productIds[index];
+    const product = byId.get(productId);
+    if (!product || product.itemType !== "barang") {
+      throw new Error(`Produk pada item ${index + 1} tidak aktif atau tidak tersedia.`);
+    }
+
+    const qty = Number(item.qty);
+    const unitPrice = Number(product.price);
+    if (!Number.isInteger(qty) || qty <= 0 || qty > MAX_PORTAL_PRODUCT_QTY) {
+      throw new Error(`Quantity item ${index + 1} harus antara 1 dan ${MAX_PORTAL_PRODUCT_QTY}.`);
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw new Error(`Harga produk ${product.name} tidak valid.`);
+    }
+
+    return {
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      unit: product.unit,
+      unitPrice: roundMoney(unitPrice),
+      qty,
+      subtotal: roundMoney(unitPrice * qty),
+      weightKg: product.weightKg != null ? Number(product.weightKg) : null,
+      lengthCm: product.lengthCm != null ? Number(product.lengthCm) : null,
+      widthCm: product.widthCm != null ? Number(product.widthCm) : null,
+      heightCm: product.heightCm != null ? Number(product.heightCm) : null,
+      goodsType: product.goodsType ?? null,
+      productScope: product.itemType,
+    };
+  });
+}
+
 function toOrder(row: OrderRow) {
   return {
     id: row.id,
@@ -284,6 +390,24 @@ const VALID_STATUSES = [
   "Admin Review", "Product RFQ Sent", "Product Quote Received", "Product Vendor Selected",
   "Customer Product Approval", "Shipment Selection Pending", "Ready for Pickup", "Shipment RFQ Sent",
 ] as const;
+
+const LEGAL_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  "New Order": ["Confirmed", "Admin Review", "Cancelled"],
+  "Confirmed": ["Processing", "Cancelled"],
+  "Processing": ["Shipped", "Cancelled"],
+  "Shipped": ["Completed"],
+  "Completed": [],
+  "Cancelled": [],
+  "Admin Review": ["Product RFQ Sent", "Cancelled"],
+  "Product RFQ Sent": ["Product Quote Received", "Cancelled"],
+  "Product Quote Received": ["Product Vendor Selected", "Admin Review", "Cancelled"],
+  "Product Vendor Selected": ["Customer Product Approval", "Cancelled"],
+  "Customer Product Approval": ["Shipment Selection Pending", "Admin Review", "Cancelled"],
+  "Shipment Selection Pending": ["Ready for Pickup", "Shipment RFQ Sent", "Cancelled"],
+  "Ready for Pickup": ["Shipment RFQ Sent", "Completed", "Cancelled"],
+  "Shipment RFQ Sent": ["Vendor Confirmed", "Cancelled"],
+  "Vendor Confirmed": ["Processing", "Cancelled"],
+};
 
 async function sendProductOrderNotification(order: ReturnType<typeof toOrder>, items: ReturnType<typeof toItem>[]) {
   const domain = getPreferredDomain();
@@ -643,8 +767,30 @@ portalProductOrdersRouter.get("/products", async (req: Request, res: Response) =
 
 // ── POST /api/portal-product/orders — buat order baru (public, optional auth) ──
 portalProductOrdersRouter.post("/orders",
-  createIdempotencyMiddleware("portal:product-orders", { ttlHours: 48 }),
   optionalCustomerPortalAuth,
+  (req: Request, res: Response, next: () => void) => {
+    const key = req.header("x-idempotency-key")?.trim();
+    if (!key || key.length < 16 || key.length > 200) {
+      res.status(400).json({
+        message: "Header x-idempotency-key wajib diisi dengan nilai unik.",
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+      });
+      return;
+    }
+    next();
+  },
+  createIdempotencyMiddleware("portal:product-orders", {
+    ttlHours: 48,
+    scopeResolver: (req) => {
+      const customerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+      if (customerId) return `customer:${customerId}`;
+      const email = typeof req.body?.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "anonymous";
+      return `guest:${email}`;
+    },
+    fingerprintResolver: (req) => JSON.stringify(req.body ?? null),
+  }),
   async (req: Request, res: Response) => {
   const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId ?? null;
   let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
@@ -702,12 +848,20 @@ portalProductOrdersRouter.post("/orders",
     return res.status(400).json({ message: "Minimal satu produk harus dipilih" });
   }
 
+  let canonicalItems: CanonicalProductItem[];
+  try {
+    canonicalItems = await resolveCanonicalProductItems(items);
+  } catch (error) {
+    return res.status(422).json({
+      message: error instanceof Error ? error.message : "Item produk tidak valid.",
+    });
+  }
+
   // T001: validasi stok tersedia sebelum buat order
   const warehouseId = await getDefaultWarehouseId();
   const stockWarnings: string[] = [];
   if (warehouseId) {
-    for (const item of items) {
-      if (!item.productId) continue;
+    for (const item of canonicalItems) {
       const stockRow = await db.execute(sql`
         SELECT COALESCE(stock_available, stock_on_hand, 0)::float AS available
         FROM inventory_stock
@@ -721,24 +875,19 @@ portalProductOrdersRouter.post("/orders",
     }
   }
 
-  const resolvedItems = await Promise.all(items.map(async (item) => {
-    let sourceScope = item.productScope ?? null;
-    if (!sourceScope && item.productId) {
-      const product = await db.execute(sql`SELECT item_type FROM products WHERE id = ${item.productId} LIMIT 1`);
-      sourceScope = (product.rows[0] as { item_type?: string } | undefined)?.item_type ?? null;
-    }
-    const productScope = normalizeCustomerPortalProductScope(sourceScope ?? productCategory);
+  const resolvedItems = canonicalItems.map((item) => {
+    const productScope = normalizeCustomerPortalProductScope(item.productScope);
     const serviceScope = assertCustomerPortalServiceScope(
       productScope,
-      item.serviceScope ?? item.serviceType ?? (productScope === "jasa" ? productCategory : null),
+      productScope === "jasa" ? productCategory : null,
     );
     return { item, productScope, serviceScope };
-  }));
+  });
   const scopes = new Set(resolvedItems.map((row) => row.productScope));
   if (scopes.size !== 1) return res.status(400).json({ message: "Satu order Customer Portal tidak boleh mencampur product scope" });
   const productScope = resolvedItems[0].productScope;
   const taxSnapshot = await resolveCustomerPortalTaxSnapshot(productScope);
-  const subtotal = items.reduce((s, i) => s + (i.subtotal ?? 0), 0);
+  const subtotal = roundMoney(canonicalItems.reduce((s, i) => s + i.subtotal, 0));
   const { taxAmount, grandTotal } = calculateCustomerPortalExclusiveTax(subtotal, taxSnapshot);
   const orderNumber = generateOrderNumber();
   const trackingToken = generateToken();
@@ -822,7 +971,7 @@ portalProductOrdersRouter.post("/orders",
 
     const itemRows = resolvedItems.map(({ item: i, productScope: itemScope, serviceScope }) => ({
       orderId: order.id,
-      productId: i.productId ?? null,
+      productId: i.productId,
       productName: i.productName,
       productSku: i.productSku ?? null,
       unit: i.unit ?? null,
@@ -844,7 +993,7 @@ portalProductOrdersRouter.post("/orders",
 
   // T001: kurangi stok (non-blocking)
   deductStock(
-    items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
+    canonicalItems.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
     orderNumber
   ).then(({ warnings }) => {
     if (warnings.length > 0) logger.warn({ warnings }, "Stock deduction warnings for portal product order");
@@ -860,7 +1009,7 @@ portalProductOrdersRouter.post("/orders",
     type: "product",
     orderId: order.id,
     orderNumber,
-    customerName: customerName.trim(),
+    customerName: resolvedCustomerName,
     companyName: null,
     grandTotal,
     itemCount: items.length,
@@ -872,9 +1021,9 @@ portalProductOrdersRouter.post("/orders",
     const orderUrl = domain ? `https://${domain}/bizportal/logistics/portal-orders` : undefined;
     sendProductOrderPickupWaNotification({
       orderNumber,
-      customerName: customerName.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
+       customerName: resolvedCustomerName,
+       phone: resolvedPhone,
+       email: resolvedEmail,
       grandTotal,
       notes: notes?.trim() ?? null,
       items: itemsOut.map((i) => ({
@@ -915,7 +1064,7 @@ ${stockWarnings.length > 0 ? `<p style="color:orange">⚠️ ${stockWarnings.joi
 
 // ── GET /api/portal-product/orders — list orders (admin) ────────────────────
 portalProductOrdersRouter.get("/orders", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const status = typeof req.query["status"] === "string" ? req.query["status"] : null;
   const search = typeof req.query["search"] === "string" ? req.query["search"].trim() : null;
 
@@ -940,7 +1089,7 @@ portalProductOrdersRouter.get("/orders", async (req: Request, res: Response) => 
 
 // ── DELETE /api/portal-product/orders/:id ───────────────────────────────────
 portalProductOrdersRouter.delete("/orders/:id", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -951,7 +1100,7 @@ portalProductOrdersRouter.delete("/orders/:id", async (req: Request, res: Respon
 
 // ── PATCH /api/portal-product/orders/items/:itemId/link ─────────────────────
 portalProductOrdersRouter.patch("/orders/items/:itemId/link", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const itemId = parseInt(String(String(req.params.itemId)), 10);
   if (isNaN(itemId)) return res.status(400).json({ message: "Item ID tidak valid" });
 
@@ -973,7 +1122,7 @@ portalProductOrdersRouter.patch("/orders/items/:itemId/link", async (req: Reques
 
 // ── GET /api/portal-product/orders/:id ──────────────────────────────────────
 portalProductOrdersRouter.get("/orders/:id", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -989,7 +1138,7 @@ portalProductOrdersRouter.get("/orders/:id", async (req: Request, res: Response)
 // T002: auto-create SO saat → Confirmed
 // T004: auto-create invoice link saat → Shipped
 portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1002,13 +1151,46 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   const [existing] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!existing) return res.status(404).json({ message: "Order tidak ditemukan" });
 
+  const nextStatus = status.trim();
+  if (existing.status === nextStatus) {
+    return res.json({ ...toOrder(existing), invoiceUrl: null, unchanged: true });
+  }
+  if (!LEGAL_STATUS_TRANSITIONS[existing.status]?.includes(nextStatus)) {
+    return res.status(409).json({
+      message: `Transisi status tidak diizinkan: ${existing.status} → ${nextStatus}.`,
+      code: "ILLEGAL_ORDER_STATUS_TRANSITION",
+    });
+  }
+  if (nextStatus === "Confirmed" && normalizeCompanyId(existing.companyId) == null) {
+    return res.status(422).json({
+      message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
+    });
+  }
+
   const [updated] = await db
     .update(portalProductOrdersTable)
-    .set({ status: status.trim() })
-    .where(eq(portalProductOrdersTable.id, id))
+    .set({ status: nextStatus })
+    .where(and(eq(portalProductOrdersTable.id, id), eq(portalProductOrdersTable.status, existing.status)))
     .returning();
 
-  if (!updated) return res.status(404).json({ message: "Order tidak ditemukan" });
+  if (!updated) {
+    return res.status(409).json({
+      message: "Order berubah oleh request lain. Muat ulang status terbaru lalu coba lagi.",
+      code: "ORDER_STATUS_CONFLICT",
+    });
+  }
+
+  void logOrderStatusChange({
+    orderId: id,
+    orderNumber: updated.orderNumber,
+    oldStatus: existing.status,
+    newStatus: nextStatus,
+    changedByType: "admin",
+    changedById: String((req as any).user?.id ?? ""),
+    changedByName: String((req as any).user?.name ?? ""),
+    changedByIp: req.ip,
+    source: "portal-product-orders",
+  });
 
   // Stamp updated_at
   await db.execute(sql`UPDATE portal_product_orders SET updated_at = NOW() WHERE id = ${id}`);
@@ -1021,26 +1203,21 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
     "Completed":  "Selesai 🎉",
     "Cancelled":  "Dibatalkan ❌",
   };
-  const label = statusLabels[status.trim()] ?? status.trim();
+  const label = statusLabels[nextStatus] ?? nextStatus;
 
   let invoiceToken: string | null = null;
   let invoiceUrl: string | null = null;
   const domain = getPreferredDomain();
 
   // T002: Confirmed → buat Sales Order
-  if (status.trim() === "Confirmed" && existing.status !== "Confirmed") {
-    if (normalizeCompanyId(existing.companyId) == null) {
-      return res.status(422).json({
-        message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
-      });
-    }
+  if (nextStatus === "Confirmed") {
     maybeCreateSalesOrder(id).then((soResult) => {
       if (soResult) logger.info({ orderId: id, soNumber: soResult.docNumber }, "SO auto-created for portal product order");
     }).catch((err: unknown) => logger.error({ err }, "maybeCreateSalesOrder failed"));
   }
 
   // T004: Shipped → buat invoice link + kirim ke customer via WA + email fallback
-  if (status.trim() === "Shipped" && existing.status !== "Shipped") {
+  if (nextStatus === "Shipped") {
     try {
       invoiceToken = await maybeCreateInvoiceLink(id);
       if (invoiceToken && domain) {
@@ -1081,7 +1258,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   }
 
   // Completed → email fallback notifikasi selesai
-  if (status.trim() === "Completed" && existing.status !== "Completed") {
+  if (nextStatus === "Completed") {
     if (isSmtpConfigured() && updated.email) {
       sendMail({
         to: updated.email,
@@ -1097,7 +1274,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   // SSE broadcast ke customer portal agar tracking live update
   broadcastToPortal("order_status_update", {
     orderNumber: updated.orderNumber,
-    status: status.trim(),
+    status: nextStatus,
     label,
     updatedAt: new Date().toISOString(),
   });
@@ -1106,7 +1283,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   broadcastToAdmins("product_order_status_update", {
     orderId: id,
     orderNumber: updated.orderNumber,
-    status: status.trim(),
+    status: nextStatus,
     label,
   });
 
@@ -1235,32 +1412,89 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
 });
 
 // ── POST /api/portal-product/orders/:id/confirm-payment — admin konfirmasi bayar (T004) ──
-portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+portalProductOrdersRouter.post(
+  "/orders/:id/confirm-payment",
+  requirePortalProductAdminMiddleware,
+  (req: Request, res: Response, next: NextFunction) => {
+    const key = req.header("x-idempotency-key")?.trim();
+    if (!key || key.length < 16 || key.length > 200) {
+      res.status(400).json({
+        message: "Header x-idempotency-key wajib diisi dengan nilai unik.",
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+      });
+      return;
+    }
+    next();
+  },
+  createIdempotencyMiddleware("portal:product-order-payment", {
+    ttlHours: 48,
+    scopeResolver: (req) => `actor:${String((req as any).user?.id ?? "unknown")}`,
+    fingerprintResolver: () => "confirm-payment",
+  }),
+  async (req: Request, res: Response) => {
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
-  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
-  if (normalizeCompanyId(order.companyId) == null) {
+  const paymentResult = await db.transaction(async (tx) => {
+    const lock = await tx.execute(sql`
+      SELECT id FROM portal_product_orders WHERE id = ${id} FOR UPDATE
+    `);
+    if (!lock.rows.length) return { order: null, changed: false };
+
+    const [lockedOrder] = await tx
+      .select()
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, id));
+    if (!lockedOrder) return { order: null, changed: false };
+    if (normalizeCompanyId(lockedOrder.companyId) == null) {
+      throw new Error("PAYMENT_ORDER_COMPANY_SCOPE_INVALID");
+    }
+    if (lockedOrder.paymentStatus === "paid") {
+      return { order: lockedOrder, changed: false };
+    }
+
+    await tx.execute(sql`
+      UPDATE portal_product_orders
+      SET payment_status = 'paid', paid_at = NOW(), updated_at = NOW()
+      WHERE id = ${id} AND payment_status IS DISTINCT FROM 'paid'
+    `);
+
+    const invToken = (lockedOrder as any).invoiceToken as string | null;
+    if (invToken) {
+      await tx.execute(sql`
+        UPDATE customer_invoice_links
+        SET payment_status = 'paid', amount_paid = grand_total, confirmed_at = NOW()
+        WHERE token = ${invToken}
+      `);
+    }
+
+    return {
+      order: {
+        ...lockedOrder,
+        paymentStatus: "paid",
+        paidAt: new Date(),
+      },
+      changed: true,
+    };
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === "PAYMENT_ORDER_COMPANY_SCOPE_INVALID") {
+      return { order: "invalid-company" as const, changed: false };
+    }
+    throw error;
+  });
+
+  if (paymentResult.order === null) {
+    return res.status(404).json({ message: "Order tidak ditemukan" });
+  }
+  if (paymentResult.order === "invalid-company") {
     return res.status(422).json({
       message: "Pembayaran ditolak: order belum memiliki company yang tidak ambigu.",
     });
   }
 
-  await db.execute(sql`
-    UPDATE portal_product_orders
-    SET payment_status = 'paid', paid_at = NOW(), updated_at = NOW()
-    WHERE id = ${id}
-  `);
-
-  const invToken = (order as any).invoiceToken as string | null;
-  if (invToken) {
-    await db.execute(sql`
-      UPDATE customer_invoice_links
-      SET payment_status = 'paid', amount_paid = grand_total, confirmed_at = NOW()
-      WHERE token = ${invToken}
-    `);
+  const order = paymentResult.order;
+  if (!paymentResult.changed) {
+    return res.json({ success: true, message: "Pembayaran sudah dikonfirmasi", unchanged: true });
   }
 
   const phone = order.phone ?? null;
@@ -1295,11 +1529,12 @@ portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Reques
   });
 
   return res.json({ success: true, message: "Pembayaran dikonfirmasi" });
-});
+  },
+);
 
 // ── POST /api/portal-product/orders/:id/regenerate-vendor-token — admin regenerate vendor link ──
 portalProductOrdersRouter.post("/orders/:id/regenerate-vendor-token", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1326,7 +1561,7 @@ portalProductOrdersRouter.post("/orders/:id/regenerate-vendor-token", async (req
 
 // ── POST /api/portal-product/orders/:id/resend-invoice — kirim ulang invoice WA ──
 portalProductOrdersRouter.post("/orders/:id/resend-invoice", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1364,7 +1599,7 @@ portalProductOrdersRouter.post("/orders/:id/resend-invoice", async (req: Request
 // Admin menetapkan biaya shipment dan truck setelah pilih vendor pengiriman.
 // Otomatis update customer_invoice_links jika invoice sudah dibuat.
 portalProductOrdersRouter.post("/admin/orders/:id/set-shipment-cost", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1558,7 +1793,7 @@ db.execute(sql`
 `).catch(() => {});
 
 // GET /api/portal-product/drivers — list active drivers (admin)
-portalProductOrdersRouter.get("/drivers", requireClerkUser, async (_req: Request, res: Response) => {
+portalProductOrdersRouter.get("/drivers", requirePortalProductAdminMiddleware, async (_req: Request, res: Response) => {
   const rows = await db.select({
     id: driversTable.id,
     name: driversTable.name,
@@ -1572,7 +1807,7 @@ portalProductOrdersRouter.get("/drivers", requireClerkUser, async (_req: Request
 });
 
 // GET /api/portal-product/orders/:id/driver — get current driver job for order (admin)
-portalProductOrdersRouter.get("/orders/:id/driver", requireClerkUser, async (req: Request, res: Response) => {
+portalProductOrdersRouter.get("/orders/:id/driver", requirePortalProductAdminMiddleware, async (req: Request, res: Response) => {
   const orderId = parseInt(String(req.params.id), 10);
   if (!orderId) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1610,7 +1845,7 @@ portalProductOrdersRouter.get("/orders/:id/driver", requireClerkUser, async (req
 });
 
 // POST /api/portal-product/orders/:id/assign-driver — assign driver (admin)
-portalProductOrdersRouter.post("/orders/:id/assign-driver", requireClerkUser, async (req: Request, res: Response) => {
+portalProductOrdersRouter.post("/orders/:id/assign-driver", requirePortalProductAdminMiddleware, async (req: Request, res: Response) => {
   const orderId = parseInt(String(req.params.id), 10);
   if (!orderId) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1920,7 +2155,7 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
 
 // ── Admin action: Blast Product RFQ ─────────────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/blast-product-rfq", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1950,7 +2185,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/blast-product-rfq", async (req
 
 // ── Admin action: Update Product Phase (vendor, price, ready date, pickup location) ─
 portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1990,7 +2225,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
 
 // ── Admin action: Send Product Approval to Customer ─────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2028,7 +2263,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
 
 // ── Admin action: Blast Shipment RFQ (guarded) ──────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/blast-shipment-rfq", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2075,7 +2310,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/blast-shipment-rfq", async (re
 
 // ── Admin action: Mark Ready for Pickup ─────────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/mark-ready-pickup", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2107,7 +2342,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-ready-pickup", async (req
 
 // ── Admin action: Mark Shipment Vendor Confirmed ─────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2145,7 +2380,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed
 
 // ── Admin action: Send Pickup Instruction WA ────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-pickup-instruction", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2171,7 +2406,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-pickup-instruction", asyn
 
 // ── Admin action: Send Shipment Selection Reminder WA ───────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-shipment-reminder", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 

@@ -693,6 +693,28 @@ const waTrustedLoginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Password recovery endpoints are deliberately limited independently from
+// login/OTP buckets: reset links are expensive to deliver and can otherwise be
+// abused to flood an account or mailbox. The service still returns a generic
+// forgot-password response to avoid email enumeration.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // POST /api/portal/auth/login — email/password login (non-Supabase)
 router.post("/auth/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body ?? {};
@@ -929,7 +951,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, async (req, res) => {
 });
 
 // POST /api/portal/auth/forgot-password — custom flow via portal_customers (not Supabase Auth)
-router.post("/auth/forgot-password", async (req, res) => {
+router.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
   try {
     const { email, origin: bodyOrigin } = req.body ?? {};
     if (!email || typeof email !== "string") return res.status(400).json({ message: "Email wajib diisi." });
@@ -947,7 +969,7 @@ router.post("/auth/forgot-password", async (req, res) => {
 });
 
 // POST /api/portal/auth/reset-password-with-token — verify token and set new password
-router.post("/auth/reset-password-with-token", async (req, res) => {
+router.post("/auth/reset-password-with-token", resetPasswordLimiter, async (req, res) => {
   try {
     const { email, token, password } = req.body ?? {};
     if (!email || !token || !password) return res.status(400).json({ message: "email, token, dan password wajib diisi." });

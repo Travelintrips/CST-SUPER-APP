@@ -26,6 +26,7 @@ import { authRateLimiter } from "./middlewares/securityRateLimiter";
 import { correlationIdMiddleware } from "./middlewares/correlationId";
 import { logger } from "./lib/logger";
 import { recordResponseTime } from "./lib/responseTimeLog";
+import { portalCsrfProtection } from "./middlewares/portalCsrfProtection";
 
 const app: Express = express();
 
@@ -199,6 +200,9 @@ app.use(
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(cookieParser());
+// Cookie-authenticated unsafe requests must prove a same-site portal origin.
+// Bearer-only API clients and public callbacks remain unaffected.
+app.use(portalCsrfProtection);
 
 // ─── Process liveness ─────────────────────────────────────────────────────────
 // Register this before bearer/auth middleware. It answers only whether this

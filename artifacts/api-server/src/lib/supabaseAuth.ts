@@ -89,7 +89,11 @@ export function setPortalSessionCookie(
   maxAgeMs = 7 * 24 * 60 * 60 * 1000, // 7 days
 ): void {
   const secure = IS_PROD;
-  const sameSite: "none" | "lax" = IS_PROD ? "none" : "lax";
+  // The portal is same-site with its API and OAuth returns through a top-level
+  // navigation, so Lax preserves the supported flows while blocking ambient
+  // cross-site cookie submission. Unsafe requests are additionally protected
+  // by portalCsrfProtection.
+  const sameSite = "lax" as const;
   res.cookie(PORTAL_SESSION_COOKIE, token, {
     httpOnly: true,
     secure,
@@ -111,7 +115,7 @@ export function setPortalSessionCookie(
 /** Clear both portal session cookies on the response (logout). */
 export function clearPortalSessionCookie(res: Response): void {
   const secure = IS_PROD;
-  const sameSite: "none" | "lax" = IS_PROD ? "none" : "lax";
+  const sameSite = "lax" as const;
   res.clearCookie(PORTAL_SESSION_COOKIE, { path: "/", secure, sameSite });
   res.clearCookie(PORTAL_SESSION_HINT_COOKIE, { path: "/", secure, sameSite });
 }
