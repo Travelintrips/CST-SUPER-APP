@@ -15,6 +15,12 @@ Schema required by an active write endpoint must not be installed by fire-and-fo
 
 **How to apply:** Centralize the required columns in the authoritative migration, run its minimal compatibility subset as a fail-closed pre-start substep, and remove duplicate asynchronous route-level DDL.
 
+Capability-token schema changes must verify both the nullable token column and its partial unique index in the live DEV catalog after restart; a column-only proof is insufficient for collision safety.
+
+**Why:** A product-first token column appeared after route startup while the unique index remained absent because the legacy startup stage was already marked complete.
+
+**How to apply:** Pair the additive migration with an idempotent unique index and query both catalog objects before treating the runtime contract as proven.
+
 The persistent gate resolves server-chain stages by their exact display name, so adding a migration function and chaining its call is insufficient unless the matching registry row is also present.
 
 **Why:** An unregistered display name fails closed before the migration callback runs, leaving the API unready even when the migration implementation itself is valid.

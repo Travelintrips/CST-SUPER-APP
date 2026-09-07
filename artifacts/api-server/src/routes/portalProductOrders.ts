@@ -210,6 +210,11 @@ db.execute(sql`
     ADD COLUMN IF NOT EXISTS ready_date TEXT,
     ADD COLUMN IF NOT EXISTS pickup_location TEXT
 `).catch(() => {});
+db.execute(sql`
+  CREATE UNIQUE INDEX IF NOT EXISTS portal_product_orders_shipment_selection_token_uniq
+    ON portal_product_orders (shipment_selection_token)
+    WHERE shipment_selection_token IS NOT NULL
+`).catch(() => {});
 
 // ── Phase 2B-4: invoice cost breakdown columns ─────────────────────────────
 db.execute(sql`
