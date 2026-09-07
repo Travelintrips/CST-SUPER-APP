@@ -15,7 +15,12 @@ import { Navbar } from "@/components/layout/Navbar";
 import { MobileBottomNav } from "@/components/layout/MobileBottomNav";
 import { Footer } from "@/components/layout/Footer";
 import { supabase } from "@/lib/supabase";
-import { fetchAndStoreProfile, isAuthenticated } from "@/lib/auth";
+import {
+  fetchPortalAuthBootstrap,
+  getCachedPortalAuthBootstrap,
+  isAuthenticated,
+  type PortalAuthBootstrap,
+} from "@/lib/auth";
 
 // ── Lazy-loaded pages (each becomes its own JS chunk) ────────────────────────
 const Home                      = lazy(() => import("@/pages/home"));
@@ -204,63 +209,11 @@ function isNoAuthRoute(path: string) {
   return NO_AUTH_CHECK_PREFIXES.some((p) => path.startsWith(p));
 }
 
-async function checkOnboardingAndRedirect(
-  role: string,
-  token: string,
+function redirectFromBootstrap(
+  bootstrap: PortalAuthBootstrap,
   setLocation: (path: string) => void,
 ) {
-  // Keep the return target pending until the server confirms the account is
-  // fully onboarded. A first-login Google account must not bypass this gate.
-  const savedReturnTo = sessionStorage.getItem("oauth_return_to");
-  sessionStorage.removeItem("oauth_return_to");
-
-  if (role === "admin") { setLocation("/admin"); return; }
-
-  try {
-    const res = await fetch("/api/portal/onboarding/status", {
-      credentials: "include",
-    });
-    if (res.ok) {
-      const d = await res.json() as {
-        status: string;
-        role?: string;
-        accountType?: string;
-        customerContext?: { status?: string };
-      };
-      const effectiveRole = d.role ?? d.accountType ?? role;
-      const organizationStatus = d.customerContext?.status;
-      if (
-        effectiveRole === "customer"
-        &&
-        d.status === "active"
-        && (organizationStatus === "legacy_unresolved" || organizationStatus === "company_unresolved")
-      ) {
-        setLocation("/onboarding");
-        return;
-      }
-      if (organizationStatus === "company_pending") {
-        setLocation("/pending-approval");
-        return;
-      }
-      if (d.status === "incomplete") { setLocation("/onboarding"); return; }
-      if (d.status === "pending" || d.status === "rejected") { setLocation("/pending-approval"); return; }
-      if (effectiveRole === "admin") { setLocation("/admin"); return; }
-      if (effectiveRole === "vendor") { setLocation("/vendor-dashboard"); return; }
-      if (
-        savedReturnTo
-        && savedReturnTo !== "/onboarding"
-        && savedReturnTo !== "/pending-approval"
-        && !savedReturnTo.startsWith("/vendor-dashboard")
-        && !savedReturnTo.startsWith("/admin")
-      ) {
-        setLocation(savedReturnTo);
-        return;
-      }
-    }
-  } catch { /* network error — fall through */ }
-
-  if (role === "vendor") setLocation("/vendor-dashboard");
-  else setLocation("/dashboard");
+  setLocation(bootstrap.allowedDestination);
 }
 
 function OAuthRedirectHandler() {
@@ -273,12 +226,16 @@ function OAuthRedirectHandler() {
 
     // The backend Google flow sets the portal_session_hint cookie rather than
     // a Supabase session. Resolve that cookie session after returning to /login.
-    if ((path === "/" || path === "/login") && isAuthenticated()) {
-      fetchAndStoreProfile().then(async (profile) => {
-        if (!disposed && profile) {
-          await checkOnboardingAndRedirect(profile.role, "", setLocation);
-        }
+    const resolvePostAuth = () => {
+      const savedReturnTo = sessionStorage.getItem("oauth_return_to");
+      sessionStorage.removeItem("oauth_return_to");
+      return fetchPortalAuthBootstrap(savedReturnTo).then((bootstrap) => {
+        if (!disposed && bootstrap) redirectFromBootstrap(bootstrap, setLocation);
       });
+    };
+
+    if ((path === "/" || path === "/login") && isAuthenticated()) {
+      void resolvePostAuth();
     }
 
     if (!supabase) {
@@ -288,16 +245,14 @@ function OAuthRedirectHandler() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
       if (path !== "/" && path !== "/login") return;
-      const profile = await fetchAndStoreProfile();
-      if (profile) await checkOnboardingAndRedirect(profile.role, session.access_token, setLocation);
+      await resolvePostAuth();
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if ((event === "SIGNED_IN" || event === "INITIAL_SESSION") && session) {
         const p = currentPortalPath();
         if (p !== "/" && p !== "/login") return;
-        const profile = await fetchAndStoreProfile();
-        if (profile) await checkOnboardingAndRedirect(profile.role, session.access_token, setLocation);
+        await resolvePostAuth();
       }
     });
     return () => {
@@ -322,14 +277,14 @@ function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
     }
 
     (async () => {
-      const profile = await fetchAndStoreProfile();
+      const bootstrap = getCachedPortalAuthBootstrap() ?? await fetchPortalAuthBootstrap();
       if (disposed) return;
-      if (!profile) {
+      if (!bootstrap) {
         navigate("/login");
         return;
       }
 
-      const role = profile.role;
+      const role = bootstrap.role;
       const isAdminPath = location === "/admin" || location.startsWith("/admin/");
       if (role === "admin") {
         if (!isAdminPath) navigate("/admin");
@@ -337,48 +292,22 @@ function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
         return;
       }
 
-      try {
-        const res = await fetch("/api/portal/onboarding/status", { credentials: "include" });
-        if (!res.ok) throw new Error("onboarding status unavailable");
-        const d = await res.json() as {
-          status: string;
-          role?: string;
-          accountType?: string;
-          customerContext?: { status?: string };
-        };
-        const effectiveRole = d.role ?? d.accountType ?? role;
-        if (
-          effectiveRole === "customer"
-          && d.status === "active"
-          && (d.customerContext?.status === "legacy_unresolved" || d.customerContext?.status === "company_unresolved")
-        ) {
-          navigate("/onboarding");
-          return;
-        }
-        if (d.customerContext?.status === "company_pending" || d.status === "pending" || d.status === "rejected") {
-          navigate("/pending-approval");
-          return;
-        }
-        if (d.status === "incomplete") {
-          navigate("/onboarding");
-          return;
-        }
-        if (effectiveRole === "vendor" && location === "/dashboard") {
-          navigate("/vendor-dashboard");
-          return;
-        }
-        if (effectiveRole !== "vendor" && location === "/vendor-dashboard") {
-          navigate("/dashboard");
-          return;
-        }
-        if (effectiveRole === "admin") {
-          navigate("/admin");
-          return;
-        }
-        if (!disposed) setAuthorized(true);
-      } catch {
-        if (!disposed) navigate("/login");
+      if (
+        (bootstrap.allowedDestination === "/onboarding" || bootstrap.allowedDestination === "/pending-approval")
+        && location !== bootstrap.allowedDestination
+      ) {
+        navigate(bootstrap.allowedDestination);
+        return;
       }
+      if (role === "vendor" && location === "/dashboard") {
+        navigate("/vendor-dashboard");
+        return;
+      }
+      if (role !== "vendor" && location === "/vendor-dashboard") {
+        navigate("/dashboard");
+        return;
+      }
+      if (!disposed) setAuthorized(true);
     })();
 
     return () => { disposed = true; };

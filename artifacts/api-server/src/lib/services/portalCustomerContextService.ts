@@ -72,65 +72,57 @@ export class PortalCustomerContextError extends Error {
   }
 }
 
-export async function getPortalCustomerContext(customerId: number): Promise<PortalCustomerContext> {
-  if (!Number.isInteger(customerId) || customerId <= 0) {
-    throw new PortalCustomerContextError(404, "Customer tidak ditemukan.");
-  }
+type PortalCustomerContextCustomer = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  customerType: PortalCustomerType | null;
+  legacyCompany: string | null;
+};
 
-  const [customer] = await db
-    .select({
-      id: portalCustomersTable.id,
-      name: portalCustomersTable.name,
-      email: portalCustomersTable.email,
-      phone: portalCustomersTable.phone,
-      customerType: portalCustomersTable.customerType,
-      legacyCompany: portalCustomersTable.company,
-    })
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, customerId))
-    .limit(1);
-
-  if (!customer) {
-    throw new PortalCustomerContextError(404, "Customer tidak ditemukan.");
-  }
-
-  const memberships = await db
-    .select({
-      id: portalCompanyMembersTable.id,
-      companyId: portalCompanyMembersTable.companyId,
-      companyName: companiesTable.companyName,
-      companyCode: companiesTable.companyCode,
-      buyerRole: portalCompanyMembersTable.buyerRole,
-      department: portalCompanyMembersTable.department,
-      costCenter: portalCompanyMembersTable.costCenter,
-      approvalLevel: portalCompanyMembersTable.approvalLevel,
-    })
-    .from(portalCompanyMembersTable)
-    .innerJoin(companiesTable, eq(companiesTable.id, portalCompanyMembersTable.companyId))
-    .where(and(
-      eq(portalCompanyMembersTable.portalCustomerId, customerId),
-      eq(portalCompanyMembersTable.isActive, true),
-    ))
-    .orderBy(asc(portalCompanyMembersTable.createdAt));
-
-  const [pendingRequest] = await db
-    .select({
-      id: portalCompanyRequestsTable.id,
-      requestedCompanyName: portalCompanyRequestsTable.requestedCompanyName,
-      requestedRegistrationNumber: portalCompanyRequestsTable.requestedRegistrationNumber,
-      status: portalCompanyRequestsTable.status,
-      matchedCompanyId: portalCompanyRequestsTable.matchedCompanyId,
-      reviewNote: portalCompanyRequestsTable.reviewNote,
-      createdAt: portalCompanyRequestsTable.createdAt,
-      updatedAt: portalCompanyRequestsTable.updatedAt,
-    })
-    .from(portalCompanyRequestsTable)
-    .where(and(
-      eq(portalCompanyRequestsTable.portalCustomerId, customerId),
-      eq(portalCompanyRequestsTable.status, "pending"),
-    ))
-    .orderBy(desc(portalCompanyRequestsTable.createdAt))
-    .limit(1);
+async function buildPortalCustomerContext(
+  customerId: number,
+  customer: PortalCustomerContextCustomer,
+): Promise<PortalCustomerContext> {
+  const [[memberships], [pendingRequest]] = await Promise.all([
+    db
+      .select({
+        id: portalCompanyMembersTable.id,
+        companyId: portalCompanyMembersTable.companyId,
+        companyName: companiesTable.companyName,
+        companyCode: companiesTable.companyCode,
+        buyerRole: portalCompanyMembersTable.buyerRole,
+        department: portalCompanyMembersTable.department,
+        costCenter: portalCompanyMembersTable.costCenter,
+        approvalLevel: portalCompanyMembersTable.approvalLevel,
+      })
+      .from(portalCompanyMembersTable)
+      .innerJoin(companiesTable, eq(companiesTable.id, portalCompanyMembersTable.companyId))
+      .where(and(
+        eq(portalCompanyMembersTable.portalCustomerId, customerId),
+        eq(portalCompanyMembersTable.isActive, true),
+      ))
+      .orderBy(asc(portalCompanyMembersTable.createdAt)),
+    db
+      .select({
+        id: portalCompanyRequestsTable.id,
+        requestedCompanyName: portalCompanyRequestsTable.requestedCompanyName,
+        requestedRegistrationNumber: portalCompanyRequestsTable.requestedRegistrationNumber,
+        status: portalCompanyRequestsTable.status,
+        matchedCompanyId: portalCompanyRequestsTable.matchedCompanyId,
+        reviewNote: portalCompanyRequestsTable.reviewNote,
+        createdAt: portalCompanyRequestsTable.createdAt,
+        updatedAt: portalCompanyRequestsTable.updatedAt,
+      })
+      .from(portalCompanyRequestsTable)
+      .where(and(
+        eq(portalCompanyRequestsTable.portalCustomerId, customerId),
+        eq(portalCompanyRequestsTable.status, "pending"),
+      ))
+      .orderBy(desc(portalCompanyRequestsTable.createdAt))
+      .limit(1),
+  ]);
 
   const customerType = customer.customerType as PortalCustomerType | null;
   // A NULL customer_type is an explicitly unresolved legacy identity. Do not
@@ -169,4 +161,44 @@ export async function getPortalCustomerContext(customerId: number): Promise<Port
     activeMemberships: memberships,
     pendingRequest: pendingRequest ?? null,
   };
+}
+
+/**
+ * Resolve company context when the caller already loaded the canonical
+ * customer row. The auth bootstrap uses this to avoid re-reading
+ * portal_customers after authentication has already established identity.
+ */
+export async function getPortalCustomerContextForCustomer(
+  customerId: number,
+  customer: PortalCustomerContextCustomer,
+): Promise<PortalCustomerContext> {
+  if (!Number.isInteger(customerId) || customerId <= 0 || customer.id !== customerId) {
+    throw new PortalCustomerContextError(404, "Customer tidak ditemukan.");
+  }
+  return buildPortalCustomerContext(customerId, customer);
+}
+
+export async function getPortalCustomerContext(customerId: number): Promise<PortalCustomerContext> {
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    throw new PortalCustomerContextError(404, "Customer tidak ditemukan.");
+  }
+
+  const [customer] = await db
+    .select({
+      id: portalCustomersTable.id,
+      name: portalCustomersTable.name,
+      email: portalCustomersTable.email,
+      phone: portalCustomersTable.phone,
+      customerType: portalCustomersTable.customerType,
+      legacyCompany: portalCustomersTable.company,
+    })
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, customerId))
+    .limit(1);
+
+  if (!customer) {
+    throw new PortalCustomerContextError(404, "Customer tidak ditemukan.");
+  }
+
+  return buildPortalCustomerContext(customerId, customer);
 }

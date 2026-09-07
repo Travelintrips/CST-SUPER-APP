@@ -215,6 +215,10 @@ import {
   evaluateVendorInvitationEmail,
 } from "../lib/vendorInvitationIdentityGuard.js";
 import {
+  getPortalAuthBootstrap,
+  PortalAuthBootstrapError,
+} from "../lib/services/portalAuthBootstrapService.js";
+import {
   LogisticOrderServiceError,
   submitVendorQuote,
   listSalesOrders,
@@ -1015,6 +1019,36 @@ router.get("/auth/me", requirePortalAuth, async (req, res) => {
     return res.json(await getMe(customerId));
   } catch (err) {
     if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/auth/bootstrap
+// One canonical post-auth response for role, onboarding, company ownership,
+// approval state, and the safe destination. Protected APIs still authorize
+// independently; this endpoint only removes duplicate client-side lookups.
+router.get("/auth/bootstrap", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const bootstrap = await getPortalAuthBootstrap(customerId, req.query.returnTo);
+    const t = bootstrap.timings;
+    res.setHeader(
+      "Server-Timing",
+      [
+        `user-profile;dur=${t.USER_PROFILE_MS}`,
+        `role-resolution;dur=${t.ROLE_RESOLUTION_MS}`,
+        `onboarding-status;dur=${t.ONBOARDING_STATUS_MS}`,
+        `company-context;dur=${t.COMPANY_CONTEXT_MS}`,
+        `vendor-approval;dur=${t.VENDOR_APPROVAL_MS}`,
+        `redirect-decision;dur=${t.REDIRECT_DECISION_MS}`,
+        `total-resolution;dur=${t.TOTAL_RESOLUTION_MS}`,
+      ].join(", "),
+    );
+    return res.json(bootstrap);
+  } catch (err) {
+    if (err instanceof PortalAuthBootstrapError) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
     throw err;
   }
 });

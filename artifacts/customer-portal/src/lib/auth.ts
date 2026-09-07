@@ -22,6 +22,8 @@ const PROFILE_KEY            = "portal_profile";
 const DEV_TOKEN_KEY          = "portal_dev_token";
 export const TRUSTED_DEVICE_KEY = "cst_trusted_device";
 export const REMEMBER_DAYS   = 30;
+let portalAuthBootstrapCache: PortalAuthBootstrap | null = null;
+let portalAuthBootstrapInFlight: Promise<PortalAuthBootstrap | null> | null = null;
 
 interface PortalProfile {
   customerId: number;
@@ -29,6 +31,42 @@ interface PortalProfile {
   name: string;
   email: string;
 }
+
+export type PortalAuthBootstrap = {
+  authenticated: true;
+  user: {
+    id: number;
+    name: string;
+    email: string;
+    phone: string | null;
+    company: string | null;
+    role: string;
+    customerType: string | null;
+  };
+  role: string;
+  onboardingComplete: boolean;
+  onboardingStatus: string;
+  customerType: string | null;
+  customerContext: {
+    status: string;
+    companyId: number | null;
+    company: unknown;
+    activeMemberships: unknown[];
+    pendingRequest: unknown;
+  };
+  vendorApprovalStatus: string | null;
+  allowedDestination: string;
+  safeReturnTo: string | null;
+  timings?: {
+    USER_PROFILE_MS: number;
+    ROLE_RESOLUTION_MS: number;
+    ONBOARDING_STATUS_MS: number;
+    COMPANY_CONTEXT_MS: number;
+    VENDOR_APPROVAL_MS: number;
+    REDIRECT_DECISION_MS: number;
+    TOTAL_RESOLUTION_MS: number;
+  };
+};
 
 interface TrustedDeviceData {
   phone: string;
@@ -156,10 +194,69 @@ export function removeAuthToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(PROFILE_KEY);
   localStorage.removeItem(DEV_TOKEN_KEY);
+  clearPortalAuthBootstrap();
   clearTrustedDevice();
   // C1 FIX: hapus HttpOnly cookie via server endpoint (best-effort)
   fetch("/api/portal/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
   if (supabase) supabase.auth.signOut().catch(() => {});
+}
+
+export function clearPortalAuthBootstrap(): void {
+  portalAuthBootstrapCache = null;
+  portalAuthBootstrapInFlight = null;
+}
+
+export function getCachedPortalAuthBootstrap(): PortalAuthBootstrap | null {
+  return portalAuthBootstrapCache;
+}
+
+function storePortalAuthBootstrap(data: PortalAuthBootstrap): PortalAuthBootstrap {
+  portalAuthBootstrapCache = data;
+  setPortalProfile({
+    customerId: data.user.id,
+    role: data.user.role,
+    name: data.user.name,
+    email: data.user.email,
+  });
+  return data;
+}
+
+/**
+ * Resolve all post-auth routing state with one server-side request.
+ * The in-flight/cache layer only prevents duplicate requests during the same
+ * browser transition; it is never used by API authorization.
+ */
+export async function fetchPortalAuthBootstrap(
+  requestedReturnTo?: string | null,
+): Promise<PortalAuthBootstrap | null> {
+  if (portalAuthBootstrapCache && !requestedReturnTo) return portalAuthBootstrapCache;
+  if (portalAuthBootstrapInFlight) return portalAuthBootstrapInFlight;
+
+  const token = hasCookieSession() ? null : await getSupabaseToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const query = requestedReturnTo
+    ? `?returnTo=${encodeURIComponent(requestedReturnTo)}`
+    : "";
+
+  portalAuthBootstrapInFlight = fetch(`/api/portal/auth/bootstrap${query}`, {
+    headers,
+    credentials: "include",
+  })
+    .then(async (res) => {
+      if (res.status === 401 || res.status === 403) {
+        removeAuthToken();
+        return null;
+      }
+      if (!res.ok) return null;
+      return storePortalAuthBootstrap(await res.json() as PortalAuthBootstrap);
+    })
+    .catch(() => null)
+    .finally(() => {
+      portalAuthBootstrapInFlight = null;
+    });
+
+  return portalAuthBootstrapInFlight;
 }
 
 /**
