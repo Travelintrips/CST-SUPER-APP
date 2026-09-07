@@ -2,8 +2,8 @@
  * Payroll — Cash Advance & Payroll Accounting Automation.
  *
  * Tables reused as-is: employees, payroll_runs, payroll_items (pre-existing).
- * Kasbon (cash_advances) has no employee_id FK — matched to employees at
- * calculate-time by normalized full name (party_name vs first_name+last_name).
+ * Kasbon is matched to employees by employee_id first, with a unique normalized
+ * name fallback for legacy rows that predate the employee_id column.
  * All journal postings go through PayrollJournalService — never postEntry() directly.
  */
 import { Router } from "express";
@@ -30,6 +30,40 @@ function normalizeName(s: string): string {
 
 function n(v: unknown): number {
   return v == null ? 0 : Number(v);
+}
+
+function sortOutstandingAdvances<T extends { date: unknown; id: number }>(advances: T[]): T[] {
+  return [...advances].sort((a, b) => {
+    const dateOrder = String(a.date ?? "").localeCompare(String(b.date ?? ""));
+    return dateOrder || a.id - b.id;
+  });
+}
+
+function resolveAdvanceForEmployee(
+  advances: Array<{
+    id: number;
+    employeeId: number | null;
+    responsibleEmployeeId: string | null;
+    partyName: string;
+    date: unknown;
+    remainingAmount: string;
+    repaymentMethod: string;
+    installmentAmount: string | null;
+  }>,
+  employee: { id: number; firstName: string; lastName: string },
+) {
+  const eligible = advances.filter((a) => n(a.remainingAmount) > 0);
+  const explicit = eligible.filter((a) =>
+    (a.employeeId != null && String(a.employeeId) === String(employee.id)) ||
+    (a.responsibleEmployeeId != null && String(a.responsibleEmployeeId) === String(employee.id)),
+  );
+  if (explicit.length) return sortOutstandingAdvances(explicit)[0] ?? null;
+
+  // Legacy fallback is safe only when the name identifies one outstanding
+  // advance. Never guess between multiple same-name advances.
+  const fullName = normalizeName(`${employee.firstName} ${employee.lastName}`);
+  const byName = eligible.filter((a) => normalizeName(a.partyName) === fullName);
+  return byName.length === 1 ? byName[0] : null;
 }
 
 function payrollRunIntegrityError(run: {
@@ -220,8 +254,7 @@ router.post("/runs/:id/calculate", async (req, res) => {
   const results = [];
   for (const { item, employee } of items) {
     if (!employee) { results.push({ itemId: item.id, matched: false }); continue; }
-    const fullName = normalizeName(`${employee.firstName} ${employee.lastName}`);
-    const adv = outstanding.find((a) => normalizeName(a.partyName) === fullName && n(a.remainingAmount) > 0);
+    const adv = resolveAdvanceForEmployee(outstanding, employee);
 
     const gross = n(item.baseSalary) + n(item.allowance);
     const nonKasbonDeductions = n(item.bpjsJhtEmployee) + n(item.bpjsKesEmployee) + n(item.pph21) + n(item.otherDeductions);
@@ -276,6 +309,15 @@ router.post("/runs/:id/approve", async (req, res) => {
   const items = await db.select().from(payrollItemsTable).where(eq(payrollItemsTable.runId, runId));
   if (!items.length) { res.status(400).json({ message: "Payroll run tidak memiliki item." }); return; }
 
+  const unlinkedKasbon = items.filter((i) => n(i.kasbonDeduction) > 0 && !i.cashAdvanceId);
+  if (unlinkedKasbon.length) {
+    res.status(409).json({
+      message: "Payroll memiliki potongan kasbon tanpa sumber kasbon. Jalankan Hitung Ulang sebelum approve.",
+      itemIds: unlinkedKasbon.map((i) => i.id),
+    });
+    return;
+  }
+
   const totalSalary = items.reduce((s, i) => s + n(i.baseSalary), 0);
   const totalAllowance = items.reduce((s, i) => s + n(i.allowance), 0);
   const totalTax = items.reduce((s, i) => s + n(i.pph21), 0);
@@ -288,10 +330,31 @@ router.post("/runs/:id/approve", async (req, res) => {
     ? await db.select().from(cashAdvancesTable).where(sql`${cashAdvancesTable.id} IN ${advanceIds}`)
     : [];
   const advanceById = new Map(advances.map((a) => [a.id, a]));
+  const usedAdvanceIds = new Set<number>();
   const kasbonByAccountMap = new Map<number, number>();
   for (const i of kasbonItems) {
     const adv = advanceById.get(i.cashAdvanceId!);
-    if (!adv?.receivableAccountId) continue;
+    if (!adv) {
+      res.status(409).json({ message: `Kasbon untuk payroll item ${i.id} tidak ditemukan.` });
+      return;
+    }
+    if (usedAdvanceIds.has(adv.id)) {
+      res.status(409).json({ message: `Kasbon ${adv.id} dipakai lebih dari satu item payroll.` });
+      return;
+    }
+    usedAdvanceIds.add(adv.id);
+    if (adv.employeeId != null && String(adv.employeeId) !== String(i.employeeId)) {
+      res.status(409).json({ message: `Kasbon ${adv.id} tidak cocok dengan karyawan payroll item ${i.id}.` });
+      return;
+    }
+    if (n(i.kasbonDeduction) > n(adv.remainingAmount) + 0.005) {
+      res.status(409).json({ message: `Potongan kasbon item ${i.id} melebihi saldo kasbon ${adv.id}.` });
+      return;
+    }
+    if (!adv.receivableAccountId) {
+      res.status(409).json({ message: `COA piutang kasbon ${adv.id} belum terisi.` });
+      return;
+    }
     kasbonByAccountMap.set(adv.receivableAccountId, (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(i.kasbonDeduction));
   }
   const kasbonByAccount = [...kasbonByAccountMap.entries()].map(([accountId, amount]) => ({ accountId, amount }));
