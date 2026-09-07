@@ -89,6 +89,17 @@ async function scopeAdminToA() {
   if (!await tableExists('user_allowed_companies')) throw new Error('user_allowed_companies table missing');
   await q('UPDATE users SET company_id=$1 WHERE id=$2', [created.companies[0], created.adminUserId]);
   await q('INSERT INTO user_allowed_companies (user_id,company_id) VALUES ($1,$2)', [created.adminUserId, created.companies[0]]);
+  // The dev-login session snapshots the user's company context. Update that
+  // existing deterministic session after applying the fixture scope so proof
+  // requests cannot accidentally reuse the pre-scope all-company context.
+  if (!created.sid) throw new Error('missing admin session before scope');
+  const sessionUpdate = await q(
+    `UPDATE sessions
+        SET sess = jsonb_set(sess::jsonb, '{user,companyId}', to_jsonb($1::int), true)::json
+      WHERE sid=$2`,
+    [created.companies[0], created.sid.replace(/^sid=/, '')],
+  );
+  if (sessionUpdate.rowCount !== 1) throw new Error('admin session scope update did not affect one row');
 }
 async function proof1(cookie) {
   const paymentId = created.payments[0];
