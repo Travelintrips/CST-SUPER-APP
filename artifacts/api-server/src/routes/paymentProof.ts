@@ -265,14 +265,22 @@ paymentProofPublicRouter.post(
     }
 
     // Simpan private storage path di DB; akses via endpoint internal /proof-file/:id
-    await db
+    const [claimed] = await db
       .update(salesDocumentsTable)
       .set({
         proofUrl: privateStoragePath,
         proofUploadedAt: new Date(),
         proofRemarks: remarks || null,
       })
-      .where(eq(salesDocumentsTable.id, doc.id));
+      .where(sql`${salesDocumentsTable.id} = ${doc.id} AND ${salesDocumentsTable.proofUrl} IS NULL`)
+      .returning({ id: salesDocumentsTable.id });
+    if (!claimed) {
+      await new ObjectStorageService().deletePrivateEntity(privateStoragePath).catch((err: unknown) =>
+        logger.warn({ err, privateStoragePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      res.send(alreadyUploadedHtml(invoiceLabel, doc.customerName));
+      return;
+    }
 
     if (doc.logisticOrderId) {
       void transitionLogisticOrderStatus(doc.logisticOrderId, "Payment Received", {
@@ -540,8 +548,8 @@ router.post("/:token/upload", upload.single("file"), async (req: Request, res: R
 
   try {
     const rows = await db.execute(sql`
-      SELECT id, doc_number, invoice_number, customer_name, grand_total,
-             customer_id, logistic_order_id, proof_upload_token_expires_at
+       SELECT id, doc_number, invoice_number, customer_name, grand_total,
+              customer_id, logistic_order_id, proof_url, proof_upload_token_expires_at
       FROM sales_documents
       WHERE proof_upload_token = ${token}
       LIMIT 1
@@ -563,14 +571,29 @@ router.post("/:token/upload", upload.single("file"), async (req: Request, res: R
     // Internal endpoint URL — akses via /api/payment-proof/file/:id (admin only)
     const internalProofUrl = `/api/payment-proof/file/${String(row["id"])}`;
 
-    // Update record — simpan private path di DB
-    await db.execute(sql`
+    if (row["proof_url"]) {
+      await objStore.deletePrivateEntity(proofPrivatePath).catch((err: unknown) =>
+        logger.warn({ err, proofPrivatePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      return res.status(409).json({ error: "Bukti pembayaran sudah diunggah sebelumnya." });
+    }
+
+    // Update record — simpan private path di DB only once. The predicate is
+    // the ownership/concurrency boundary for this capability token.
+    const claimed = await db.execute(sql`
       UPDATE sales_documents
       SET proof_url = ${proofPrivatePath},
           proof_remarks = ${remarks},
           proof_uploaded_at = NOW()
-      WHERE id = ${Number(row["id"])}
+      WHERE id = ${Number(row["id"])} AND proof_url IS NULL
+      RETURNING id
     `);
+    if (claimed.rows.length === 0) {
+      await objStore.deletePrivateEntity(proofPrivatePath).catch((err: unknown) =>
+        logger.warn({ err, proofPrivatePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      return res.status(409).json({ error: "Bukti pembayaran sudah diunggah sebelumnya." });
+    }
 
     // Audit log
     db.execute(sql`

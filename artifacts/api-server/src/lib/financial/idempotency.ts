@@ -26,37 +26,46 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 import type { Request, Response, NextFunction } from "express";
+import { createHash } from "node:crypto";
 
 // ─── Migration ────────────────────────────────────────────────────────────────
 
 let _migrated = false;
+let _migrationPromise: Promise<void> | null = null;
 
 export async function ensureIdempotencyTable(): Promise<void> {
   if (_migrated) return;
-  _migrated = true;
+  if (!_migrationPromise) {
+    _migrationPromise = (async () => {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS processed_requests (
+          idempotency_key TEXT NOT NULL,
+          namespace       TEXT NOT NULL DEFAULT 'default',
+          response_code   INTEGER NOT NULL DEFAULT 200,
+          response_body   JSONB,
+          actor           TEXT,
+          request_fingerprint TEXT,
+          created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at      TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+          PRIMARY KEY (idempotency_key, namespace)
+        )
+      `);
 
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS processed_requests (
-      idempotency_key TEXT NOT NULL,
-      namespace       TEXT NOT NULL DEFAULT 'default',
-      response_code   INTEGER NOT NULL DEFAULT 200,
-      response_body   JSONB,
-      actor           TEXT,
-      request_fingerprint TEXT,
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      expires_at      TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
-      PRIMARY KEY (idempotency_key, namespace)
-    )
-  `).catch(() => {});
+      await db.execute(sql`
+        ALTER TABLE processed_requests
+          ADD COLUMN IF NOT EXISTS request_fingerprint TEXT
+      `);
 
-  await db.execute(sql`
-    ALTER TABLE processed_requests
-      ADD COLUMN IF NOT EXISTS request_fingerprint TEXT
-  `).catch(() => {});
-
-  await db.execute(sql`
-    CREATE INDEX IF NOT EXISTS pr_expires_idx ON processed_requests(expires_at)
-  `).catch(() => {});
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS pr_expires_idx ON processed_requests(expires_at)
+      `);
+      _migrated = true;
+    })().catch((error) => {
+      _migrationPromise = null;
+      throw error;
+    });
+  }
+  await _migrationPromise;
 }
 
 // ─── Core functions ───────────────────────────────────────────────────────────
@@ -114,8 +123,9 @@ export async function checkIdempotency(
         ? JSON.parse(row["response_body"])
         : row["response_body"],
     };
-  } catch {
-    return { hit: false }; // non-fatal: continue processing if check fails
+  } catch (error) {
+    logger.error({ error, key, namespace }, "[idempotency] check failed closed");
+    throw new Error("IDEMPOTENCY_STORAGE_UNAVAILABLE");
   }
 }
 
@@ -172,9 +182,9 @@ export async function claimIdempotencySlot(
 
     // Slot exists but no response yet — concurrent request is in-flight
     return { claimed: false, inFlight: true };
-  } catch {
-    // On any error, let the request proceed (fail-open for availability)
-    return { claimed: true };
+  } catch (error) {
+    logger.error({ error, key, namespace }, "[idempotency] claim failed closed");
+    throw new Error("IDEMPOTENCY_STORAGE_UNAVAILABLE");
   }
 }
 
@@ -232,7 +242,7 @@ export async function cleanupExpiredKeys(): Promise<number> {
 // ─── Express Middleware ───────────────────────────────────────────────────────
 
 export type IdempotencyNamespaceResolver = (req: Request) => string;
-export type IdempotencyScopeResolver = (req: Request) => string;
+export type IdempotencyScopeResolver = (req: Request) => string | Promise<string>;
 export type IdempotencyFingerprintResolver = (req: Request) => string | null;
 
 const defaultNamespaceResolver: IdempotencyNamespaceResolver = (req) => {
@@ -240,6 +250,28 @@ const defaultNamespaceResolver: IdempotencyNamespaceResolver = (req) => {
   const path = req.path.replace(/\/\d+/g, "/:id");
   return `${req.method}:${path}`;
 };
+
+/**
+ * Stable JSON serialization for request fingerprints. Object key order is not
+ * semantically meaningful, while array order is preserved because item order
+ * can be meaningful to the business payload.
+ */
+export function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => (
+    `${JSON.stringify(key)}:${stableSerialize(record[key])}`
+  )).join(",")}}`;
+}
+
+export function canonicalRequestFingerprint(value: unknown): string {
+  return createHash("sha256").update(stableSerialize(value)).digest("hex");
+}
 
 /**
  * createIdempotencyMiddleware — factory untuk membuat middleware idempotency.
@@ -279,10 +311,27 @@ export function createIdempotencyMiddleware(
       return next();
     }
 
-    const scope = opts?.scopeResolver?.(req);
+    const scope = await opts?.scopeResolver?.(req);
     const ns = scope ? `${nsResolver(req)}:${scope}` : nsResolver(req);
-    const fingerprint = opts?.fingerprintResolver?.(req) ?? null;
-    const claim  = await claimIdempotencySlot(key, ns, ttlHours, fingerprint);
+    const fingerprint = opts?.fingerprintResolver?.(req)
+      ?? canonicalRequestFingerprint({
+        params: req.params,
+        query: req.query,
+        body: req.body ?? null,
+      });
+    let claim: Awaited<ReturnType<typeof claimIdempotencySlot>>;
+    try {
+      claim = await claimIdempotencySlot(key, ns, ttlHours, fingerprint);
+    } catch (error) {
+      if (error instanceof Error && error.message === "IDEMPOTENCY_STORAGE_UNAVAILABLE") {
+        res.status(503).json({
+          error: "IDEMPOTENCY_STORAGE_UNAVAILABLE",
+          message: "Idempotency storage tidak tersedia; request tidak dijalankan.",
+        });
+        return;
+      }
+      throw error;
+    }
 
     if (!claim.claimed) {
       if ("cached" in claim && claim.cached.hit) {

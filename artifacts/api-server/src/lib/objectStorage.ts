@@ -326,6 +326,20 @@ export class ObjectStorageService {
     return { bucket: PRIVATE_BUCKET, path: entityId, metadata: acl ? { acl_policy: JSON.stringify(acl) } : {} };
   }
 
+  async deletePrivateEntity(objectPath: string): Promise<void> {
+    if (!objectPath.startsWith("/objects/")) throw new ObjectNotFoundError();
+    const entityId = objectPath.slice("/objects/".length);
+    const allowDevelopmentStorageWrite =
+      process.env.APP_ENV === "development" &&
+      process.env.ALLOW_DEV_STORAGE_WRITES === "true";
+    if (isSafeDevTestMode() && !allowDevelopmentStorageWrite) {
+      aclStore.delete(objectPath);
+      return;
+    }
+    await supabaseDelete(PRIVATE_BUCKET, entityId);
+    aclStore.delete(objectPath);
+  }
+
   async getObjectEntitySize(objectPath: string): Promise<number> {
     if (!objectPath.startsWith("/objects/")) throw new ObjectNotFoundError();
     const entityId = objectPath.slice("/objects/".length);

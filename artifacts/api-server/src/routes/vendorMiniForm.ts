@@ -50,6 +50,7 @@ import { wasRecentlyNotified, logNotification } from "../lib/notificationLog.js"
 import { createSalesOrderFromVmfApproval } from "../lib/vmfSoIntegration.js";
 import { updateOrderProgress } from "../lib/orderProgress.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import { createIdempotencyMiddleware } from "../lib/financial/idempotency.js";
 import {
   sendCustomerApprovedNotification,
 
@@ -4313,7 +4314,21 @@ vendorMiniFormRouter.get("/admin/customer-invoices/:id", async (req: Request, re
 });
 
 // ── ADMIN: POST /api/vendor-form/admin/customer-invoices/:id/confirm-payment ──
-vendorMiniFormRouter.post("/admin/customer-invoices/:id/confirm-payment", async (req: Request, res: Response) => {
+vendorMiniFormRouter.post(
+  "/admin/customer-invoices/:id/confirm-payment",
+  createIdempotencyMiddleware("portal:customer-invoice-payment", {
+    ttlHours: 48,
+    scopeResolver: async (req) => {
+      const actor = String((req as any).user?.id ?? "unknown");
+      const id = Number(req.params.id);
+      const [link] = await db
+        .select({ companyId: customerInvoiceLinksTable.companyId })
+        .from(customerInvoiceLinksTable)
+        .where(eq(customerInvoiceLinksTable.id, id));
+      return `actor:${actor}:company:${normalizeCompanyId(link?.companyId) ?? "unknown"}`;
+    },
+  }),
+  async (req: Request, res: Response) => {
   if (!(await requireClerkUser(req, res))) return;
   const id = Number(req.params["id"]);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
@@ -4391,7 +4406,15 @@ vendorMiniFormRouter.post("/admin/customer-invoices/:id/confirm-payment", async 
     }
 
     await db.transaction(async (tx) => {
-      await tx.update(customerInvoiceLinksTable)
+      const [lockedLink] = await tx
+        .select({ id: customerInvoiceLinksTable.id, paymentStatus: customerInvoiceLinksTable.paymentStatus })
+        .from(customerInvoiceLinksTable)
+        .where(eq(customerInvoiceLinksTable.id, id))
+        .for("update");
+      if (!lockedLink) throw new Error("INVOICE_NOT_FOUND");
+      if (lockedLink.paymentStatus === "paid") throw new Error("PAYMENT_ALREADY_CONFIRMED");
+
+      const [updatedLink] = await tx.update(customerInvoiceLinksTable)
         .set({
           companyId,
           salesDocId: canonicalSalesDocId,
@@ -4401,7 +4424,12 @@ vendorMiniFormRouter.post("/admin/customer-invoices/:id/confirm-payment", async 
           status: newPaymentStatus === "paid" ? "paid" : link.status,
           confirmedAt: new Date(),
         } as any)
-        .where(eq(customerInvoiceLinksTable.id, id));
+        .where(and(
+          eq(customerInvoiceLinksTable.id, id),
+          ne(customerInvoiceLinksTable.paymentStatus, "paid"),
+        ))
+        .returning({ id: customerInvoiceLinksTable.id });
+      if (!updatedLink) throw new Error("PAYMENT_ALREADY_CONFIRMED");
 
       await tx.update(salesDocumentsTable)
         .set({
@@ -4461,10 +4489,14 @@ vendorMiniFormRouter.post("/admin/customer-invoices/:id/confirm-payment", async 
 
     return res.json({ success: true, paymentStatus: newPaymentStatus });
   } catch (err) {
+    if (err instanceof Error && err.message === "PAYMENT_ALREADY_CONFIRMED") {
+      return res.status(409).json({ error: "Pembayaran invoice sudah dikonfirmasi oleh request lain." });
+    }
     req.log?.error({ err }, "confirm-payment error");
     return res.status(500).json({ error: "Gagal konfirmasi pembayaran" });
   }
-});
+  },
+);
 
 // ── ADMIN: POST /api/vendor-form/admin/customer-invoices/:id/mark-completed ──
 vendorMiniFormRouter.post("/admin/customer-invoices/:id/mark-completed", async (req: Request, res: Response) => {

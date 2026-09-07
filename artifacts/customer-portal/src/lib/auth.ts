@@ -4,11 +4,11 @@
  * C1-REMEDIATION (dual-mode migration):
  *   - New logins: token is stored as HttpOnly cookie (portal_session) set by the server.
  *     Frontend does NOT write the token to localStorage for new logins.
- *   - Existing sessions: localStorage token (portal_token / portal_dev_token) is still
- *     accepted via Bearer header for backward compatibility.
+ *   - Existing localStorage tokens remain available only for explicit migration
+ *     calls; they are never treated as proof of an authenticated UI session.
  *   - All API calls include `credentials: 'include'` so the browser sends the session cookie.
- *   - `isAuthenticated()` checks localStorage token (legacy) OR the non-httponly hint
- *     cookie `portal_session_hint=1` (new cookie-based sessions).
+ *   - `isAuthenticated()` trusts only the server-set session hint. A stale or
+ *     forged localStorage token cannot unlock authenticated UI routes.
  *   - Legacy Bearer path will be removed after 2026-12-31 or next major release.
  *   - Profile cache (portal_profile) is UI-only; it is NOT the source of authorization.
  *
@@ -136,18 +136,19 @@ export function setAuthToken(token: string): void {
 
 /**
  * C1 FIX: Setelah login, simpan token sebagai HttpOnly cookie di server.
- * Cookie adalah sumber auth utama; localStorage hanya sebagai fallback sementara.
- * Non-fatal: jika gagal, auth via Bearer header localStorage tetap bekerja.
+ * Cookie is the only browser-session proof used by protected UI routes.
  */
 export async function persistAuthCookie(token: string): Promise<void> {
   try {
-    await fetch("/api/portal/auth/set-cookie", {
+    const response = await fetch("/api/portal/auth/set-cookie", {
       method: "POST",
       credentials: "include",
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (!response.ok) throw new Error(`Cookie session setup failed (${response.status})`);
   } catch {
-    // Non-fatal: localStorage fallback masih aktif selama masa transisi
+    // Deliberately fail closed: without the server session cookie the UI
+    // remains unauthenticated even if a legacy token exists in storage.
   }
 }
 
@@ -173,11 +174,12 @@ export function getAuthHeaders(): { Authorization?: string } {
 }
 
 /**
- * isAuthenticated — checks legacy localStorage token OR cookie session hint.
- * Synchronous, safe to call during route guard evaluation.
+ * isAuthenticated — checks only the server-issued cookie hint.
+ * Synchronous, safe to call during route guard evaluation. The hint is not an
+ * authorization credential; every protected route still validates /auth/me.
  */
 export function isAuthenticated(): boolean {
-  return !!getAuthToken() || hasCookieSession();
+  return hasCookieSession();
 }
 
 export function getPortalProfile(): PortalProfile | null {
@@ -204,10 +206,11 @@ export function isPortalAdmin(): boolean {
 
 /**
  * fetchAndStoreProfile — always uses credentials:'include' so cookie sessions work.
- * Falls back to Bearer header for legacy localStorage sessions.
+ * Supabase Bearer sessions are supported during migration, but a stale custom
+ * portal token is never sent when the server cookie hint is present.
  */
 export async function fetchAndStoreProfile(): Promise<PortalProfile | null> {
-  const token = (await getAuthTokenAsync()) ?? getAuthToken();
+  const token = hasCookieSession() ? null : await getSupabaseToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
