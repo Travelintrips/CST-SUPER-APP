@@ -150,6 +150,7 @@
 - [Vitest source contract paths](vitest-source-contract-paths.md) — source-reading tests must resolve from the test working directory; import.meta.url is unavailable in this BizPortal Vitest mode.
 - [Browser smoke runtime](browser-smoke-runtime.md) — shell Chromium may fail on host glibc; use managed screenshots plus harness/HTTP proofs when interactive CDP is unavailable.
 - [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.
+- [Customer Portal readiness gates](customer-portal-readiness-gates.md) — production approval requires owner-bound pricing, idempotency, payment evidence linkage, atomic transitions, and CSRF protection.
 - [DEV/PROD PPh master boundary](dev-prod-pph-master-boundary.md) — PROD has withholding tax templates, but DEV-only specific PPh COA rows can make invoice account choices appear missing.
 - [QRIS journal gross mismatch](qris-journal-gross-mismatch.md) — canonical approval can reject an exact-net candidate when live payment gross and payment-journal gross diverge; surface the source mismatch first.
 - [Reversal status fail-closed](reversal-status-fail-closed.md) — reversal creation can commit while the original remains posted; verify and atomically persist void metadata before any destructive cleanup.
