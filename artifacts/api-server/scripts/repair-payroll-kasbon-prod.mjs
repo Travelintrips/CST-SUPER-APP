@@ -1,11 +1,13 @@
 /**
- * Recover the missing source links and repayment audit rows for a legacy
- * payroll run whose kasbon amounts were already reflected in cash_advances.
+ * Reconcile a legacy payroll run whose kasbon amounts were already reflected
+ * in cash_advances and whose accrual journal may predate payroll_run links.
  *
- * This does not change paid_amount or remaining_amount. It only:
+ * This does not change paid_amount or remaining_amount and never creates a
+ * payment journal. It only:
  *   - links each deduction item to one exact employee advance;
  *   - records the already-applied payroll repayment once;
- *   - normalizes the canonical lifecycle/legacy status.
+ *   - links one exact, balanced legacy accrual journal to the run;
+ *   - normalizes the run to approved/posted when no payment evidence exists.
  *
  * Dry-run is the default. Production mutation requires --apply.
  */
@@ -48,8 +50,90 @@ try {
   );
   const run = runResult.rows[0];
   if (!run) throw new Error(`Payroll run ${runId} tidak ditemukan untuk company ${companyId}`);
-  if (run.accounting_entry_id || run.payment_entry_id) {
-    throw new Error("Run sudah memiliki journal accounting/payment; repair legacy ini diblokir.");
+  if (run.payment_entry_id) {
+    throw new Error("Run sudah memiliki journal pembayaran; repair legacy ini diblokir.");
+  }
+
+  const payrollTotalsResult = await client.query(
+    `SELECT count(*)::int AS item_count,
+            count(*) FILTER (WHERE is_paid)::int AS paid_item_count,
+            coalesce(sum(base_salary + allowance), 0)::numeric AS gross_total,
+            coalesce(sum(net_salary), 0)::numeric AS net_total,
+            coalesce(sum(kasbon_deduction), 0)::numeric AS kasbon_total
+       FROM payroll_items
+      WHERE run_id = $1`,
+    [runId],
+  );
+  const payrollTotals = payrollTotalsResult.rows[0];
+  if (!payrollTotals || Number(payrollTotals.item_count) === 0) {
+    throw new Error(`Payroll run ${runId} tidak memiliki item.`);
+  }
+
+  const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
+  const legacyAccrualRef = `PAYROLL/${period}/R${runId}`;
+  const accrualResult = await client.query(
+    `SELECT id, status, source, source_id, ref, entry_number,
+            total_debit, total_credit, date
+       FROM accounting_entries
+      WHERE company_id = $1
+        AND source = 'payroll'
+        AND status = 'posted'
+        AND (ref = $2 OR entry_number = $2)
+      ORDER BY id
+      FOR UPDATE`,
+    [companyId, legacyAccrualRef],
+  );
+  const accrualCandidates = accrualResult.rows;
+  if (accrualCandidates.length > 1) {
+    throw new Error(`Ditemukan lebih dari satu jurnal accrual legacy untuk ${legacyAccrualRef}.`);
+  }
+  const accrual = accrualCandidates[0] ?? null;
+  if (!accrual && !run.accounting_entry_id) {
+    throw new Error(`Jurnal accrual legacy ${legacyAccrualRef} tidak ditemukan; repair berhenti fail-closed.`);
+  }
+  if (run.accounting_entry_id && accrual && Number(run.accounting_entry_id) !== Number(accrual.id)) {
+    throw new Error(`Run menunjuk entry ${run.accounting_entry_id}, tetapi kandidat legacy adalah ${accrual.id}.`);
+  }
+  if (accrual) {
+    const lineResult = await client.query(
+      `SELECT count(*)::int AS line_count,
+              coalesce(sum(debit), 0)::numeric AS debit_total,
+              coalesce(sum(credit), 0)::numeric AS credit_total
+         FROM accounting_entry_lines
+        WHERE entry_id = $1`,
+      [accrual.id],
+    );
+    const lines = lineResult.rows[0];
+    if (
+      Number(lines.line_count) < 2 ||
+      !sameMoney(lines.debit_total, payrollTotals.gross_total) ||
+      !sameMoney(lines.credit_total, payrollTotals.gross_total) ||
+      !sameMoney(accrual.total_debit, payrollTotals.gross_total) ||
+      !sameMoney(accrual.total_credit, payrollTotals.gross_total)
+    ) {
+      throw new Error(`Jurnal accrual ${accrual.id} tidak balanced atau nominalnya tidak sama dengan payroll gross.`);
+    }
+  }
+
+  const paymentResult = await client.query(
+    `SELECT id, status, source, source_id, ref, total_debit, total_credit
+       FROM accounting_entries
+      WHERE company_id = $1
+        AND (
+          (source = 'hrd_salary_payment' AND source_id = $2)
+          OR ref = $3
+          OR entry_number = $3
+        )
+      ORDER BY id
+      FOR UPDATE`,
+    [companyId, runId, `PAYROLL-PAY-${runId}`],
+  );
+  if (paymentResult.rows.length > 1) {
+    throw new Error(`Ditemukan lebih dari satu jurnal pembayaran untuk payroll run ${runId}.`);
+  }
+  const payment = paymentResult.rows[0] ?? null;
+  if (payment && Number(payrollTotals.paid_item_count) === 0) {
+    throw new Error(`Jurnal pembayaran ${payment.id} ada, tetapi seluruh item payroll belum ditandai dibayar.`);
   }
 
   const itemResult = await client.query(
@@ -105,11 +189,26 @@ try {
   }
 
   const postedDate = sqlDate(run.posted_at) || new Date().toISOString().slice(0, 10);
-  const notes = `Pemulihan Potongan Payroll ${run.year}-${String(run.month).padStart(2, "0")} (run ${runId})`;
+  const notes = `Pemulihan Potongan Payroll ${period} (run ${runId})`;
+  const legacyNote = accrual
+    ? `LEGACY/MANUAL RECONCILIATION: accrual entry ${accrual.id} (${legacyAccrualRef}) linked; payment journal intentionally not created or linked because no payment evidence exists. Payroll kasbon repayment rows are retained as source evidence and are not re-posted.`
+    : null;
 
   console.log(JSON.stringify({
     mode: apply ? "apply" : "dry-run",
     run: { id: run.id, companyId: run.company_id, period: `${run.year}-${String(run.month).padStart(2, "0")}`, status: run.status, postingStatus: run.posting_status },
+    payrollTotals: {
+      itemCount: Number(payrollTotals.item_count),
+      paidItemCount: Number(payrollTotals.paid_item_count),
+      gross: payrollTotals.gross_total,
+      net: payrollTotals.net_total,
+      kasbon: payrollTotals.kasbon_total,
+    },
+    accrual: accrual
+      ? { id: accrual.id, ref: accrual.ref, status: accrual.status, totalDebit: accrual.total_debit, totalCredit: accrual.total_credit }
+      : null,
+    payment: payment ? { id: payment.id, status: payment.status, source: payment.source } : null,
+    legacyNote,
     repairCount: repairs.length,
     repairs: repairs.map(({ item, advance }) => ({
       itemId: item.item_id,
@@ -166,6 +265,31 @@ try {
           settled,
           run.posted_at ?? new Date().toISOString(),
           advance.id,
+          companyId,
+        ],
+      );
+    }
+
+    if (accrual && !run.accounting_entry_id) {
+      await client.query(
+        `UPDATE payroll_runs
+            SET accounting_entry_id = $1,
+                status = CASE WHEN $2 THEN 'approved' ELSE status END,
+                approved_at = COALESCE(approved_at, posted_at, NOW()),
+                posting_status = 'posted',
+                posting_error = NULL,
+                notes = CASE
+                  WHEN notes IS NULL OR btrim(notes) = '' THEN $3
+                  ELSE notes || E'\n' || $3
+                END
+          WHERE id = $4 AND company_id = $5
+            AND accounting_entry_id IS NULL
+            AND payment_entry_id IS NULL`,
+        [
+          accrual.id,
+          !payment && Number(payrollTotals.paid_item_count) === 0,
+          legacyNote,
+          runId,
           companyId,
         ],
       );

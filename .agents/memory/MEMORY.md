@@ -5,7 +5,7 @@
 - [Marketplace proof ledger cleanup](marketplace-proof-ledger-cleanup.md) — DEV proof cleanup must explicitly remove marker-linked dual-write rows when live FK discovery is incomplete.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
-- [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
+- [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — one-off portal proofs must use the Secret Manager loader and correct DB isolation; bootstrap failures stay fail-closed.
 - [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
@@ -26,15 +26,13 @@
 - [Vendor line FK migration](vendor-line-fk-migration.md) — legacy line tables may lack live uniqueness despite source schema; restore the key invariant before adding child FKs.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
-- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.
-- [Production database URL selection](production-db-url-selection.md) — approval dan maintenance wajib memakai `SUPABASE_DATABASE_URL`; migration URL tidak boleh menjadi fallback diam-diam.
+- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle; maintenance wajib memakai `SUPABASE_DATABASE_URL`, bukan migration URL atau DB pane.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
-- [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
 - [Live SMTP credential drift](live-smtp-credential-drift.md) — production notification logs can show SMTP 535 while the workspace production bundle verifies; compare the live runtime's secret source, not only the current Repl bundle.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
@@ -157,3 +155,4 @@
 - [Reversal status fail-closed](reversal-status-fail-closed.md) — reversal creation can commit while the original remains posted; verify and atomically persist void metadata before any destructive cleanup.
 - [Vendor payment runtime proof](vendor-payment-runtime-proof.md) — development loader aliases shared DB keys; wait for async idempotency persistence before asserting cached retry replay.
 - [Payroll kasbon linkage](payroll-kasbon-linkage.md) — deduction-only payroll rows without a source advance ID cannot safely settle or reduce kasbon balances.
+- [Payroll legacy journal reconciliation](payroll-legacy-journal-reconciliation.md) — match balanced period/ref accruals before linking; keep payment null without payment evidence and mark legacy/manual explicitly.
