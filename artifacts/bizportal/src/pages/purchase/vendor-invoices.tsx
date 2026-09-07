@@ -313,6 +313,31 @@ export function VendorInvoiceEditorPage() {
     }
   }, [vi]);
 
+  // The invoice carries the tax type and amount, while the GL account comes
+  // from the company's COA. Apply the company's deterministic tax-account
+  // convention as soon as both the invoice and liability account list exist.
+  // Users can still override the suggestion before posting.
+  useEffect(() => {
+    if (!liabilityAccounts.length) return;
+    setLines((current) => {
+      let changed = false;
+      const next = current.map((line) => {
+        if (line.liabilityAccountId || Number(line.withholdingAmount ?? 0) <= 0) return line;
+        const taxType = `${line.taxType ?? ""} ${line.taxObject ?? ""}`.toLowerCase();
+        const exactName = taxType.includes("4(2)") || taxType.includes("4 ayat 2")
+          ? /hutang pph final pasal 4 ayat 2/i
+          : taxType.includes("pph 15")
+            ? /hutang pajak lainnya/i
+            : new RegExp(`hutang pph pasal ${taxType.match(/pph\\s*(\\d+)/i)?.[1] ?? "___"}`, "i");
+        const suggested = liabilityAccounts.find((account) => exactName.test(account.name));
+        if (!suggested) return line;
+        changed = true;
+        return { ...line, liabilityAccountId: String(suggested.id) };
+      });
+      return changed ? next : current;
+    });
+  }, [liabilityAccounts, lines]);
+
   const updateLine = (i: number, key: keyof VILine, value: string) => setLines(prev => {
     const updated = prev.map((l, idx) => idx === i ? { ...l, [key]: value } : l);
     const line = updated[i];
@@ -565,22 +590,27 @@ export function VendorInvoiceEditorPage() {
                       </td>
                       <td className="py-2 px-2">
                         {Number(line.withholdingAmount ?? 0) > 0 ? (
-                          <Select
-                            value={line.liabilityAccountId || undefined}
-                            onValueChange={(value) => updateLine(i, "liabilityAccountId", value)}
-                            disabled={!isDraft || liabilityAccountsLoading}
-                          >
-                            <SelectTrigger className="h-9">
-                              <SelectValue placeholder={liabilityAccountsLoading ? "Memuat akun..." : "Pilih akun PPh"} />
-                            </SelectTrigger>
-                            <SelectContent searchPlaceholder="Cari kode atau nama akun...">
-                              {liabilityAccounts.map((account) => (
-                                <SelectItem key={account.id} value={String(account.id)}>
-                                  {account.code} — {account.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <div>
+                            <Select
+                              value={line.liabilityAccountId || undefined}
+                              onValueChange={(value) => updateLine(i, "liabilityAccountId", value)}
+                              disabled={!isDraft || liabilityAccountsLoading}
+                            >
+                              <SelectTrigger className="h-9">
+                                <SelectValue placeholder={liabilityAccountsLoading ? "Memuat akun..." : "Pilih akun PPh"} />
+                              </SelectTrigger>
+                              <SelectContent searchPlaceholder="Cari kode atau nama akun...">
+                                {liabilityAccounts.map((account) => (
+                                  <SelectItem key={account.id} value={String(account.id)}>
+                                    {account.code} — {account.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {line.liabilityAccountId && (
+                              <span className="mt-1 block text-[10px] text-emerald-600">Usulan akun otomatis — dapat diubah Finance</span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">Tidak ada PPh</span>
                         )}
