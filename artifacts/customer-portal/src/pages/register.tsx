@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { useListPortalServices } from "@workspace/api-client-react";
-import { setPortalProfile, saveTrustedDevice, REMEMBER_DAYS } from "@/lib/auth";
+import {
+  fetchPortalAuthBootstrap,
+  setPortalProfile,
+  saveTrustedDevice,
+  REMEMBER_DAYS,
+} from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -74,6 +79,15 @@ export default function Register() {
   const services: SimpleItem[] = (Array.isArray(servicesData) ? servicesData : []).map((s) => ({
     id: s.id, name: s.name, itemType: "jasa" as const,
   }));
+
+  async function redirectExistingAccount(role: string) {
+    const bootstrap = await fetchPortalAuthBootstrap(returnTo);
+    if (bootstrap) {
+      setLocation(bootstrap.allowedDestination);
+      return;
+    }
+    setLocation(role === "vendor" ? "/vendor-dashboard" : "/dashboard");
+  }
 
   useEffect(() => {
     fetch(`${BASE}/api/portal/products`)
@@ -185,7 +199,8 @@ export default function Register() {
       // New email identities enter the same canonical onboarding as WA/Google.
       // Existing accounts are also sent through the status-aware onboarding
       // route, which redirects completed profiles to their portal.
-      setLocation(returnTo && !json.isNew ? returnTo : "/onboarding");
+      if (json.isNew) setLocation("/onboarding");
+      else await redirectExistingAccount(json.user.role);
     } catch {
       setEmailMsg("Gagal menghubungi server.");
     } finally {
@@ -308,9 +323,7 @@ export default function Register() {
       const loginJson = await loginRes.json();
       if (loginRes.ok && loginJson.token) {
         setPortalProfile({ customerId: loginJson.user.id, role: loginJson.user.role, name: loginJson.user.name, email: loginJson.user.email });
-        if (returnTo) setLocation(returnTo);
-        else if (loginJson.user.role === "vendor") setLocation("/vendor-dashboard");
-        else setLocation("/dashboard");
+        await redirectExistingAccount(loginJson.user.role);
         return;
       }
       // Not registered → re-verify needed (token consumed by login attempt actually only on success)

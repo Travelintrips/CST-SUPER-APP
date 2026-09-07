@@ -3,7 +3,14 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { isAuthenticated, removeAuthToken } from "@/lib/auth";
+import {
+  clearPortalAuthBootstrap,
+  fetchPortalAuthBootstrap,
+  getCachedPortalAuthBootstrap,
+  isAuthenticated,
+  removeAuthToken,
+  type PortalAuthBootstrap,
+} from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -160,37 +167,59 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
-    // Check if already completed
-    fetch("/api/portal/onboarding/status", { credentials: "include" })
-      .then(r => r.json())
-      .then((d: {
-        status: string;
-        role?: string;
-        accountType?: string;
-        hasProfile?: boolean;
-        customerType?: CustomerType | null;
-        customerContext?: { status?: string };
-      }) => {
-        const contextStatus = d.customerContext?.status;
-        const isExistingCustomerWithUnresolvedOrganization =
-          d.role === "customer"
-          &&
-          d.status === "active"
-          && d.hasProfile === true
-          && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
 
-        if (isExistingCustomerWithUnresolvedOrganization) {
-          setOrganizationCompletion(contextStatus as OrganizationCompletionStatus);
-          setCustomerType(d.customerType ?? (contextStatus === "company_unresolved" ? "company" : null));
-        } else if (d.status === "active") {
-          if (d.accountType === "vendor") setLocation("/vendor-dashboard");
-          else setLocation("/dashboard");
-        } else if (d.status === "pending") {
-          setLocation("/pending-approval");
-        }
+    const applyBootstrap = (bootstrap: PortalAuthBootstrap | null) => {
+      if (!bootstrap) {
         setStatusLoading(false);
-      })
-      .catch(() => setStatusLoading(false));
+        return;
+      }
+
+      const role = bootstrap.role;
+      const contextStatus = bootstrap.customerContext.status;
+      const resolvedCustomerType: CustomerType | null =
+        bootstrap.customerType === "individual" || bootstrap.customerType === "company"
+          ? bootstrap.customerType
+          : null;
+      const isExistingCustomerWithUnresolvedOrganization =
+        role === "customer"
+        && bootstrap.onboardingStatus === "active"
+        && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
+
+      if (isExistingCustomerWithUnresolvedOrganization) {
+        setOrganizationCompletion(contextStatus as OrganizationCompletionStatus);
+        setCustomerType(
+          resolvedCustomerType
+          ?? (contextStatus === "company_unresolved" ? "company" : null),
+        );
+      } else if (["customer", "vendor", "driver", "employee"].includes(role)) {
+        setAccountType(role as AccountType);
+        if (role === "customer") setCustomerType(resolvedCustomerType);
+      }
+
+      if (isExistingCustomerWithUnresolvedOrganization) {
+        setStatusLoading(false);
+        return;
+      }
+
+      if (bootstrap.allowedDestination !== "/onboarding") {
+        setLocation(bootstrap.allowedDestination);
+      } else if (
+        bootstrap.onboardingStatus === "pending"
+        || bootstrap.onboardingStatus === "rejected"
+        || contextStatus === "company_pending"
+      ) {
+        setLocation("/pending-approval");
+      }
+      setStatusLoading(false);
+    };
+
+    const cached = getCachedPortalAuthBootstrap();
+    if (cached) {
+      applyBootstrap(cached);
+      return;
+    }
+
+    void fetchPortalAuthBootstrap().then(applyBootstrap);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, setLocation]);
 
@@ -409,6 +438,7 @@ export default function OnboardingPage() {
         setSubmitError(json.error ?? t("onboarding.submit.saveFailed", "Gagal menyimpan profil."));
         return;
       }
+       clearPortalAuthBootstrap();
        if (json.status === "pending" || json.status === "company_pending") {
         setLocation("/pending-approval");
        } else if (accountType === "vendor") {
@@ -1098,6 +1128,7 @@ function LegacyOrganizationCompletion({
         setError(data.error ?? "Gagal menyimpan pilihan organisasi.");
         return;
       }
+      clearPortalAuthBootstrap();
       if (data.context?.status === "company_pending") {
         setLocation("/pending-approval");
       } else {

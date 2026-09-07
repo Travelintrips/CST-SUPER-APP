@@ -172,26 +172,26 @@ export async function getPortalAuthBootstrap(
     throw new PortalAuthBootstrapError(404, "Customer tidak ditemukan.");
   }
 
+  // The DEV transaction pooler penalizes concurrent queries from the same
+  // authenticated bootstrap more than it benefits from parallelism. Keep the
+  // two independent reads serial here; this is measured faster end-to-end.
+  const profileStart = performance.now();
+  const [profile] = await db
+    .select({
+      status: userProfilesTable.status,
+      accountType: userProfilesTable.accountType,
+      rejectionReason: userProfilesTable.rejectionReason,
+      fullName: userProfilesTable.fullName,
+      phone: userProfilesTable.phone,
+      address: userProfilesTable.address,
+      ktpUrl: userProfilesTable.ktpUrl,
+    })
+    .from(userProfilesTable)
+    .where(eq(userProfilesTable.customerId, customerId));
+  const profileMs = performance.now() - profileStart;
+
   const contextStart = performance.now();
-  let profileMs = 0;
-  const profilePromise = (async () => {
-    const profileStart = performance.now();
-    const [profile] = await db
-      .select({
-        status: userProfilesTable.status,
-        accountType: userProfilesTable.accountType,
-        rejectionReason: userProfilesTable.rejectionReason,
-        fullName: userProfilesTable.fullName,
-        phone: userProfilesTable.phone,
-        address: userProfilesTable.address,
-        ktpUrl: userProfilesTable.ktpUrl,
-      })
-      .from(userProfilesTable)
-      .where(eq(userProfilesTable.customerId, customerId));
-    profileMs = performance.now() - profileStart;
-    return profile;
-  })();
-  const contextPromise = getPortalCustomerContextForCustomer(customerId, {
+  const context = await getPortalCustomerContextForCustomer(customerId, {
     id: customer.id,
     name: customer.name,
     email: customer.email,
@@ -199,7 +199,6 @@ export async function getPortalAuthBootstrap(
     customerType: customer.customerType,
     legacyCompany: customer.company,
   });
-  const [profile, context] = await Promise.all([profilePromise, contextPromise]);
   const contextMs = performance.now() - contextStart;
 
   const roleStart = performance.now();

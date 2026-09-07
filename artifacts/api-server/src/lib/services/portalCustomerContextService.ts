@@ -85,26 +85,35 @@ async function buildPortalCustomerContext(
   customerId: number,
   customer: PortalCustomerContextCustomer,
 ): Promise<PortalCustomerContext> {
-  const [memberships, pendingRequests] = await Promise.all([
-    db
-      .select({
-        id: portalCompanyMembersTable.id,
-        companyId: portalCompanyMembersTable.companyId,
-        companyName: companiesTable.companyName,
-        companyCode: companiesTable.companyCode,
-        buyerRole: portalCompanyMembersTable.buyerRole,
-        department: portalCompanyMembersTable.department,
-        costCenter: portalCompanyMembersTable.costCenter,
-        approvalLevel: portalCompanyMembersTable.approvalLevel,
-      })
-      .from(portalCompanyMembersTable)
-      .innerJoin(companiesTable, eq(companiesTable.id, portalCompanyMembersTable.companyId))
-      .where(and(
-        eq(portalCompanyMembersTable.portalCustomerId, customerId),
-        eq(portalCompanyMembersTable.isActive, true),
-      ))
-      .orderBy(asc(portalCompanyMembersTable.createdAt)),
-    db
+  // The development Supabase transaction pooler serializes competing
+  // connection work more efficiently than two concurrent requests here.
+  // Promise.all made this resolver ~1.5s slower in the authenticated bootstrap
+  // path even though each query was only ~220ms on its own.
+  const memberships = await db
+    .select({
+      id: portalCompanyMembersTable.id,
+      companyId: portalCompanyMembersTable.companyId,
+      companyName: companiesTable.companyName,
+      companyCode: companiesTable.companyCode,
+      buyerRole: portalCompanyMembersTable.buyerRole,
+      department: portalCompanyMembersTable.department,
+      costCenter: portalCompanyMembersTable.costCenter,
+      approvalLevel: portalCompanyMembersTable.approvalLevel,
+    })
+    .from(portalCompanyMembersTable)
+    .innerJoin(companiesTable, eq(companiesTable.id, portalCompanyMembersTable.companyId))
+    .where(and(
+      eq(portalCompanyMembersTable.portalCustomerId, customerId),
+      eq(portalCompanyMembersTable.isActive, true),
+    ))
+    .orderBy(asc(portalCompanyMembersTable.createdAt));
+
+  // An individual customer cannot be company-pending. Avoid an unrelated
+  // request lookup while retaining the full membership result for the
+  // canonical company-scope response.
+  const pendingRequests = customer.customerType === "individual"
+    ? []
+    : await db
       .select({
         id: portalCompanyRequestsTable.id,
         requestedCompanyName: portalCompanyRequestsTable.requestedCompanyName,
@@ -121,8 +130,7 @@ async function buildPortalCustomerContext(
         eq(portalCompanyRequestsTable.status, "pending"),
       ))
       .orderBy(desc(portalCompanyRequestsTable.createdAt))
-      .limit(1),
-  ]);
+      .limit(1);
   const [pendingRequest] = pendingRequests;
 
   const customerType = customer.customerType as PortalCustomerType | null;

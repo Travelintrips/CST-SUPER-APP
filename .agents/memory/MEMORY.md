@@ -25,6 +25,7 @@
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
+- [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
