@@ -62,6 +62,7 @@ import {
 import { getOpenAI } from "../lib/openaiClient.js";
 import { imagePdfUpload } from "../lib/uploadMiddleware.js";
 import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
+import { recalculateVendorInvoiceBreakdown } from "../lib/invoiceWithholdingCalculation.js";
 import { createRequire as _bdCreateRequire } from "node:module";
 import * as _bdFs from "node:fs/promises";
 import * as _bdOs from "node:os";
@@ -680,6 +681,12 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
             grandTotal: Number(r.grand_total),
           };
       const amountPaid = Number(r.amount_paid ?? 0);
+      const recalculatedWithholding = r.source === "vendor_invoice"
+        ? recalculateVendorInvoiceBreakdown(r.invoice_breakdown, r.supplier_name ?? "")
+        : null;
+      const withholdingTaxAmount = recalculatedWithholding?.vendorPolicyApplied
+        ? Number(recalculatedWithholding.withholding.amount ?? r.withholding_tax_amount ?? 0)
+        : Number(r.withholding_tax_amount ?? 0);
 
       return {
         id: r.id,
@@ -693,8 +700,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
         amountPaid,
         outstanding: financials.grandTotal - amountPaid,
         taxReviewStatus: r.tax_review_status ?? "not_required",
-        withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
-        payableToSupplier: Math.max(0, financials.grandTotal - Number(r.withholding_tax_amount ?? 0)),
+        withholdingTaxAmount,
+        payableToSupplier: Math.max(0, financials.grandTotal - withholdingTaxAmount),
         dueDate: r.due_date,
         currency: "IDR",
         source: r.source,

@@ -315,6 +315,7 @@ function sanitizeOcrResult(
       withholding,
       totals,
       sourceText,
+      typeof normalizedData.vendor_name === "string" ? normalizedData.vendor_name : "",
     );
     const calculatedComponents = calculation.components;
     const calculatedWithholding = calculation.withholding;
@@ -367,8 +368,20 @@ function sanitizeOcrResult(
     const normalizedWithholding = suspiciousWithholdingAmount
       ? { ...calculatedWithholding, amount: null }
       : calculatedWithholding;
+    const calculatedBreakdownTotals = calculation.totals;
+    const shouldApplyVendorHeader = calculation.vendorPolicyApplied &&
+      asNumberOrNull(calculatedBreakdownTotals.dpp) != null &&
+      asNumberOrNull(calculatedBreakdownTotals.ppn) != null &&
+      asNumberOrNull(calculatedBreakdownTotals.gross) != null;
     return {
       ...normalizedData,
+      ...(shouldApplyVendorHeader
+        ? {
+            subtotal: calculatedBreakdownTotals.dpp,
+            tax: calculatedBreakdownTotals.ppn,
+            total_amount: calculatedBreakdownTotals.gross,
+          }
+        : {}),
       withholding_amount: normalizedTopLevelWithholdingAmount,
       withholding_tax_type:
         typeof normalizedWithholding.type === "string"
@@ -382,9 +395,9 @@ function sanitizeOcrResult(
           amount: sanitizedWithholdingAmount,
         },
         totals: {
-          dpp: asNumberOrNull(totals.dpp),
-          ppn: asNumberOrNull(totals.ppn),
-          gross: asNumberOrNull(totals.gross),
+          dpp: asNumberOrNull(calculatedBreakdownTotals.dpp),
+          ppn: asNumberOrNull(calculatedBreakdownTotals.ppn),
+          gross: asNumberOrNull(calculatedBreakdownTotals.gross),
           withholding_tax_amount: sanitizedTotalsWithholdingAmount,
           payable_amount: suspiciousWithholdingAmount
             ? asNumberOrNull(totals.payable_amount)

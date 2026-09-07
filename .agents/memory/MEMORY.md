@@ -145,3 +145,4 @@
 - [Payroll kasbon linkage](payroll-kasbon-linkage.md) — deduction-only payroll rows without a source advance ID cannot safely settle or reduce kasbon balances.
 - [Payroll legacy journal reconciliation](payroll-legacy-journal-reconciliation.md) — match balanced period/ref accruals before linking; keep payment null without payment evidence and mark legacy/manual explicitly.
 - [Payroll kasbon settlement boundary](payroll-kasbon-settlement-boundary.md) — post deductions atomically, but never infer the remaining salary payment without deterministic bank evidence.
+- [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
