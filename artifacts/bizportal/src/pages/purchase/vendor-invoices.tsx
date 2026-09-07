@@ -411,10 +411,11 @@ export function VendorInvoiceEditorPage() {
   const summaryWithholding = vi
     ? Math.max(Number(vi.withholdingTaxAmount ?? 0), lineWithholding)
     : lineWithholding;
+  const estimatedNetPayment = Math.max(0, summaryGrandTotal - summaryWithholding);
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-6 max-w-5xl">
+      <div className="flex flex-col gap-6 max-w-7xl">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate("/purchase/vendor-invoices")}><ChevronLeft className="h-4 w-4" /></Button>
           <div className="flex-1">
@@ -476,12 +477,16 @@ export function VendorInvoiceEditorPage() {
             </CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle className="text-base">Ringkasan</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="text-base">Ringkasan Nilai Invoice</CardTitle>
+              <p className="text-xs text-muted-foreground">Grand Total adalah nilai bruto. PPh dipotong saat pembayaran vendor.</p>
+            </CardHeader>
             <CardContent className="space-y-2">
               <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(summarySubtotal)}</span></div>
               <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(summaryTax)}</span></div>
-               <div className="flex justify-between text-amber-600"><span>PPh (Withholding)</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
-              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
+              <div className="flex justify-between text-amber-600"><span>PPh dipotong saat bayar</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
+              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total (bruto)</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
+              <div className="flex justify-between font-semibold text-blue-600 border-t pt-2"><span>Estimasi transfer (neto)</span><span className="font-mono">{idr(estimatedNetPayment)}</span></div>
               {vi && <div className="flex justify-between text-green-600"><span>Terbayar</span><span className="font-mono">{idr(Number(vi.amountPaid))}</span></div>}
               {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
             </CardContent>
@@ -490,34 +495,42 @@ export function VendorInvoiceEditorPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Item Invoice</CardTitle>
+            <div>
+              <CardTitle className="text-base">Rincian Item Invoice</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Masukkan nilai dalam rupiah. COA adalah akun beban; PPh adalah potongan pembayaran per baris.
+              </p>
+            </div>
             {isDraft && <Button size="sm" variant="outline" onClick={() => setLines(prev => [...prev, emptyLine()])}><Plus className="mr-1 h-4 w-4" />Tambah</Button>}
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1120px] text-sm">
                 <thead><tr className="border-b">
-                  <th className="text-left py-2 px-2">Nama</th>
-                  <th className="text-left py-2 px-2 w-20">Qty</th>
-                  <th className="text-left py-2 px-2 w-20">Satuan</th>
-                  <th className="text-left py-2 px-2 w-32">Harga</th>
-                  <th className="text-left py-2 px-2 w-28">Pajak</th>
-                   <th className="text-left py-2 px-2 w-24">COA ID</th>
-                   <th className="text-left py-2 px-2 w-24">PPh</th>
-                  <th className="text-right py-2 px-2 w-32">Subtotal</th>
+                  <th className="text-left py-2 px-2 min-w-52"><span className="text-xs uppercase tracking-wide text-muted-foreground">Nama item</span></th>
+                  <th className="text-left py-2 px-2 w-20"><span className="text-xs uppercase tracking-wide text-muted-foreground">Qty</span></th>
+                  <th className="text-left py-2 px-2 w-20"><span className="text-xs uppercase tracking-wide text-muted-foreground">Satuan</span></th>
+                  <th className="text-left py-2 px-2 w-40"><span className="text-xs uppercase tracking-wide text-muted-foreground">Harga satuan</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-left py-2 px-2 w-36"><span className="text-xs uppercase tracking-wide text-muted-foreground">PPN</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-left py-2 px-2 w-32"><span className="text-xs uppercase tracking-wide text-muted-foreground">COA beban</span><span className="block text-[10px] font-normal text-muted-foreground">(ID)</span></th>
+                  <th className="text-left py-2 px-2 w-40"><span className="text-xs uppercase tracking-wide text-muted-foreground">PPh dipotong</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-right py-2 px-2 w-36"><span className="text-xs uppercase tracking-wide text-muted-foreground">Subtotal</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
                   {isDraft && <th className="w-10" />}
                 </tr></thead>
                 <tbody>
                   {lines.map((line, i) => (
-                    <tr key={i} className="border-b">
-                      <td className="py-1 px-2"><Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.quantity} onChange={e => updateLine(i, "quantity", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.taxAmount} onChange={e => updateLine(i, "taxAmount", e.target.value)} disabled={!isDraft} className="h-8" placeholder="PPN..." /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.coaAccountId ?? ""} onChange={e => updateLine(i, "coaAccountId", e.target.value)} disabled={!isDraft} className="h-8" placeholder="COA ID" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.withholdingAmount ?? "0"} onChange={e => updateLine(i, "withholdingAmount", e.target.value)} disabled={!isDraft} className="h-8" placeholder="PPh" /></td>
-                      <td className="py-1 px-2 text-right font-mono text-xs">{idr(Number(line.subtotal))}</td>
+                    <tr key={i} className="border-b align-top">
+                      <td className="py-2 px-2"><Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-9 min-w-48" aria-label={`Nama item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.quantity} onChange={e => updateLine(i, "quantity", e.target.value)} disabled={!isDraft} className="h-9 w-20 text-right" aria-label={`Kuantitas item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-9 w-20" aria-label={`Satuan item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" aria-label={`Harga satuan item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.taxAmount} onChange={e => updateLine(i, "taxAmount", e.target.value)} disabled={!isDraft} className="h-9 w-32 text-right font-mono" placeholder="0" aria-label={`PPN item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.coaAccountId ?? ""} onChange={e => updateLine(i, "coaAccountId", e.target.value)} disabled={!isDraft} className="h-9 w-28 text-right font-mono" placeholder="ID akun" aria-label={`COA beban item ${i + 1}`} /></td>
+                      <td className="py-2 px-2">
+                        <Input type="number" value={line.withholdingAmount ?? "0"} onChange={e => updateLine(i, "withholdingAmount", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" placeholder="0" aria-label={`PPh item ${i + 1}`} />
+                        {line.taxType && <span className="mt-1 block text-[10px] text-amber-600">{line.taxType}</span>}
+                      </td>
+                      <td className="py-2 px-2 text-right font-mono text-xs whitespace-nowrap">{idr(Number(line.subtotal))}</td>
                       {isDraft && <td className="py-1 px-2"><Button size="icon" variant="ghost" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="h-8 w-8"><Trash2 className="h-4 w-4 text-destructive" /></Button></td>}
                     </tr>
                   ))}
