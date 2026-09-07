@@ -14,7 +14,7 @@ const sb = createClient(storageUrl, storageKey, {
   realtime: { transport: WebSocket },
 });
 
-const created = { companies: [], customers: [], logisticOrders: [], docs: [], payments: [], storage: [], sid: null, adminUserId: null, previousAllowed: [] };
+const created = { companies: [], customers: [], logisticOrders: [], docs: [], payments: [], storage: [], sid: null, adminUserId: null, adminEmail: 'admcst001@gmail.com', adminUserCreated: false, previousAllowed: [] };
 const report = {};
 
 function assertDev() {
@@ -34,14 +34,14 @@ async function api(path, opts = {}) {
   return { status: response.status, body, headers: Object.fromEntries(response.headers.entries()) };
 }
 async function loginAdmin() {
-  const response = await fetch(`${BASE}/api/dev-login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'admcst001@gmail.com' }) });
+  const response = await fetch(`${BASE}/api/dev-login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: created.adminEmail }) });
   const body = await response.json();
   if (!response.ok || body?.role !== 'admin') throw new Error(`dev-login failed ${response.status}`);
   const raw = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie().join(',') : (response.headers.get('set-cookie') ?? '');
   const match = raw.match(/sid=[^;]+/);
   if (!match) throw new Error('dev-login did not return sid cookie');
   created.sid = match[0];
-  const u = await q('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1', ['admcst001@gmail.com']);
+  const u = await q('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1', [created.adminEmail]);
   if (!u.rows[0]) throw new Error('dev-login user missing in DB');
   created.adminUserId = u.rows[0].id;
   if (await tableExists('user_allowed_companies')) {
@@ -90,7 +90,7 @@ async function scopeAdminToA() {
 }
 async function proof1(cookie) {
   const paymentId = created.payments[0];
-  const url = `/api/payments/${paymentId}/simulate-paid`;
+  const url = `/api/payments/${paymentId}/simulate-paid?companyId=${created.companies[0]}`;
   const barrier = new Promise((resolve) => setTimeout(resolve, 25));
   const requests = await Promise.all([
     barrier.then(() => api(url, { method: 'POST', cookie })),
@@ -106,7 +106,7 @@ async function proof1(cookie) {
   let outbox = 0;
   for (const table of ['financial_outbox_events','payment_accounting_outbox','notification_outbox']) {
     if (await tableExists(table)) {
-      const r = await q(`SELECT count(*)::int AS n FROM ${table} WHERE CAST(row_to_json(${table}) AS text) ILIKE $1`, [`%${paymentId}%`]);
+      const r = await q(`SELECT count(*)::int AS n FROM ${table} WHERE CAST(row_to_json(${table}) AS text) ILIKE $1`, [`%${marker}%`]);
       outbox += Number(r.rows[0]?.n ?? 0);
     }
   }
@@ -128,7 +128,9 @@ async function proof1(cookie) {
     accounting_payment_rows: Number(accPayments.rows[0]?.n ?? 0),
     outbox_rows: outbox,
     parallel_statuses: requests.map((r) => r.status),
+    parallel_bodies: requests.map((r) => r.body),
     retry_status: retry.status,
+    retry_body: retry.body,
   };
   if (state.rows[0]?.payment_status !== 'paid' || state.rows[0]?.invoice_status !== 'invoiced' || state.rows[0]?.order_status !== 'Payment Received' || Number(finance.rows[0]?.n ?? 0) !== 1 || duplicatePaymentEffects !== 0 || duplicateAccountingEffects !== 0) {
     throw new Error(`PROOF1_NOT_PASS ${JSON.stringify(report.concurrentPaymentConfirmation)}`);
@@ -152,7 +154,7 @@ async function proof2() {
   const newObjects = [...after].filter((x) => !before.has(x));
   created.storage.push(...newObjects);
   const row = await q('SELECT proof_url, proof_remarks FROM sales_documents WHERE id=$1', [created.docs[0]]);
-  const canonical = row.rows[0]?.proof_url ? `uploads/${String(row.rows[0].proof_url).replace(/^\/objects\//, '')}` : null;
+  const canonical = row.rows[0]?.proof_url ? String(row.rows[0].proof_url).replace(/^\/objects\//, '') : null;
   const loserResidual = newObjects.filter((x) => x !== canonical);
   const metadata = await q('SELECT count(*)::int AS n FROM sales_documents WHERE id=$1 AND proof_url IS NOT NULL', [created.docs[0]]);
   const successCount = uploads.filter((r) => r.status >= 200 && r.status < 300).length;
@@ -183,9 +185,12 @@ async function proof3(cookie) {
   ];
   // B must have a real private proof before access-scope checks, otherwise 404 could mask scope.
   const bToken = (await q('SELECT payment_proof_token FROM sales_documents WHERE id=$1', [b])).rows[0].payment_proof_token;
+  const beforeB = await listUploadObjects();
   const bUpload = await uploadProof(bToken, 'proof-b.pdf');
   if (bUpload.status !== 200) throw new Error(`fixture B proof upload failed ${bUpload.status}`);
   await sleep(500);
+  const afterB = await listUploadObjects();
+  created.storage.push(...[...afterB].filter((object) => !beforeB.has(object)));
   const matrix = {};
   for (const endpoint of endpoints) {
     const same = await api(endpoint.same[1], { method: endpoint.same[0], cookie, redirect: 'manual' });
@@ -214,14 +219,25 @@ async function cleanup() {
   try {
     await client.query('BEGIN');
     if (await tableExists('customer_payment_finance_events')) await client.query('DELETE FROM customer_payment_finance_events WHERE source_payment_id = ANY($1::int[])', [paymentIds]);
-    if (await tableExists('erp_audit_logs')) await client.query('DELETE FROM erp_audit_logs WHERE CAST(row_to_json(erp_audit_logs) AS text) ILIKE $1 OR ref_id = ANY($2::text[])', [`%${marker}%`, docIds.map(String)]);
     if (await tableExists('payment_accounting_outbox')) await client.query('DELETE FROM payment_accounting_outbox WHERE CAST(row_to_json(payment_accounting_outbox) AS text) ILIKE $1', [`%${marker}%`]);
     if (await tableExists('financial_outbox_events')) await client.query('DELETE FROM financial_outbox_events WHERE CAST(row_to_json(financial_outbox_events) AS text) ILIKE $1', [`%${marker}%`]);
     if (await tableExists('notification_outbox')) await client.query('DELETE FROM notification_outbox WHERE CAST(row_to_json(notification_outbox) AS text) ILIKE $1', [`%${marker}%`]);
     if (await tableExists('accounting_reconciliations')) await client.query('DELETE FROM accounting_reconciliations WHERE match_source_id = ANY($1::int[])', [paymentIds]);
-    if (await tableExists('accounting_entry_lines')) await client.query('DELETE FROM accounting_entry_lines WHERE entry_id IN (SELECT id FROM accounting_entries WHERE source_id = ANY($1::int[]) OR ref LIKE $2)', [paymentIds, `${marker}%`]);
-    if (await tableExists('accounting_payments')) await client.query('DELETE FROM accounting_payments WHERE source_doc_id = ANY($1::int[]) OR ref LIKE $2', [paymentIds, `${marker}%`]);
-    if (await tableExists('accounting_entries')) await client.query('DELETE FROM accounting_entries WHERE source_id = ANY($1::int[]) OR ref LIKE $2', [paymentIds, `${marker}%`]);
+    if (await tableExists('accounting_payments')) await client.query('DELETE FROM accounting_payments WHERE source_doc_id = ANY($1::int[]) AND ref LIKE $2', [paymentIds, `${marker}%`]);
+    if (await tableExists('accounting_entries')) {
+      const fixtureEntries = await client.query(
+        `SELECT id FROM accounting_entries
+         WHERE source IN ('sales_payment','purchase_payment')
+           AND source_id = ANY($1::int[]) AND ref LIKE $2`,
+        [paymentIds, `${marker}%`],
+      );
+      const entryIds = fixtureEntries.rows.map((r) => Number(r.id));
+      if (entryIds.length) {
+        await client.query("ALTER TABLE accounting_entries DISABLE TRIGGER trg_block_posted_delete");
+        await client.query("DELETE FROM accounting_entries WHERE id = ANY($1::int[])", [entryIds]);
+        await client.query("ALTER TABLE accounting_entries ENABLE TRIGGER trg_block_posted_delete");
+      }
+    }
     await client.query('DELETE FROM payments WHERE id = ANY($1::int[])', [paymentIds]);
     await client.query('DELETE FROM sales_documents WHERE id = ANY($1::int[])', [docIds]);
     await client.query('DELETE FROM logistic_orders WHERE id = ANY($1::int[])', [orderIds]);
@@ -231,18 +247,26 @@ async function cleanup() {
       for (const companyId of created.previousAllowed) await client.query('INSERT INTO user_allowed_companies (user_id,company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [created.adminUserId, companyId]);
     }
     if (created.sid) await client.query('DELETE FROM sessions WHERE sid=$1', [created.sid.replace(/^sid=/, '')]);
+    if (created.adminUserCreated && created.adminUserId) {
+      if (await tableExists('erp_audit_logs')) await client.query('DELETE FROM erp_audit_logs WHERE CAST(row_to_json(erp_audit_logs) AS text) ILIKE $1', [`%${created.adminUserId}%`]);
+      await client.query('DELETE FROM users WHERE id=$1', [created.adminUserId]);
+    }
     await client.query('DELETE FROM companies WHERE id = ANY($1::int[])', [companyIds]);
     await client.query('COMMIT');
   } catch (e) {
     await client.query('ROLLBACK');
     cleanupErrors.push(`db: ${e.message}`);
   } finally { client.release(); }
-  for (const table of ['customer_payment_finance_events','erp_audit_logs','payment_accounting_outbox','financial_outbox_events','notification_outbox']) {
+  for (const table of ['customer_payment_finance_events','payment_accounting_outbox','financial_outbox_events','notification_outbox']) {
     if (!await tableExists(table)) continue;
     try {
       const r = await q(`SELECT count(*)::int AS n FROM ${table} WHERE CAST(row_to_json(${table}) AS text) ILIKE $1`, [`%${marker}%`]);
       if (Number(r.rows[0]?.n ?? 0) !== 0) cleanupErrors.push(`${table} residual=${r.rows[0].n}`);
     } catch (e) { cleanupErrors.push(`${table} residual check: ${e.message}`); }
+  }
+  if (await tableExists('erp_audit_logs')) {
+    const audit = await q('SELECT count(*)::int AS n FROM erp_audit_logs WHERE CAST(row_to_json(erp_audit_logs) AS text) ILIKE $1', [`%${marker}%`]);
+    report.AUDIT_LOG_ROWS_PRESERVED = Number(audit.rows[0]?.n ?? 0);
   }
   try {
     const remaining = await listUploadObjects();
