@@ -735,10 +735,10 @@ router.get("/file/:documentId", async (req: Request, res: Response) => {
   if (isNaN(docId)) return res.status(400).json({ error: "Invalid document id" });
 
   try {
-    const rows = await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT id, proof_url, company_id FROM sales_documents WHERE id = ${docId} LIMIT 1
     `);
-    const row = (rows as unknown as Record<string, unknown>[])[0];
+    const row = (result.rows as unknown as Record<string, unknown>[])[0];
     if (!row) return res.status(404).json({ error: "Dokumen tidak ditemukan" });
     if (!assertPaymentProofCompanyAccess(req, res, row["company_id"])) return;
 

@@ -14,7 +14,7 @@ const sb = createClient(storageUrl, storageKey, {
   realtime: { transport: WebSocket },
 });
 
-const created = { companies: [], customers: [], logisticOrders: [], docs: [], payments: [], storage: [], sid: null, adminUserId: null, adminEmail: 'admcst001@gmail.com', adminUserCreated: false, previousAllowed: [] };
+const created = { companies: [], customers: [], logisticOrders: [], docs: [], payments: [], storage: [], sid: null, adminUserId: null, adminEmail: 'admcst001@gmail.com', adminUserCreated: false, previousAllowed: [], previousUserCompanyId: null };
 const report = {};
 
 function assertDev() {
@@ -41,9 +41,10 @@ async function loginAdmin() {
   const match = raw.match(/sid=[^;]+/);
   if (!match) throw new Error('dev-login did not return sid cookie');
   created.sid = match[0];
-  const u = await q('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1', [created.adminEmail]);
+  const u = await q('SELECT id, company_id FROM users WHERE lower(email)=lower($1) LIMIT 1', [created.adminEmail]);
   if (!u.rows[0]) throw new Error('dev-login user missing in DB');
   created.adminUserId = u.rows[0].id;
+  created.previousUserCompanyId = u.rows[0].company_id == null ? null : Number(u.rows[0].company_id);
   if (await tableExists('user_allowed_companies')) {
     const before = await q('SELECT company_id FROM user_allowed_companies WHERE user_id=$1 ORDER BY company_id', [created.adminUserId]);
     created.previousAllowed = before.rows.map((r) => Number(r.company_id));
@@ -86,10 +87,15 @@ async function insertFixtures() {
 }
 async function scopeAdminToA() {
   if (!await tableExists('user_allowed_companies')) throw new Error('user_allowed_companies table missing');
+  await q('UPDATE users SET company_id=$1 WHERE id=$2', [created.companies[0], created.adminUserId]);
   await q('INSERT INTO user_allowed_companies (user_id,company_id) VALUES ($1,$2)', [created.adminUserId, created.companies[0]]);
 }
 async function proof1(cookie) {
   const paymentId = created.payments[0];
+  const authContext = await api('/api/auth/user', { method: 'GET', cookie });
+  const paymentContext = await q('SELECT id, company_id, ref_id, ref_doc_number FROM payments WHERE id=$1', [paymentId]);
+  report.authContextBeforePayment = authContext.body;
+  report.paymentContextBeforePayment = paymentContext.rows[0] ?? null;
   const url = `/api/payments/${paymentId}/simulate-paid?companyId=${created.companies[0]}`;
   const barrier = new Promise((resolve) => setTimeout(resolve, 25));
   const requests = await Promise.all([
@@ -246,6 +252,7 @@ async function cleanup() {
       await client.query('DELETE FROM user_allowed_companies WHERE user_id=$1', [created.adminUserId]);
       for (const companyId of created.previousAllowed) await client.query('INSERT INTO user_allowed_companies (user_id,company_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [created.adminUserId, companyId]);
     }
+    await client.query('UPDATE users SET company_id=$1 WHERE id=$2', [created.previousUserCompanyId, created.adminUserId]);
     if (created.sid) await client.query('DELETE FROM sessions WHERE sid=$1', [created.sid.replace(/^sid=/, '')]);
     if (created.adminUserCreated && created.adminUserId) {
       if (await tableExists('erp_audit_logs')) await client.query('DELETE FROM erp_audit_logs WHERE CAST(row_to_json(erp_audit_logs) AS text) ILIKE $1', [`%${created.adminUserId}%`]);
