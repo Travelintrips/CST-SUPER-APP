@@ -2886,7 +2886,12 @@ function VendorInvoicePaymentDialog({
         : Number(invoice.outstanding)),
     0,
   );
-  const selectionFitsMutation = Math.abs(selectedTotal - mutationAmount) <= 0.01;
+  const wrongTransferAmount = Math.max(
+    0,
+    Math.round((mutationAmount - selectedTotal) * 100) / 100,
+  );
+  const selectionFitsMutation =
+    selectedInvoices.length > 0 && selectedTotal <= mutationAmount + 0.01;
   const selectedHasWithholdingReview = selectedInvoices.some(
     (invoice) =>
       Number(invoice.withholdingTaxAmount ?? 0) > 0
@@ -2915,7 +2920,7 @@ function VendorInvoicePaymentDialog({
     }
     if (!selectionFitsMutation) {
       toast({
-        title: "Total pilihan belum sama dengan nominal mutasi",
+        title: "Total invoice melebihi nominal mutasi",
         description: `Alokasi terpilih ${idr(selectedTotal)}; nominal mutasi ${idr(mutationAmount)}.`,
         variant: "destructive",
       });
@@ -2946,7 +2951,9 @@ function VendorInvoicePaymentDialog({
       if (!response.ok) throw new Error(body.error ?? "Pembayaran invoice vendor gagal diproses");
       toast({
         title: "Pembayaran invoice berhasil dialokasikan",
-        description: `${selectedInvoices.length} invoice — ${idr(mutationAmount)} masuk ke Hutang Vendor/AP.`,
+        description: wrongTransferAmount > 0.01
+          ? `${selectedInvoices.length} invoice — ${idr(selectedTotal)} ke Hutang Vendor/AP; ${idr(wrongTransferAmount)} ke COA Salah Transfer.`
+          : `${selectedInvoices.length} invoice — ${idr(mutationAmount)} masuk ke Hutang Vendor/AP.`,
       });
       onClose();
       await onSaved();
@@ -2977,12 +2984,16 @@ function VendorInvoicePaymentDialog({
               <strong>{idr(mutationAmount)}</strong>
             </div>
             <div className="mt-1 text-xs">
-              Jurnal: <strong>Debit Hutang Vendor/AP</strong> — <strong>Kredit Bank</strong>
+              Jurnal: <strong>Debit Hutang Vendor/AP</strong>
+              {wrongTransferAmount > 0.01 && (
+                <> + <strong>Debit 2-1011-CST — Salah Transfer ({idr(wrongTransferAmount)})</strong></>
+              )}
+              {" "}— <strong>Kredit Bank</strong>
             </div>
           </div>
 
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            Invoice yang sudah tersettle penuh tidak ditampilkan. Untuk beberapa invoice, total sisa yang dicentang harus sama persis dengan nominal mutasi.
+            Invoice yang sudah tersettle penuh tidak ditampilkan. Jika total sisa invoice lebih kecil dari nominal mutasi, selisihnya akan dicatat ke COA 2-1011-CST — Salah Transfer.
           </div>
 
           {invoicesQuery.isLoading && (
@@ -3106,7 +3117,12 @@ function VendorInvoicePaymentDialog({
               </div>
               {!selectionFitsMutation && (
                 <div className="mt-1 text-xs">
-                  Pilih invoice lain atau ubah pilihan sampai total alokasi sama dengan nominal mutasi.
+                  Total alokasi invoice tidak boleh melebihi nominal mutasi.
+                </div>
+              )}
+              {selectionFitsMutation && wrongTransferAmount > 0.01 && (
+                <div className="mt-1 text-xs">
+                  Kelebihan {idr(wrongTransferAmount)} akan masuk ke COA 2-1011-CST — Salah Transfer.
                 </div>
               )}
               {selectedHasWithholdingReview && (

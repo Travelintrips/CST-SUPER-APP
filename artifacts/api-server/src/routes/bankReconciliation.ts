@@ -143,6 +143,39 @@ import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule
 
 const router = Router();
 
+const WRONG_TRANSFER_COA_CODE = "2-1011-CST";
+const WRONG_TRANSFER_COA_NAME = "Salah Transfer";
+
+async function resolveWrongTransferAccount(tx: any, companyId: number): Promise<{
+  id: number;
+  code: string;
+  name: string;
+}> {
+  const { rows } = await tx.execute(sql`
+    SELECT id, code, name
+    FROM chart_of_accounts
+    WHERE company_id = ${companyId}
+      AND code = ${WRONG_TRANSFER_COA_CODE}
+      AND is_active = TRUE
+      AND is_postable = TRUE
+      AND status = 'ACTIVE'
+    LIMIT 1
+  `);
+  const row = rows[0] as Record<string, unknown> | undefined;
+  const accountId = row?.id == null ? null : Number(row.id);
+  if (!Number.isInteger(accountId) || accountId <= 0) {
+    throw Object.assign(
+      new Error(`COA ${WRONG_TRANSFER_COA_CODE} — ${WRONG_TRANSFER_COA_NAME} belum tersedia atau belum aktif untuk perusahaan ini`),
+      { httpStatus: 422 },
+    );
+  }
+  return {
+    id: accountId,
+    code: String(row?.code ?? WRONG_TRANSFER_COA_CODE),
+    name: String(row?.name ?? WRONG_TRANSFER_COA_NAME),
+  };
+}
+
 type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
 
 /**
@@ -5431,13 +5464,14 @@ router.post(
         if (
           !Number.isFinite(mutationAmount)
           || mutationAmount <= 0
-          || Math.abs(totalAllocation - mutationAmount) > 0.01
+          || totalAllocation > mutationAmount + 0.01
         ) {
           throw Object.assign(
-            new Error(`Total sisa invoice terpilih (${totalAllocation.toFixed(2)}) harus sama dengan nominal mutasi (${mutationAmount.toFixed(2)}).`),
+            new Error(`Nominal mutasi (${mutationAmount.toFixed(2)}) tidak cukup untuk total alokasi invoice (${totalAllocation.toFixed(2)}).`),
             { httpStatus: 422 },
           );
         }
+        const wrongTransferAmount = Math.max(0, Math.round((mutationAmount - totalAllocation) * 100) / 100);
 
         const { rows: settingsRows } = await tx.execute(sql`
           SELECT default_bank_account_id, ap_account_id, bank_journal_id
@@ -5473,6 +5507,9 @@ router.post(
         `);
         const journalCode = String(journalRows[0]?.code ?? "BANK");
         const description = `Pembayaran ${allocations.length} invoice vendor — ${String(mutation.mutation_key ?? "")}`.slice(0, 200);
+        const wrongTransferAccount = wrongTransferAmount > 0.01
+          ? await resolveWrongTransferAccount(tx, companyId)
+          : null;
         const entry = await postEntryWithClient(
           tx as any,
           {
@@ -5492,6 +5529,14 @@ router.post(
                 credit: 0,
                 description: `Pembayaran invoice vendor ${item.invoiceNumber}`.slice(0, 200),
               })),
+              ...(wrongTransferAccount
+                ? [{
+                    accountId: wrongTransferAccount.id,
+                    debit: wrongTransferAmount,
+                    credit: 0,
+                    description: `Kelebihan transfer — ${wrongTransferAccount.code} ${wrongTransferAccount.name}`.slice(0, 200),
+                  }]
+                : []),
               { accountId: bankCoaId, debit: 0, credit: mutationAmount, description },
             ],
           },
@@ -5523,8 +5568,10 @@ router.post(
              status, candidate_source, is_manual)
           VALUES
             (${mutationId}, 'vendor_invoice', ${Number(allocations[0].invoice.id)}, 100,
-             ${`vendor invoice batch payment; invoice_ids:${invoiceIdsText}`},
-             TRUE, FALSE, TRUE, FALSE, FALSE, 'approved', 'vendor_invoice_batch', TRUE)
+             ${wrongTransferAccount
+               ? `vendor invoice batch payment; invoice_ids:${invoiceIdsText}; excess ${wrongTransferAmount.toFixed(2)} posted to ${wrongTransferAccount.code}`
+               : `vendor invoice batch payment; invoice_ids:${invoiceIdsText}`},
+             ${wrongTransferAmount <= 0.01}, FALSE, TRUE, FALSE, FALSE, 'approved', 'vendor_invoice_batch', TRUE)
         `);
         await tx.execute(sql`
           INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
@@ -5535,6 +5582,8 @@ router.post(
               candidate_ids: allocations.map((item) => Number(item.invoice.id)),
               amounts: allocations.map((item) => item.amount),
               total_amount: mutationAmount,
+              wrong_transfer_amount: wrongTransferAmount,
+              wrong_transfer_coa_code: wrongTransferAccount?.code ?? null,
               journal_entry_id: entry.id,
               payment_type: "vendor_invoice_settlement",
             })}
@@ -5545,6 +5594,8 @@ router.post(
           mutationId,
           journalEntryId: entry.id,
           totalAmount: mutationAmount,
+          wrongTransferAmount,
+          wrongTransferCoaCode: wrongTransferAccount?.code ?? null,
           invoices: allocations.map((item) => ({
             vendorInvoiceId: Number(item.invoice.id),
             invoiceNumber: item.invoiceNumber,
@@ -5995,12 +6046,11 @@ router.post(
         if (!Number.isFinite(grandTotal) || grandTotal <= 0 || outstanding <= 0.01) {
           throw Object.assign(new Error("Invoice vendor sudah lunas atau nominal invoice tidak valid"), { httpStatus: 409 });
         }
-        if (amount > outstanding + 0.01) {
-          throw Object.assign(
-            new Error(`Nominal pembayaran melebihi sisa invoice (${outstanding.toFixed(2)})`),
-            { httpStatus: 422 },
-          );
-        }
+        const invoiceAllocation = Math.min(amount, outstanding);
+        const wrongTransferAmount = Math.max(
+          0,
+          Math.round((amount - invoiceAllocation) * 100) / 100,
+        );
 
         // Withholding requires the specialized Bank Disbursement flow because
         // the cash amount is net while AP settlement is gross.
@@ -6062,6 +6112,9 @@ router.post(
 
         const invoiceNumber = String(invoice.invoice_number ?? `VI-${vendorInvoiceId}`);
         const description = `Pembayaran invoice vendor ${invoiceNumber} — ${String(invoice.supplier_name ?? "")}`.slice(0, 200);
+        const wrongTransferAccount = wrongTransferAmount > 0.01
+          ? await resolveWrongTransferAccount(tx, companyId)
+          : null;
         const entry = await postEntryWithClient(
           tx as any,
           {
@@ -6075,7 +6128,15 @@ router.post(
             createdById: actor,
             companyId,
             lines: [
-              { accountId: apCoaId, debit: amount, credit: 0, description },
+              { accountId: apCoaId, debit: invoiceAllocation, credit: 0, description },
+              ...(wrongTransferAccount
+                ? [{
+                    accountId: wrongTransferAccount.id,
+                    debit: wrongTransferAmount,
+                    credit: 0,
+                    description: `Kelebihan transfer — ${wrongTransferAccount.code} ${wrongTransferAccount.name}`.slice(0, 200),
+                  }]
+                : []),
               { accountId: bankCoaId, debit: 0, credit: amount, description },
             ],
           },
@@ -6083,7 +6144,7 @@ router.post(
           "draft",
         );
 
-        const newPaid = Math.round((alreadyPaid + amount) * 100) / 100;
+        const newPaid = Math.round((alreadyPaid + invoiceAllocation) * 100) / 100;
         const invoiceStatus = newPaid >= grandTotal - 0.01 ? "paid" : "posted";
         await tx.execute(sql`
           UPDATE vendor_invoices
@@ -6108,7 +6169,10 @@ router.post(
              status, candidate_source)
           VALUES
             (${mutationId}, 'vendor_invoice', ${vendorInvoiceId}, 100,
-             'vendor invoice payment allocation', TRUE, FALSE, TRUE, FALSE, FALSE,
+             ${wrongTransferAccount
+               ? `vendor invoice payment allocation; excess ${wrongTransferAmount.toFixed(2)} posted to ${wrongTransferAccount.code}`
+               : "vendor invoice payment allocation"},
+             ${wrongTransferAmount <= 0.01}, FALSE, TRUE, FALSE, FALSE,
              'approved', NULL)
           ON CONFLICT DO NOTHING
         `);
@@ -6123,6 +6187,9 @@ router.post(
               candidate_id: vendorInvoiceId,
               invoice_number: invoiceNumber,
               amount,
+              invoice_allocation: invoiceAllocation,
+              wrong_transfer_amount: wrongTransferAmount,
+              wrong_transfer_coa_code: wrongTransferAccount?.code ?? null,
               journal_entry_id: entry.id,
               payment_type: "vendor_invoice_settlement",
             })}
@@ -6134,6 +6201,9 @@ router.post(
           vendorInvoiceId,
           invoiceNumber,
           amount,
+          invoiceAllocation,
+          wrongTransferAmount,
+          wrongTransferCoaCode: wrongTransferAccount?.code ?? null,
           journalEntryId: entry.id,
           invoiceStatus,
           amountPaid: newPaid,
