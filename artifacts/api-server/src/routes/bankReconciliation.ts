@@ -4457,7 +4457,15 @@ router.get("/mutations", async (req, res) => {
     bmiFilters.push(`${importedPaymentTypeSql} = '${esc(payment_type)}'`);
   }
   // Deduplikasi: exclude bmi baris yang sudah ada di bank_mutations (via mutation_key)
-  bmiFilters.push(`NOT EXISTS (SELECT 1 FROM bank_mutations bm2 WHERE bm2.mutation_key = COALESCE(bmi.unique_key, bmi.id::text))`);
+  // Legacy databases may still expose bank_mutations.mutation_key as an
+  // integer even though current imports use a text identity. Compare the
+  // normalized identity as text so the optional bank-import branch cannot
+  // abort the whole UNION query with "integer = text".
+  bmiFilters.push(`NOT EXISTS (
+    SELECT 1
+    FROM bank_mutations bm2
+    WHERE bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)
+  )`);
   const bmiWhere = `WHERE ${bmiFilters.join(" AND ")}`;
 
   // Enrich candidate rows with the source transaction details that the user
