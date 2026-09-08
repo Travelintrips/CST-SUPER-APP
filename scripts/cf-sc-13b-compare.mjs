@@ -68,6 +68,16 @@ const indexParity = {
     def.includes("finance_project_configs") && def.includes("project_code") && def.includes("company_id")),
 };
 const indexBlocker = Object.values(indexParity).every(Boolean) ? 0 : 1;
+const devSemantic = dev.semantic_config ?? { status: "BLOCKED", certified: false, mismatches: ["semantic audit missing"] };
+const prodSemantic = prod.semantic_config ?? { status: "BLOCKED", certified: false, mismatches: ["semantic audit missing"] };
+const semanticParity = devSemantic.certified && prodSemantic.certified &&
+  JSON.stringify(devSemantic.configuration) === JSON.stringify(prodSemantic.configuration);
+const semanticBlockers = [
+  ...(!devSemantic.certified ? [`DEV certified baseline ${devSemantic.status.toLowerCase()}: ${(devSemantic.mismatches ?? []).join(", ")}`] : []),
+  ...(!prodSemantic.certified ? [`PROD semantic baseline ${prodSemantic.status.toLowerCase()}: ${(prodSemantic.mismatches ?? []).join(", ")}`] : []),
+  ...(devSemantic.certified && prodSemantic.certified && !semanticParity
+    ? ["DEV/PROD certified finance semantics differ"] : []),
+];
 const report = {
   audit: "CF-SC-13B",
   dev: {
@@ -76,6 +86,7 @@ const report = {
     required_routines_present: dev.required_routines_present,
     finance_mode: dev.finance_mode,
     data_checks: dev.data_checks,
+    semantic_config: devSemantic,
   },
   prod: {
     project_ref: prod.project_ref,
@@ -83,6 +94,7 @@ const report = {
     required_routines_present: prod.required_routines_present,
     finance_mode: prod.finance_mode,
     data_checks: prod.data_checks,
+    semantic_config: prodSemantic,
   },
   column_diff: columnDiff,
   routine_diff: routineDiff,
@@ -91,6 +103,8 @@ const report = {
   constraint_parity: prod.canonical_settlement_fk.fk_exists &&
     prod.canonical_settlement_fk.invalid_references === 0 ? "PASS" : "FAIL",
   index_parity: indexParity,
+  semantic_config_parity: semanticParity ? "PASS" : "FAIL",
+  dev_certified_baseline: devSemantic.certified ? "PASS" : "FAIL",
   unresolved_sport_center_required_drift: requiredDrift.length,
   blockers: [
     ...requiredDrift.map((row) => `missing PROD shared column ${row.table}.${row.column}`),
@@ -98,6 +112,7 @@ const report = {
     ...(routineBlocker ? ["required PROD routine is missing"] : []),
     ...(provenanceBlocker ? ["required mutation provenance column is missing"] : []),
     ...(indexBlocker ? ["required PROD idempotency/performance index is missing"] : []),
+    ...semanticBlockers,
   ],
   classifications: {
     product_scope: "CUSTOMER_PORTAL_ONLY",
