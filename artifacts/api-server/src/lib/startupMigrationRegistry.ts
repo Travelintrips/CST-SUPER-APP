@@ -141,6 +141,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["accounting_defaults_seed", "Accounting defaults seed", "seed"],
   ["development_coa_sync", "Development COA sync", "reconciliation"],
   ["additional_tax_seed", "Additional tax seed", "seed"],
+  ["pph15_tax_account_repair", "PPh 15 tax account repair", "repair"],
   ["expense_category_account_backfill", "Expense category account backfill", "backfill"],
   ["mdr_expense_category_backfill", "MDR expense category backfill", "backfill"],
   ["uom_seed", "UOM seed", "seed"],
@@ -173,6 +174,8 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
           ? 2
         : name === "customer_portal_product_coa"
           ? 1
+        : name === "pph15_tax_account_repair"
+          ? 2
         : 1,
     critical: true,
     category,

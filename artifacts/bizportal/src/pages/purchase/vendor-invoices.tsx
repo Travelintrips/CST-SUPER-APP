@@ -327,9 +327,15 @@ export function VendorInvoiceEditorPage() {
         const exactName = taxType.includes("4(2)") || taxType.includes("4 ayat 2")
           ? /hutang pph final pasal 4 ayat 2/i
           : taxType.includes("pph 15")
-            ? /hutang pajak lainnya/i
+            ? /hutang pph final pasal 15/i
             : new RegExp(`hutang pph pasal ${taxType.match(/pph\\s*(\\d+)/i)?.[1] ?? "___"}`, "i");
-        const suggested = liabilityAccounts.find((account) => exactName.test(account.name));
+        const suggested = taxType.includes("pph 15")
+          ? liabilityAccounts.find(
+              (account) =>
+                account.code.startsWith("2-1102-") ||
+                /hutang pph final pasal 15/i.test(account.name),
+            )
+          : liabilityAccounts.find((account) => exactName.test(account.name));
         if (!suggested) return line;
         changed = true;
         return { ...line, liabilityAccountId: String(suggested.id) };

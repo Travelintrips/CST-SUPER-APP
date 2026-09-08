@@ -3,7 +3,7 @@ import pg from "pg";
 import { logger } from "./lib/logger";
 import { bootstrapConfigFromSupabase } from "./lib/configBootstrap";
 import { runTranslationsMigration } from "./lib/translationsMigration";
-import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts, backfillMdrExpenseCategory } from "./lib/accountingSeed";
+import { seedAccountingDefaults, seedAdditionalTaxes, repairPph15TaxAccounts, backfillExpenseCategoryAccounts, backfillMdrExpenseCategory } from "./lib/accountingSeed";
 import { syncDevCoaToFixture } from "./lib/coaDevSync";
 import { seedLogisticsServiceItems } from "./lib/seedLogisticsItems";
 import { seedCatalogProducts } from "./lib/seedCatalogProducts";
@@ -2279,6 +2279,9 @@ async function startServer() {
         markStartupSeedPhaseFailed("additional_tax");
         throw error;
       }
+    }))
+    .then(() => timeStartupStage("PPh 15 tax account repair", async () => {
+      await repairPph15TaxAccounts();
     }))
     .then(() => timeStartupStage("Expense category account backfill", async () => {
       markStartupSeedPhaseStarting("expense_category_account_backfill");

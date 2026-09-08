@@ -1413,27 +1413,70 @@ const ADDITIONAL_TAX_TEMPLATES: {
   { name: "PPN Keluaran 12%",           rate: "12.000", kind: "sale",       cutType: "self_borne",  accountBase: "2-1020" },
   { name: "PPN Masukan 12%",            rate: "12.000", kind: "purchase",   cutType: "self_borne",  accountBase: "1-1050" },
   { name: "PPh 4(2) Sewa 10%",          rate: "10.000", kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
-  { name: "PPh 15 Pelayaran DN 1,2%",   rate: "1.200",  kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
-  { name: "PPh 15 Pelayaran LN 2,64%",  rate: "2.640",  kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
+  { name: "PPh 15 Pelayaran DN 1,2%",   rate: "1.200",  kind: "withholding",cutType: "withholding", accountBase: "2-1102" },
+  { name: "PPh 15 Pelayaran LN 2,64%",  rate: "2.640",  kind: "withholding",cutType: "withholding", accountBase: "2-1102" },
   { name: "PPh 26 20%",                 rate: "20.000", kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
 ];
+
+/**
+ * Repair only the PPh 15 tax-master account mapping. This is intentionally a
+ * separate additive stage because the original additional-tax seed may already
+ * be marked complete in an existing environment.
+ */
+export async function repairPph15TaxAccounts(): Promise<void> {
+  await populateDynamicCompanies();
+  for (const cid of ALL_COMPANY_IDS) {
+    const abbr = COMPANY_ABBR[cid]!;
+    const accountCode = `2-1102-${abbr}`;
+    const [accountRow] = await db
+      .select({ id: chartOfAccountsTable.id })
+      .from(chartOfAccountsTable)
+      .where(sql`
+        ${chartOfAccountsTable.code} = ${accountCode}
+        AND ${chartOfAccountsTable.companyId} = ${cid}
+        AND ${chartOfAccountsTable.type} = 'liability'
+        AND ${chartOfAccountsTable.isActive} = true
+        AND ${chartOfAccountsTable.isPostable} = true
+      `)
+      .limit(1);
+
+    if (!accountRow) {
+      logger.warn({ cid, accountCode }, "repairPph15TaxAccounts: dedicated account not found, skip");
+      continue;
+    }
+
+    const result = await db.execute(sql`
+      UPDATE accounting_taxes
+      SET account_id = ${accountRow.id}
+      WHERE company_id = ${cid}
+        AND kind = 'withholding'
+        AND LOWER(name) LIKE 'pph 15%'
+        AND account_id IS DISTINCT FROM ${accountRow.id}
+    `);
+    logger.info(
+      { cid, accountCode, repairedRows: Number(result.rowCount ?? 0) },
+      "repairPph15TaxAccounts: completed",
+    );
+  }
+}
 
 export async function seedAdditionalTaxes(): Promise<void> {
   try {
     await populateDynamicCompanies();
+    await repairPph15TaxAccounts();
     for (const cid of ALL_COMPANY_IDS) {
       const abbr = COMPANY_ABBR[cid]!;
 
       const existingRows = await db
-        .select({ id: accountingTaxesTable.id, name: accountingTaxesTable.name })
+        .select({
+          id: accountingTaxesTable.id,
+          name: accountingTaxesTable.name,
+          accountId: accountingTaxesTable.accountId,
+        })
         .from(accountingTaxesTable)
         .where(eq(accountingTaxesTable.companyId, cid));
 
-      const existingNames = new Set(existingRows.map((r) => r.name.trim().toLowerCase()));
-
       for (const tpl of ADDITIONAL_TAX_TEMPLATES) {
-        if (existingNames.has(tpl.name.trim().toLowerCase())) continue;
-
         const accountCode = `${tpl.accountBase}-${abbr}`;
         const [accountRow] = await db
           .select({ id: chartOfAccountsTable.id })
@@ -1443,6 +1486,28 @@ export async function seedAdditionalTaxes(): Promise<void> {
 
         if (!accountRow) {
           logger.warn({ accountCode, cid }, "seedAdditionalTaxes: account not found, skip");
+          continue;
+        }
+
+        const existing = existingRows.find(
+          (row) => row.name.trim().toLowerCase() === tpl.name.trim().toLowerCase(),
+        );
+        if (existing) {
+          // PPh 15 has a dedicated liability account. Repair the tax master
+          // mapping so disbursement fallback cannot return the generic 2-1030.
+          if (
+            tpl.name.toLowerCase().includes("pph 15") &&
+            Number(existing.accountId ?? 0) !== Number(accountRow.id)
+          ) {
+            await db
+              .update(accountingTaxesTable)
+              .set({ accountId: accountRow.id })
+              .where(eq(accountingTaxesTable.id, existing.id));
+            logger.info(
+              { name: tpl.name, cid, accountCode },
+              "seedAdditionalTaxes: repaired PPh 15 liability account",
+            );
+          }
           continue;
         }
 

@@ -86,7 +86,7 @@ const KEWAJIBAN_PAJAK_SUBACCOUNTS: TaxSubaccountDef[] = [
   { baseCode: "2-1099", name: "Hutang Pajak Daerah",               type: "liability", category: "LIABILITY", normalBalance: "CREDIT", headerBaseCode: "2-1090" },
   { baseCode: "2-1100", name: "Hutang Pajak Kendaraan",            type: "liability", category: "LIABILITY", normalBalance: "CREDIT", headerBaseCode: "2-1090" },
   { baseCode: "2-1101", name: "Hutang Bea Masuk",                  type: "liability", category: "LIABILITY", normalBalance: "CREDIT", headerBaseCode: "2-1090" },
-  { baseCode: "2-1102", name: "Hutang Cukai",                      type: "liability", category: "LIABILITY", normalBalance: "CREDIT", headerBaseCode: "2-1090" },
+  { baseCode: "2-1102", name: "Hutang PPh Final Pasal 15",         type: "liability", category: "LIABILITY", normalBalance: "CREDIT", headerBaseCode: "2-1090" },
 ];
 
 // ─── B. ASET PAJAK ─────────────────────────────────────────────────────────────

@@ -116,6 +116,24 @@ type DisbRow = {
 async function resolveDefaultWithholdingAccountId(companyId: number, taxType: string): Promise<number | null> {
   const normalizedTaxType = taxType.trim().toLowerCase();
   if (!normalizedTaxType) return null;
+
+  // PPh 15 has a dedicated company COA. Prefer it over legacy
+  // accounting_taxes rows that may still point to the generic 2-1030 account.
+  if (normalizedTaxType.includes("pph 15")) {
+    const dedicatedRows = execRows<{ account_id: number }>(await db.execute(sql`
+      SELECT coa.id AS account_id
+      FROM chart_of_accounts coa
+      WHERE coa.company_id = ${companyId}
+        AND coa.code LIKE '2-1102-%'
+        AND coa.type = 'liability'
+        AND coa.is_active = true
+        AND coa.is_postable = true
+      ORDER BY coa.id
+      LIMIT 1
+    `));
+    if (dedicatedRows[0]?.account_id) return Number(dedicatedRows[0].account_id);
+  }
+
   const rows = execRows<{ account_id: number }>(await db.execute(sql`
     SELECT at.account_id
     FROM accounting_taxes at
