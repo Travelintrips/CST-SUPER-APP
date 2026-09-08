@@ -739,6 +739,16 @@ interface OutstandingVendorInvoice {
     coaName?: string | null;
     coaResolutionStatus?: string | null;
   }>;
+  withholdingLines?: Array<{
+    lineTaxId: number;
+    taxType: string;
+    taxObject: string;
+    amount: number;
+    liabilityAccountId?: number | null;
+    coaCode?: string | null;
+    coaName?: string | null;
+    resolutionStatus?: string | null;
+  }>;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -3055,6 +3065,7 @@ function VendorInvoicePaymentDialog({
                     const hasWithholding = Number(invoice.withholdingTaxAmount ?? 0) > 0;
                     const components = invoice.invoiceBreakdown?.components ?? [];
                     const expenseLines = invoice.expenseLines ?? [];
+                    const withholdingLines = invoice.withholdingLines ?? [];
                     const componentRowCount = Math.max(components.length, expenseLines.length);
                     return (
                       <TableRow key={invoice.id} className={checked ? "bg-emerald-50/70" : undefined}>
@@ -3118,6 +3129,25 @@ function VendorInvoicePaymentDialog({
                             </div>
                           ) : (
                             <div className="text-amber-700">Belum ada line COA</div>
+                          )}
+                          {withholdingLines.length > 0 && (
+                            <div className="mt-2 space-y-1 border-t border-blue-200 pt-2">
+                              <div className="font-medium text-blue-800">PPh / Hutang PPh</div>
+                              {withholdingLines.map((tax) => (
+                                <div key={`${invoice.id}-tax-${tax.lineTaxId}`} className="rounded border border-blue-200 bg-blue-50 px-2 py-1">
+                                  <div className="font-medium text-blue-900">
+                                    {tax.taxType}
+                                    {tax.taxObject ? ` — ${tax.taxObject}` : ""}
+                                  </div>
+                                  <div className="text-blue-800">PPh {idr(tax.amount)}</div>
+                                  <div className={tax.coaCode ? "text-emerald-700" : "text-amber-700"}>
+                                    {tax.coaCode
+                                      ? `${tax.coaCode} — ${tax.coaName ?? "COA Hutang PPh"}`
+                                      : "COA Hutang PPh belum terpetakan"}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </TableCell>
                         <TableCell className="align-top text-right">{idr(invoice.grandTotal)}</TableCell>

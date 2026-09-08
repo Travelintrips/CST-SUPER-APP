@@ -5848,6 +5848,53 @@ router.get(
         }
       }
 
+      const withholdingLinesByInvoice = new Map<number, Array<{
+        lineTaxId: number;
+        taxType: string;
+        taxObject: string;
+        amount: number;
+        liabilityAccountId: number | null;
+        coaCode: string | null;
+        coaName: string | null;
+        resolutionStatus: string | null;
+      }>>();
+      if (invoiceIds.length > 0) {
+        const { rows: withholdingRows } = await db.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vit.id AS line_tax_id,
+            vit.tax_type,
+            vit.tax_object,
+            vit.tax_amount,
+            vit.liability_account_id,
+            vit.resolution_status,
+            coa.code AS coa_code,
+            coa.name AS coa_name
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          LEFT JOIN chart_of_accounts coa ON coa.id = vit.liability_account_id
+          WHERE vil.invoice_id IN (${sql.join(invoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vil.invoice_id, vit.id
+        `);
+        for (const tax of withholdingRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(tax.invoice_id);
+          const current = withholdingLinesByInvoice.get(invoiceId) ?? [];
+          current.push({
+            lineTaxId: Number(tax.line_tax_id),
+            taxType: String(tax.tax_type ?? "PPh"),
+            taxObject: String(tax.tax_object ?? ""),
+            amount: Number(tax.tax_amount ?? 0),
+            liabilityAccountId: tax.liability_account_id == null ? null : Number(tax.liability_account_id),
+            coaCode: tax.coa_code == null ? null : String(tax.coa_code),
+            coaName: tax.coa_name == null ? null : String(tax.coa_name),
+            resolutionStatus: tax.resolution_status == null ? null : String(tax.resolution_status),
+          });
+          withholdingLinesByInvoice.set(invoiceId, current);
+        }
+      }
+
       const invoices = rows.map((row) => {
         const financials = resolveVendorInvoiceFinancialAmounts({
           totalAmount: row.total_amount,
@@ -5874,6 +5921,7 @@ router.get(
           source: "vendor_invoice",
            invoiceBreakdown: row.invoice_breakdown ?? null,
            expenseLines: expenseLinesByInvoice.get(Number(row.id)) ?? [],
+           withholdingLines: withholdingLinesByInvoice.get(Number(row.id)) ?? [],
           settlementMode: linkOnly ? "link_only" : "payment",
           linkedDisbursementId: linkOnly ? Number(row.linked_disbursement_id) : null,
           linkedDisbursementNumber: linkOnly ? String(row.linked_disbursement_number ?? "") : null,
