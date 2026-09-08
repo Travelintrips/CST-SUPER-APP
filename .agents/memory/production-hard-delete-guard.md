@@ -9,6 +9,12 @@ Hard deletion of posted bank-reconciliation data must cover both the accounting 
 
 **How to apply:** Re-identify exact targets at execution time from source, line-description and audit evidence, fail closed on count or reference changes, remove derived mirror rows and source rows atomically, and verify every targeted surface plus trigger state after commit.
 
+Audit-only `MATCH_APPROVED_AUTO_POSTED` evidence can also appear on legitimate vendor settlements; it is not sufficient by itself to classify a journal as an auto-post expense. Require the bank-reconciliation source plus the persisted auto-post line marker, and exclude explicit vendor-payment descriptions.
+
+**Why:** A production snapshot contained two vendor invoice settlements with auto-post audit actions but no auto-post line marker; deleting them would have removed valid AP settlement history.
+
+**How to apply:** Build the destructive manifest from the live journal/line predicate, use audit rows only as corroborating evidence, and guard the exact journal count, mutation count, mirror count, and nominal total inside the delete transaction.
+
 During a production purge, pause both the active DB sheet configuration and the legacy environment-based sheet fallback first; marking every DB config inactive alone can cause the legacy worker to reimport the same sheet.
 
 **Why:** The nightly sync treats “no active DB config” as permission to use `GOOGLE_SHEET_ID_BANK_MUTATIONS`, so a successful delete can be undone minutes later.
