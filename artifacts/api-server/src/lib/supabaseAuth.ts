@@ -1,6 +1,6 @@
 import { type Request, type Response, type NextFunction } from "express";
-import { db, portalCustomersTable, userProfilesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, getPoolStats, portalCustomersTable, userProfilesTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 import { verifySupabaseToken } from "./supabaseAdmin";
 import { verifyPortalJwt } from "./portalJwt";
 import { createHash, createHmac } from "crypto";
@@ -33,7 +33,23 @@ function verifyDevToken(token: string): { id: number; email: string; role: strin
   } catch { return null; }
 }
 
-export type PortalAuthReq = Request & { portalCustomerId: number; portalRole: string };
+export type PortalAuthTiming = {
+  COOKIE_PARSE_MS: number;
+  SESSION_LOOKUP_MS: number;
+  REVOCATION_LOOKUP_MS: number;
+  PORTAL_CUSTOMER_LOOKUP_MS: number;
+  AUTH_CONTEXT_LOOKUP_MS: number;
+  AUTH_MIDDLEWARE_TOTAL_MS: number;
+  POOL_BEFORE: string;
+  POOL_AFTER: string;
+};
+
+export type PortalAuthReq = Request & {
+  portalCustomerId: number;
+  portalRole: string;
+  portalCustomer?: typeof portalCustomersTable.$inferSelect;
+  portalAuthTiming?: PortalAuthTiming;
+};
 
 function rejectUnavailablePortalAccount(
   customer: { accountStatus?: string | null; sanctionUntil?: Date | string | null },
@@ -89,7 +105,11 @@ export function setPortalSessionCookie(
   maxAgeMs = 7 * 24 * 60 * 60 * 1000, // 7 days
 ): void {
   const secure = IS_PROD;
-  const sameSite: "none" | "lax" = IS_PROD ? "none" : "lax";
+  // The portal is same-site with its API and OAuth returns through a top-level
+  // navigation, so Lax preserves the supported flows while blocking ambient
+  // cross-site cookie submission. Unsafe requests are additionally protected
+  // by portalCsrfProtection.
+  const sameSite = "lax" as const;
   res.cookie(PORTAL_SESSION_COOKIE, token, {
     httpOnly: true,
     secure,
@@ -111,7 +131,7 @@ export function setPortalSessionCookie(
 /** Clear both portal session cookies on the response (logout). */
 export function clearPortalSessionCookie(res: Response): void {
   const secure = IS_PROD;
-  const sameSite: "none" | "lax" = IS_PROD ? "none" : "lax";
+  const sameSite = "lax" as const;
   res.clearCookie(PORTAL_SESSION_COOKIE, { path: "/", secure, sameSite });
   res.clearCookie(PORTAL_SESSION_HINT_COOKIE, { path: "/", secure, sameSite });
 }
@@ -155,11 +175,14 @@ export async function revokePortalSession(token: string): Promise<void> {
 // to Bearer header for backward compatibility with legacy sessions.
 // Legacy Bearer path retained until 2026-12-31 or next major release.
 export async function requirePortalAuth(req: Request, res: Response, next: NextFunction) {
+  const middlewareStart = performance.now();
+  const cookieParseStart = performance.now();
   const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
   const bearerToken = req.headers.authorization?.startsWith("Bearer ")
     ? req.headers.authorization.slice(7)
     : undefined;
   const token = cookieToken ?? bearerToken;
+  const cookieParseMs = performance.now() - cookieParseStart;
 
   if (!token) {
     res.status(401).json({ message: "Unauthorized" });
@@ -173,11 +196,77 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
   const isDevToken = token.startsWith("devportal.");
   const jwtParts = token.split(".");
   const hasJwtShape = jwtParts.length === 3 && jwtParts.every((part) => part.length > 0);
-  if ((isDevToken && !verifyDevToken(token)) || (!isDevToken && !hasJwtShape)) {
+  if ((!isDevToken && !hasJwtShape)) {
     res.status(401).json({ message: "Invalid or expired token" });
     return;
   }
 
+  const sessionLookupStart = performance.now();
+  const devPayload = isDevToken ? verifyDevToken(token) : null;
+  if (isDevToken && !devPayload) {
+    res.status(401).json({ message: "Invalid or expired token" });
+    return;
+  }
+  const portalPayload = !isDevToken ? await verifyPortalJwt(token) : null;
+  const sessionLookupMs = performance.now() - sessionLookupStart;
+
+  // 1) Dev token / portal JWT. The customer row and revocation state are
+  // resolved by one canonical fail-closed DB operation, avoiding a duplicate
+  // customer read before the bootstrap handler.
+  const canonicalPayload = devPayload ?? portalPayload;
+  if (canonicalPayload) {
+    const canonicalCustomerId = devPayload ? devPayload.id : portalPayload!.customerId;
+    const authContextStart = performance.now();
+    const poolBefore = getPoolStats();
+    let customer: typeof portalCustomersTable.$inferSelect | undefined;
+    try {
+      const [resolved] = await db
+        .select()
+        .from(portalCustomersTable)
+        .where(and(
+          eq(portalCustomersTable.id, canonicalCustomerId),
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM portal_session_revocations
+            WHERE token_hash = ${hashPortalSessionToken(token)}
+              AND expires_at > NOW()
+          )`,
+        ))
+        .limit(1);
+      customer = resolved;
+    } catch (error) {
+      req.log?.error({ err: error }, "portal session validation lookup failed");
+      res.status(503).json({ message: "Sesi tidak dapat diverifikasi. Coba lagi." });
+      return;
+    }
+    const authContextMs = performance.now() - authContextStart;
+    const poolAfter = getPoolStats();
+    if (!customer) {
+      res.status(401).json({ message: "Session sudah tidak berlaku atau customer tidak ditemukan" });
+      return;
+    }
+    if (rejectUnavailablePortalAccount(customer, res)) return;
+    const authReq = req as PortalAuthReq;
+    authReq.portalCustomerId = customer.id;
+    authReq.portalRole = customer.role;
+    authReq.portalCustomer = customer;
+    authReq.portalAuthTiming = {
+      COOKIE_PARSE_MS: cookieParseMs,
+      SESSION_LOOKUP_MS: sessionLookupMs,
+      REVOCATION_LOOKUP_MS: authContextMs,
+      PORTAL_CUSTOMER_LOOKUP_MS: 0,
+      AUTH_CONTEXT_LOOKUP_MS: authContextMs,
+      AUTH_MIDDLEWARE_TOTAL_MS: performance.now() - middlewareStart,
+      POOL_BEFORE: `${poolBefore.totalCount}/${poolBefore.idleCount}/${poolBefore.waitingCount}`,
+      POOL_AFTER: `${poolAfter.totalCount}/${poolAfter.idleCount}/${poolAfter.waitingCount}`,
+    };
+    next();
+    return;
+  }
+
+  // 2) Supabase token fallback. Keep the existing immediate revocation check
+  // for this token family because it does not expose a local customer id until
+  // the provider token is verified.
   let revoked: boolean;
   try {
     revoked = await isPortalSessionRevoked(token);
@@ -188,36 +277,6 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
   }
   if (revoked) {
     res.status(401).json({ message: "Session sudah tidak berlaku" });
-    return;
-  }
-
-  // 1) Dev token bypass (non-production only)
-  const devPayload = verifyDevToken(token);
-  if (devPayload) {
-    const [customer] = await db
-      .select()
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.id, devPayload.id));
-    if (!customer) { res.status(401).json({ message: "Dev user not found" }); return; }
-    if (rejectUnavailablePortalAccount(customer, res)) return;
-    (req as PortalAuthReq).portalCustomerId = customer.id;
-    (req as PortalAuthReq).portalRole = customer.role;
-    next();
-    return;
-  }
-
-  // 2) Our own portal JWT
-  const portalPayload = await verifyPortalJwt(token);
-  if (portalPayload) {
-    const [customer] = await db
-      .select()
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.id, portalPayload.customerId));
-    if (!customer) { res.status(401).json({ message: "Customer not found" }); return; }
-    if (rejectUnavailablePortalAccount(customer, res)) return;
-    (req as PortalAuthReq).portalCustomerId = customer.id;
-    (req as PortalAuthReq).portalRole = customer.role;
-    next();
     return;
   }
 

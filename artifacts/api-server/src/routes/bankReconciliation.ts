@@ -65,6 +65,7 @@ import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.js";
 import { postEntryWithClient } from "../lib/accounting.js";
+import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { extractBankProofOcr } from "../lib/bankProofOcr.js";
@@ -141,6 +142,39 @@ import {
 import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
 
 const router = Router();
+
+const WRONG_TRANSFER_COA_CODE = "2-1011-CST";
+const WRONG_TRANSFER_COA_NAME = "Salah Transfer";
+
+async function resolveWrongTransferAccount(tx: any, companyId: number): Promise<{
+  id: number;
+  code: string;
+  name: string;
+}> {
+  const { rows } = await tx.execute(sql`
+    SELECT id, code, name
+    FROM chart_of_accounts
+    WHERE company_id = ${companyId}
+      AND code = ${WRONG_TRANSFER_COA_CODE}
+      AND is_active = TRUE
+      AND is_postable = TRUE
+      AND status = 'ACTIVE'
+    LIMIT 1
+  `);
+  const row = rows[0] as Record<string, unknown> | undefined;
+  const accountId = row?.id == null ? null : Number(row.id);
+  if (accountId == null || !Number.isInteger(accountId) || accountId <= 0) {
+    throw Object.assign(
+      new Error(`COA ${WRONG_TRANSFER_COA_CODE} — ${WRONG_TRANSFER_COA_NAME} belum tersedia atau belum aktif untuk perusahaan ini`),
+      { httpStatus: 422 },
+    );
+  }
+  return {
+    id: accountId,
+    code: String(row?.code ?? WRONG_TRANSFER_COA_CODE),
+    name: String(row?.name ?? WRONG_TRANSFER_COA_NAME),
+  };
+}
 
 type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
 
@@ -289,6 +323,20 @@ function qrisCandidateSourcePaymentMethodSql(
 }
 
 /**
+ * bank_reconciliation_matches.candidate_id is a polymorphic legacy text
+ * column, while source tables use integer/bigint primary keys. Invalid
+ * historical identities remain non-matching instead of aborting the list
+ * query with `integer = text`.
+ */
+function candidateIdAsBigIntSql(alias = "m"): string {
+  return `(CASE
+    WHEN ${alias}.candidate_id::text ~ '^[0-9]+$'
+      THEN ${alias}.candidate_id::text::bigint
+    ELSE NULL
+  END)`;
+}
+
+/**
  * The public match-result projection is source-aware. Legacy QRIS matches
  * (including pre-source rows with NULL) are historical evidence only and must
  * not become visible again merely because cleanup/replay recreates them with
@@ -321,27 +369,27 @@ function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): str
   return `(
     (${matchAlias}.candidate_type = 'accounting_payment' AND EXISTS (
       SELECT 1 FROM accounting_payments ap_match
-      WHERE ap_match.id = ${matchAlias}.candidate_id
+      WHERE ap_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND ap_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'invoice' AND EXISTS (
       SELECT 1 FROM sales_documents sd_match
-      WHERE sd_match.id = ${matchAlias}.candidate_id
+      WHERE sd_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND COALESCE(sd_match.invoice_date::text, sd_match.created_at::date::text) = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'expense' AND EXISTS (
       SELECT 1 FROM expenses e_match
-      WHERE e_match.id = ${matchAlias}.candidate_id
+      WHERE e_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND e_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'logistic_order' AND EXISTS (
       SELECT 1 FROM logistic_orders lo_match
-      WHERE lo_match.id = ${matchAlias}.candidate_id
+      WHERE lo_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND lo_match.created_at::date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'tenant_invoice' AND EXISTS (
       SELECT 1 FROM tenant_invoices ti_match
-      WHERE ti_match.id = ${matchAlias}.candidate_id
+      WHERE ti_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND ti_match.created_at::date::text = ${mutationDate}
     ))
   )`;
@@ -4191,7 +4239,7 @@ router.get("/mutations", async (req, res) => {
     ? `EXISTS (
          SELECT 1
          FROM sport_center.expected_bank_settlements ebs_h1
-         WHERE ebs_h1.settlement_id = m.candidate_id
+          WHERE ebs_h1.settlement_id = ${candidateIdAsBigIntSql("m")}
            AND ebs_h1.settlement_date::text = bm.transaction_date::text
        )`
     : "FALSE";
@@ -4202,7 +4250,7 @@ router.get("/mutations", async (req, res) => {
       AND EXISTS (
         SELECT 1
         FROM sport_payments sp_h1
-        WHERE sp_h1.id = m.candidate_id
+        WHERE sp_h1.id = ${candidateIdAsBigIntSql("m")}
           AND (
             -- Non-QRIS Sport Center payments are ordinary bank-transfer
             -- evidence and must not be hidden by the QRIS H-1 gate.
@@ -4226,7 +4274,7 @@ router.get("/mutations", async (req, res) => {
           AND EXISTS (
             SELECT 1
             FROM qris_settlements qs_h1
-            WHERE qs_h1.id = m.candidate_id
+            WHERE qs_h1.id = ${candidateIdAsBigIntSql("m")}
               AND qs_h1.settlement_date::text = bm.transaction_date::text
           )
         )
@@ -4456,7 +4504,15 @@ router.get("/mutations", async (req, res) => {
     bmiFilters.push(`${importedPaymentTypeSql} = '${esc(payment_type)}'`);
   }
   // Deduplikasi: exclude bmi baris yang sudah ada di bank_mutations (via mutation_key)
-  bmiFilters.push(`NOT EXISTS (SELECT 1 FROM bank_mutations bm2 WHERE bm2.mutation_key = COALESCE(bmi.unique_key, bmi.id::text))`);
+  // Legacy databases may still expose bank_mutations.mutation_key as an
+  // integer even though current imports use a text identity. Compare the
+  // normalized identity as text so the optional bank-import branch cannot
+  // abort the whole UNION query with "integer = text".
+  bmiFilters.push(`NOT EXISTS (
+    SELECT 1
+    FROM bank_mutations bm2
+    WHERE bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)
+  )`);
   const bmiWhere = `WHERE ${bmiFilters.join(" AND ")}`;
 
   // Enrich candidate rows with the source transaction details that the user
@@ -4478,7 +4534,7 @@ router.get("/mutations", async (req, res) => {
           'sourceType', ap.source_type
         )
         FROM accounting_payments ap
-        WHERE ap.id = m.candidate_id
+        WHERE ap.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'sport_payment' THEN (
         SELECT jsonb_build_object(
@@ -4512,7 +4568,7 @@ router.get("/mutations", async (req, res) => {
         FROM sport_payments sp
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
         LEFT JOIN customers c ON c.id = sb.customer_id
-        WHERE sp.id = m.candidate_id
+        WHERE sp.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'recon_rule' THEN (
         SELECT jsonb_build_object(
@@ -4547,7 +4603,7 @@ router.get("/mutations", async (req, res) => {
           'sourceType', 'recon_rule'
         )
         FROM recon_rules rr
-        WHERE rr.id = m.candidate_id
+        WHERE rr.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}' THEN (
@@ -4589,7 +4645,7 @@ router.get("/mutations", async (req, res) => {
            ), '[]'::jsonb)
         )
         FROM qris_settlements qs
-        WHERE qs.id = m.candidate_id
+        WHERE qs.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}' THEN
@@ -4607,7 +4663,7 @@ router.get("/mutations", async (req, res) => {
           'paymentStatus', sd.payment_status
         )
         FROM sales_documents sd
-        WHERE sd.id = m.candidate_id
+        WHERE sd.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'expense' THEN (
         SELECT jsonb_build_object(
@@ -4617,7 +4673,7 @@ router.get("/mutations", async (req, res) => {
           'reference', e.expense_number
         )
         FROM expenses e
-        WHERE e.id = m.candidate_id
+        WHERE e.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'logistic_order' THEN (
         SELECT jsonb_build_object(
@@ -4628,7 +4684,7 @@ router.get("/mutations", async (req, res) => {
           'status', lo.status
         )
         FROM logistic_orders lo
-        WHERE lo.id = m.candidate_id
+        WHERE lo.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
@@ -4640,7 +4696,7 @@ router.get("/mutations", async (req, res) => {
         )
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
-        WHERE ti.id = m.candidate_id
+        WHERE ti.id = ${candidateIdAsBigIntSql("m")}
       )
       ELSE NULL
     END
@@ -4737,7 +4793,7 @@ router.get("/mutations", async (req, res) => {
          (
            SELECT ${sportPaymentTypeSql("sp_type")}
            FROM bank_reconciliation_matches m_type
-           JOIN sport_payments sp_type ON sp_type.id = m_type.candidate_id
+           JOIN sport_payments sp_type ON sp_type.id = ${candidateIdAsBigIntSql("m_type")}
            WHERE m_type.mutation_id = bm.id
              AND m_type.candidate_type = 'sport_payment'
              AND m_type.status IN ('candidate', 'approved')
@@ -4775,7 +4831,7 @@ router.get("/mutations", async (req, res) => {
                 AND EXISTS (
                   SELECT 1
                   FROM sales_documents sd_paid
-                  WHERE sd_paid.id = m.candidate_id
+                  WHERE sd_paid.id = ${candidateIdAsBigIntSql("m")}
                     AND sd_paid.payment_status = 'paid'
                 )
               )
@@ -4784,7 +4840,7 @@ router.get("/mutations", async (req, res) => {
                 AND EXISTS (
                   SELECT 1
                   FROM tenant_invoices ti_paid
-                  WHERE ti_paid.id = m.candidate_id
+                  WHERE ti_paid.id = ${candidateIdAsBigIntSql("m")}
                     AND ti_paid.status = 'paid'
                 )
               )
@@ -5146,7 +5202,7 @@ router.get("/mutations", async (req, res) => {
                      used.mutation_id = bm.id
                      OR (
                        used.candidate_type = 'qris_settlement'
-                       AND used.candidate_id = psb.id
+                        AND ${candidateIdAsBigIntSql("used")} = psb.id
                        AND used.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
                      )
                    )
@@ -5304,6 +5360,747 @@ router.post(
 // expense COA used by the invoice journal. This path keeps the bank mutation,
 // payment journal, invoice amount_paid, and reconciliation link atomic.
 router.post(
+  "/:mutationId/vendor-invoice-payment-batch",
+  createIdempotencyMiddleware("reconciliation:vendor-invoice-payment-batch"),
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const rawIds = Array.isArray(req.body?.vendor_invoice_ids) ? req.body.vendor_invoice_ids : [];
+    const numericIds: number[] = rawIds.map((value: unknown): number => Number(value));
+    const vendorInvoiceIds: number[] = Array.from(new Set<number>(numericIds));
+    const rawAllocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
+    const requestedAllocationByInvoice = new Map<number, number>();
+    for (const rawAllocation of rawAllocations as Array<Record<string, unknown>>) {
+      const invoiceId = Number(rawAllocation.vendor_invoice_id ?? rawAllocation.invoice_id);
+      const amount = Number(rawAllocation.amount);
+      if (
+        !Number.isSafeInteger(invoiceId)
+        || invoiceId <= 0
+        || !Number.isFinite(amount)
+        || amount <= 0
+        || requestedAllocationByInvoice.has(invoiceId)
+      ) {
+        return res.status(400).json({ error: "Alokasi invoice tidak valid atau duplikat" });
+      }
+      requestedAllocationByInvoice.set(invoiceId, Math.round(amount * 100) / 100);
+    }
+    if (
+      requestedAllocationByInvoice.size > 0
+      && Array.from(requestedAllocationByInvoice.keys()).some((id) => !vendorInvoiceIds.includes(id))
+    ) {
+      return res.status(400).json({ error: "Alokasi hanya boleh dikirim untuk invoice yang dipilih" });
+    }
+    const actor = String((req as any).user?.email ?? "admin");
+
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (
+      vendorInvoiceIds.length === 0
+      || vendorInvoiceIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    ) {
+      return res.status(400).json({ error: "Minimal satu invoice vendor yang valid wajib dipilih" });
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const { rows: mutationRows } = await tx.execute(sql`
+          SELECT id, amount, direction, transaction_date, mutation_key,
+                 company_id, bank_account_id, journal_entry_id, status
+          FROM bank_mutations
+          WHERE id = ${mutationId}
+          FOR UPDATE
+        `);
+        const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+        if (!mutation) throw Object.assign(new Error("Mutasi bank tidak ditemukan"), { httpStatus: 404 });
+
+        const companyId = Number(mutation.company_id);
+        const mutationAmount = Number(mutation.amount);
+        if (!Number.isInteger(companyId) || companyId <= 0) {
+          throw Object.assign(new Error("Mutasi tidak memiliki company context yang valid"), { httpStatus: 422 });
+        }
+        if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+          throw Object.assign(new Error("Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor"), { httpStatus: 422 });
+        }
+        if (
+          mutation.journal_entry_id != null
+          || ["approved", "posted", "approved_pending_posting"].includes(String(mutation.status))
+        ) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
+        }
+        const { rows: activeMatches } = await tx.execute(sql`
+          SELECT id FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId} AND status IN ('candidate', 'approved')
+          LIMIT 1
+        `);
+        if (activeMatches.length > 0) {
+          throw Object.assign(new Error("Mutasi sudah memiliki settlement matching aktif"), { httpStatus: 409 });
+        }
+
+        const { rows: invoiceRows } = await tx.execute(sql`
+          SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
+                 total_amount, tax_amount, invoice_breakdown, status,
+                 withholding_tax_amount, tax_review_status
+          FROM vendor_invoices
+          WHERE id IN (${sql.join(vendorInvoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND company_id = ${companyId}
+            AND cancelled_at IS NULL
+          ORDER BY id
+          FOR UPDATE
+        `);
+        if (invoiceRows.length !== vendorInvoiceIds.length) {
+          throw Object.assign(new Error("Satu atau lebih invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
+        }
+
+        const { rows: withholdingRows } = await tx.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vit.tax_type,
+            vit.tax_amount,
+            vit.liability_account_id
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          WHERE vil.invoice_id IN (${sql.join(vendorInvoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vil.invoice_id, vit.id
+        `);
+        const withholdingByInvoice = new Map<number, Array<{
+          taxType: string;
+          amount: number;
+          liabilityAccountId: number | null;
+        }>>();
+        for (const row of withholdingRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(row.invoice_id);
+          const amount = Number(row.tax_amount ?? 0);
+          if (!Number.isFinite(amount) || amount <= 0) continue;
+          const list = withholdingByInvoice.get(invoiceId) ?? [];
+          list.push({
+            taxType: String(row.tax_type ?? "PPh"),
+            amount,
+            liabilityAccountId: row.liability_account_id == null
+              ? null
+              : Number(row.liability_account_id),
+          });
+          withholdingByInvoice.set(invoiceId, list);
+        }
+
+        const allocations = (invoiceRows as Array<Record<string, unknown>>).map((invoice) => {
+          const invoiceNumber = String(invoice.invoice_number ?? invoice.id);
+          if (!["posted", "matched"].includes(String(invoice.status))) {
+            throw Object.assign(new Error(`Invoice ${invoiceNumber} harus berstatus posted atau matched sebelum dibayar`), { httpStatus: 422 });
+          }
+          const financials = resolveVendorInvoiceFinancialAmounts({
+            totalAmount: invoice.total_amount,
+            taxAmount: invoice.tax_amount,
+            grandTotal: invoice.grand_total,
+            invoiceBreakdown: invoice.invoice_breakdown,
+          });
+          const amountPaid = Number(invoice.amount_paid ?? 0);
+          const outstanding = Math.max(0, financials.grandTotal - amountPaid);
+          if (!Number.isFinite(financials.grandTotal) || financials.grandTotal <= 0 || outstanding <= 0.01) {
+            throw Object.assign(new Error(`Invoice ${invoiceNumber} sudah lunas atau nominalnya tidak valid`), { httpStatus: 409 });
+          }
+          const withholdingTaxes = withholdingByInvoice.get(Number(invoice.id)) ?? [];
+          const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
+          const requestedAmount = requestedAllocationByInvoice.get(Number(invoice.id));
+          const amount = requestedAmount != null
+            ? requestedAmount
+            : invoiceRows.length === 1
+              ? Math.min(mutationAmount, outstanding)
+              : outstanding;
+          if (!Number.isFinite(amount) || amount <= 0 || amount > outstanding + 0.01) {
+            throw Object.assign(
+              new Error(`Alokasi invoice ${invoiceNumber} harus lebih dari nol dan tidak boleh melebihi sisa invoice (${outstanding.toFixed(2)}).`),
+              { httpStatus: 422 },
+            );
+          }
+          // A full net settlement is the one case where the bank mutation
+          // proves both the supplier payment and the withholding allocation.
+          // Partial cash payments remain ordinary AP settlements and must not
+          // recognize the entire PPh amount prematurely.
+          const settlesNetAmount =
+            withholdingTaxTotal > 0
+            && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
+          const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
+          return {
+            invoice,
+            invoiceNumber,
+            financials,
+            amountPaid,
+            outstanding,
+            amount,
+            grossAmount: amount + withholdingCredit,
+            withholdingTaxes,
+            withholdingCredit,
+          };
+        });
+        const totalAllocation = allocations.reduce((sum, item) => sum + item.amount, 0);
+        if (
+          !Number.isFinite(mutationAmount)
+          || mutationAmount <= 0
+          || totalAllocation > mutationAmount + 0.01
+        ) {
+          throw Object.assign(
+            new Error(`Nominal mutasi (${mutationAmount.toFixed(2)}) tidak cukup untuk total alokasi invoice (${totalAllocation.toFixed(2)}).`),
+            { httpStatus: 422 },
+          );
+        }
+        const wrongTransferAmount = Math.max(0, Math.round((mutationAmount - totalAllocation) * 100) / 100);
+
+        const { rows: settingsRows } = await tx.execute(sql`
+          SELECT default_bank_account_id, ap_account_id, bank_journal_id
+          FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+        `);
+        const settings = settingsRows[0] as Record<string, unknown> | undefined;
+        let bankCoaId = settings?.default_bank_account_id == null ? null : Number(settings.default_bank_account_id);
+        const bankAccountId = mutation.bank_account_id == null ? null : Number(mutation.bank_account_id);
+        if (bankAccountId != null && Number.isInteger(bankAccountId)) {
+          const { rows: bankRows } = await tx.execute(sql`
+            SELECT coa_id FROM company_bank_accounts
+            WHERE id = ${bankAccountId} AND company_id = ${companyId} LIMIT 1
+          `);
+          if (bankRows[0]?.coa_id != null) bankCoaId = Number(bankRows[0].coa_id);
+        }
+        const apCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        let journalId = settings?.bank_journal_id == null ? null : Number(settings.bank_journal_id);
+        if (!bankCoaId || !apCoaId) {
+          throw Object.assign(new Error("COA bank atau COA Hutang Vendor belum dikonfigurasi"), { httpStatus: 422 });
+        }
+        if (!journalId) {
+          const { rows: journalRows } = await tx.execute(sql`
+            SELECT id FROM accounting_journals
+            WHERE company_id = ${companyId}
+              AND (LOWER(name) LIKE '%bank%' OR LOWER(code) LIKE '%bank%' OR type = 'bank')
+            ORDER BY id ASC LIMIT 1
+          `);
+          journalId = journalRows[0]?.id == null ? null : Number(journalRows[0].id);
+        }
+        if (!journalId) throw Object.assign(new Error("Jurnal bank belum dikonfigurasi"), { httpStatus: 422 });
+        const { rows: journalRows } = await tx.execute(sql`
+          SELECT code FROM accounting_journals WHERE id = ${journalId} AND company_id = ${companyId} LIMIT 1
+        `);
+        const journalCode = String(journalRows[0]?.code ?? "BANK");
+        const description = `Pembayaran ${allocations.length} invoice vendor — ${String(mutation.mutation_key ?? "")}`.slice(0, 200);
+        const wrongTransferAccount = wrongTransferAmount > 0.01
+          ? await resolveWrongTransferAccount(tx, companyId)
+          : null;
+        const entry = await postEntryWithClient(
+          tx as any,
+          {
+            journalId,
+            date: new Date(String(mutation.transaction_date)),
+            ref: String(mutation.mutation_key ?? "").slice(0, 100),
+            description,
+            source: "bank_reconciliation",
+            sourceModule: "vendor_invoice_payment",
+            sourceId: mutationId,
+            createdById: actor,
+            companyId,
+            lines: [
+              ...allocations.map((item) => ({
+                accountId: apCoaId,
+                debit: item.grossAmount,
+                credit: 0,
+                description: `Pembayaran invoice vendor ${item.invoiceNumber}`.slice(0, 200),
+              })),
+              ...(wrongTransferAccount
+                ? [{
+                    accountId: wrongTransferAccount.id,
+                    debit: wrongTransferAmount,
+                    credit: 0,
+                    description: `Kelebihan transfer — ${wrongTransferAccount.code} ${wrongTransferAccount.name}`.slice(0, 200),
+                  }]
+                : []),
+              ...Array.from(
+                allocations.reduce((byAccount, item) => {
+                  if (item.withholdingCredit <= 0) return byAccount;
+                  for (const tax of item.withholdingTaxes) {
+                    if (tax.amount <= 0 || tax.liabilityAccountId == null) {
+                      throw Object.assign(
+                        new Error(`COA Hutang PPh untuk invoice ${item.invoiceNumber} belum terpetakan`),
+                        { httpStatus: 422 },
+                      );
+                    }
+                    const accountId = Number(tax.liabilityAccountId);
+                    byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                  }
+                  return byAccount;
+                }, new Map<number, number>()),
+              ).map(([accountId, amount]) => ({
+                accountId,
+                debit: 0,
+                credit: amount,
+                description: `Hutang PPh — matching invoice vendor`,
+              })),
+              { accountId: bankCoaId, debit: 0, credit: mutationAmount, description },
+            ],
+          },
+          journalCode,
+          "draft",
+        );
+
+        for (const item of allocations) {
+          const newPaid = Math.round((item.amountPaid + item.grossAmount) * 100) / 100;
+          await tx.execute(sql`
+            UPDATE vendor_invoices
+            SET amount_paid = ${String(newPaid)},
+                status = ${newPaid >= item.financials.grandTotal - 0.01 ? "paid" : "posted"},
+                updated_at = NOW()
+            WHERE id = ${Number(item.invoice.id)}
+          `);
+        }
+        const invoiceIdsText = allocations.map((item) => Number(item.invoice.id)).join(",");
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'approved_pending_posting', journal_entry_id = ${entry.id},
+              approved_by = ${actor}, approved_at = NOW(), updated_at = NOW()
+          WHERE id = ${mutationId}
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match,
+             status, candidate_source, is_manual)
+          VALUES
+            (${mutationId}, 'vendor_invoice', ${Number(allocations[0].invoice.id)}, 100,
+             ${wrongTransferAccount
+               ? `vendor invoice batch payment; invoice_ids:${invoiceIdsText}; excess ${wrongTransferAmount.toFixed(2)} posted to ${wrongTransferAccount.code}`
+               : `vendor invoice batch payment; invoice_ids:${invoiceIdsText}`},
+             ${wrongTransferAmount <= 0.01}, FALSE, TRUE, FALSE, FALSE, 'approved', 'vendor_invoice_batch', TRUE)
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId}, 'MATCH_APPROVED', ${actor},
+            ${JSON.stringify({
+              candidate_type: "vendor_invoice_batch",
+              candidate_ids: allocations.map((item) => Number(item.invoice.id)),
+              amounts: allocations.map((item) => item.amount),
+              gross_amounts: allocations.map((item) => item.grossAmount),
+              withholding_amounts: allocations.map((item) => item.withholdingCredit),
+              total_amount: mutationAmount,
+              wrong_transfer_amount: wrongTransferAmount,
+              wrong_transfer_coa_code: wrongTransferAccount?.code ?? null,
+              journal_entry_id: entry.id,
+              payment_type: "vendor_invoice_settlement",
+            })}
+          )
+        `);
+
+        return {
+          mutationId,
+          journalEntryId: entry.id,
+          totalAmount: mutationAmount,
+          wrongTransferAmount,
+          wrongTransferCoaCode: wrongTransferAccount?.code ?? null,
+          invoices: allocations.map((item) => ({
+            vendorInvoiceId: Number(item.invoice.id),
+            invoiceNumber: item.invoiceNumber,
+            amount: item.amount,
+            grossAmount: item.grossAmount,
+            withholdingAmount: item.withholdingCredit,
+            outstanding: Math.max(0, item.outstanding - item.amount),
+          })),
+        };
+      });
+      audit(req, {
+        action: "vendor-invoice-payment-batch-allocated",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error: any) {
+      const status = Number(error?.httpStatus) || 400;
+      logger.warn({ err: error?.message ?? error, mutationId, vendorInvoiceIds }, "[bankRecon/vendor-invoice-payment-batch] rejected");
+      return res.status(status).json({ error: error?.message ?? "Pembayaran invoice vendor gagal diproses" });
+    }
+  },
+);
+
+router.get(
+  "/:mutationId/vendor-invoice-candidates",
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+
+    try {
+      const { rows: mutationRows } = await db.execute(sql`
+        SELECT id, amount, direction, company_id, journal_entry_id, status
+        FROM bank_mutations
+        WHERE id = ${mutationId}
+        LIMIT 1
+      `);
+      const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+      if (!mutation) return res.status(404).json({ error: "Mutasi bank tidak ditemukan" });
+
+      const companyId = Number(mutation.company_id);
+      const mutationAmount = Number(mutation.amount);
+      if (!Number.isInteger(companyId) || companyId <= 0 || !Number.isFinite(mutationAmount) || mutationAmount <= 0) {
+        return res.status(422).json({ error: "Mutasi tidak memiliki company context atau nominal yang valid" });
+      }
+      if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+        return res.status(422).json({ error: "Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor" });
+      }
+
+      const { rows } = await db.execute(sql`
+        SELECT
+          vi.id,
+          vi.invoice_number AS doc_number,
+          vi.invoice_number AS bill_number,
+          vi.supplier_name,
+          vi.total_amount,
+          vi.tax_amount,
+          vi.grand_total,
+          vi.amount_paid,
+          vi.invoice_breakdown,
+          vi.tax_review_status,
+          vi.withholding_tax_amount,
+          vi.due_date,
+          linked.disbursement_id AS linked_disbursement_id,
+          linked.disbursement_number AS linked_disbursement_number,
+          linked.disbursement_item_id AS linked_disbursement_item_id,
+          linked.payment_amount AS linked_payment_amount
+        FROM vendor_invoices vi
+        LEFT JOIN LATERAL (
+          SELECT
+            bdi.id AS disbursement_item_id,
+            bd.id AS disbursement_id,
+            bd.disbursement_number,
+            bdi.amount AS payment_amount
+          FROM bank_disbursement_items bdi
+          INNER JOIN bank_disbursements bd ON bd.id = bdi.disbursement_id
+          WHERE bdi.vendor_invoice_id = vi.id
+            AND bdi.transaction_type = 'supplier_payment'
+            AND bd.company_id = vi.company_id
+            AND bd.status = 'posted'
+            AND ABS(CAST(bdi.amount AS numeric) - ${mutationAmount}) <= 0.01
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_matches used_link
+              WHERE used_link.status = 'approved'
+                AND used_link.candidate_source = 'bank_disbursement'
+                AND used_link.match_reason LIKE ('bank_disbursement_item:' || bdi.id::text || ';%')
+            )
+          ORDER BY bd.date DESC, bd.id DESC, bdi.id DESC
+          LIMIT 1
+        ) linked ON TRUE
+        WHERE vi.company_id = ${companyId}
+          AND vi.status IN ('posted', 'matched', 'paid')
+          AND vi.cancelled_at IS NULL
+          AND (
+            vi.grand_total > COALESCE(vi.amount_paid, 0)
+            OR linked.disbursement_item_id IS NOT NULL
+          )
+        ORDER BY vi.due_date ASC NULLS LAST, vi.id ASC
+      `);
+
+      const invoiceIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+      const expenseLinesByInvoice = new Map<number, Array<{
+        lineId: number;
+        description: string;
+        quantity: number;
+        unit: string;
+        amount: number;
+        taxAmount: number;
+        coaAccountId: number | null;
+        coaCode: string | null;
+        coaName: string | null;
+        coaResolutionStatus: string | null;
+      }>>();
+      if (invoiceIds.length > 0) {
+        const { rows: lineRows } = await db.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vil.id AS line_id,
+            vil.name AS description,
+            vil.quantity,
+            vil.unit,
+            vil.subtotal AS amount,
+            vil.tax_amount,
+            vil.coa_account_id,
+            vil.coa_resolution_status,
+            coa.code AS coa_code,
+            coa.name AS coa_name
+          FROM vendor_invoice_lines vil
+          LEFT JOIN chart_of_accounts coa ON coa.id = vil.coa_account_id
+          WHERE vil.invoice_id IN (${sql.join(invoiceIds.map((id) => sql`${id}`), sql`, `)})
+          ORDER BY vil.invoice_id, vil.id
+        `);
+        for (const line of lineRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(line.invoice_id);
+          const current = expenseLinesByInvoice.get(invoiceId) ?? [];
+          current.push({
+            lineId: Number(line.line_id),
+            description: String(line.description ?? ""),
+            quantity: Number(line.quantity ?? 0),
+            unit: String(line.unit ?? ""),
+            amount: Number(line.amount ?? 0),
+            taxAmount: Number(line.tax_amount ?? 0),
+            coaAccountId: line.coa_account_id == null ? null : Number(line.coa_account_id),
+            coaCode: line.coa_code == null ? null : String(line.coa_code),
+            coaName: line.coa_name == null ? null : String(line.coa_name),
+            coaResolutionStatus: line.coa_resolution_status == null ? null : String(line.coa_resolution_status),
+          });
+          expenseLinesByInvoice.set(invoiceId, current);
+        }
+      }
+
+      const withholdingLinesByInvoice = new Map<number, Array<{
+        lineTaxId: number;
+        taxType: string;
+        taxObject: string;
+        amount: number;
+        liabilityAccountId: number | null;
+        coaCode: string | null;
+        coaName: string | null;
+        resolutionStatus: string | null;
+      }>>();
+      if (invoiceIds.length > 0) {
+        const { rows: withholdingRows } = await db.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vit.id AS line_tax_id,
+            vit.tax_type,
+            vit.tax_object,
+            vit.tax_amount,
+            vit.liability_account_id,
+            vit.resolution_status,
+            coa.code AS coa_code,
+            coa.name AS coa_name
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          LEFT JOIN chart_of_accounts coa ON coa.id = vit.liability_account_id
+          WHERE vil.invoice_id IN (${sql.join(invoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vil.invoice_id, vit.id
+        `);
+        for (const tax of withholdingRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(tax.invoice_id);
+          const current = withholdingLinesByInvoice.get(invoiceId) ?? [];
+          current.push({
+            lineTaxId: Number(tax.line_tax_id),
+            taxType: String(tax.tax_type ?? "PPh"),
+            taxObject: String(tax.tax_object ?? ""),
+            amount: Number(tax.tax_amount ?? 0),
+            liabilityAccountId: tax.liability_account_id == null ? null : Number(tax.liability_account_id),
+            coaCode: tax.coa_code == null ? null : String(tax.coa_code),
+            coaName: tax.coa_name == null ? null : String(tax.coa_name),
+            resolutionStatus: tax.resolution_status == null ? null : String(tax.resolution_status),
+          });
+          withholdingLinesByInvoice.set(invoiceId, current);
+        }
+      }
+
+      const invoices = rows.map((row) => {
+        const financials = resolveVendorInvoiceFinancialAmounts({
+          totalAmount: row.total_amount,
+          taxAmount: row.tax_amount,
+          grandTotal: row.grand_total,
+          invoiceBreakdown: row.invoice_breakdown,
+        });
+        const amountPaid = Number(row.amount_paid ?? 0);
+        const outstanding = Math.max(0, financials.grandTotal - amountPaid);
+        const linkOnly = row.linked_disbursement_item_id != null;
+        return {
+          id: Number(row.id),
+          docNumber: String(row.doc_number ?? ""),
+          billNumber: row.bill_number == null ? null : String(row.bill_number),
+          supplierName: String(row.supplier_name ?? "—"),
+          subtotal: financials.subtotal,
+          taxAmount: financials.taxAmount,
+          grandTotal: financials.grandTotal,
+          amountPaid,
+          outstanding,
+          taxReviewStatus: row.tax_review_status ?? "not_required",
+          withholdingTaxAmount: Number(row.withholding_tax_amount ?? 0),
+          dueDate: row.due_date ?? null,
+          source: "vendor_invoice",
+           invoiceBreakdown: row.invoice_breakdown ?? null,
+           expenseLines: expenseLinesByInvoice.get(Number(row.id)) ?? [],
+           withholdingLines: withholdingLinesByInvoice.get(Number(row.id)) ?? [],
+          settlementMode: linkOnly ? "link_only" : "payment",
+          linkedDisbursementId: linkOnly ? Number(row.linked_disbursement_id) : null,
+          linkedDisbursementNumber: linkOnly ? String(row.linked_disbursement_number ?? "") : null,
+          linkedDisbursementItemId: linkOnly ? Number(row.linked_disbursement_item_id) : null,
+          linkedPaymentAmount: linkOnly ? Number(row.linked_payment_amount ?? 0) : null,
+        };
+      });
+
+      return res.json({ invoices });
+    } catch (error: any) {
+      logger.error({ err: error, mutationId }, "[bankRecon/vendor-invoice-candidates] failed");
+      return res.status(500).json({ error: "Gagal memuat kandidat invoice vendor" });
+    }
+  },
+);
+
+// A previously posted Bank Disbursement can be linked to its bank mutation
+// without creating another journal or increasing vendor_invoices.amount_paid.
+router.post(
+  "/:mutationId/vendor-invoice-link",
+  createIdempotencyMiddleware("reconciliation:vendor-invoice-link"),
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const vendorInvoiceId = Number(req.body?.vendor_invoice_id);
+    const actor = String((req as any).user?.email ?? "admin");
+
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (!Number.isInteger(vendorInvoiceId) || vendorInvoiceId <= 0) {
+      return res.status(400).json({ error: "Invoice vendor tidak valid" });
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const { rows: mutationRows } = await tx.execute(sql`
+          SELECT id, amount, direction, company_id, journal_entry_id, status
+          FROM bank_mutations
+          WHERE id = ${mutationId}
+          FOR UPDATE
+        `);
+        const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+        if (!mutation) throw Object.assign(new Error("Mutasi bank tidak ditemukan"), { httpStatus: 404 });
+
+        const companyId = Number(mutation.company_id);
+        const mutationAmount = Number(mutation.amount);
+        if (!Number.isInteger(companyId) || companyId <= 0) {
+          throw Object.assign(new Error("Mutasi tidak memiliki company context yang valid"), { httpStatus: 422 });
+        }
+        if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+          throw Object.assign(new Error("Hanya mutasi uang keluar yang dapat ditautkan ke pembayaran vendor"), { httpStatus: 422 });
+        }
+        if (mutation.journal_entry_id != null || ["approved", "posted", "approved_pending_posting", "reconciled"].includes(String(mutation.status))) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
+        }
+
+        const { rows: existingRows } = await tx.execute(sql`
+          SELECT id
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId}
+            AND status = 'approved'
+          LIMIT 1
+        `);
+        if (existingRows.length > 0) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki reconciliation match"), { httpStatus: 409 });
+        }
+
+        const { rows: linkRows } = await tx.execute(sql`
+          SELECT
+            bdi.id AS disbursement_item_id,
+            bd.id AS disbursement_id,
+            bd.disbursement_number,
+            bd.date,
+            bdi.amount AS payment_amount,
+            bdi.wht_amount
+          FROM bank_disbursement_items bdi
+          INNER JOIN bank_disbursements bd ON bd.id = bdi.disbursement_id
+          WHERE bdi.vendor_invoice_id = ${vendorInvoiceId}
+            AND bdi.transaction_type = 'supplier_payment'
+            AND bd.company_id = ${companyId}
+            AND bd.status = 'posted'
+            AND ABS(CAST(bdi.amount AS numeric) - ${mutationAmount}) <= 0.01
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_matches used_link
+              WHERE used_link.status = 'approved'
+                AND used_link.candidate_source = 'bank_disbursement'
+                AND used_link.match_reason LIKE ('bank_disbursement_item:' || bdi.id::text || ';%')
+            )
+          ORDER BY bd.date DESC, bd.id DESC, bdi.id DESC
+          LIMIT 1
+          FOR UPDATE OF bdi, bd
+        `);
+        const link = linkRows[0] as Record<string, unknown> | undefined;
+        if (!link) {
+          throw Object.assign(
+            new Error("Tidak ditemukan Bank Disbursement posted dengan invoice dan nominal bank yang cocok"),
+            { httpStatus: 409 },
+          );
+        }
+
+        const { rows: invoiceRows } = await tx.execute(sql`
+          SELECT id, invoice_number, supplier_name, company_id
+          FROM vendor_invoices
+          WHERE id = ${vendorInvoiceId}
+            AND company_id = ${companyId}
+            AND cancelled_at IS NULL
+          FOR UPDATE
+        `);
+        const invoice = invoiceRows[0] as Record<string, unknown> | undefined;
+        if (!invoice) {
+          throw Object.assign(new Error("Invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
+        }
+
+        const matchReason = `bank_disbursement_item:${Number(link.disbursement_item_id)};disbursement:${Number(link.disbursement_id)}`;
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match,
+             status, candidate_source)
+          VALUES
+            (${mutationId}, 'vendor_invoice', ${vendorInvoiceId}, 100, ${matchReason},
+             TRUE, FALSE, TRUE, FALSE, FALSE,
+             'approved', 'bank_disbursement')
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId},
+            'MATCH_APPROVED',
+            ${actor},
+            ${JSON.stringify({
+              candidate_type: "vendor_invoice",
+              candidate_id: vendorInvoiceId,
+              invoice_number: String(invoice.invoice_number ?? ""),
+              amount: mutationAmount,
+              link_only: true,
+              bank_disbursement_id: Number(link.disbursement_id),
+              bank_disbursement_item_id: Number(link.disbursement_item_id),
+            })}
+          )
+        `);
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'reconciled',
+              updated_at = NOW()
+          WHERE id = ${mutationId}
+        `);
+
+        return {
+          mutationId,
+          vendorInvoiceId,
+          invoiceNumber: String(invoice.invoice_number ?? ""),
+          disbursementId: Number(link.disbursement_id),
+          disbursementNumber: String(link.disbursement_number ?? ""),
+          amount: mutationAmount,
+          linkOnly: true,
+        };
+      });
+
+      audit(req, {
+        action: "vendor-invoice-payment-linked",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error: any) {
+      const status = Number(error?.httpStatus) || 400;
+      logger.warn(
+        { err: error?.message ?? error, mutationId, vendorInvoiceId },
+        "[bankRecon/vendor-invoice-link] rejected",
+      );
+      return res.status(status).json({ error: error?.message ?? "Link pembayaran invoice vendor gagal diproses" });
+    }
+  },
+);
+
+router.post(
   "/:mutationId/vendor-invoice-payment",
   createIdempotencyMiddleware("reconciliation:vendor-invoice-payment"),
   async (req, res) => {
@@ -5346,6 +6143,16 @@ router.post(
         if (mutation.journal_entry_id != null || ["approved", "posted", "approved_pending_posting"].includes(String(mutation.status))) {
           throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
         }
+        const { rows: activeMutationMatches } = await tx.execute(sql`
+          SELECT id
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId}
+            AND status IN ('candidate', 'approved')
+          LIMIT 1
+        `);
+        if (activeMutationMatches.length > 0) {
+          throw Object.assign(new Error("Mutasi sudah memiliki settlement matching aktif"), { httpStatus: 409 });
+        }
 
         const mutationAmount = Number(mutation.amount);
         const amount = requestedAmount ?? mutationAmount;
@@ -5358,7 +6165,8 @@ router.post(
 
         const { rows: invoiceRows } = await tx.execute(sql`
           SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
-                 status, withholding_tax_amount, withholding_review_status
+                  total_amount, tax_amount, invoice_breakdown, status,
+                  withholding_tax_amount, withholding_review_status
           FROM vendor_invoices
           WHERE id = ${vendorInvoiceId}
             AND company_id = ${companyId}
@@ -5373,30 +6181,44 @@ router.post(
           throw Object.assign(new Error("Invoice vendor harus berstatus posted atau matched sebelum dibayar"), { httpStatus: 422 });
         }
 
-        const grandTotal = Number(invoice.grand_total);
+        const financials = resolveVendorInvoiceFinancialAmounts({
+          totalAmount: invoice.total_amount,
+          taxAmount: invoice.tax_amount,
+          grandTotal: invoice.grand_total,
+          invoiceBreakdown: invoice.invoice_breakdown,
+        });
+        const grandTotal = financials.grandTotal;
         const alreadyPaid = Number(invoice.amount_paid ?? 0);
         const outstanding = Math.max(0, grandTotal - alreadyPaid);
         if (!Number.isFinite(grandTotal) || grandTotal <= 0 || outstanding <= 0.01) {
           throw Object.assign(new Error("Invoice vendor sudah lunas atau nominal invoice tidak valid"), { httpStatus: 409 });
         }
-        if (amount > outstanding + 0.01) {
-          throw Object.assign(
-            new Error(`Nominal pembayaran melebihi sisa invoice (${outstanding.toFixed(2)})`),
-            { httpStatus: 422 },
-          );
-        }
+        const invoiceAllocation = Math.min(amount, outstanding);
+        const wrongTransferAmount = Math.max(
+          0,
+          Math.round((amount - invoiceAllocation) * 100) / 100,
+        );
 
-        // Withholding requires the specialized Bank Disbursement flow because
-        // the cash amount is net while AP settlement is gross.
-        if (
-          Number(invoice.withholding_tax_amount ?? 0) > 0
-          || String(invoice.withholding_review_status ?? "not_required") !== "not_required"
-        ) {
-          throw Object.assign(
-            new Error("Invoice memiliki withholding tax. Gunakan Bank Disbursement agar jurnal gross AP, bank net, dan hutang pajak tetap seimbang."),
-            { httpStatus: 422 },
-          );
-        }
+        const { rows: withholdingRows } = await tx.execute(sql`
+          SELECT vit.tax_type, vit.tax_amount, vit.liability_account_id
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          WHERE vil.invoice_id = ${vendorInvoiceId}
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vit.id
+        `);
+        const withholdingTaxes = (withholdingRows as Array<Record<string, unknown>>).map((row) => ({
+          taxType: String(row.tax_type ?? "PPh"),
+          amount: Number(row.tax_amount ?? 0),
+          liabilityAccountId: row.liability_account_id == null ? null : Number(row.liability_account_id),
+        })).filter((tax) => Number.isFinite(tax.amount) && tax.amount > 0);
+        const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
+        const settlesNetAmount =
+          withholdingTaxTotal > 0
+          && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
+        const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
+        const grossAmount = invoiceAllocation + withholdingCredit;
 
         const { rows: settingsRows } = await tx.execute(sql`
           SELECT default_bank_account_id, ap_account_id, bank_journal_id
@@ -5446,6 +6268,9 @@ router.post(
 
         const invoiceNumber = String(invoice.invoice_number ?? `VI-${vendorInvoiceId}`);
         const description = `Pembayaran invoice vendor ${invoiceNumber} — ${String(invoice.supplier_name ?? "")}`.slice(0, 200);
+        const wrongTransferAccount = wrongTransferAmount > 0.01
+          ? await resolveWrongTransferAccount(tx, companyId)
+          : null;
         const entry = await postEntryWithClient(
           tx as any,
           {
@@ -5459,7 +6284,35 @@ router.post(
             createdById: actor,
             companyId,
             lines: [
-              { accountId: apCoaId, debit: amount, credit: 0, description },
+              { accountId: apCoaId, debit: grossAmount, credit: 0, description },
+              ...(() => {
+                if (withholdingCredit <= 0) return [];
+                const byAccount = new Map<number, number>();
+                for (const tax of withholdingTaxes) {
+                  if (tax.liabilityAccountId == null) {
+                    throw Object.assign(
+                      new Error(`COA Hutang PPh untuk invoice ${invoiceNumber} belum terpetakan`),
+                      { httpStatus: 422 },
+                    );
+                  }
+                  const accountId = Number(tax.liabilityAccountId);
+                  byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                }
+                return Array.from(byAccount, ([accountId, taxAmount]) => ({
+                  accountId,
+                  debit: 0,
+                  credit: taxAmount,
+                  description: "Hutang PPh — matching invoice vendor",
+                }));
+              })(),
+              ...(wrongTransferAccount
+                ? [{
+                    accountId: wrongTransferAccount.id,
+                    debit: wrongTransferAmount,
+                    credit: 0,
+                    description: `Kelebihan transfer — ${wrongTransferAccount.code} ${wrongTransferAccount.name}`.slice(0, 200),
+                  }]
+                : []),
               { accountId: bankCoaId, debit: 0, credit: amount, description },
             ],
           },
@@ -5467,7 +6320,7 @@ router.post(
           "draft",
         );
 
-        const newPaid = Math.round((alreadyPaid + amount) * 100) / 100;
+        const newPaid = Math.round((alreadyPaid + grossAmount) * 100) / 100;
         const invoiceStatus = newPaid >= grandTotal - 0.01 ? "paid" : "posted";
         await tx.execute(sql`
           UPDATE vendor_invoices
@@ -5492,7 +6345,10 @@ router.post(
              status, candidate_source)
           VALUES
             (${mutationId}, 'vendor_invoice', ${vendorInvoiceId}, 100,
-             'vendor invoice payment allocation', TRUE, FALSE, TRUE, FALSE, FALSE,
+             ${wrongTransferAccount
+               ? `vendor invoice payment allocation; excess ${wrongTransferAmount.toFixed(2)} posted to ${wrongTransferAccount.code}`
+               : "vendor invoice payment allocation"},
+             ${wrongTransferAmount <= 0.01}, FALSE, TRUE, FALSE, FALSE,
              'approved', NULL)
           ON CONFLICT DO NOTHING
         `);
@@ -5507,6 +6363,11 @@ router.post(
               candidate_id: vendorInvoiceId,
               invoice_number: invoiceNumber,
               amount,
+              invoice_allocation: invoiceAllocation,
+              wrong_transfer_amount: wrongTransferAmount,
+              wrong_transfer_coa_code: wrongTransferAccount?.code ?? null,
+              gross_amount: grossAmount,
+              withholding_amount: withholdingCredit,
               journal_entry_id: entry.id,
               payment_type: "vendor_invoice_settlement",
             })}
@@ -5518,6 +6379,9 @@ router.post(
           vendorInvoiceId,
           invoiceNumber,
           amount,
+          invoiceAllocation,
+          wrongTransferAmount,
+          wrongTransferCoaCode: wrongTransferAccount?.code ?? null,
           journalEntryId: entry.id,
           invoiceStatus,
           amountPaid: newPaid,
@@ -5543,6 +6407,180 @@ router.post(
   },
 );
 
+// ─── POST /api/bank-reconciliation/:mutationId/vendor-invoice-settlement-link
+// Link a bank mutation to an invoice whose financial payment was already
+// recorded elsewhere (for example through a posted Bank Disbursement).
+// This is reconciliation-only: it must never create a journal or increment
+// vendor_invoices.amount_paid.
+router.post(
+  "/:mutationId/vendor-invoice-settlement-link",
+  createIdempotencyMiddleware("reconciliation:vendor-invoice-settlement-link"),
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const vendorInvoiceId = Number(req.body?.vendor_invoice_id);
+    const actor = String((req as any).user?.email ?? "admin");
+
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (!Number.isInteger(vendorInvoiceId) || vendorInvoiceId <= 0) {
+      return res.status(400).json({ error: "Invoice vendor tidak valid" });
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const { rows: mutationRows } = await tx.execute(sql`
+          SELECT id, status, amount, direction, transaction_date,
+                 mutation_key, company_id, journal_entry_id,
+                 linked_transaction_type, linked_transaction_id
+          FROM bank_mutations
+          WHERE id = ${mutationId}
+          FOR UPDATE
+        `);
+        const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+        if (!mutation) {
+          throw Object.assign(new Error("Mutasi bank tidak ditemukan"), { httpStatus: 404 });
+        }
+
+        const companyId = Number(mutation.company_id);
+        if (!Number.isInteger(companyId) || companyId <= 0) {
+          throw Object.assign(new Error("Mutasi tidak memiliki company context yang valid"), { httpStatus: 422 });
+        }
+        if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+          throw Object.assign(new Error("Hanya mutasi uang keluar yang dapat ditautkan ke invoice vendor"), { httpStatus: 422 });
+        }
+        if (mutation.journal_entry_id != null || ["approved", "posted", "approved_pending_posting"].includes(String(mutation.status))) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
+        }
+
+        const { rows: mutationMatchRows } = await tx.execute(sql`
+          SELECT id, candidate_type, candidate_id, status
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId}
+            AND status IN ('candidate', 'approved')
+          ORDER BY id
+          LIMIT 2
+        `);
+        if (mutationMatchRows.length > 0) {
+          throw Object.assign(new Error("Mutasi sudah memiliki kandidat settlement aktif"), { httpStatus: 409 });
+        }
+
+        const { rows: invoiceRows } = await tx.execute(sql`
+          SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
+                 total_amount, tax_amount, invoice_breakdown, status,
+                 cancelled_at
+          FROM vendor_invoices
+          WHERE id = ${vendorInvoiceId}
+            AND company_id = ${companyId}
+            AND cancelled_at IS NULL
+          FOR UPDATE
+        `);
+        const invoice = invoiceRows[0] as Record<string, unknown> | undefined;
+        if (!invoice) {
+          throw Object.assign(new Error("Invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
+        }
+        if (!["posted", "matched", "paid"].includes(String(invoice.status))) {
+          throw Object.assign(new Error("Invoice vendor belum berada pada status yang dapat ditautkan"), { httpStatus: 422 });
+        }
+
+        const financials = resolveVendorInvoiceFinancialAmounts({
+          totalAmount: invoice.total_amount,
+          taxAmount: invoice.tax_amount,
+          grandTotal: invoice.grand_total,
+          invoiceBreakdown: invoice.invoice_breakdown,
+        });
+        const grandTotal = financials.grandTotal;
+        const alreadyPaid = Number(invoice.amount_paid ?? 0);
+        if (!Number.isFinite(grandTotal) || grandTotal <= 0 || alreadyPaid < grandTotal - 0.01) {
+          throw Object.assign(
+            new Error("Link Settlement hanya untuk invoice yang sudah lunas secara finansial"),
+            { httpStatus: 409 },
+          );
+        }
+
+        const { rows: invoiceMatchRows } = await tx.execute(sql`
+          SELECT id, mutation_id, status
+          FROM bank_reconciliation_matches
+          WHERE candidate_type = 'vendor_invoice'
+            AND candidate_id::text = ${String(vendorInvoiceId)}
+            AND status IN ('candidate', 'approved')
+          ORDER BY id
+          LIMIT 2
+        `);
+        if (invoiceMatchRows.length > 0) {
+          throw Object.assign(new Error("Invoice vendor sudah memiliki settlement matching aktif"), { httpStatus: 409 });
+        }
+
+        const mutationAmount = Number(mutation.amount);
+        const invoiceNumber = String(invoice.invoice_number ?? `VI-${vendorInvoiceId}`);
+        const amountMatch = Number.isFinite(mutationAmount)
+          && Math.abs(mutationAmount - grandTotal) < 0.01;
+        const matchReason = "vendor invoice settlement link only; payment already recorded";
+
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match,
+             status, candidate_source, is_manual)
+          VALUES
+            (${mutationId}, 'vendor_invoice', ${vendorInvoiceId}, 100, ${matchReason},
+             ${amountMatch}, FALSE, TRUE, FALSE, FALSE,
+             'approved', NULL, TRUE)
+        `);
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'matched',
+              linked_transaction_type = 'vendor_invoice',
+              linked_transaction_id = ${vendorInvoiceId},
+              updated_at = NOW()
+          WHERE id = ${mutationId}
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId},
+            'MATCH_APPROVED',
+            ${actor},
+            ${JSON.stringify({
+              candidate_type: "vendor_invoice",
+              candidate_id: vendorInvoiceId,
+              invoice_number: invoiceNumber,
+              link_only: true,
+              payment_already_recorded: true,
+              amount_paid: alreadyPaid,
+              grand_total: grandTotal,
+            })}
+          )
+        `);
+
+        return {
+          mutationId,
+          vendorInvoiceId,
+          invoiceNumber,
+          linkOnly: true,
+          amountPaid: alreadyPaid,
+          outstanding: Math.max(0, grandTotal - alreadyPaid),
+        };
+      });
+
+      audit(req, {
+        action: "vendor-invoice-settlement-linked",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error: any) {
+      const status = Number(error?.httpStatus) || 400;
+      logger.warn(
+        { err: error?.message ?? error, mutationId, vendorInvoiceId },
+        "[bankRecon/vendor-invoice-settlement-link] rejected",
+      );
+      return res.status(status).json({ error: error?.message ?? "Settlement invoice vendor gagal ditautkan" });
+    }
+  },
+);
+
 // ─── POST /api/bank-reconciliation/:mutationId/approve ───────────────────────
 // RULE 3: Wrapped dalam real DB transaction (SELECT FOR UPDATE efektif).
 // RULE 4: Idempotency check via x-idempotency-key header.
@@ -5556,6 +6594,11 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
     manual_override, override_reason, rule_ai,
   } = req.body;
+  const parsedCandidateId =
+    candidate_id == null || candidate_id === "" ? null : Number(candidate_id);
+  if (parsedCandidateId != null && !Number.isSafeInteger(parsedCandidateId)) {
+    return res.status(400).json({ error: "ID kandidat tidak valid" });
+  }
   const actor = (req as any).user?.email ?? "admin";
   if (rule_ai != null && (typeof rule_ai !== "object" || Array.isArray(rule_ai))) {
     return res.status(400).json({ error: "Payload Rule AI tidak valid." });
@@ -5675,7 +6718,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         mutationId: resolvedMutId,
         matchId: match_id ? Number(match_id) : null,
         candidateType: candidate_type ?? null,
-        candidateId: candidate_id ? Number(candidate_id) : null,
+        candidateId: parsedCandidateId,
         candidateSource: candidate_source === CANONICAL_SETTLEMENT_SOURCE
           ? CANONICAL_SETTLEMENT_SOURCE
           : null,
@@ -5714,7 +6757,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     resolvedMutId,
     match_id ? Number(match_id) : null,
     candidate_type ?? null,
-    candidate_id ? Number(candidate_id) : null,
+    parsedCandidateId,
     actor,
     note,
     manual_coa_code ? String(manual_coa_code) : null,

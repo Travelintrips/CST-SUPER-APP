@@ -1,18 +1,10 @@
-- [Marketplace RFQ retry idempotency](marketplace-rfq-retry-idempotency.md) — canonical writes need a unique logical key and atomic ledger claim; legacy unkeyed rows stay manual-only during containment.
 - [Vendor invoice OCR tax evidence](vendor-invoice-ocr-tax-evidence.md) — PPh/payable must stay null for rate-only evidence; preserve the printed breakdown and require review before payment.
-- [Post-merge setup hook](post-merge-setup.md) — an existing setup script still needs an explicit `.replit` hook path and a realistic non-interactive timeout.
-- [Marketplace RFQ duplicate cleanup](marketplace-rfq-duplicate-cleanup.md) — exact manifest + locked fail-closed cleanup; preserve dual-write audit ledger and safely de-link activity history.
-- [Marketplace proof ledger cleanup](marketplace-proof-ledger-cleanup.md) — DEV proof cleanup must explicitly remove marker-linked dual-write rows when live FK discovery is incomplete.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
-- [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
+- [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — one-off portal proofs must use the Secret Manager loader and correct DB isolation; bootstrap failures stay fail-closed.
 - [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
-- [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
-- [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
-- [Development AI preview allowlist](development-ai-preview-allowlist.md) — OCR preview boleh ke base OpenAI terkonfigurasi saja; arbitrary HTTP dan E2E provider calls tetap diblokir.
-- [DEV storage runtime proof](dev-storage-runtime-proof.md) — proof Node 20 harus memakai workspace package + ws transport; fixture PDF menghindari kompresi gambar saat byte readback.
-- [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
 - [Recon sheet COA display](recon-sheet-coa-display.md) — write contra-account COA and name to the result sheet, excluding the bank/cash COA.
 - [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
@@ -26,17 +18,16 @@
 - [Vendor line FK migration](vendor-line-fk-migration.md) — legacy line tables may lack live uniqueness despite source schema; restore the key invariant before adding child FKs.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
-- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.
-- [Production database URL selection](production-db-url-selection.md) — approval dan maintenance wajib memakai `SUPABASE_DATABASE_URL`; migration URL tidak boleh menjadi fallback diam-diam.
+- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle; maintenance wajib memakai `SUPABASE_DATABASE_URL`, bukan migration URL atau DB pane.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
+- [BizPortal GL canonical summary](bizportal-gl-canonical-summary-boundary.md) — debit/kredit/saldo/detail harus memakai scope posted canonical yang sama; voided tetap audit-only.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
-- [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
-- [Live SMTP credential drift](live-smtp-credential-drift.md) — production notification logs can show SMTP 535 while the workspace production bundle verifies; compare the live runtime's secret source, not only the current Repl bundle.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
+- [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
@@ -49,6 +40,7 @@
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
 - [Vendor invoice detail company context](vendor-invoice-detail-company-context.md) — detail requests need active company scope or admin sessions can render undefined/NaN instead of the invoice.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
+- [Marketplace Product Order ownership](marketplace-product-order-ownership.md) — compatibility Product Order wajib membawa `portal_customer_id` dari session verified agar customer individual dapat melihat RFQ/order-nya.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport payment posted amount correction](sport-payment-amount-correction.md) — posted amount fixes need a balanced additive correction, canonical/mirror update, manual review, then candidate regeneration.
@@ -108,6 +100,7 @@
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
 - [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
+- [Bank reconciliation polymorphic IDs](bank-reconciliation-polymorphic-candidate-id.md) — match candidate IDs are live text identities; normalize safely before comparing to integer/bigint source IDs.
 - [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
 - [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
 - [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
@@ -126,7 +119,6 @@
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
 - [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
-- [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
 - [Accounting master-data period lock](accounting-master-data-period-lock.md) — period-lock hanya untuk mutasi ledger; CRUD jurnal/COA/settings adalah master data dan tidak memerlukan tanggal transaksi.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
@@ -140,7 +132,6 @@
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
 - [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
 - [Rule AI tax classification](rule-ai-tax-classification.md) — primary Rule AI COA follows expense/income flow; tax treatment is derived from OCR/context and mapped separately.
-- [Development synthetic marker cleanup](dev-synthetic-marker-cleanup.md) — stale audit leaves can outlive parents and numeric IDs can be reused; classify live parents before exact-manifest deletion.
 - [Rule AI document and tax gate](rule-ai-document-tax-gate.md) — required proof blocks posting; PPN routing follows configured company tax accounts before standard-code fallback.
 - [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.
 - [Rule AI direct bank allocation](rule-ai-direct-bank-allocation.md) — `recon_rule` classifies the bank mutation directly; it is not a business document with a source journal.
@@ -149,10 +140,15 @@
 - [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
 - [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
-- [Vitest source contract paths](vitest-source-contract-paths.md) — source-reading tests must resolve from the test working directory; import.meta.url is unavailable in this BizPortal Vitest mode.
-- [Browser smoke runtime](browser-smoke-runtime.md) — shell Chromium may fail on host glibc; use managed screenshots plus harness/HTTP proofs when interactive CDP is unavailable.
 - [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.
+- [Customer Portal readiness gates](customer-portal-readiness-gates.md) — production approval requires owner-bound pricing, idempotency, payment evidence linkage, atomic transitions, and CSRF protection.
+- [Safe-mode notification dedupe](safe-mode-notification-dedupe.md) — simulated WA deliveries need the same logical dedupe identity as sent deliveries; orphan DEV logs can contaminate fixture proofs.
 - [DEV/PROD PPh master boundary](dev-prod-pph-master-boundary.md) — PROD has withholding tax templates, but DEV-only specific PPh COA rows can make invoice account choices appear missing.
 - [QRIS journal gross mismatch](qris-journal-gross-mismatch.md) — canonical approval can reject an exact-net candidate when live payment gross and payment-journal gross diverge; surface the source mismatch first.
 - [Reversal status fail-closed](reversal-status-fail-closed.md) — reversal creation can commit while the original remains posted; verify and atomically persist void metadata before any destructive cleanup.
 - [Vendor payment runtime proof](vendor-payment-runtime-proof.md) — development loader aliases shared DB keys; wait for async idempotency persistence before asserting cached retry replay.
+- [Payroll kasbon linkage](payroll-kasbon-linkage.md) — deduction-only payroll rows without a source advance ID cannot safely settle or reduce kasbon balances.
+- [Payroll legacy journal reconciliation](payroll-legacy-journal-reconciliation.md) — match balanced period/ref accruals before linking; keep payment null without payment evidence and mark legacy/manual explicitly.
+- [Payroll kasbon settlement boundary](payroll-kasbon-settlement-boundary.md) — post deductions atomically, but never infer the remaining salary payment without deterministic bank evidence.
+- [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
+- [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.

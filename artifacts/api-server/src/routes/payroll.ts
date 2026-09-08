@@ -4,6 +4,8 @@
  * Tables reused as-is: employees, payroll_runs, payroll_items (pre-existing).
  * Employee-linked advances use employee_id first; normalized party_name matching
  * remains only as a compatibility fallback for legacy rows.
+ * Kasbon is matched to employees by employee_id first, with a unique normalized
+ * name fallback for legacy rows that predate the employee_id column.
  * All journal postings go through PayrollJournalService — never postEntry() directly.
  */
 import { Router } from "express";
@@ -86,6 +88,75 @@ function n(v: unknown): number {
   return v == null ? 0 : Number(v);
 }
 
+function sortOutstandingAdvances<T extends { date: unknown; id: number }>(advances: T[]): T[] {
+  return [...advances].sort((a, b) => {
+    const dateOrder = String(a.date ?? "").localeCompare(String(b.date ?? ""));
+    return dateOrder || a.id - b.id;
+  });
+}
+
+function resolveAdvanceForEmployee(
+  advances: Array<{
+    id: number;
+    employeeId: number | null;
+    responsibleEmployeeId: string | null;
+    partyName: string;
+    date: unknown;
+    remainingAmount: string;
+    repaymentMethod: string;
+    installmentAmount: string | null;
+  }>,
+  employee: { id: number; firstName: string; lastName: string },
+) {
+  const eligible = advances.filter((a) => n(a.remainingAmount) > 0);
+  const explicit = eligible.filter((a) =>
+    (a.employeeId != null && String(a.employeeId) === String(employee.id)) ||
+    (a.responsibleEmployeeId != null && String(a.responsibleEmployeeId) === String(employee.id)),
+  );
+  if (explicit.length) return sortOutstandingAdvances(explicit)[0] ?? null;
+
+  // Legacy fallback is safe only when the name identifies one outstanding
+  // advance. Never guess between multiple same-name advances.
+  const fullName = normalizeName(`${employee.firstName} ${employee.lastName}`);
+  const byName = eligible.filter((a) => normalizeName(a.partyName) === fullName);
+  return byName.length === 1 ? byName[0] : null;
+}
+
+function payrollRunIntegrityError(run: {
+  status: string;
+  postingStatus: string;
+  accountingEntryId: number | null;
+  paymentEntryId: number | null;
+}): string | null {
+  if (run.postingStatus === "posted" && !run.accountingEntryId) {
+    return "Payroll ditandai posted tetapi journal accrual belum terhubung.";
+  }
+  if (run.status === "approved" && !run.accountingEntryId) {
+    return "Payroll approved tetapi journal accrual belum terhubung.";
+  }
+  if (run.status === "paid" && (!run.accountingEntryId || !run.paymentEntryId)) {
+    return "Payroll paid tetapi journal accrual atau journal pembayaran belum lengkap.";
+  }
+  return null;
+}
+
+async function assertPostedAccountingEntry(entryId: number | null | undefined, companyId: number, label: string): Promise<void> {
+  if (!Number.isInteger(entryId) || Number(entryId) <= 0) {
+    throw new Error(`${label}: journal entry belum terhubung.`);
+  }
+  const result = await db.execute<{ id: number }>(sql`
+    SELECT id
+    FROM accounting_entries
+    WHERE id = ${Number(entryId)}
+      AND company_id = ${companyId}
+      AND status = 'posted'
+    LIMIT 1
+  `);
+  if (!result.rows.length) {
+    throw new Error(`${label}: journal entry tidak ditemukan atau belum posted.`);
+  }
+}
+
 async function loadRunWithItems(runId: number, companyId: number) {
   const [run] = await db.select().from(payrollRunsTable)
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
@@ -96,7 +167,7 @@ async function loadRunWithItems(runId: number, companyId: number) {
   }).from(payrollItemsTable)
     .leftJoin(employeesTable, eq(payrollItemsTable.employeeId, employeesTable.id))
     .where(eq(payrollItemsTable.runId, runId));
-  return { run, items };
+  return { run, items, integrityError: payrollRunIntegrityError(run) };
 }
 
 // ── GET /api/payroll/runs ──────────────────────────────────────────────────────
@@ -106,7 +177,12 @@ router.get("/runs", async (req, res) => {
   const runs = await db.select().from(payrollRunsTable)
     .where(eq(payrollRunsTable.companyId, companyId))
     .orderBy(sql`year desc, month desc, id desc`);
-  res.json({ runs });
+  res.json({
+    runs: runs.map((run) => ({
+      ...run,
+      integrityError: payrollRunIntegrityError(run),
+    })),
+  });
 });
 
 // ── POST /api/payroll/runs — create draft run ─────────────────────────────────
@@ -246,6 +322,40 @@ router.post("/runs/:id/calculate", async (req, res) => {
     const list = schedulesByAdvance.get(schedule.advance_id) ?? [];
     list.push(schedule);
     schedulesByAdvance.set(schedule.advance_id, list);
+  const results = [];
+  for (const { item, employee } of items) {
+    if (!employee) { results.push({ itemId: item.id, matched: false }); continue; }
+    const adv = resolveAdvanceForEmployee(outstanding, employee);
+
+    const gross = n(item.baseSalary) + n(item.allowance);
+    const nonKasbonDeductions = n(item.bpjsJhtEmployee) + n(item.bpjsKesEmployee) + n(item.pph21) + n(item.otherDeductions);
+    const payCapacity = Math.max(0, gross - nonKasbonDeductions);
+
+    let deduction = 0;
+    let cashAdvanceId: number | null = null;
+    let kasbonBalanceAfter = 0;
+    if (adv) {
+      const remaining = n(adv.remainingAmount);
+      const planned = adv.repaymentMethod === "installment" && adv.installmentAmount != null
+        ? Number(adv.installmentAmount)
+        : remaining; // one_time: pay off in full this run
+      deduction = Math.min(planned, remaining, payCapacity);
+      cashAdvanceId = adv.id;
+      kasbonBalanceAfter = remaining - deduction;
+    }
+
+    const totalDeductions = nonKasbonDeductions + deduction;
+    const netSalary = gross - totalDeductions;
+
+    await db.update(payrollItemsTable).set({
+      kasbonDeduction: String(deduction),
+      cashAdvanceId,
+      totalDeductions: String(totalDeductions),
+      netSalary: String(netSalary),
+      kasbonBalanceAfter: String(kasbonBalanceAfter),
+    }).where(eq(payrollItemsTable.id, item.id));
+
+    results.push({ itemId: item.id, matched: !!adv, deduction, cashAdvanceId });
   }
 
   const results: Array<{
@@ -363,6 +473,15 @@ router.post("/runs/:id/approve", async (req, res) => {
   const items = await db.select().from(payrollItemsTable).where(eq(payrollItemsTable.runId, runId));
   if (!items.length) { res.status(400).json({ message: "Payroll run tidak memiliki item." }); return; }
 
+  const unlinkedKasbon = items.filter((i) => n(i.kasbonDeduction) > 0 && !i.cashAdvanceId);
+  if (unlinkedKasbon.length) {
+    res.status(409).json({
+      message: "Payroll memiliki potongan kasbon tanpa sumber kasbon. Jalankan Hitung Ulang sebelum approve.",
+      itemIds: unlinkedKasbon.map((i) => i.id),
+    });
+    return;
+  }
+
   const totalSalary = items.reduce((s, i) => s + n(i.baseSalary), 0);
   const totalAllowance = items.reduce((s, i) => s + n(i.allowance), 0);
   const totalTax = items.reduce((s, i) => s + n(i.pph21), 0);
@@ -430,6 +549,32 @@ router.post("/runs/:id/approve", async (req, res) => {
       adv.receivableAccountId,
       (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(allocation.amount),
     );
+  const usedAdvanceIds = new Set<number>();
+  const kasbonByAccountMap = new Map<number, number>();
+  for (const i of kasbonItems) {
+    const adv = advanceById.get(i.cashAdvanceId!);
+    if (!adv) {
+      res.status(409).json({ message: `Kasbon untuk payroll item ${i.id} tidak ditemukan.` });
+      return;
+    }
+    if (usedAdvanceIds.has(adv.id)) {
+      res.status(409).json({ message: `Kasbon ${adv.id} dipakai lebih dari satu item payroll.` });
+      return;
+    }
+    usedAdvanceIds.add(adv.id);
+    if (adv.employeeId != null && String(adv.employeeId) !== String(i.employeeId)) {
+      res.status(409).json({ message: `Kasbon ${adv.id} tidak cocok dengan karyawan payroll item ${i.id}.` });
+      return;
+    }
+    if (n(i.kasbonDeduction) > n(adv.remainingAmount) + 0.005) {
+      res.status(409).json({ message: `Potongan kasbon item ${i.id} melebihi saldo kasbon ${adv.id}.` });
+      return;
+    }
+    if (!adv.receivableAccountId) {
+      res.status(409).json({ message: `COA piutang kasbon ${adv.id} belum terisi.` });
+      return;
+    }
+    kasbonByAccountMap.set(adv.receivableAccountId, (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(i.kasbonDeduction));
   }
   const kasbonByAccount = [...kasbonByAccountMap.entries()].map(([accountId, amount]) => ({ accountId, amount }));
 
@@ -458,6 +603,7 @@ router.post("/runs/:id/approve", async (req, res) => {
       companyId, payrollRunId: runId, period, date: new Date(),
       totalSalary, totalAllowance, totalTax, totalBpjs, kasbonByAccount, totalSalaryPayable,
     });
+    await assertPostedAccountingEntry(entryId, companyId, "Journal accrual payroll");
 
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
@@ -557,15 +703,27 @@ router.post("/runs/:id/pay", async (req, res) => {
     .where(and(eq(payrollRunsTable.id, runId), eq(payrollRunsTable.companyId, companyId)));
   if (!run) { res.status(404).json({ message: "Payroll run tidak ditemukan" }); return; }
   if (run.status !== "approved") { res.status(400).json({ message: "Payroll run harus diapprove sebelum dibayar." }); return; }
+  const integrityError = payrollRunIntegrityError(run);
+  if (integrityError || run.postingStatus !== "posted" || !run.accountingEntryId) {
+    res.status(409).json({
+      message: integrityError ?? "Payroll belum memiliki journal accrual yang posted.",
+    });
+    return;
+  }
+  try {
+    await assertPostedAccountingEntry(run.accountingEntryId, companyId, "Journal accrual payroll");
+  } catch (err) {
+    res.status(409).json({ message: err instanceof Error ? err.message : "Journal accrual payroll tidak valid." });
+    return;
+  }
 
   const mapping = await resolvePayrollAccountMapping(companyId);
   if (!mapping) { res.status(400).json({ message: MAPPING_ERROR }); return; }
 
-  const [settings] = await db.execute<{ default_cash_account_id: number | null; default_bank_account_id: number | null }>(sql`
-    SELECT default_cash_account_id, default_bank_account_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+  const [settings] = await db.execute<{ default_bank_account_id: number | null }>(sql`
+    SELECT default_bank_account_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).then((r) => r.rows);
-  const paymentMethod: "cash" | "bank" = req.body?.paymentMethod === "cash" ? "cash" : "bank";
-  const cashBankAccountId = paymentMethod === "cash" ? settings?.default_cash_account_id : settings?.default_bank_account_id;
+  const cashBankAccountId = settings?.default_bank_account_id;
   if (!cashBankAccountId) { res.status(400).json({ message: "Akun Kas/Bank belum dikonfigurasi." }); return; }
 
   const items = await db.select().from(payrollItemsTable).where(eq(payrollItemsTable.runId, runId));
@@ -587,13 +745,52 @@ router.post("/runs/:id/pay", async (req, res) => {
   }
   const amount = items.reduce((s, i) => s + n(i.netSalary), 0);
   const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
+  const evidenceResult = await db.execute<{
+    mutation_id: number;
+    payment_id: number;
+    transaction_date: string;
+  }>(sql`
+    SELECT bm.id AS mutation_id, ap.id AS payment_id, bm.transaction_date
+    FROM bank_mutations bm
+    JOIN accounting_payments ap ON ap.id = bm.matched_payment_id
+    JOIN bank_reconciliation_matches brm
+      ON brm.mutation_id = bm.id
+     AND brm.candidate_type = 'accounting_payment'
+     AND brm.candidate_id = ap.id
+     AND brm.status = 'approved'
+    WHERE bm.company_id = ${companyId}
+      AND bm.direction = 'OUT'
+      AND bm.status IN ('matched', 'posted')
+      AND bm.linked_transaction_type = 'accounting_payment'
+      AND bm.linked_transaction_id = ap.id
+      AND ap.company_id = ${companyId}
+      AND ap.status = 'posted'
+      AND (
+        (ap.source_type = 'payroll' AND ap.source_doc_id = ${runId})
+        OR (ap.source_type = 'hrd_salary_payment' AND ap.source_id = ${runId})
+      )
+      AND bm.amount::numeric = (
+        SELECT COALESCE(SUM(pi.net_salary), 0)::numeric
+        FROM payroll_items pi
+        WHERE pi.run_id = ${runId}
+      )
+      AND ap.amount::numeric = (
+        SELECT COALESCE(SUM(pi.net_salary), 0)::numeric
+        FROM payroll_items pi
+        WHERE pi.run_id = ${runId}
+      )
+    ORDER BY bm.id
+  `);
+  if (evidenceResult.rows.length !== 1) {
+    res.status(409).json({
+      message: "Pembayaran payroll ditahan: harus ada tepat satu bank/payment evidence yang approved, linked ke run, dan nominalnya sama persis.",
+      code: "PAYROLL_PAYMENT_EVIDENCE_NOT_UNIQUE",
+      evidenceCount: evidenceResult.rows.length,
+    });
+    return;
+  }
 
   try {
-    const { entryId } = await PayrollJournalService.postPaymentJournal({
-      companyId, payrollRunId: runId, period, date: new Date(), amount,
-      salaryPayableAccountId: mapping.salaryPayableAccountId, cashBankAccountId, paymentMethod,
-    });
-
     const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
@@ -616,9 +813,21 @@ router.post("/runs/:id/pay", async (req, res) => {
              WHERE sp.payroll_item_id = pi.id
            )
        `);
+    const result = await PayrollJournalService.postPaymentJournal({
+      companyId,
+      payrollRunId: runId,
+      bankMutationId: evidenceResult.rows[0]!.mutation_id,
+      accountingPaymentId: evidenceResult.rows[0]!.payment_id,
+      date: evidenceResult.rows[0]!.transaction_date,
+      salaryPayableAccountId: mapping.salaryPayableAccountId,
+      cashBankAccountId,
+      actor: paidBy ?? "payroll-payment",
+      paidBy,
     });
+    const { entryId } = result;
+    await assertPostedAccountingEntry(entryId, companyId, "Journal pembayaran payroll");
 
-    auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, amount } });
+    auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, payment: result } });
     const data = await loadRunWithItems(runId, companyId);
     res.json({ entryId, ...data });
   } catch (err) {

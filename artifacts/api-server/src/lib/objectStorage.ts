@@ -18,6 +18,28 @@ function normalizeSupabaseUrl(raw: string): string {
   return `https://${raw}.supabase.co`;
 }
 
+function requireHostedSupabaseUrl(raw: string, appEnv: string): string {
+  const normalized = normalizeSupabaseUrl(raw).replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(`Supabase Storage URL is invalid for APP_ENV=${appEnv}.`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    parsed.protocol !== "https:" ||
+    !(hostname === "supabase.co" || hostname.endsWith(".supabase.co"))
+  ) {
+    throw new Error(
+      `Only hosted Supabase Storage is allowed for APP_ENV=${appEnv}; ` +
+      `received origin "${parsed.origin}".`,
+    );
+  }
+  return normalized;
+}
+
 const PUBLIC_BUCKET = "public-assets";
 const PRIVATE_BUCKET = "private-uploads";
 
@@ -47,7 +69,7 @@ function resolveStorageConfig(): { url: string; key: string } {
       "Required environment-specific URL and service-role key are missing.",
     );
   }
-  return { url: normalizeSupabaseUrl(url), key };
+  return { url: requireHostedSupabaseUrl(url, appEnv), key };
 }
 
 function getSupabase() {
@@ -288,16 +310,8 @@ export class ObjectStorageService {
 
   // ── Normalize object path from presigned URL ─────────────────────────────────
   normalizeObjectEntityPath(rawPath: string): string {
-    if (rawPath.startsWith("https://storage.placeholder/")) {
-      // Legacy paths that were stored before fail-closed was enforced.
-      // Return as-is normalized; callers should treat these as broken references.
-      return "/" + rawPath.replace("https://storage.placeholder/", "");
-    }
-    if (rawPath.startsWith("https://storage.googleapis.com/")) {
-      const url = new URL(rawPath);
-      const parts = url.pathname.split("/");
-      const uploadsIdx = parts.indexOf("uploads");
-      if (uploadsIdx >= 0) return `/objects/uploads/${parts.slice(uploadsIdx + 1).join("/")}`;
+    if (/^https?:\/\//i.test(rawPath)) {
+      throw new Error("External storage URLs are not supported; use Supabase Storage.");
     }
     return rawPath;
   }
@@ -324,6 +338,20 @@ export class ObjectStorageService {
     if (!exists) throw new ObjectNotFoundError();
     const acl = aclStore.get(objectPath);
     return { bucket: PRIVATE_BUCKET, path: entityId, metadata: acl ? { acl_policy: JSON.stringify(acl) } : {} };
+  }
+
+  async deletePrivateEntity(objectPath: string): Promise<void> {
+    if (!objectPath.startsWith("/objects/")) throw new ObjectNotFoundError();
+    const entityId = objectPath.slice("/objects/".length);
+    const allowDevelopmentStorageWrite =
+      process.env.APP_ENV === "development" &&
+      process.env.ALLOW_DEV_STORAGE_WRITES === "true";
+    if (isSafeDevTestMode() && !allowDevelopmentStorageWrite) {
+      aclStore.delete(objectPath);
+      return;
+    }
+    await supabaseDelete(PRIVATE_BUCKET, entityId);
+    aclStore.delete(objectPath);
   }
 
   async getObjectEntitySize(objectPath: string): Promise<number> {

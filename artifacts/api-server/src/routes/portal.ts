@@ -215,6 +215,10 @@ import {
   evaluateVendorInvitationEmail,
 } from "../lib/vendorInvitationIdentityGuard.js";
 import {
+  getPortalAuthBootstrap,
+  PortalAuthBootstrapError,
+} from "../lib/services/portalAuthBootstrapService.js";
+import {
   LogisticOrderServiceError,
   submitVendorQuote,
   listSalesOrders,
@@ -693,6 +697,28 @@ const waTrustedLoginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Password recovery endpoints are deliberately limited independently from
+// login/OTP buckets: reset links are expensive to deliver and can otherwise be
+// abused to flood an account or mailbox. The service still returns a generic
+// forgot-password response to avoid email enumeration.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // POST /api/portal/auth/login — email/password login (non-Supabase)
 router.post("/auth/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body ?? {};
@@ -929,7 +955,7 @@ router.post("/auth/otp/verify", otpVerifyLimiter, async (req, res) => {
 });
 
 // POST /api/portal/auth/forgot-password — custom flow via portal_customers (not Supabase Auth)
-router.post("/auth/forgot-password", async (req, res) => {
+router.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
   try {
     const { email, origin: bodyOrigin } = req.body ?? {};
     if (!email || typeof email !== "string") return res.status(400).json({ message: "Email wajib diisi." });
@@ -947,7 +973,7 @@ router.post("/auth/forgot-password", async (req, res) => {
 });
 
 // POST /api/portal/auth/reset-password-with-token — verify token and set new password
-router.post("/auth/reset-password-with-token", async (req, res) => {
+router.post("/auth/reset-password-with-token", resetPasswordLimiter, async (req, res) => {
   try {
     const { email, token, password } = req.body ?? {};
     if (!email || !token || !password) return res.status(400).json({ message: "email, token, dan password wajib diisi." });
@@ -993,6 +1019,52 @@ router.get("/auth/me", requirePortalAuth, async (req, res) => {
     return res.json(await getMe(customerId));
   } catch (err) {
     if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/auth/bootstrap
+// One canonical post-auth response for role, onboarding, company ownership,
+// approval state, and the safe destination. Protected APIs still authorize
+// independently; this endpoint only removes duplicate client-side lookups.
+router.get("/auth/bootstrap", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const authReq = req as PortalAuthReq;
+    const bootstrap = await getPortalAuthBootstrap(
+      customerId,
+      req.query.returnTo,
+      authReq.portalCustomer,
+    );
+    const t = bootstrap.timings;
+    const authTiming = authReq.portalAuthTiming;
+    res.setHeader(
+      "Server-Timing",
+      [
+        ...(authTiming ? [
+          `cookie-parse;dur=${Math.round(authTiming.COOKIE_PARSE_MS)}`,
+          `session-lookup;dur=${Math.round(authTiming.SESSION_LOOKUP_MS)}`,
+          `revocation-customer;dur=${Math.round(authTiming.REVOCATION_LOOKUP_MS)}`,
+          `auth-context;dur=${Math.round(authTiming.AUTH_CONTEXT_LOOKUP_MS)}`,
+          `auth-middleware;dur=${Math.round(authTiming.AUTH_MIDDLEWARE_TOTAL_MS)}`,
+        ] : []),
+        `user-profile;dur=${t.USER_PROFILE_MS}`,
+        `role-resolution;dur=${t.ROLE_RESOLUTION_MS}`,
+        `onboarding-status;dur=${t.ONBOARDING_STATUS_MS}`,
+        `company-context;dur=${t.COMPANY_CONTEXT_MS}`,
+        `vendor-approval;dur=${t.VENDOR_APPROVAL_MS}`,
+        `redirect-decision;dur=${t.REDIRECT_DECISION_MS}`,
+        `total-resolution;dur=${t.TOTAL_RESOLUTION_MS}`,
+      ].join(", "),
+    );
+    if (authTiming) {
+      res.setHeader("X-Portal-Auth-Pool", `${authTiming.POOL_BEFORE}->${authTiming.POOL_AFTER}`);
+    }
+    return res.json(bootstrap);
+  } catch (err) {
+    if (err instanceof PortalAuthBootstrapError) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
     throw err;
   }
 });

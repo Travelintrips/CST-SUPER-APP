@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { isAuthenticated, removeAuthToken } from "@/lib/auth";
+import {
+  fetchPortalAuthBootstrap,
+  getCachedPortalAuthBootstrap,
+  isAuthenticated,
+  removeAuthToken,
+  type PortalAuthBootstrap,
+} from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Clock, CheckCircle2, XCircle, LogOut, RefreshCw } from "lucide-react";
 
@@ -34,7 +40,12 @@ export default function PendingApprovalPage() {
 
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
-    loadStatus();
+    const cached = getCachedPortalAuthBootstrap();
+    if (cached) {
+      applyBootstrap(cached);
+    } else {
+      void fetchPortalAuthBootstrap().then(applyBootstrap);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
@@ -45,6 +56,31 @@ export default function PendingApprovalPage() {
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.status]);
+
+  function applyBootstrap(bootstrap: PortalAuthBootstrap | null) {
+    if (!bootstrap) {
+      setLocation("/login");
+      return;
+    }
+    const data: OnboardingStatus = {
+      status: bootstrap.customerContext.status === "company_pending"
+        ? "company_pending"
+        : bootstrap.onboardingStatus,
+      accountType: bootstrap.role,
+      customerType: bootstrap.customerType as OnboardingStatus["customerType"],
+      customerContext: {
+        status: bootstrap.customerContext.status,
+        pendingRequest: bootstrap.customerContext.pendingRequest as {
+          requestedCompanyName: string;
+          requestedRegistrationNumber: string | null;
+        } | null,
+      },
+    };
+    setStatus(data);
+    if (bootstrap.allowedDestination !== "/pending-approval") {
+      setLocation(bootstrap.allowedDestination);
+    }
+  }
 
   async function loadStatus() {
     setChecking(true);

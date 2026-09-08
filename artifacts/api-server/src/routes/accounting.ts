@@ -52,6 +52,7 @@ import {
   ensureAccountingSettings,
   seedAccountingDefaults,
 } from "../lib/accountingSeed.js";
+import { syncAccountingSequences } from "../lib/accountingMigration.js";
 import { logger } from "../lib/logger.js";
 import { postEntry, createDraftEntry, type PostingLine } from "../lib/accounting.js";
 import { recalculatePaymentStatus } from "../lib/services/index.js";
@@ -373,8 +374,7 @@ router.post("/accounts/:id/child", async (req, res) => {
 
   const companyId = resolveCompanyId(req);
 
-  try {
-    const created = await db.transaction(async (tx) => {
+  const createChild = async () => db.transaction(async (tx) => {
       const parentResult = await tx.execute(sql`
         SELECT
           coa.id,
@@ -455,11 +455,13 @@ router.post("/accounts/:id/child", async (req, res) => {
       const usesTensSequence = siblingNumbers.length > 0 &&
         siblingNumbers.every((value: number) => (value - baseNumber) % 10 === 0);
       const increment = siblingNumbers.length === 0 || usesTensSequence ? 10 : 1;
+      // Some older runtime databases still retain a legacy global code
+      // constraint. Check every company here so the generated code is safe
+      // under both the current scoped index and that legacy constraint.
       const usedCodesResult = await tx.execute(sql`
         SELECT code
         FROM chart_of_accounts
-        WHERE (company_id IS NULL OR company_id = ${companyId})
-          AND code LIKE ${`${prefix}%`}
+        WHERE code LIKE ${`${prefix}%`}
       `);
       const usedCodes = new Set(
         ((usedCodesResult as any).rows ?? []).map((row: { code?: unknown }) => String(row.code ?? "")),
@@ -497,15 +499,38 @@ router.post("/accounts/:id/child", async (req, res) => {
       return inserted;
     });
 
+  try {
+    let created;
+    try {
+      created = await createChild();
+    } catch (err: unknown) {
+      const pgError = err as { code?: string; constraint?: string; message?: string };
+      // Bulk imports can leave SERIAL's sequence behind the actual max(id).
+      // Repair that known condition and retry the same idempotent calculation
+      // once; the parent row lock serializes concurrent child creation.
+      if (pgError.code === "23505" && pgError.constraint === "chart_of_accounts_pkey") {
+        await syncAccountingSequences();
+        created = await createChild();
+      } else {
+        throw err;
+      }
+    }
+
     return res.status(201).json(serializeAccount(created!));
   } catch (err: unknown) {
     const status = Number((err as Error & { status?: number }).status);
     if (status >= 400 && status < 500) {
       return res.status(status).json({ message: (err as Error).message });
     }
+    const pgError = err as { code?: string; constraint?: string; message?: string };
+    if (pgError.code === "23505" && pgError.constraint === "coa_company_code_uniq") {
+      return res.status(409).json({
+        message: "Kode COA tersebut sudah digunakan oleh perusahaan ini. Silakan coba lagi.",
+      });
+    }
     return res.status(409).json({
-      message: "Nomor COA otomatis bentrok. Silakan coba lagi.",
-      error: String((err as Error)?.message ?? err),
+      message: "COA belum dapat ditambahkan. Silakan coba lagi.",
+      error: String(pgError.message ?? err),
     });
   }
 });
@@ -3339,6 +3364,11 @@ router.get("/reports/general-ledger", async (req, res) => {
   });
 });
 
+function isCogsAccountCode(code: string): boolean {
+  // HPP is the 5-10xx branch; company leaf accounts may carry a suffix.
+  return code === "5-1000" || code.startsWith("5-10");
+}
+
 router.get("/reports/profit-loss", async (req, res) => {
   const scope = resolveCompanyScope(req);
   const range = parseDateRange(req);
@@ -3376,15 +3406,24 @@ router.get("/reports/profit-loss", async (req, res) => {
       amount: Math.round(-(totals.get(a.id) ?? 0) * 100) / 100,
     }))
     .filter((r) => r.amount !== 0);
+  const cogs = expenses.filter((r) => isCogsAccountCode(r.code));
+  const operatingExpenses = expenses.filter((r) => !isCogsAccountCode(r.code));
   const totalRevenue = revenues.reduce((s, r) => s + r.amount, 0);
+  const totalCogs = cogs.reduce((s, r) => s + r.amount, 0);
+  const totalOperatingExpense = operatingExpenses.reduce((s, r) => s + r.amount, 0);
   const totalExpense = expenses.reduce((s, r) => s + r.amount, 0);
   return res.json({
     from: range.from?.toISOString() ?? null,
     to: range.to?.toISOString() ?? null,
     revenues,
+    cogs,
+    operatingExpenses,
     expenses,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
+    totalCogs: Math.round(totalCogs * 100) / 100,
+    totalOperatingExpense: Math.round(totalOperatingExpense * 100) / 100,
     totalExpense: Math.round(totalExpense * 100) / 100,
+    grossProfit: Math.round((totalRevenue - totalCogs) * 100) / 100,
     netIncome: Math.round((totalRevenue - totalExpense) * 100) / 100,
   });
 });
@@ -3411,7 +3450,8 @@ router.get("/reports/profit-loss-monthly", async (req, res) => {
     SELECT
       TO_CHAR(ae.date, 'YYYY-MM') AS month,
       COALESCE(SUM(CASE WHEN coa.type = 'revenue' THEN COALESCE(ael.credit,0) - COALESCE(ael.debit,0) ELSE 0 END), 0) AS revenue,
-      COALESCE(SUM(CASE WHEN coa.type = 'expense' THEN COALESCE(ael.debit,0) - COALESCE(ael.credit,0) ELSE 0 END), 0) AS expense
+      COALESCE(SUM(CASE WHEN coa.type = 'expense' AND coa.code LIKE '5-10%' THEN COALESCE(ael.debit,0) - COALESCE(ael.credit,0) ELSE 0 END), 0) AS cogs,
+      COALESCE(SUM(CASE WHEN coa.type = 'expense' AND coa.code NOT LIKE '5-10%' THEN COALESCE(ael.debit,0) - COALESCE(ael.credit,0) ELSE 0 END), 0) AS operating_expense
     FROM accounting_entry_lines ael
     JOIN chart_of_accounts coa ON coa.id = ael.account_id
     JOIN accounting_entries ae ON ae.id = ael.entry_id
@@ -3425,8 +3465,11 @@ router.get("/reports/profit-loss-monthly", async (req, res) => {
   const months = (result.rows as any[]).map((r) => ({
     month: r.month as string,
     revenue:   Math.round(Number(r.revenue)  * 100) / 100,
-    expense:   Math.round(Number(r.expense)  * 100) / 100,
-    netIncome: Math.round((Number(r.revenue) - Number(r.expense)) * 100) / 100,
+    cogs:      Math.round(Number(r.cogs) * 100) / 100,
+    operatingExpense: Math.round(Number(r.operating_expense) * 100) / 100,
+    expense:   Math.round((Number(r.cogs) + Number(r.operating_expense)) * 100) / 100,
+    grossProfit: Math.round((Number(r.revenue) - Number(r.cogs)) * 100) / 100,
+    netIncome: Math.round((Number(r.revenue) - Number(r.cogs) - Number(r.operating_expense)) * 100) / 100,
   }));
 
   return res.json({ months });

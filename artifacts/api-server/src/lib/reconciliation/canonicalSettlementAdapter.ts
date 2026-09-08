@@ -527,6 +527,12 @@ export function canonicalSettlementDetailsSql(
     throw new Error("Invalid canonical settlement candidate ID expression");
   }
 
+  const normalizedCandidateId = `(CASE
+    WHEN (${candidateIdExpression})::text ~ '^[0-9]+$'
+      THEN (${candidateIdExpression})::text::bigint
+    ELSE NULL
+  END)`;
+
   return `
     (
       SELECT jsonb_build_object(
@@ -580,7 +586,7 @@ export function canonicalSettlementDetailsSql(
        FROM sport_center.expected_bank_settlements ebs
         JOIN public.bank_mutations bm
          ON bm.id = m.mutation_id
-        WHERE ebs.settlement_id = ${candidateIdExpression}
+         WHERE ebs.settlement_id = ${normalizedCandidateId}
          AND ebs.settlement_journal_id IS NOT NULL
          AND (
            (

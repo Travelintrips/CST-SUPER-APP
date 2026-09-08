@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { randomBytes } from "crypto";
 import {
   optionalCustomerPortalAuth,
@@ -6,7 +6,10 @@ import {
   verifyDevPortalEmail,
   type PortalAuthReq,
 } from "../lib/supabaseAuth.js";
-import { createIdempotencyMiddleware } from "../lib/financial/idempotency.js";
+import {
+  canonicalRequestFingerprint,
+  createIdempotencyMiddleware,
+} from "../lib/financial/idempotency.js";
 import { db } from "@workspace/db";
 import {
   portalProductOrdersTable,
@@ -19,9 +22,10 @@ import {
   driverJobsTable,
   driversTable,
 } from "@workspace/db";
-import { eq, ilike, and, or, sql } from "drizzle-orm";
+import { eq, ilike, and, or, sql, inArray } from "drizzle-orm";
 import { resolveTemplate, resolveAllTemplates, validateTemplatePayload, CATEGORY_LABELS } from "@workspace/product-templates";
-import { requireClerkUser } from "../lib/requireAdmin.js";
+import { requireRole } from "../lib/requireAdmin.js";
+import { logOrderStatusChange } from "../lib/auditTrail.js";
 import { getPreferredDomain } from "../lib/domain";
 import {
   sendProductOrderWaNotification,
@@ -38,7 +42,13 @@ import { sendMail, isSmtpConfigured } from "../lib/mailer";
 import { logger } from "../lib/logger";
 import { saveAndBroadcast } from "../lib/notificationStore";
 import { broadcastToAdmins, broadcastToPortal } from "../lib/sseManager";
-import { signVendorResponseToken, verifyVendorResponseToken } from "../lib/vendorResponseToken.js";
+import {
+  hashVendorResponseToken,
+  constantTimeTokenHashEqual,
+  signVendorResponseToken,
+  verifyVendorResponseToken,
+  vendorResponseTokenTtlMs,
+} from "../lib/vendorResponseToken.js";
 import { postStockOut, StockShortageError } from "../lib/inventoryStock.js";
 import { postSalesInvoice } from "../lib/accounting.js";
 import {
@@ -50,6 +60,7 @@ import { getAdminGroupWa } from "../lib/adminWa.js";
 import {
   PortalCompanyScopeError,
   normalizeCompanyId,
+  resolvePortalCustomerCompanyId,
 } from "../lib/services/portalCompanyScope.js";
 import {
   getPortalCustomerContext,
@@ -79,6 +90,52 @@ async function resolveCustomerPortalTaxSnapshot(productScope: "goods" | "jasa") 
 }
 
 export const portalProductOrdersRouter = Router();
+
+const PRODUCT_ORDER_ADMIN_ROLES = ["admin", "owner", "manager"];
+
+async function requirePortalProductAdmin(req: Request, res: Response): Promise<boolean> {
+  return requireRole(req, res, PRODUCT_ORDER_ADMIN_ROLES);
+}
+
+function requirePortalProductAdminMiddleware(req: Request, res: Response, next: () => void): void {
+  requirePortalProductAdmin(req, res).then((allowed) => {
+    if (allowed) next();
+  });
+}
+
+type ScopedInternalUser = {
+  role?: string | null;
+  companyId?: number | null;
+  allowedCompanyIds?: number[];
+};
+
+function allowedInternalCompanyIds(req: Request): number[] | null {
+  const user = (req.user ?? {}) as ScopedInternalUser;
+  const configured = Array.isArray(user.allowedCompanyIds)
+    ? user.allowedCompanyIds.filter((id): id is number => Number.isInteger(id) && id > 0)
+    : [];
+  if (configured.length > 0) return [...new Set(configured)];
+  if (user.role === "admin" || user.role === "owner") return null;
+  return user.companyId != null && Number.isInteger(user.companyId) ? [user.companyId] : [];
+}
+
+async function assertPortalProductOrderCompanyAccess(
+  req: Request,
+  res: Response,
+  companyId: unknown,
+): Promise<boolean> {
+  const normalizedOrderCompany = normalizeCompanyId(companyId);
+  if (normalizedOrderCompany == null) {
+    res.status(422).json({ message: "Order belum memiliki company scope yang valid." });
+    return false;
+  }
+  const allowed = allowedInternalCompanyIds(req);
+  if (allowed !== null && !allowed.includes(normalizedOrderCompany)) {
+    res.status(403).json({ message: "Forbidden: order berada di luar company scope Anda." });
+    return false;
+  }
+  return true;
+}
 
 // ── Idempotent migrations ────────────────────────────────────────────────────
 // Add shipping spec columns to products table
@@ -146,11 +203,17 @@ db.execute(sql`
   ALTER TABLE portal_product_orders
     ADD COLUMN IF NOT EXISTS order_type TEXT DEFAULT 'standard',
     ADD COLUMN IF NOT EXISTS product_approve_token TEXT,
+    ADD COLUMN IF NOT EXISTS shipment_selection_token TEXT,
     ADD COLUMN IF NOT EXISTS shipment_mode TEXT,
     ADD COLUMN IF NOT EXISTS vendor_quoted_price NUMERIC(14,2),
     ADD COLUMN IF NOT EXISTS vendor_name_selected TEXT,
     ADD COLUMN IF NOT EXISTS ready_date TEXT,
     ADD COLUMN IF NOT EXISTS pickup_location TEXT
+`).catch(() => {});
+db.execute(sql`
+  CREATE UNIQUE INDEX IF NOT EXISTS portal_product_orders_shipment_selection_token_uniq
+    ON portal_product_orders (shipment_selection_token)
+    WHERE shipment_selection_token IS NOT NULL
 `).catch(() => {});
 
 // ── Phase 2B-4: invoice cost breakdown columns ─────────────────────────────
@@ -167,10 +230,24 @@ db.execute(sql`
     ADD COLUMN IF NOT EXISTS company_id INTEGER
 `).catch(() => {});
 
+// Product-vendor links are revocable credentials. The hash and expiry are
+// intentionally stored server-side so regenerating a link invalidates the old
+// one instead of merely issuing another valid stateless HMAC.
+db.execute(sql`
+  ALTER TABLE portal_product_orders
+    ADD COLUMN IF NOT EXISTS vendor_response_token_hash TEXT,
+    ADD COLUMN IF NOT EXISTS vendor_response_token_expires_at TIMESTAMPTZ
+`).catch(() => {});
+
 // Add vendor_phone to vendor responses table
 db.execute(sql`
   ALTER TABLE portal_product_vendor_responses
     ADD COLUMN IF NOT EXISTS vendor_phone TEXT
+`).catch(() => {});
+
+db.execute(sql`
+  CREATE UNIQUE INDEX IF NOT EXISTS portal_product_vendor_responses_order_uidx
+  ON portal_product_vendor_responses(order_number)
 `).catch(() => {});
 
 // Add shipping_method column
@@ -180,6 +257,29 @@ db.execute(sql`
 `).catch(() => {});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// All internal order actions with an :id pass through one ownership boundary.
+// Individual handlers still perform their own role check; this middleware only
+// prevents a valid staff session from crossing company boundaries.
+portalProductOrdersRouter.use(async (req: Request, res: Response, next: NextFunction) => {
+  const match = req.path.match(/^\/(?:admin\/)?orders\/(\d+)(?:\/|$)/);
+  if (!match) {
+    next();
+    return;
+  }
+  if (!(await requirePortalProductAdmin(req, res))) return;
+  const orderId = Number(match[1]);
+  const result = await db.execute(sql`
+    SELECT company_id FROM portal_product_orders WHERE id = ${orderId} LIMIT 1
+  `);
+  const row = result.rows[0] as { company_id?: unknown } | undefined;
+  if (!row) {
+    res.status(404).json({ message: "Order tidak ditemukan" });
+    return;
+  }
+  if (!(await assertPortalProductOrderCompanyAccess(req, res, row.company_id))) return;
+  next();
+});
 
 function generateOrderNumber(): string {
   const date = new Date();
@@ -214,6 +314,99 @@ async function nextSoNumber(): Promise<string> {
 }
 
 type OrderRow = typeof portalProductOrdersTable.$inferSelect;
+
+type SubmittedProductItem = {
+  productId?: number;
+  productName?: string;
+  productSku?: string;
+  unit?: string;
+  unitPrice?: number;
+  qty?: number;
+  subtotal?: number;
+  weightKg?: number | null;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  goodsType?: string | null;
+  productScope?: string | null;
+  serviceScope?: string | null;
+  serviceType?: string | null;
+};
+
+type CanonicalProductItem = {
+  productId: number;
+  productName: string;
+  productSku: string;
+  unit: string;
+  unitPrice: number;
+  qty: number;
+  subtotal: number;
+  weightKg: number | null;
+  lengthCm: number | null;
+  widthCm: number | null;
+  heightCm: number | null;
+  goodsType: string | null;
+  productScope: string;
+};
+
+const MAX_PORTAL_PRODUCT_QTY = 100_000;
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+async function resolveCanonicalProductItems(
+  submitted: unknown,
+): Promise<CanonicalProductItem[]> {
+  if (!Array.isArray(submitted) || submitted.length === 0 || submitted.length > 100) {
+    throw new Error("Daftar produk tidak valid.");
+  }
+
+  const items = submitted as SubmittedProductItem[];
+  const productIds = items.map((item) => Number(item?.productId));
+  if (productIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw new Error("Setiap item wajib memiliki productId yang valid.");
+  }
+
+  const products = await db
+    .select()
+    .from(productsTable)
+    .where(and(inArray(productsTable.id, productIds), eq(productsTable.isActive, true)));
+  const byId = new Map(products.map((product) => [product.id, product]));
+
+  return items.map((item, index) => {
+    const productId = productIds[index];
+    const product = byId.get(productId);
+    if (!product || product.itemType !== "barang") {
+      throw new Error(`Produk pada item ${index + 1} tidak aktif atau tidak tersedia.`);
+    }
+
+    const qty = Number(item.qty);
+    const unitPrice = Number(product.price);
+    if (!Number.isInteger(qty) || qty <= 0 || qty > MAX_PORTAL_PRODUCT_QTY) {
+      throw new Error(`Quantity item ${index + 1} harus antara 1 dan ${MAX_PORTAL_PRODUCT_QTY}.`);
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw new Error(`Harga produk ${product.name} tidak valid.`);
+    }
+
+    return {
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      unit: product.unit,
+      unitPrice: roundMoney(unitPrice),
+      qty,
+      subtotal: roundMoney(unitPrice * qty),
+      weightKg: product.weightKg != null ? Number(product.weightKg) : null,
+      lengthCm: product.lengthCm != null ? Number(product.lengthCm) : null,
+      widthCm: product.widthCm != null ? Number(product.widthCm) : null,
+      heightCm: product.heightCm != null ? Number(product.heightCm) : null,
+      goodsType: product.goodsType ?? null,
+      productScope: product.itemType,
+    };
+  });
+}
 
 function toOrder(row: OrderRow) {
   return {
@@ -285,10 +478,39 @@ const VALID_STATUSES = [
   "Customer Product Approval", "Shipment Selection Pending", "Ready for Pickup", "Shipment RFQ Sent",
 ] as const;
 
+const LEGAL_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  "New Order": ["Confirmed", "Admin Review", "Cancelled"],
+  "Confirmed": ["Processing", "Cancelled"],
+  "Processing": ["Shipped", "Cancelled"],
+  "Shipped": ["Completed"],
+  "Completed": [],
+  "Cancelled": [],
+  "Admin Review": ["Product RFQ Sent", "Cancelled"],
+  "Product RFQ Sent": ["Product Quote Received", "Cancelled"],
+  "Product Quote Received": ["Product Vendor Selected", "Admin Review", "Cancelled"],
+  "Product Vendor Selected": ["Customer Product Approval", "Cancelled"],
+  "Customer Product Approval": ["Shipment Selection Pending", "Admin Review", "Cancelled"],
+  "Shipment Selection Pending": ["Ready for Pickup", "Shipment RFQ Sent", "Cancelled"],
+  "Ready for Pickup": ["Shipment RFQ Sent", "Completed", "Cancelled"],
+  "Shipment RFQ Sent": ["Vendor Confirmed", "Cancelled"],
+  "Vendor Confirmed": ["Processing", "Cancelled"],
+};
+
+async function persistProductVendorToken(orderId: number, token: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE portal_product_orders
+       SET vendor_response_token_hash = ${hashVendorResponseToken(token)},
+           vendor_response_token_expires_at = NOW() + (${vendorResponseTokenTtlMs()} * INTERVAL '1 millisecond'),
+           updated_at = NOW()
+     WHERE id = ${orderId}
+  `);
+}
+
 async function sendProductOrderNotification(order: ReturnType<typeof toOrder>, items: ReturnType<typeof toItem>[]) {
   const domain = getPreferredDomain();
   const orderUrl = domain ? `https://${domain}/bizportal/logistics/portal-orders` : undefined;
-  const vendorToken = signVendorResponseToken(order.orderNumber);
+  const vendorToken = signVendorResponseToken(order.orderNumber, null, undefined, "product_vendor_response");
+  await persistProductVendorToken(order.id, vendorToken);
   const vendorFormUrl = domain ? `https://${domain}/vendor-product-approval/${order.orderNumber}?t=${vendorToken}` : undefined;
 
   const itemsSubtotal = items.reduce((s, i) => s + i.subtotal, 0);
@@ -343,81 +565,123 @@ ${order.notes ? `<p>Catatan: ${order.notes}</p>` : ""}
 
 // ── T002: Auto-create SO ketika status → Confirmed ───────────────────────────
 async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: string; docId: number } | null> {
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, orderId));
-  if (!order) return null;
-  if ((order as any).salesDocId) return { docNumber: (order as any).salesDocNumber, docId: (order as any).salesDocId };
-  const companyId = normalizeCompanyId(order.companyId);
-  if (companyId == null) {
-    logger.warn(
-      { orderId, orderNumber: order.orderNumber },
-      "[portalProductOrders] sales order creation blocked: company scope is missing or invalid",
-    );
-    return null;
-  }
+  const result = await db.transaction(async (tx) => {
+    // Serialize SO number allocation and all header/line writes. A max()+1
+    // allocator is otherwise vulnerable to two Confirmed transitions racing.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('portal_product_sales_order'))`);
+    const locked = await tx.execute(sql`
+      SELECT id, sales_doc_id, sales_doc_number, company_id, order_number,
+             customer_name, email, phone, shipping_address, notes,
+             subtotal, grand_total, product_category
+        FROM portal_product_orders
+       WHERE id = ${orderId}
+       FOR UPDATE
+    `);
+    const order = locked.rows[0] as any;
+    if (!order) return null;
+    if (order.sales_doc_id) return { docNumber: order.sales_doc_number, docId: Number(order.sales_doc_id) };
 
-  const items = await db.select().from(portalProductOrderItemsTable).where(eq(portalProductOrderItemsTable.orderId, orderId));
-  if (items.length === 0) return null;
+    const companyId = normalizeCompanyId(order.company_id);
+    if (companyId == null) {
+      logger.warn(
+        { orderId, orderNumber: order.order_number },
+        "[portalProductOrders] sales order creation blocked: company scope is missing or invalid",
+      );
+      return null;
+    }
 
-  const docNumber = await nextSoNumber();
-  const subtotal = parseFloat(order.subtotal);
-  const grandTotal = parseFloat(order.grandTotal);
-  const taxAmount = Math.max(0, grandTotal - subtotal);
+    const items = await tx.select().from(portalProductOrderItemsTable)
+      .where(eq(portalProductOrderItemsTable.orderId, orderId));
+    if (items.length === 0) return null;
 
-  const [doc] = await db.insert(salesDocumentsTable).values({
-    companyId,
-    kind: "order",
-    docNumber,
-    customerName: order.customerName,
-    customerEmail: order.email ?? null,
-    customerPhone: order.phone ?? null,
-    shippingAddress: order.shippingAddress ?? null,
-    notes: order.notes ?? null,
-    status: "confirmed",
-    invoiceStatus: "to_invoice",
-    totalAmount: String(subtotal),
-    taxAmount: String(taxAmount),
-    grandTotal: String(grandTotal),
-    source: "portal_product",
-    categoryKey: order.productCategory ?? null,
-  } as any).returning();
+    const sequence = await tx.execute(sql`
+      SELECT COALESCE(MAX(CAST(SPLIT_PART(doc_number, '/', 3) AS int)), 0) + 1 AS next_seq
+        FROM sales_documents
+       WHERE doc_number LIKE ${`SO/${new Date().getFullYear()}/%`}
+    `);
+    const nextSeq = Number((sequence.rows[0] as any)?.next_seq ?? 1);
+    const docNumber = `SO/${new Date().getFullYear()}/${String(nextSeq).padStart(5, "0")}`;
+    const subtotal = parseFloat(String(order.subtotal));
+    const grandTotal = parseFloat(String(order.grand_total));
+    const taxAmount = Math.max(0, grandTotal - subtotal);
 
-  for (const item of items) {
-    await db.insert(salesDocumentLinesTable).values({
-      documentId: doc.id,
-      productId: item.productId ?? null,
-      name: item.productName,
-      description: null,
-      quantity: item.qty,
-      unitPrice: String(item.unitPrice),
-      subtotal: item.subtotal,
+    const [doc] = await tx.insert(salesDocumentsTable).values({
+      companyId,
+      kind: "order",
+      docNumber,
+      customerName: order.customer_name,
+      customerEmail: order.email ?? null,
+      customerPhone: order.phone ?? null,
+      shippingAddress: order.shipping_address ?? null,
+      notes: order.notes ?? null,
+      status: "confirmed",
+      invoiceStatus: "to_invoice",
+      totalAmount: String(subtotal),
+      taxAmount: String(taxAmount),
+      grandTotal: String(grandTotal),
+      source: "portal_product",
+      categoryKey: order.product_category ?? null,
     } as any).returning();
+
+    for (const item of items) {
+      await tx.insert(salesDocumentLinesTable).values({
+        documentId: doc.id,
+        productId: item.productId ?? null,
+        name: item.productName,
+        description: null,
+        quantity: item.qty,
+        unitPrice: String(item.unitPrice),
+        subtotal: item.subtotal,
+      } as any);
+    }
+
+    await tx.execute(sql`
+      UPDATE portal_product_orders
+         SET sales_doc_id = ${doc.id}, sales_doc_number = ${docNumber}, updated_at = NOW()
+       WHERE id = ${orderId} AND sales_doc_id IS NULL
+    `);
+    return {
+      docNumber,
+      docId: doc.id,
+      customerName: order.customer_name,
+      subtotal,
+      taxAmount,
+      companyId,
+    };
+  });
+
+  if (!result) return null;
+  if (
+    "subtotal" in result &&
+    result.subtotal != null &&
+    result.taxAmount != null &&
+    result.companyId != null
+  ) {
+    postSalesInvoice({
+      salesDocId: result.docId,
+      docNumber: result.docNumber,
+      customerName: result.customerName,
+      netAmount: result.subtotal,
+      taxAmount: result.taxAmount,
+      taxAccountId: null,
+      companyId: result.companyId,
+    }).catch((err: unknown) => logger.error({ err }, "postSalesInvoice portal product failed"));
   }
-
-  await db.execute(sql`
-    UPDATE portal_product_orders
-    SET sales_doc_id = ${doc.id}, sales_doc_number = ${docNumber}
-    WHERE id = ${orderId}
-  `);
-
-  postSalesInvoice({
-    salesDocId: doc.id,
-    docNumber,
-    customerName: order.customerName,
-    netAmount: subtotal,
-    taxAmount,
-    taxAccountId: null,
-    companyId,
-  }).catch((err: unknown) => logger.error({ err }, "postSalesInvoice portal product failed"));
-
-  return { docNumber, docId: doc.id };
+  return { docNumber: result.docNumber, docId: result.docId };
 }
 
 // ── T004: Buat invoice link untuk customer ────────────────────────────────────
 // Untuk product-first orders, breakdown: Harga Produk + Biaya Shipment + Truck Cost + PPN = Grand Total
 async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, orderId));
+  return db.transaction(async (tx) => {
+  const locked = await tx.execute(sql`
+    SELECT id FROM portal_product_orders WHERE id = ${orderId} FOR UPDATE
+  `);
+  if (!locked.rows.length) return null;
+  const [order] = await tx.select().from(portalProductOrdersTable)
+    .where(eq(portalProductOrdersTable.id, orderId));
   if (!order) return null;
-  if ((order as any).invoiceToken) return (order as any).invoiceToken as string;
+  if (order.invoiceToken) return order.invoiceToken;
   const companyId = normalizeCompanyId(order.companyId);
   if (companyId == null) {
     logger.warn(
@@ -427,7 +691,7 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
     return null;
   }
 
-  const items = await db.select().from(portalProductOrderItemsTable)
+  const items = await tx.select().from(portalProductOrderItemsTable)
     .where(eq(portalProductOrderItemsTable.orderId, orderId));
   const token = generateToken();
   const invoiceNumber = `INV-PRD-${order.orderNumber}`;
@@ -490,7 +754,7 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 7);
 
-  await db.insert(customerInvoiceLinksTable).values({
+  await tx.insert(customerInvoiceLinksTable).values({
     token,
     companyId,
     salesDocId: (order as any).salesDocId ?? null,
@@ -509,11 +773,12 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
     lineItems,
   } as any);
 
-  await db.execute(sql`
+  await tx.execute(sql`
     UPDATE portal_product_orders SET invoice_token = ${token} WHERE id = ${orderId}
   `);
 
   return token;
+  });
 }
 
 // Helper: compute breakdown amounts for product-first invoice WA
@@ -643,8 +908,37 @@ portalProductOrdersRouter.get("/products", async (req: Request, res: Response) =
 
 // ── POST /api/portal-product/orders — buat order baru (public, optional auth) ──
 portalProductOrdersRouter.post("/orders",
-  createIdempotencyMiddleware("portal:product-orders", { ttlHours: 48 }),
   optionalCustomerPortalAuth,
+  (req: Request, res: Response, next: () => void) => {
+    const key = req.header("x-idempotency-key")?.trim();
+    if (!key || key.length < 16 || key.length > 200) {
+      res.status(400).json({
+        message: "Header x-idempotency-key wajib diisi dengan nilai unik.",
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+      });
+      return;
+    }
+    next();
+  },
+  createIdempotencyMiddleware("portal:product-orders", {
+    ttlHours: 48,
+    scopeResolver: async (req) => {
+      const customerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+      if (customerId) {
+        const companyId = await resolvePortalCustomerCompanyId(customerId);
+        return `actor:customer:${customerId}:company:${companyId ?? "none"}`;
+      }
+      const email = typeof req.body?.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "anonymous";
+      return `actor:guest:${email}:company:none`;
+    },
+    fingerprintResolver: (req) => canonicalRequestFingerprint({
+      params: req.params,
+      query: req.query,
+      body: req.body ?? null,
+    }),
+  }),
   async (req: Request, res: Response) => {
   const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId ?? null;
   let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
@@ -702,12 +996,20 @@ portalProductOrdersRouter.post("/orders",
     return res.status(400).json({ message: "Minimal satu produk harus dipilih" });
   }
 
+  let canonicalItems: CanonicalProductItem[];
+  try {
+    canonicalItems = await resolveCanonicalProductItems(items);
+  } catch (error) {
+    return res.status(422).json({
+      message: error instanceof Error ? error.message : "Item produk tidak valid.",
+    });
+  }
+
   // T001: validasi stok tersedia sebelum buat order
   const warehouseId = await getDefaultWarehouseId();
   const stockWarnings: string[] = [];
   if (warehouseId) {
-    for (const item of items) {
-      if (!item.productId) continue;
+    for (const item of canonicalItems) {
       const stockRow = await db.execute(sql`
         SELECT COALESCE(stock_available, stock_on_hand, 0)::float AS available
         FROM inventory_stock
@@ -721,24 +1023,19 @@ portalProductOrdersRouter.post("/orders",
     }
   }
 
-  const resolvedItems = await Promise.all(items.map(async (item) => {
-    let sourceScope = item.productScope ?? null;
-    if (!sourceScope && item.productId) {
-      const product = await db.execute(sql`SELECT item_type FROM products WHERE id = ${item.productId} LIMIT 1`);
-      sourceScope = (product.rows[0] as { item_type?: string } | undefined)?.item_type ?? null;
-    }
-    const productScope = normalizeCustomerPortalProductScope(sourceScope ?? productCategory);
+  const resolvedItems = canonicalItems.map((item) => {
+    const productScope = normalizeCustomerPortalProductScope(item.productScope);
     const serviceScope = assertCustomerPortalServiceScope(
       productScope,
-      item.serviceScope ?? item.serviceType ?? (productScope === "jasa" ? productCategory : null),
+      productScope === "jasa" ? productCategory : null,
     );
     return { item, productScope, serviceScope };
-  }));
+  });
   const scopes = new Set(resolvedItems.map((row) => row.productScope));
   if (scopes.size !== 1) return res.status(400).json({ message: "Satu order Customer Portal tidak boleh mencampur product scope" });
   const productScope = resolvedItems[0].productScope;
   const taxSnapshot = await resolveCustomerPortalTaxSnapshot(productScope);
-  const subtotal = items.reduce((s, i) => s + (i.subtotal ?? 0), 0);
+  const subtotal = roundMoney(canonicalItems.reduce((s, i) => s + i.subtotal, 0));
   const { taxAmount, grandTotal } = calculateCustomerPortalExclusiveTax(subtotal, taxSnapshot);
   const orderNumber = generateOrderNumber();
   const trackingToken = generateToken();
@@ -822,7 +1119,7 @@ portalProductOrdersRouter.post("/orders",
 
     const itemRows = resolvedItems.map(({ item: i, productScope: itemScope, serviceScope }) => ({
       orderId: order.id,
-      productId: i.productId ?? null,
+      productId: i.productId,
       productName: i.productName,
       productSku: i.productSku ?? null,
       unit: i.unit ?? null,
@@ -844,7 +1141,7 @@ portalProductOrdersRouter.post("/orders",
 
   // T001: kurangi stok (non-blocking)
   deductStock(
-    items.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
+    canonicalItems.map((i) => ({ productId: i.productId, productName: i.productName, qty: i.qty })),
     orderNumber
   ).then(({ warnings }) => {
     if (warnings.length > 0) logger.warn({ warnings }, "Stock deduction warnings for portal product order");
@@ -860,7 +1157,7 @@ portalProductOrdersRouter.post("/orders",
     type: "product",
     orderId: order.id,
     orderNumber,
-    customerName: customerName.trim(),
+    customerName: resolvedCustomerName,
     companyName: null,
     grandTotal,
     itemCount: items.length,
@@ -872,9 +1169,9 @@ portalProductOrdersRouter.post("/orders",
     const orderUrl = domain ? `https://${domain}/bizportal/logistics/portal-orders` : undefined;
     sendProductOrderPickupWaNotification({
       orderNumber,
-      customerName: customerName.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
+       customerName: resolvedCustomerName,
+       phone: resolvedPhone,
+       email: resolvedEmail,
       grandTotal,
       notes: notes?.trim() ?? null,
       items: itemsOut.map((i) => ({
@@ -915,7 +1212,7 @@ ${stockWarnings.length > 0 ? `<p style="color:orange">⚠️ ${stockWarnings.joi
 
 // ── GET /api/portal-product/orders — list orders (admin) ────────────────────
 portalProductOrdersRouter.get("/orders", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const status = typeof req.query["status"] === "string" ? req.query["status"] : null;
   const search = typeof req.query["search"] === "string" ? req.query["search"].trim() : null;
 
@@ -930,6 +1227,14 @@ portalProductOrdersRouter.get("/orders", async (req: Request, res: Response) => 
       )!
     );
   }
+  const companyIds = allowedInternalCompanyIds(req);
+  if (companyIds !== null) {
+    conds.push(companyIds.length === 0
+      ? sql`FALSE`
+      : companyIds.length === 1
+        ? eq(portalProductOrdersTable.companyId, companyIds[0])
+        : inArray(portalProductOrdersTable.companyId, companyIds));
+  }
 
   const rows = conds.length > 0
     ? await db.select().from(portalProductOrdersTable).where(and(...conds)).orderBy(sql`${portalProductOrdersTable.createdAt} DESC`)
@@ -940,7 +1245,7 @@ portalProductOrdersRouter.get("/orders", async (req: Request, res: Response) => 
 
 // ── DELETE /api/portal-product/orders/:id ───────────────────────────────────
 portalProductOrdersRouter.delete("/orders/:id", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -951,9 +1256,20 @@ portalProductOrdersRouter.delete("/orders/:id", async (req: Request, res: Respon
 
 // ── PATCH /api/portal-product/orders/items/:itemId/link ─────────────────────
 portalProductOrdersRouter.patch("/orders/items/:itemId/link", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const itemId = parseInt(String(String(req.params.itemId)), 10);
   if (isNaN(itemId)) return res.status(400).json({ message: "Item ID tidak valid" });
+
+  const ownership = await db.execute(sql`
+    SELECT ppo.company_id
+      FROM portal_product_order_items ppoi
+      JOIN portal_product_orders ppo ON ppo.id = ppoi.order_id
+     WHERE ppoi.id = ${itemId}
+     LIMIT 1
+  `);
+  const ownershipRow = ownership.rows[0] as { company_id?: unknown } | undefined;
+  if (!ownershipRow) return res.status(404).json({ message: "Item tidak ditemukan" });
+  if (!(await assertPortalProductOrderCompanyAccess(req, res, ownershipRow.company_id))) return;
 
   const { productId } = req.body as { productId?: number };
   if (!productId) return res.status(400).json({ message: "productId wajib diisi" });
@@ -973,7 +1289,7 @@ portalProductOrdersRouter.patch("/orders/items/:itemId/link", async (req: Reques
 
 // ── GET /api/portal-product/orders/:id ──────────────────────────────────────
 portalProductOrdersRouter.get("/orders/:id", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -989,7 +1305,7 @@ portalProductOrdersRouter.get("/orders/:id", async (req: Request, res: Response)
 // T002: auto-create SO saat → Confirmed
 // T004: auto-create invoice link saat → Shipped
 portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1002,13 +1318,46 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   const [existing] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!existing) return res.status(404).json({ message: "Order tidak ditemukan" });
 
+  const nextStatus = status.trim();
+  if (existing.status === nextStatus) {
+    return res.json({ ...toOrder(existing), invoiceUrl: null, unchanged: true });
+  }
+  if (!LEGAL_STATUS_TRANSITIONS[existing.status]?.includes(nextStatus)) {
+    return res.status(409).json({
+      message: `Transisi status tidak diizinkan: ${existing.status} → ${nextStatus}.`,
+      code: "ILLEGAL_ORDER_STATUS_TRANSITION",
+    });
+  }
+  if (nextStatus === "Confirmed" && normalizeCompanyId(existing.companyId) == null) {
+    return res.status(422).json({
+      message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
+    });
+  }
+
   const [updated] = await db
     .update(portalProductOrdersTable)
-    .set({ status: status.trim() })
-    .where(eq(portalProductOrdersTable.id, id))
+    .set({ status: nextStatus })
+    .where(and(eq(portalProductOrdersTable.id, id), eq(portalProductOrdersTable.status, existing.status)))
     .returning();
 
-  if (!updated) return res.status(404).json({ message: "Order tidak ditemukan" });
+  if (!updated) {
+    return res.status(409).json({
+      message: "Order berubah oleh request lain. Muat ulang status terbaru lalu coba lagi.",
+      code: "ORDER_STATUS_CONFLICT",
+    });
+  }
+
+  void logOrderStatusChange({
+    orderId: id,
+    orderNumber: updated.orderNumber,
+    oldStatus: existing.status,
+    newStatus: nextStatus,
+    changedByType: "admin",
+    changedById: String((req as any).user?.id ?? ""),
+    changedByName: String((req as any).user?.name ?? ""),
+    changedByIp: req.ip,
+    source: "portal-product-orders",
+  });
 
   // Stamp updated_at
   await db.execute(sql`UPDATE portal_product_orders SET updated_at = NOW() WHERE id = ${id}`);
@@ -1021,26 +1370,21 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
     "Completed":  "Selesai 🎉",
     "Cancelled":  "Dibatalkan ❌",
   };
-  const label = statusLabels[status.trim()] ?? status.trim();
+  const label = statusLabels[nextStatus] ?? nextStatus;
 
   let invoiceToken: string | null = null;
   let invoiceUrl: string | null = null;
   const domain = getPreferredDomain();
 
   // T002: Confirmed → buat Sales Order
-  if (status.trim() === "Confirmed" && existing.status !== "Confirmed") {
-    if (normalizeCompanyId(existing.companyId) == null) {
-      return res.status(422).json({
-        message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
-      });
-    }
+  if (nextStatus === "Confirmed") {
     maybeCreateSalesOrder(id).then((soResult) => {
       if (soResult) logger.info({ orderId: id, soNumber: soResult.docNumber }, "SO auto-created for portal product order");
     }).catch((err: unknown) => logger.error({ err }, "maybeCreateSalesOrder failed"));
   }
 
   // T004: Shipped → buat invoice link + kirim ke customer via WA + email fallback
-  if (status.trim() === "Shipped" && existing.status !== "Shipped") {
+  if (nextStatus === "Shipped") {
     try {
       invoiceToken = await maybeCreateInvoiceLink(id);
       if (invoiceToken && domain) {
@@ -1081,7 +1425,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   }
 
   // Completed → email fallback notifikasi selesai
-  if (status.trim() === "Completed" && existing.status !== "Completed") {
+  if (nextStatus === "Completed") {
     if (isSmtpConfigured() && updated.email) {
       sendMail({
         to: updated.email,
@@ -1097,7 +1441,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   // SSE broadcast ke customer portal agar tracking live update
   broadcastToPortal("order_status_update", {
     orderNumber: updated.orderNumber,
-    status: status.trim(),
+    status: nextStatus,
     label,
     updatedAt: new Date().toISOString(),
   });
@@ -1106,7 +1450,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
   broadcastToAdmins("product_order_status_update", {
     orderId: id,
     orderNumber: updated.orderNumber,
-    status: status.trim(),
+    status: nextStatus,
     label,
   });
 
@@ -1130,7 +1474,7 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
       ppo.id, ppo.order_number, ppo.customer_name, ppo.shipping_address,
       ppo.status, ppo.grand_total, ppo.created_at, ppo.product_category,
       ppo.invoice_token, ppo.payment_status, ppo.paid_at,
-      ppo.order_type, ppo.product_approve_token
+       ppo.order_type, ppo.product_approve_token, ppo.shipment_selection_token
     FROM portal_product_orders ppo
     WHERE ppo.tracking_token = ${token}
     LIMIT 1
@@ -1154,8 +1498,8 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
   const productApproveUrl = (orderType === "product_first") && row.product_approve_token && domain
     ? `https://${domain}/product-approve/${row.product_approve_token}`
     : null;
-  const shipmentSelectionUrl = (orderType === "product_first") && row.product_approve_token && domain
-    ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+  const shipmentSelectionUrl = (orderType === "product_first") && row.shipment_selection_token && domain
+    ? `https://${domain}/shipment-selection/${row.shipment_selection_token}`
     : null;
 
   const PRODUCT_FIRST_TIMELINE = [
@@ -1235,32 +1579,101 @@ portalProductOrdersRouter.get("/track/:token", async (req: Request, res: Respons
 });
 
 // ── POST /api/portal-product/orders/:id/confirm-payment — admin konfirmasi bayar (T004) ──
-portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+portalProductOrdersRouter.post(
+  "/orders/:id/confirm-payment",
+  requirePortalProductAdminMiddleware,
+  (req: Request, res: Response, next: NextFunction) => {
+    const key = req.header("x-idempotency-key")?.trim();
+    if (!key || key.length < 16 || key.length > 200) {
+      res.status(400).json({
+        message: "Header x-idempotency-key wajib diisi dengan nilai unik.",
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+      });
+      return;
+    }
+    next();
+  },
+  createIdempotencyMiddleware("portal:product-order-payment", {
+    ttlHours: 48,
+    scopeResolver: async (req) => {
+      const actor = String((req as any).user?.id ?? "unknown");
+      const orderId = Number(req.params.id);
+      const result = await db.execute(sql`
+        SELECT company_id FROM portal_product_orders WHERE id = ${orderId} LIMIT 1
+      `);
+      const companyId = normalizeCompanyId((result.rows[0] as { company_id?: unknown } | undefined)?.company_id);
+      return `actor:${actor}:company:${companyId ?? "unknown"}`;
+    },
+    fingerprintResolver: (req) => canonicalRequestFingerprint({
+      params: req.params,
+      query: req.query,
+      body: req.body ?? null,
+    }),
+  }),
+  async (req: Request, res: Response) => {
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
-  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
-  if (normalizeCompanyId(order.companyId) == null) {
+  const paymentResult = await db.transaction(async (tx) => {
+    const lock = await tx.execute(sql`
+      SELECT id FROM portal_product_orders WHERE id = ${id} FOR UPDATE
+    `);
+    if (!lock.rows.length) return { order: null, changed: false };
+
+    const [lockedOrder] = await tx
+      .select()
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, id));
+    if (!lockedOrder) return { order: null, changed: false };
+    if (normalizeCompanyId(lockedOrder.companyId) == null) {
+      throw new Error("PAYMENT_ORDER_COMPANY_SCOPE_INVALID");
+    }
+    if (lockedOrder.paymentStatus === "paid") {
+      return { order: lockedOrder, changed: false };
+    }
+
+    await tx.execute(sql`
+      UPDATE portal_product_orders
+      SET payment_status = 'paid', paid_at = NOW(), updated_at = NOW()
+      WHERE id = ${id} AND payment_status IS DISTINCT FROM 'paid'
+    `);
+
+    const invToken = (lockedOrder as any).invoiceToken as string | null;
+    if (invToken) {
+      await tx.execute(sql`
+        UPDATE customer_invoice_links
+        SET payment_status = 'paid', amount_paid = grand_total, confirmed_at = NOW()
+        WHERE token = ${invToken}
+      `);
+    }
+
+    return {
+      order: {
+        ...lockedOrder,
+        paymentStatus: "paid",
+        paidAt: new Date(),
+      },
+      changed: true,
+    };
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === "PAYMENT_ORDER_COMPANY_SCOPE_INVALID") {
+      return { order: "invalid-company" as const, changed: false };
+    }
+    throw error;
+  });
+
+  if (paymentResult.order === null) {
+    return res.status(404).json({ message: "Order tidak ditemukan" });
+  }
+  if (paymentResult.order === "invalid-company") {
     return res.status(422).json({
       message: "Pembayaran ditolak: order belum memiliki company yang tidak ambigu.",
     });
   }
 
-  await db.execute(sql`
-    UPDATE portal_product_orders
-    SET payment_status = 'paid', paid_at = NOW(), updated_at = NOW()
-    WHERE id = ${id}
-  `);
-
-  const invToken = (order as any).invoiceToken as string | null;
-  if (invToken) {
-    await db.execute(sql`
-      UPDATE customer_invoice_links
-      SET payment_status = 'paid', amount_paid = grand_total, confirmed_at = NOW()
-      WHERE token = ${invToken}
-    `);
+  const order = paymentResult.order;
+  if (!paymentResult.changed) {
+    return res.json({ success: true, message: "Pembayaran sudah dikonfirmasi", unchanged: true });
   }
 
   const phone = order.phone ?? null;
@@ -1295,11 +1708,12 @@ portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Reques
   });
 
   return res.json({ success: true, message: "Pembayaran dikonfirmasi" });
-});
+  },
+);
 
 // ── POST /api/portal-product/orders/:id/regenerate-vendor-token — admin regenerate vendor link ──
 portalProductOrdersRouter.post("/orders/:id/regenerate-vendor-token", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1310,7 +1724,8 @@ portalProductOrdersRouter.post("/orders/:id/regenerate-vendor-token", async (req
   if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
 
   const domain = getPreferredDomain();
-  const newToken = signVendorResponseToken(order.orderNumber);
+  const newToken = signVendorResponseToken(order.orderNumber, null, undefined, "product_vendor_response");
+  await persistProductVendorToken(id, newToken);
   const vendorFormUrl = domain
     ? `https://${domain}/vendor-product-approval/${order.orderNumber}?t=${newToken}`
     : null;
@@ -1320,13 +1735,13 @@ portalProductOrdersRouter.post("/orders/:id/regenerate-vendor-token", async (req
     orderNumber: order.orderNumber,
     vendorToken: newToken,
     vendorFormUrl,
-    expiresIn: "7 hari",
+    expiresIn: "7 hari sejak token diterbitkan",
   });
 });
 
 // ── POST /api/portal-product/orders/:id/resend-invoice — kirim ulang invoice WA ──
 portalProductOrdersRouter.post("/orders/:id/resend-invoice", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
@@ -1364,72 +1779,45 @@ portalProductOrdersRouter.post("/orders/:id/resend-invoice", async (req: Request
 // Admin menetapkan biaya shipment dan truck setelah pilih vendor pengiriman.
 // Otomatis update customer_invoice_links jika invoice sudah dibuat.
 portalProductOrdersRouter.post("/admin/orders/:id/set-shipment-cost", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const { shipmentCost, truckCost } = req.body as { shipmentCost?: number | null; truckCost?: number | null };
   const shipCostNum = shipmentCost != null ? Number(shipmentCost) : 0;
   const truckCostNum = truckCost != null ? Number(truckCost) : 0;
+  if (!Number.isFinite(shipCostNum) || shipCostNum < 0 || !Number.isFinite(truckCostNum) || truckCostNum < 0) {
+    return res.status(422).json({ error: "Biaya shipment dan truck harus berupa angka positif atau nol." });
+  }
 
-  const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
-  if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
-
-  // Update kolom biaya di order
-  await db.update(portalProductOrdersTable)
-    .set({
-      shipmentCost: String(shipCostNum),
-      truckCost: String(truckCostNum),
-      updatedAt: new Date(),
-    })
-    .where(eq(portalProductOrdersTable.id, id));
-
-  // Jika invoice sudah dibuat, update customer_invoice_links dengan breakdown baru
-  const invoiceToken = (order as any).invoiceToken as string | null;
-  if (invoiceToken) {
-    const productSubtotal = parseFloat(order.subtotal ?? "0");
-    const lineTotal = productSubtotal + shipCostNum + truckCostNum;
-    const scope = normalizeCustomerPortalProductScope(order.productCategory);
-    const orderTax = order as typeof order & { taxRuleId?: number | null; taxRate?: string | number | null };
-    const taxSnapshot = orderTax.taxRuleId && orderTax.taxRate != null
-      ? { taxRuleId: Number(orderTax.taxRuleId), rate: Number(orderTax.taxRate) / 100, treatment: "exclusive" as const, productScope: scope }
-      : await resolveCustomerPortalTaxSnapshot(scope);
-    const { taxAmount: ppn, grandTotal: newGrandTotal } =
-      calculateCustomerPortalExclusiveTax(lineTotal, taxSnapshot);
-
-    // Rebuild line items
-    const items = await db.select().from(portalProductOrderItemsTable)
-      .where(eq(portalProductOrderItemsTable.orderId, id));
-    const productLines = items.map(i => ({
-      description: i.productName,
-      qty: i.qty,
-      unit: i.unit ?? "pcs",
-      unitPrice: parseFloat(i.unitPrice),
-      subtotal: parseFloat(i.subtotal),
-    }));
-    const isPickupSelf = order.shipmentMode === "pickup_self";
-    const shipLabel = isPickupSelf ? "Biaya Pengiriman (Ambil Sendiri)" : "Biaya Pengiriman";
-    const newLineItems = [
-      ...productLines,
-      { description: shipLabel, qty: 1, unit: "ls", unitPrice: shipCostNum, subtotal: shipCostNum },
-      ...(truckCostNum > 0 ? [{ description: "Biaya Truk", qty: 1, unit: "ls", unitPrice: truckCostNum, subtotal: truckCostNum }] : []),
-    ];
-
-    await db.execute(sql`
-      UPDATE customer_invoice_links
-      SET subtotal = ${String(lineTotal)},
-          tax_amount = ${String(ppn)},
-          grand_total = ${String(newGrandTotal)},
-          line_items = ${JSON.stringify(newLineItems)}::jsonb
-      WHERE token = ${invoiceToken}
-    `);
+  // The invoice creator locks the same order row and checks invoice_token.
+  // Keep this predicate in the write itself so a stale pre-check cannot mutate
+  // amounts after invoice issuance wins a concurrent race.
+  const changed = await db.execute(sql`
+    UPDATE portal_product_orders
+       SET shipment_cost = ${shipCostNum},
+           truck_cost = ${truckCostNum},
+           updated_at = NOW()
+     WHERE id = ${id}
+       AND invoice_token IS NULL
+     RETURNING id
+  `);
+  if (changed.rows.length === 0) {
+    const [order] = await db.select({ id: portalProductOrdersTable.id })
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, id));
+    if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
+    return res.status(409).json({
+      error: "Invoice sudah diterbitkan dan immutable; biaya shipment tidak dapat diubah lagi.",
+      code: "INVOICE_IMMUTABLE",
+    });
   }
 
   return res.json({
     success: true,
     shipmentCost: shipCostNum,
     truckCost: truckCostNum,
-    invoiceUpdated: !!invoiceToken,
+    invoiceUpdated: false,
   });
 });
 
@@ -1437,13 +1825,32 @@ portalProductOrdersRouter.post("/admin/orders/:id/set-shipment-cost", async (req
 portalProductOrdersRouter.get("/vendor-access/:orderNumber", async (req: Request, res: Response) => {
   const orderNumber = req.params["orderNumber"] as string;
   const token = String(req.query["t"] ?? "").trim();
-  if (!verifyVendorResponseToken(orderNumber, token)) {
+  if (!verifyVendorResponseToken(orderNumber, token, null, "product_vendor_response")) {
     return res.status(403).json({ error: "Link tidak valid atau sudah kadaluarsa" });
   }
 
   const [order] = await db.select().from(portalProductOrdersTable)
     .where(eq(portalProductOrdersTable.orderNumber, orderNumber));
   if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
+
+  const tokenState = await db.execute(sql`
+    SELECT vendor_response_token_hash, vendor_response_token_expires_at
+      FROM portal_product_orders
+     WHERE id = ${order.id}
+     LIMIT 1
+  `);
+  const tokenRow = tokenState.rows[0] as {
+    vendor_response_token_hash?: string | null;
+    vendor_response_token_expires_at?: string | Date | null;
+  } | undefined;
+  if (
+    !tokenRow?.vendor_response_token_hash ||
+    !tokenRow.vendor_response_token_expires_at ||
+    new Date(tokenRow.vendor_response_token_expires_at).getTime() <= Date.now() ||
+    !constantTimeTokenHashEqual(tokenRow.vendor_response_token_hash, hashVendorResponseToken(token))
+  ) {
+    return res.status(403).json({ error: "Link tidak valid atau sudah kadaluarsa" });
+  }
 
   const items = await db.select().from(portalProductOrderItemsTable)
     .where(eq(portalProductOrderItemsTable.orderId, order.id));
@@ -1478,7 +1885,7 @@ portalProductOrdersRouter.post("/vendor-response/:orderNumber", async (req: Requ
   const { vendorName, vendorPhone, status, quotedPrice, notes, token } = req.body as Record<string, string>;
 
   const tok = String(token ?? String(req.query["t"] ?? "")).trim();
-  if (!verifyVendorResponseToken(orderNumber, tok)) {
+  if (!verifyVendorResponseToken(orderNumber, tok, null, "product_vendor_response")) {
     return res.status(403).json({ error: "Link tidak valid atau sudah kadaluarsa" });
   }
 
@@ -1489,17 +1896,64 @@ portalProductOrdersRouter.post("/vendor-response/:orderNumber", async (req: Requ
   const [order] = await db.select({
     id: portalProductOrdersTable.id,
     customerName: portalProductOrdersTable.customerName,
+    status: portalProductOrdersTable.status,
   }).from(portalProductOrdersTable)
     .where(eq(portalProductOrdersTable.orderNumber, orderNumber));
   if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
 
+  const tokenState = await db.execute(sql`
+    SELECT vendor_response_token_hash, vendor_response_token_expires_at
+      FROM portal_product_orders
+     WHERE id = ${order.id}
+     LIMIT 1
+  `);
+  const tokenRow = tokenState.rows[0] as {
+    vendor_response_token_hash?: string | null;
+    vendor_response_token_expires_at?: string | Date | null;
+  } | undefined;
+  if (
+    !tokenRow?.vendor_response_token_hash ||
+    !tokenRow.vendor_response_token_expires_at ||
+    new Date(tokenRow.vendor_response_token_expires_at).getTime() <= Date.now() ||
+    !constantTimeTokenHashEqual(tokenRow.vendor_response_token_hash, hashVendorResponseToken(tok))
+  ) {
+    return res.status(403).json({ error: "Link tidak valid atau sudah kadaluarsa" });
+  }
+  if (order.status !== "Product RFQ Sent") {
+    return res.status(409).json({ error: "RFQ produk sudah diproses atau tidak lagi menerima response." });
+  }
+
   const qp = quotedPrice ? parseFloat(String(quotedPrice)) : null;
+  if (qp != null && (!Number.isFinite(qp) || qp < 0)) {
+    return res.status(400).json({ error: "Harga penawaran tidak valid." });
+  }
   const vPhone = vendorPhone?.trim() || null;
 
-  await db.execute(sql`
-    INSERT INTO portal_product_vendor_responses (order_number, order_id, vendor_name, vendor_phone, status, quoted_price, notes)
-    VALUES (${orderNumber}, ${order.id}, ${vendorName ?? null}, ${vPhone}, ${status}, ${qp}, ${notes ?? null})
-  `);
+  const accepted = await db.transaction(async (tx) => {
+    const inserted = await tx.execute(sql`
+      INSERT INTO portal_product_vendor_responses (order_number, order_id, vendor_name, vendor_phone, status, quoted_price, notes)
+      VALUES (${orderNumber}, ${order.id}, ${vendorName?.trim() || null}, ${vPhone}, ${status}, ${qp}, ${notes?.trim() || null})
+      ON CONFLICT (order_number) DO NOTHING
+      RETURNING id
+    `);
+    if (inserted.rows.length === 0) return false;
+    const transitioned = await tx.execute(sql`
+      UPDATE portal_product_orders
+         SET status = 'Product Quote Received', updated_at = NOW()
+       WHERE id = ${order.id} AND status = 'Product RFQ Sent'
+       RETURNING id
+    `);
+    if (transitioned.rows.length === 0) {
+      throw new Error("PRODUCT_VENDOR_RESPONSE_STATUS_CONFLICT");
+    }
+    return true;
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === "PRODUCT_VENDOR_RESPONSE_STATUS_CONFLICT") return false;
+    throw error;
+  });
+  if (!accepted) {
+    return res.status(409).json({ error: "Response vendor sudah pernah diterima atau order berubah." });
+  }
 
   const items = await db.select({
     productName: portalProductOrderItemsTable.productName,
@@ -1558,7 +2012,7 @@ db.execute(sql`
 `).catch(() => {});
 
 // GET /api/portal-product/drivers — list active drivers (admin)
-portalProductOrdersRouter.get("/drivers", requireClerkUser, async (_req: Request, res: Response) => {
+portalProductOrdersRouter.get("/drivers", requirePortalProductAdminMiddleware, async (_req: Request, res: Response) => {
   const rows = await db.select({
     id: driversTable.id,
     name: driversTable.name,
@@ -1572,7 +2026,7 @@ portalProductOrdersRouter.get("/drivers", requireClerkUser, async (_req: Request
 });
 
 // GET /api/portal-product/orders/:id/driver — get current driver job for order (admin)
-portalProductOrdersRouter.get("/orders/:id/driver", requireClerkUser, async (req: Request, res: Response) => {
+portalProductOrdersRouter.get("/orders/:id/driver", requirePortalProductAdminMiddleware, async (req: Request, res: Response) => {
   const orderId = parseInt(String(req.params.id), 10);
   if (!orderId) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1610,7 +2064,7 @@ portalProductOrdersRouter.get("/orders/:id/driver", requireClerkUser, async (req
 });
 
 // POST /api/portal-product/orders/:id/assign-driver — assign driver (admin)
-portalProductOrdersRouter.post("/orders/:id/assign-driver", requireClerkUser, async (req: Request, res: Response) => {
+portalProductOrdersRouter.post("/orders/:id/assign-driver", requirePortalProductAdminMiddleware, async (req: Request, res: Response) => {
   const orderId = parseInt(String(req.params.id), 10);
   if (!orderId) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1691,7 +2145,8 @@ portalProductOrdersRouter.get("/product-approve/:token", async (req: Request, re
   const result = await db.execute(sql`
     SELECT
       id, order_number, customer_name, status, order_type,
-      product_approve_token, vendor_name_selected, vendor_quoted_price,
+      product_approve_token, shipment_selection_token,
+      vendor_name_selected, vendor_quoted_price,
       ready_date, pickup_location, notes, created_at
     FROM portal_product_orders
     WHERE product_approve_token = ${token}
@@ -1751,7 +2206,8 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
   if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "action harus approve atau reject" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, status, customer_name, phone, order_type
+    SELECT id, order_number, status, customer_name, phone, order_type,
+           product_approve_token, shipment_selection_token
     FROM portal_product_orders
     WHERE product_approve_token = ${token}
     LIMIT 1
@@ -1764,11 +2220,25 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
   }
 
   const newStatus = action === "approve" ? "Shipment Selection Pending" : "Admin Review";
-  await db.execute(sql`
-    UPDATE portal_product_orders
-    SET status = ${newStatus}, updated_at = NOW()
-    WHERE id = ${row.id}
-  `);
+  const selectionToken = row.shipment_selection_token ?? generateToken();
+  const changed = action === "approve"
+    ? await db.execute(sql`
+        UPDATE portal_product_orders
+        SET status = ${newStatus},
+            shipment_selection_token = COALESCE(shipment_selection_token, ${selectionToken}),
+            updated_at = NOW()
+        WHERE id = ${row.id} AND status = 'Customer Product Approval'
+        RETURNING id, shipment_selection_token
+      `)
+    : await db.execute(sql`
+        UPDATE portal_product_orders
+        SET status = ${newStatus}, updated_at = NOW()
+        WHERE id = ${row.id} AND status = 'Customer Product Approval'
+        RETURNING id
+      `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "Order berubah oleh request lain; status persetujuan sudah diproses." });
+  }
 
   broadcastToAdmins("order_status_update", {
     orderNumber: row.order_number,
@@ -1781,8 +2251,8 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
     if (action === "approve") {
       // WA ke customer dengan link pilih pengiriman
       const domain = getPreferredDomain();
-      const selectionUrl = domain && row.product_approve_token
-        ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+      const selectionUrl = domain && selectionToken
+        ? `https://${domain}/shipment-selection/${selectionToken}`
         : null;
       sendShipmentSelectionCustomerWa({
         customerPhone: String(row.phone),
@@ -1814,7 +2284,7 @@ portalProductOrdersRouter.get("/shipment-selection/:token", async (req: Request,
   const result = await db.execute(sql`
     SELECT id, order_number, customer_name, status, shipment_mode, grand_total
     FROM portal_product_orders
-    WHERE product_approve_token = ${token}
+    WHERE shipment_selection_token = ${token}
     LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -1860,7 +2330,7 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
   const result = await db.execute(sql`
     SELECT id, order_number, status, customer_name, phone
     FROM portal_product_orders
-    WHERE product_approve_token = ${token}
+    WHERE shipment_selection_token = ${token}
     LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -1871,11 +2341,15 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
   }
 
   const newStatus = shipmentMode === "pickup_self" ? "Ready for Pickup" : "Shipment RFQ Sent";
-  await db.execute(sql`
+  const changed = await db.execute(sql`
     UPDATE portal_product_orders
     SET status = ${newStatus}, shipment_mode = ${shipmentMode}, shipping_method = ${shipmentMode}, updated_at = NOW()
-    WHERE id = ${row.id}
+    WHERE id = ${row.id} AND status = 'Shipment Selection Pending'
+    RETURNING id
   `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "Order berubah oleh request lain; pilihan pengiriman sudah diproses." });
+  }
 
   broadcastToAdmins("order_status_update", {
     orderNumber: row.order_number,
@@ -1920,16 +2394,22 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
 
 // ── Admin action: Blast Product RFQ ─────────────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/blast-product-rfq", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
 
-  await db.execute(sql`
-    UPDATE portal_product_orders SET status = 'Product RFQ Sent', updated_at = NOW() WHERE id = ${id}
+  const changed = await db.execute(sql`
+    UPDATE portal_product_orders
+    SET status = 'Product RFQ Sent', updated_at = NOW()
+    WHERE id = ${id} AND status = 'Admin Review'
+    RETURNING id
   `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "Order tidak berada pada tahap Admin Review atau sudah diproses." });
+  }
 
   const { sendViaService } = await import("../lib/waTransport.js");
   const adminGroupWa = await getAdminGroupWa();
@@ -1950,7 +2430,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/blast-product-rfq", async (req
 
 // ── Admin action: Update Product Phase (vendor, price, ready date, pickup location) ─
 portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -1966,7 +2446,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
   if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
 
   const qp = quotedPrice != null ? parseFloat(String(quotedPrice)) : null;
-  await db.execute(sql`
+  const phaseUpdated = await db.execute(sql`
     UPDATE portal_product_orders SET
       vendor_name_selected = ${vendorName?.trim() ?? null},
       vendor_quoted_price = ${qp},
@@ -1974,13 +2454,24 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
       pickup_location = ${pickupLocation?.trim() ?? null},
       updated_at = NOW()
     WHERE id = ${id}
+      AND status IN ('Product RFQ Sent', 'Product Quote Received')
+    RETURNING id, status
   `);
+  if (phaseUpdated.rows.length === 0) {
+    return res.status(409).json({ error: "Order tidak berada pada tahap penawaran produk yang dapat diubah." });
+  }
 
   let newStatus: string | null = null;
   if (selectVendor && vendorName?.trim()) {
-    await db.execute(sql`
-      UPDATE portal_product_orders SET status = 'Product Vendor Selected' WHERE id = ${id}
+    const selected = await db.execute(sql`
+      UPDATE portal_product_orders
+      SET status = 'Product Vendor Selected', updated_at = NOW()
+      WHERE id = ${id} AND status = 'Product Quote Received'
+      RETURNING id
     `);
+    if (selected.rows.length === 0) {
+      return res.status(409).json({ error: "Penawaran produk berubah; vendor tidak dapat dipilih dari status saat ini." });
+    }
     newStatus = "Product Vendor Selected";
     broadcastToAdmins("order_status_update", { orderNumber: order.orderNumber, status: "Product Vendor Selected", source: "admin_update" });
   }
@@ -1990,12 +2481,13 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
 
 // ── Admin action: Send Product Approval to Customer ─────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const result = await db.execute(sql`
     SELECT id, order_number, customer_name, phone, status, product_approve_token,
+           shipment_selection_token,
            vendor_name_selected, vendor_quoted_price, ready_date
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
   `);
@@ -2003,9 +2495,19 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
   if (!row) return res.status(404).json({ error: "Order tidak ditemukan" });
   if (!row.product_approve_token) return res.status(400).json({ error: "Order ini bukan tipe product_first" });
 
-  await db.execute(sql`
-    UPDATE portal_product_orders SET status = 'Customer Product Approval', updated_at = NOW() WHERE id = ${id}
+  const shipmentSelectionToken = row.shipment_selection_token ?? generateToken();
+  const changed = await db.execute(sql`
+    UPDATE portal_product_orders
+       SET status = 'Customer Product Approval',
+           shipment_selection_token = COALESCE(shipment_selection_token, ${shipmentSelectionToken}),
+           updated_at = NOW()
+     WHERE id = ${id}
+       AND status = 'Product Vendor Selected'
+    RETURNING id, shipment_selection_token
   `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "Vendor produk sudah diproses atau order belum siap untuk persetujuan customer." });
+  }
 
   const domain = getPreferredDomain();
   const approveUrl = domain ? `https://${domain}/product-approve/${row.product_approve_token}` : null;
@@ -2028,7 +2530,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
 
 // ── Admin action: Blast Shipment RFQ (guarded) ──────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/blast-shipment-rfq", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2048,9 +2550,14 @@ portalProductOrdersRouter.post("/admin/orders/:id/blast-shipment-rfq", async (re
   if (row.shipment_mode === "pickup_self") missing.push("Shipment RFQ tidak diperlukan untuk Ambil Sendiri");
   if (missing.length > 0) return res.status(400).json({ error: "Data tidak lengkap", missing });
 
-  await db.execute(sql`
+  const changed = await db.execute(sql`
     UPDATE portal_product_orders SET status = 'Shipment RFQ Sent', updated_at = NOW() WHERE id = ${id}
+      AND status IN ('Shipment Selection Pending', 'Ready for Pickup')
+    RETURNING id
   `);
+  if (changed.rows.length === 0 && row.status !== "Shipment RFQ Sent") {
+    return res.status(409).json({ error: "Order belum berada pada tahap pengiriman yang dapat dikirimkan RFQ." });
+  }
 
   const { sendViaService } = await import("../lib/waTransport.js");
   const adminGroupWa = await getAdminGroupWa();
@@ -2075,16 +2582,21 @@ portalProductOrdersRouter.post("/admin/orders/:id/blast-shipment-rfq", async (re
 
 // ── Admin action: Mark Ready for Pickup ─────────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/mark-ready-pickup", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
 
-  await db.execute(sql`
+  const changed = await db.execute(sql`
     UPDATE portal_product_orders SET status = 'Ready for Pickup', updated_at = NOW() WHERE id = ${id}
+      AND status = 'Shipment Selection Pending'
+    RETURNING id
   `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "Order tidak berada pada tahap pilihan pengiriman atau sudah diproses." });
+  }
 
   // WA ke customer — produk siap diambil
   const pickupPhone = (order as any).phone ?? null;
@@ -2107,7 +2619,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-ready-pickup", async (req
 
 // ── Admin action: Mark Shipment Vendor Confirmed ─────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2124,9 +2636,14 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed
   const row = result.rows[0] as any;
   if (!row) return res.status(404).json({ error: "Order tidak ditemukan" });
 
-  await db.execute(sql`
+  const changed = await db.execute(sql`
     UPDATE portal_product_orders SET status = 'Vendor Confirmed', updated_at = NOW() WHERE id = ${id}
+      AND status = 'Shipment RFQ Sent'
+    RETURNING id
   `);
+  if (changed.rows.length === 0) {
+    return res.status(409).json({ error: "RFQ pengiriman sudah diproses atau order belum siap dikonfirmasi." });
+  }
 
   // WA ke customer dan admin group
   sendShipmentVendorConfirmedWa({
@@ -2145,7 +2662,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed
 
 // ── Admin action: Send Pickup Instruction WA ────────────────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-pickup-instruction", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
@@ -2171,12 +2688,12 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-pickup-instruction", asyn
 
 // ── Admin action: Send Shipment Selection Reminder WA ───────────────────────
 portalProductOrdersRouter.post("/admin/orders/:id/send-shipment-reminder", async (req: Request, res: Response) => {
-  if (!(await requireClerkUser(req, res))) return;
+  if (!(await requirePortalProductAdmin(req, res))) return;
   const id = parseInt(String(String(req.params.id)), 10);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, customer_name, phone, product_approve_token
+    SELECT id, order_number, customer_name, phone, shipment_selection_token
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -2184,8 +2701,8 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-shipment-reminder", async
   if (!row.phone) return res.status(400).json({ error: "Nomor telepon customer tidak tersedia" });
 
   const domain = getPreferredDomain();
-  const selUrl = domain && row.product_approve_token
-    ? `https://${domain}/shipment-selection/${row.product_approve_token}`
+  const selUrl = domain && row.shipment_selection_token
+    ? `https://${domain}/shipment-selection/${row.shipment_selection_token}`
     : null;
 
   const { sendViaService } = await import("../lib/waTransport.js");

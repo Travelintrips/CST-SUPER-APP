@@ -2,7 +2,7 @@
 
 **Tanggal Rilis:** 27 Mei 2026
 **Commit:** `6a6c394`
-**Environment:** Production (Replit + Supabase PostgreSQL + Replit Object Storage)
+**Environment:** Production (Replit + Supabase PostgreSQL + Supabase Storage)
 
 ---
 
@@ -52,8 +52,8 @@ Rilis pertama BizPortal ERP sebagai sistem manajemen operasional logistik terpad
 - Workflows: `order_new`, `quotation_send`, `vendor_form_sent`, `customer_approval_sent`, dll.
 
 ### 6. Attachment Persistence
-- Upload file ke Replit Object Storage (bukan temp storage)
-- Pemisahan bucket publik dan privat via environment variable
+- Upload file ke Supabase Storage (bukan Replit Object Storage atau temp storage)
+- Pemisahan bucket publik dan privat (`public-assets` dan `private-uploads`)
 - Support tipe: POD (Proof of Delivery), foto unit, dokumen quote, lampiran korespondensi
 - `UploadGuardSession`: cleanup otomatis file oversized (>100MB) setelah presigned URL expired
 - Download/view via signed URL dengan ACL check

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useGetPortalMe, useListPortalOrders, useListPortalLogisticOrders } from "@workspace/api-client-react";
-import { isAuthenticated, removeAuthToken, getPortalRole } from "@/lib/auth";
+import { useListPortalOrders, useListPortalLogisticOrders } from "@workspace/api-client-react";
+import { getCachedPortalAuthBootstrap, isAuthenticated, getPortalRole } from "@/lib/auth";
 import { useLocation, Link } from "wouter";
 import {
   Truck, Plus, Ship, Clock, FileText, Navigation,
@@ -37,6 +37,9 @@ export default function Dashboard() {
   const authed  = isAuthenticated();
   const { t }   = useLanguage();
   const qc      = useQueryClient();
+  const bootstrap = getCachedPortalAuthBootstrap();
+  const customer = bootstrap?.user;
+  const isLoadingUser = !bootstrap;
 
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
@@ -54,11 +57,6 @@ export default function Dashboard() {
     });
     return () => es.close();
   }, [authed, qc]);
-
-  const { data: customer, isLoading: isLoadingUser, error: userError } = useGetPortalMe({
-    query: { queryKey: ["getPortalMe"], enabled: authed, retry: 1 },
-    request: { credentials: "include" },
-  });
 
   const { data: ordersResponse, isLoading: isLoadingCrm } = useListPortalOrders({
     query: { queryKey: ["listPortalOrders"], enabled: authed },
@@ -118,10 +116,6 @@ export default function Dashboard() {
     enabled: authed,
     staleTime: 60_000,
   });
-
-  useEffect(() => {
-    if (userError) { removeAuthToken(); setLocation("/login"); }
-  }, [userError, setLocation]);
 
   if (!authed) return null;
 

@@ -126,14 +126,18 @@ export function evaluateVendorInvoicePostingGate(input: {
   const coa = evaluateVendorInvoiceCoaGate(input.lines);
   const withholding = evaluateVendorWithholdingGate(input.withholdingTaxes ?? []);
   const reasons = [...coa.reasons, ...withholding.reasons];
+  const hasLineWithholdingEvidence = (input.withholdingTaxes ?? [])
+    .some((tax) => amount(tax.taxAmount) > 0);
 
   // Preserve the safe behavior of legacy header-level OCR fields. They can
-  // trigger review, but can never authorize posting.
-  if (
+  // trigger review, but can never authorize posting. Once complete line-level
+  // tax evidence exists, it is the source of truth and a stale legacy header
+  // flag must not block an otherwise fully-reviewed invoice.
+  if (!hasLineWithholdingEvidence && (
     input.legacyTaxReviewStatus === "required" ||
     input.legacyWithholdingTaxType?.trim() ||
     amount(input.legacyWithholdingTaxAmount) > 0
-  ) {
+  )) {
     reasons.push({
       code: "TAX_REVIEW_REQUIRED",
       message: "Data PPh header lama belum dipindahkan dan disetujui per line/tax object.",

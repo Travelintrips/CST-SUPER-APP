@@ -86,10 +86,11 @@ function seedHappyPath(row: Record<string, unknown> = makeTenantPaymentRow()): v
     .mockResolvedValueOnce({ rows: [{ id: 301 }] })                                    // 5
     .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
     .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                           // 7
-    .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                // 8
-    .mockResolvedValueOnce({ rows: [] })                                               // 9
-    .mockResolvedValueOnce({ rows: [] })                                               // 10
-    .mockResolvedValueOnce({ rows: [] });                                              // 11
+    .mockResolvedValueOnce({ rows: [] })                                               // 8 accounting_revenue_mappings
+    .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                // 9 accounting_settings
+    .mockResolvedValueOnce({ rows: [] })                                               // 10 idempotency entry check
+    .mockResolvedValueOnce({ rows: [] })                                               // 11 link accounting payment
+    .mockResolvedValueOnce({ rows: [] });                                              // 12 update source posting status
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -106,7 +107,6 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
     seedHappyPath();
 
     const result = await bulkIngestModule("tenant", 1);
-
     expect(result.total).toBe(1);
     expect(result.posted).toBe(1);
     expect(result.skipped).toBe(0);
@@ -149,7 +149,7 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
   it("is idempotent — skips a tenant payment that already has an accounting_payment", async () => {
     mockExecute
       .mockResolvedValueOnce({ rows: [makeTenantPaymentRow()] }) // 1. bulk SELECT
-      .mockResolvedValueOnce({ rows: [{ id: 301 }] });           // 2. alreadyPosted → found
+      .mockResolvedValueOnce({ rows: [{ id: 301, status: "posted", entry_id: 601 }] }); // 2. alreadyPosted → found
 
     const result = await bulkIngestModule("tenant", 1);
 
@@ -211,10 +211,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ id: 302 }] })                                  // 5
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: null, default_cash_account_id: 30 }] }) // 6
       .mockResolvedValueOnce({ rows: [{ name: "Kas Operasional" }] })                  // 7
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })              // 8
-      .mockResolvedValueOnce({ rows: [] })                                              // 9
-      .mockResolvedValueOnce({ rows: [] })                                              // 10
-      .mockResolvedValueOnce({ rows: [] });                                             // 11
+      .mockResolvedValueOnce({ rows: [] })                                              // 8 accounting_revenue_mappings
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })              // 9 accounting_settings
+      .mockResolvedValueOnce({ rows: [] })                                              // 10 idempotency entry check
+      .mockResolvedValueOnce({ rows: [] })                                              // 11 link accounting payment
+      .mockResolvedValueOnce({ rows: [] });                                             // 12 update source posting status
 
     const result = await bulkIngestModule("tenant", 1);
 
@@ -249,10 +250,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
         .mockResolvedValueOnce({ rows: [{ id: 310 + i }] })                                               // 5  INSERT accounting_payments
         .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6  resolveBankAccount
         .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                                          // 7  getAccountName
-        .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                               // 8  resolveRevenueAccount
-        .mockResolvedValueOnce({ rows: [] })                                                              // 9  idempotency entry check
-        .mockResolvedValueOnce({ rows: [] })                                                              // 10 UPDATE accounting_payments entry_id
-        .mockResolvedValueOnce({ rows: [] });                                                             // 11 UPDATE tenant_payments posting_status
+        .mockResolvedValueOnce({ rows: [] })                                                              // 8  accounting_revenue_mappings
+        .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                              // 9  accounting_settings
+        .mockResolvedValueOnce({ rows: [] })                                                              // 10 idempotency entry check
+        .mockResolvedValueOnce({ rows: [] })                                                              // 11 link accounting payment
+        .mockResolvedValueOnce({ rows: [] });                                                             // 12 UPDATE tenant_payments posting_status
     }
 
     const result = await bulkIngestModule("tenant", 1);
@@ -277,7 +279,7 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
 
     // Row 20 — already posted (step 2 finds existing record → skip)
     mockExecute
-      .mockResolvedValueOnce({ rows: [{ id: 501 }] });                                                   // 2  alreadyPosted
+      .mockResolvedValueOnce({ rows: [{ id: 501, status: "posted", entry_id: 701 }] });                   // 2  alreadyPosted
 
     // Row 21 — happy path (steps 2-11)
     mockExecute
@@ -287,10 +289,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ id: 502 }] })                                                    // 5  INSERT accounting_payments
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6  resolveBankAccount
       .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                                           // 7  getAccountName
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 8  resolveRevenueAccount
-      .mockResolvedValueOnce({ rows: [] })                                                               // 9  idempotency entry check
-      .mockResolvedValueOnce({ rows: [] })                                                               // 10 UPDATE accounting_payments entry_id
-      .mockResolvedValueOnce({ rows: [] });                                                              // 11 UPDATE tenant_payments posting_status
+      .mockResolvedValueOnce({ rows: [] })                                                               // 8  accounting_revenue_mappings
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                               // 9  accounting_settings
+      .mockResolvedValueOnce({ rows: [] })                                                               // 10 idempotency entry check
+      .mockResolvedValueOnce({ rows: [] })                                                               // 11 link accounting payment
+      .mockResolvedValueOnce({ rows: [] });                                                              // 12 UPDATE tenant_payments posting_status
 
     // Row 22 — no journal configured (steps 2-6: resolveJournal fallbacks all empty)
     mockExecute
@@ -343,10 +346,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
       .mockResolvedValueOnce({ rows: [{ name: "Kas Operasional" }] })                                    // 7  ← wrong category
       .mockResolvedValueOnce({ rows: [{ id: 55, name: "Bank BNI" }] })                                   // 8  COA fallback
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 9
-      .mockResolvedValueOnce({ rows: [] })                                                               // 10
-      .mockResolvedValueOnce({ rows: [] })                                                               // 11
-      .mockResolvedValueOnce({ rows: [] });                                                              // 12
+      .mockResolvedValueOnce({ rows: [] })                                                               // 9 accounting_revenue_mappings
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 10 accounting_settings
+      .mockResolvedValueOnce({ rows: [] })                                                               // 11 idempotency entry check
+      .mockResolvedValueOnce({ rows: [] })                                                               // 12 link accounting payment
+      .mockResolvedValueOnce({ rows: [] });                                                              // 13 update source posting status
 
     const result = await bulkIngestModule("tenant", 1);
 
@@ -388,9 +392,10 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ id: 305 }] })                                                    // 5
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
       .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                                           // 7  ✓ valid bank
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: null }] })                              // 8  no revenue account in settings
-      .mockResolvedValueOnce({ rows: [] })                                                               // 9  no revenue COA fallback
-      .mockResolvedValueOnce({ rows: [] });                                                              // 10 updatePostingStatus('error')
+      .mockResolvedValueOnce({ rows: [] })                                                               // 8  accounting_revenue_mappings
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: null }] })                              // 9  no revenue account in settings
+      .mockResolvedValueOnce({ rows: [] })                                                               // 10 no revenue COA fallback
+      .mockResolvedValueOnce({ rows: [] });                                                              // 11 updatePostingStatus('error')
 
     const result = await bulkIngestModule("tenant", 1);
 
@@ -508,10 +513,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ id: 901 }] })                                                  // 4  INSERT accounting_payments
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 5  resolveBankAccount ← values[0]=1
       .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                                         // 6  getAccountName
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                              // 7  resolveRevenueAccount ← values[0]=1
-      .mockResolvedValueOnce({ rows: [] })                                                             // 8  idempotency entry check
-      .mockResolvedValueOnce({ rows: [] })                                                             // 9  UPDATE accounting_payments entry_id
-      .mockResolvedValueOnce({ rows: [] });                                                            // 10 UPDATE tenant_payments
+      .mockResolvedValueOnce({ rows: [] })                                                             // 7  accounting_revenue_mappings ← values[0]=1
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                              // 8  accounting_settings ← values[0]=1
+      .mockResolvedValueOnce({ rows: [] })                                                             // 9  idempotency entry check
+      .mockResolvedValueOnce({ rows: [] })                                                             // 10 link accounting payment
+      .mockResolvedValueOnce({ rows: [] });                                                            // 11 UPDATE tenant_payments
 
     // Row 201 (company_id=2) — steps 11-20
     mockExecute
@@ -521,10 +527,11 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
       .mockResolvedValueOnce({ rows: [{ id: 902 }] })                                                  // 14 INSERT accounting_payments
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 60, default_cash_account_id: null }] }) // 15 resolveBankAccount ← values[0]=2
       .mockResolvedValueOnce({ rows: [{ name: "Bank Mandiri" }] })                                     // 16 getAccountName
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 45 }] })                              // 17 resolveRevenueAccount ← values[0]=2
-      .mockResolvedValueOnce({ rows: [] })                                                             // 18 idempotency entry check
-      .mockResolvedValueOnce({ rows: [] })                                                             // 19 UPDATE accounting_payments entry_id
-      .mockResolvedValueOnce({ rows: [] });                                                            // 20 UPDATE tenant_payments
+      .mockResolvedValueOnce({ rows: [] })                                                             // 17 accounting_revenue_mappings ← values[0]=2
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 45 }] })                              // 18 accounting_settings ← values[0]=2
+      .mockResolvedValueOnce({ rows: [] })                                                             // 19 idempotency entry check
+      .mockResolvedValueOnce({ rows: [] })                                                             // 20 link accounting payment
+      .mockResolvedValueOnce({ rows: [] });                                                            // 21 UPDATE tenant_payments
 
     const result = await bulkIngestModule("tenant", null);
 
@@ -536,21 +543,21 @@ describe("bulkIngestModule('tenant') — tenant payments accounting", () => {
     expect(mockPost).toHaveBeenCalledTimes(2);
 
     // ── Verify company_id isolation in SQL calls ──────────────────────────────
-    // resolveJournal settings SELECT (call indices 2 and 12):
+    // resolveJournal settings SELECT (call indices 2 and 13):
     const resolveJournalCall1 = mockExecute.mock.calls[2][0] as { values: unknown[] };
-    const resolveJournalCall2 = mockExecute.mock.calls[12][0] as { values: unknown[] };
+    const resolveJournalCall2 = mockExecute.mock.calls[13][0] as { values: unknown[] };
     expect(resolveJournalCall1.values[0]).toBe(1);   // row's company_id=1, NOT null
     expect(resolveJournalCall2.values[0]).toBe(2);   // row's company_id=2, NOT null
 
-    // resolveBankAccount settings SELECT (call indices 5 and 15):
+    // resolveBankAccount settings SELECT (call indices 5 and 16):
     const resolveBankCall1 = mockExecute.mock.calls[5][0] as { values: unknown[] };
-    const resolveBankCall2 = mockExecute.mock.calls[15][0] as { values: unknown[] };
+    const resolveBankCall2 = mockExecute.mock.calls[16][0] as { values: unknown[] };
     expect(resolveBankCall1.values[0]).toBe(1);
     expect(resolveBankCall2.values[0]).toBe(2);
 
-    // resolveRevenueAccount settings SELECT (call indices 7 and 17):
-    const resolveRevenueCall1 = mockExecute.mock.calls[7][0] as { values: unknown[] };
-    const resolveRevenueCall2 = mockExecute.mock.calls[17][0] as { values: unknown[] };
+    // resolveRevenueAccount settings SELECT (call indices 8 and 19):
+    const resolveRevenueCall1 = mockExecute.mock.calls[8][0] as { values: unknown[] };
+    const resolveRevenueCall2 = mockExecute.mock.calls[19][0] as { values: unknown[] };
     expect(resolveRevenueCall1.values[0]).toBe(1);
     expect(resolveRevenueCall2.values[0]).toBe(2);
 

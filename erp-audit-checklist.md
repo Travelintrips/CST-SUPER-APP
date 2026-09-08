@@ -504,7 +504,7 @@
 ### 12.3 Media & Object Storage
 | # | Item Audit | Status | Temuan |
 |---|-----------|--------|--------|
-| 12.3.1 | Object storage bucket terkonfigurasi (DEFAULT_OBJECT_STORAGE_BUCKET_ID) | | |
+| 12.3.1 | Supabase Storage bucket terkonfigurasi (`public-assets` / `private-uploads`) | | |
 | 12.3.2 | File public (gambar produk, logo) dapat diakses tanpa autentikasi | | |
 | 12.3.3 | File private (dokumen invoice, BL) memerlukan autentikasi untuk diakses | | |
 | 12.3.4 | Media manager berfungsi untuk upload/delete/view aset | | |

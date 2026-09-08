@@ -17,6 +17,40 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 export const paymentProofPublicRouter = Router();
 export const paymentProofAdminRouter = Router();
 
+type ScopedInternalUser = {
+  role?: string | null;
+  companyId?: number | null;
+  allowedCompanyIds?: number[];
+};
+
+function allowedInternalCompanyIds(req: Request): number[] | null {
+  const user = (req.user ?? {}) as ScopedInternalUser;
+  const configured = Array.isArray(user.allowedCompanyIds)
+    ? user.allowedCompanyIds.filter((id): id is number => Number.isInteger(id) && id > 0)
+    : [];
+  if (configured.length > 0) return [...new Set(configured)];
+  if (user.role === "admin" || user.role === "owner") return null;
+  return user.companyId != null && Number.isInteger(user.companyId) ? [user.companyId] : [];
+}
+
+function assertPaymentProofCompanyAccess(
+  req: Request,
+  res: Response,
+  companyId: unknown,
+): boolean {
+  const normalizedCompanyId = Number(companyId);
+  if (!Number.isInteger(normalizedCompanyId) || normalizedCompanyId <= 0) {
+    res.status(422).json({ message: "Invoice belum memiliki company scope yang valid." });
+    return false;
+  }
+  const allowed = allowedInternalCompanyIds(req);
+  if (allowed !== null && !allowed.includes(normalizedCompanyId)) {
+    res.status(403).json({ message: "Forbidden: invoice berada di luar company scope Anda." });
+    return false;
+  }
+  return true;
+}
+
 // Columns payment_proof_token, proof_url, proof_uploaded_at, proof_remarks
 // are managed via official Drizzle migrations — not created at startup.
 
@@ -265,14 +299,22 @@ paymentProofPublicRouter.post(
     }
 
     // Simpan private storage path di DB; akses via endpoint internal /proof-file/:id
-    await db
+    const [claimed] = await db
       .update(salesDocumentsTable)
       .set({
         proofUrl: privateStoragePath,
         proofUploadedAt: new Date(),
         proofRemarks: remarks || null,
       })
-      .where(eq(salesDocumentsTable.id, doc.id));
+      .where(sql`${salesDocumentsTable.id} = ${doc.id} AND ${salesDocumentsTable.proofUrl} IS NULL`)
+      .returning({ id: salesDocumentsTable.id });
+    if (!claimed) {
+      await new ObjectStorageService().deletePrivateEntity(privateStoragePath).catch((err: unknown) =>
+        logger.warn({ err, privateStoragePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      res.send(alreadyUploadedHtml(invoiceLabel, doc.customerName));
+      return;
+    }
 
     if (doc.logisticOrderId) {
       void transitionLogisticOrderStatus(doc.logisticOrderId, "Payment Received", {
@@ -373,6 +415,7 @@ paymentProofAdminRouter.get("/:id/proof-info", async (req: Request, res: Respons
       proofUrl: salesDocumentsTable.proofUrl,
       proofUploadedAt: salesDocumentsTable.proofUploadedAt,
       proofRemarks: salesDocumentsTable.proofRemarks,
+      companyId: salesDocumentsTable.companyId,
     })
     .from(salesDocumentsTable)
     .where(eq(salesDocumentsTable.id, id));
@@ -381,6 +424,7 @@ paymentProofAdminRouter.get("/:id/proof-info", async (req: Request, res: Respons
     res.status(404).json({ message: "Not found" });
     return;
   }
+  if (!assertPaymentProofCompanyAccess(req, res, doc.companyId)) return;
 
   // P0-2: proofUrl dikembalikan sebagai endpoint internal, bukan URL bucket
   const proofUrl = doc.proofUrl
@@ -413,7 +457,10 @@ paymentProofAdminRouter.get("/:id/proof-file", async (req: Request, res: Respons
   }
 
   const [doc] = await db
-    .select({ proofUrl: salesDocumentsTable.proofUrl })
+    .select({
+      proofUrl: salesDocumentsTable.proofUrl,
+      companyId: salesDocumentsTable.companyId,
+    })
     .from(salesDocumentsTable)
     .where(eq(salesDocumentsTable.id, id));
 
@@ -421,6 +468,7 @@ paymentProofAdminRouter.get("/:id/proof-file", async (req: Request, res: Respons
     res.status(404).json({ message: "Bukti pembayaran belum ada" });
     return;
   }
+  if (!assertPaymentProofCompanyAccess(req, res, doc.companyId)) return;
 
   try {
     const objStore = new ObjectStorageService();
@@ -443,6 +491,16 @@ paymentProofAdminRouter.post("/:id/resend-proof-wa", async (req: Request, res: R
     res.status(400).json({ message: "Invalid id" });
     return;
   }
+
+  const [documentScope] = await db
+    .select({ companyId: salesDocumentsTable.companyId })
+    .from(salesDocumentsTable)
+    .where(eq(salesDocumentsTable.id, id));
+  if (!documentScope) {
+    res.status(404).json({ message: "Not found" });
+    return;
+  }
+  if (!assertPaymentProofCompanyAccess(req, res, documentScope.companyId)) return;
 
   try {
     const { sendPaymentProofWaLink } = await import("../lib/paymentProofService.js");
@@ -540,8 +598,8 @@ router.post("/:token/upload", upload.single("file"), async (req: Request, res: R
 
   try {
     const rows = await db.execute(sql`
-      SELECT id, doc_number, invoice_number, customer_name, grand_total,
-             customer_id, logistic_order_id, proof_upload_token_expires_at
+       SELECT id, doc_number, invoice_number, customer_name, grand_total,
+              customer_id, logistic_order_id, proof_url, proof_upload_token_expires_at
       FROM sales_documents
       WHERE proof_upload_token = ${token}
       LIMIT 1
@@ -563,14 +621,29 @@ router.post("/:token/upload", upload.single("file"), async (req: Request, res: R
     // Internal endpoint URL — akses via /api/payment-proof/file/:id (admin only)
     const internalProofUrl = `/api/payment-proof/file/${String(row["id"])}`;
 
-    // Update record — simpan private path di DB
-    await db.execute(sql`
+    if (row["proof_url"]) {
+      await objStore.deletePrivateEntity(proofPrivatePath).catch((err: unknown) =>
+        logger.warn({ err, proofPrivatePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      return res.status(409).json({ error: "Bukti pembayaran sudah diunggah sebelumnya." });
+    }
+
+    // Update record — simpan private path di DB only once. The predicate is
+    // the ownership/concurrency boundary for this capability token.
+    const claimed = await db.execute(sql`
       UPDATE sales_documents
       SET proof_url = ${proofPrivatePath},
           proof_remarks = ${remarks},
           proof_uploaded_at = NOW()
-      WHERE id = ${Number(row["id"])}
+      WHERE id = ${Number(row["id"])} AND proof_url IS NULL
+      RETURNING id
     `);
+    if (claimed.rows.length === 0) {
+      await objStore.deletePrivateEntity(proofPrivatePath).catch((err: unknown) =>
+        logger.warn({ err, proofPrivatePath }, "[paymentProof] losing upload cleanup failed"),
+      );
+      return res.status(409).json({ error: "Bukti pembayaran sudah diunggah sebelumnya." });
+    }
 
     // Audit log
     db.execute(sql`
@@ -662,11 +735,12 @@ router.get("/file/:documentId", async (req: Request, res: Response) => {
   if (isNaN(docId)) return res.status(400).json({ error: "Invalid document id" });
 
   try {
-    const rows = await db.execute(sql`
-      SELECT id, proof_url FROM sales_documents WHERE id = ${docId} LIMIT 1
+    const result = await db.execute(sql`
+      SELECT id, proof_url, company_id FROM sales_documents WHERE id = ${docId} LIMIT 1
     `);
-    const row = (rows as unknown as Record<string, unknown>[])[0];
+    const row = (result.rows as unknown as Record<string, unknown>[])[0];
     if (!row) return res.status(404).json({ error: "Dokumen tidak ditemukan" });
+    if (!assertPaymentProofCompanyAccess(req, res, row["company_id"])) return;
 
     const storedPath = row["proof_url"] as string | null;
     if (!storedPath) return res.status(404).json({ error: "Bukti pembayaran belum ada" });

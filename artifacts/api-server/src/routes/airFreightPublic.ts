@@ -175,10 +175,17 @@ router.post("/public/orders", optionalCustomerPortalAuth, async (req: Request, r
 
     const year = new Date().getFullYear();
     const countRes = await db.execute(sql`
-      SELECT COUNT(*) AS cnt FROM air_freight_orders
-      WHERE EXTRACT(YEAR FROM created_at) = ${year}
+      SELECT COALESCE(MAX(
+        CASE
+          WHEN order_number ~ ${`^AFO/${year}/[0-9]+$`}
+          THEN substring(order_number FROM '[0-9]+$')::int
+          ELSE NULL
+        END
+      ), 0) + 1 AS seq
+      FROM air_freight_orders
+      WHERE order_number LIKE ${`AFO/${year}/%`}
     `);
-    const seq = Number((countRes.rows[0] as any)?.cnt ?? 0) + 1;
+    const seq = Number((countRes.rows[0] as any)?.seq ?? 1);
     const orderNumber = `AFO/${year}/${String(seq).padStart(5, "0")}`;
 
     const r = await db.execute(sql`

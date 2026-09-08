@@ -47,6 +47,27 @@ const REQUIRED_ROUTINES = [
   "finalize_payment_settlement",
   "project_public_bank_mutation_to_canonical",
 ];
+const CERTIFIED_FINANCE_BASELINE = {
+  project_code: "sport_center",
+  company_id: 1,
+  payment_method: "qris",
+  provider_code: "mandiri_direct",
+  bank_account_number: "1640006707220",
+  currency_code: "IDR",
+  settlement_delay_business_days: 1,
+  mdr_rate: 0.003,
+  fixed_provider_fee: 0,
+  fee_tax_rate: 0,
+  fee_tax_inclusive: false,
+  tax_rate: 11,
+  tax_direction: "output",
+  account_codes: {
+    RECEIVING_BANK: "1-1023-CST",
+    REVENUE: "4-1017-CST",
+    TAX_OUTPUT: "2-1020-CST",
+    MDR_EXPENSE: "5-3050-CST",
+  },
+};
 
 function classifyColumn(column) {
   if (column === "product_scope" || column === "service_scope") return "CUSTOMER_PORTAL_ONLY";
@@ -61,6 +82,104 @@ function normalizedDefault(value) {
 
 async function query(client, text, values = []) {
   return (await client.query(text, values)).rows;
+}
+
+function numberOrNull(value) {
+  return value == null ? null : Number(value);
+}
+
+function normalizedSemanticConfig(row) {
+  if (!row) return null;
+  return {
+    project_code: CERTIFIED_FINANCE_BASELINE.project_code,
+    company_id: CERTIFIED_FINANCE_BASELINE.company_id,
+    payment_method: CERTIFIED_FINANCE_BASELINE.payment_method,
+    provider_code: CERTIFIED_FINANCE_BASELINE.provider_code,
+    config_version: numberOrNull(row.config_version),
+    bank_account_number: row.bank_account_number == null ? null : String(row.bank_account_number),
+    currency_code: row.currency_code == null ? null : String(row.currency_code),
+    settlement_delay_business_days: numberOrNull(row.settlement_delay_business_days),
+    mdr_rate: numberOrNull(row.mdr_rate),
+    fixed_provider_fee: numberOrNull(row.fixed_provider_fee),
+    fee_tax_rate: numberOrNull(row.fee_tax_rate),
+    fee_tax_inclusive: row.fee_tax_inclusive === true,
+    tax_rate: numberOrNull(row.tax_rate),
+    tax_direction: row.tax_direction == null ? null : String(row.tax_direction),
+    account_codes: {
+      RECEIVING_BANK: row.receiving_bank_coa_code == null ? null : String(row.receiving_bank_coa_code),
+      REVENUE: row.revenue_coa_code == null ? null : String(row.revenue_coa_code),
+      TAX_OUTPUT: row.tax_output_coa_code == null ? null : String(row.tax_output_coa_code),
+      MDR_EXPENSE: row.mdr_expense_coa_code == null ? null : String(row.mdr_expense_coa_code),
+    },
+  };
+}
+
+function semanticMismatches(actual) {
+  if (!actual) return ["resolver returned no configuration"];
+  const mismatches = [];
+  for (const field of [
+    "project_code",
+    "company_id",
+    "payment_method",
+    "provider_code",
+    "bank_account_number",
+    "currency_code",
+    "settlement_delay_business_days",
+    "mdr_rate",
+    "fixed_provider_fee",
+    "fee_tax_rate",
+    "fee_tax_inclusive",
+    "tax_rate",
+    "tax_direction",
+  ]) {
+    if (actual[field] !== CERTIFIED_FINANCE_BASELINE[field]) {
+      mismatches.push(`${field}=${JSON.stringify(actual[field])}`);
+    }
+  }
+  for (const [role, expected] of Object.entries(CERTIFIED_FINANCE_BASELINE.account_codes)) {
+    if (actual.account_codes?.[role] !== expected) {
+      mismatches.push(`${role}=${JSON.stringify(actual.account_codes?.[role])}`);
+    }
+  }
+  return mismatches;
+}
+
+async function readSemanticConfig(client) {
+  const effectiveDate = (await query(client, "SELECT CURRENT_DATE::text AS effective_date"))[0]?.effective_date ?? null;
+  try {
+    const rows = await query(client, `
+      SELECT *
+        FROM sport_center.resolve_shared_finance_config(
+          $1, $2, $3, $4, CURRENT_DATE
+        )
+    `, [
+      CERTIFIED_FINANCE_BASELINE.project_code,
+      CERTIFIED_FINANCE_BASELINE.company_id,
+      CERTIFIED_FINANCE_BASELINE.payment_method,
+      CERTIFIED_FINANCE_BASELINE.provider_code,
+    ]);
+    const configuration = normalizedSemanticConfig(rows.length === 1 ? rows[0] : null);
+    const mismatches = rows.length === 1
+      ? semanticMismatches(configuration)
+      : [`resolver row_count=${rows.length}`];
+    return {
+      status: mismatches.length === 0 ? "PASS" : "FAIL",
+      certified: mismatches.length === 0,
+      effective_date: effectiveDate,
+      row_count: rows.length,
+      configuration,
+      mismatches,
+    };
+  } catch (error) {
+    return {
+      status: "BLOCKED",
+      certified: false,
+      effective_date: effectiveDate,
+      row_count: null,
+      configuration: null,
+      mismatches: [String(error instanceof Error ? error.message : error).slice(0, 300)],
+    };
+  }
 }
 
 async function audit(client) {
@@ -207,6 +326,7 @@ async function audit(client) {
   const mode = (await query(client, `
     SELECT COALESCE(current_setting('sport_center.finance_mode', true), 'legacy') AS finance_mode
   `))[0]?.finance_mode ?? "legacy";
+  const semanticConfig = await readSemanticConfig(client);
 
   return {
     target,
@@ -233,6 +353,7 @@ async function audit(client) {
     },
     mutation_provenance: provenance,
     data_checks: dataChecks,
+    semantic_config: semanticConfig,
     startup_markers: marker,
     finance_mode: mode,
     classification_rules: {

@@ -7,6 +7,7 @@ import {
   setPortalProfile,
   persistAuthCookie,
   saveTrustedDevice, loadTrustedDevice, clearTrustedDevice, REMEMBER_DAYS,
+  fetchPortalAuthBootstrap,
 } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,56 +119,18 @@ export default function Login() {
     defaultValues: { email: "", password: "" },
   });
 
-  async function redirectAfterLogin(role: string) {
+  async function redirectAfterLogin() {
     const requestedReturnTo = new URLSearchParams(window.location.search).get("returnTo");
-    const savedReturnTo = requestedReturnTo ? safeCustomerReturnTo(requestedReturnTo) : null;
-
     try {
-      const res = await fetch(`${BASE}/api/portal/onboarding/status`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const d = await res.json() as {
-          status: string;
-          role?: string;
-          accountType?: string;
-          customerContext?: { status?: string };
-        };
-        const effectiveRole = d.role ?? d.accountType ?? role;
-        if (effectiveRole === "admin") { setLocation("/admin"); return; }
-        if (
-          effectiveRole === "customer"
-          && d.status === "active"
-          && (d.customerContext?.status === "legacy_unresolved" || d.customerContext?.status === "company_unresolved")
-        ) {
-          setLocation("/onboarding");
-          return;
-        }
-        if (d.customerContext?.status === "company_pending") {
-          setLocation("/pending-approval");
-          return;
-        }
-        if (d.status === "incomplete") { setLocation("/onboarding"); return; }
-        if (d.status === "pending" || d.status === "rejected") { setLocation("/pending-approval"); return; }
-        if (effectiveRole === "vendor") { setLocation("/vendor-dashboard"); return; }
-        if (
-          savedReturnTo
-          && savedReturnTo !== "/onboarding"
-          && savedReturnTo !== "/pending-approval"
-          && !savedReturnTo.startsWith("/vendor-dashboard")
-          && !savedReturnTo.startsWith("/admin")
-        ) {
-          setLocation(savedReturnTo);
-          return;
-        }
-        setLocation("/dashboard");
+      const bootstrap = await fetchPortalAuthBootstrap(
+        requestedReturnTo ? safeCustomerReturnTo(requestedReturnTo) : null,
+      );
+      if (bootstrap) {
+        setLocation(bootstrap.allowedDestination);
         return;
       }
-    } catch { /* fallback */ }
-
-    if (role === "admin") setLocation("/admin");
-    else if (role === "vendor") setLocation("/vendor-dashboard");
-    else setLocation("/dashboard");
+    } catch { /* fallback below */ }
+    setLocation("/login");
   }
 
   // Cek trusted device saat tab WA dibuka
@@ -188,7 +151,7 @@ export default function Login() {
         const json = await res.json() as { token?: string; user?: { id: number; role: string; name: string; email: string }; expired?: boolean; message?: string };
         if (res.ok && json.token && json.user) {
           setPortalProfile({ customerId: json.user.id, role: json.user.role, name: json.user.name, email: json.user.email });
-          redirectAfterLogin(json.user.role);
+          redirectAfterLogin();
         } else {
           if (json.expired) clearTrustedDevice();
           setWaTrustedLoading(false);
@@ -212,7 +175,7 @@ export default function Login() {
       const data = await res.json() as { token: string; profile: { id: number; name: string; email: string; role: string } };
       // C1: server sets HttpOnly cookie; do not write token to localStorage for new sessions
       setPortalProfile({ customerId: data.profile.id, role: data.profile.role, name: data.profile.name, email: data.profile.email });
-      redirectAfterLogin(data.profile.role);
+      redirectAfterLogin();
     } catch { setErrorMsg(t("login.devLoginFailed")); }
     finally { setDevLoading(null); }
   }
@@ -256,9 +219,8 @@ export default function Login() {
       const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
       if (!res.ok || !json.token) { setOtpMsg({ type: "err", text: json.message ?? t("login.otpInvalid") }); }
       else {
-        await persistAuthCookie(json.token);
         setPortalProfile({ customerId: json.user!.id, role: json.user!.role, name: json.user!.name, email: json.user!.email });
-        redirectAfterLogin(json.user!.role);
+        redirectAfterLogin();
       }
     } catch { setOtpMsg({ type: "err", text: t("login.serverError") }); }
     setIsSubmitting(false);
@@ -341,7 +303,7 @@ export default function Login() {
           saveTrustedDevice(normalizedPhone, loginJson.deviceToken);
         }
 
-        redirectAfterLogin(loginJson.user!.role);
+          redirectAfterLogin();
       }
     } catch { setWaMsg({ type: "err", text: t("login.serverError") }); }
     setIsSubmitting(false);
@@ -360,9 +322,8 @@ export default function Login() {
       const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
       if (!res.ok || !json.token) { setErrorMsg(json.message ?? t("login.emailOrPasswordWrong")); }
       else {
-        await persistAuthCookie(json.token);
         setPortalProfile({ customerId: json.user!.id, role: json.user!.role, name: json.user!.name, email: json.user!.email });
-        redirectAfterLogin(json.user!.role);
+        redirectAfterLogin();
       }
     } catch { setErrorMsg(t("login.serverErrorRetry")); }
     setIsSubmitting(false);

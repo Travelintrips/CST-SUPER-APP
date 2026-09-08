@@ -5518,13 +5518,22 @@ components:
         revenues:
           type: array
           items: { $ref: "#/components/schemas/PnlRow" }
+        cogs:
+          type: array
+          items: { $ref: "#/components/schemas/PnlRow" }
+        operatingExpenses:
+          type: array
+          items: { $ref: "#/components/schemas/PnlRow" }
         expenses:
           type: array
           items: { $ref: "#/components/schemas/PnlRow" }
         totalRevenue: { type: number }
+        totalCogs: { type: number }
+        totalOperatingExpense: { type: number }
         totalExpense: { type: number }
+        grossProfit: { type: number }
         netIncome: { type: number }
-      required: [revenues, expenses, totalRevenue, totalExpense, netIncome]
+      required: [revenues, cogs, operatingExpenses, expenses, totalRevenue, totalCogs, totalOperatingExpense, totalExpense, grossProfit, netIncome]
 
     BalanceSheetRow:
       type: object

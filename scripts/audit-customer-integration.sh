@@ -116,10 +116,10 @@ step "Vendor deep link: buildVendorDeepLink() implemented (not hardcoded null)" 
   ! grep -q 'deepLinkUrl.*null.*TODO' artifacts/api-server/src/lib/services/vendorInvitationService.ts
 "
 
-# ── 12. Object storage fail-closed ───────────────────────────────────────────
-step "Object storage: getObjectEntityUploadURL no longer returns fake URL" bash -c "
-  ! grep -q 'storage.placeholder/objects/uploads' artifacts/api-server/src/lib/objectStorage.ts \
-    && grep -q 'getSupabase()' artifacts/api-server/src/lib/objectStorage.ts
+# ── 12. Supabase Storage only ────────────────────────────────────────────────
+step "Object storage: uploads are Supabase-backed and external URLs fail closed" bash -c "
+  grep -q 'getSupabase()' artifacts/api-server/src/lib/objectStorage.ts \
+    && grep -q 'External storage URLs are not supported' artifacts/api-server/src/lib/objectStorage.ts
 "
 
 # ── 13. Customer Portal build ─────────────────────────────────────────────────

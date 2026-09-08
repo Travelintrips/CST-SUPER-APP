@@ -1,6 +1,7 @@
 import { DatePicker } from "@/components/ui/date-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
+import { useCompany } from "@/contexts/CompanyContext";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -126,6 +127,21 @@ function SortIcon({ col, sortBy, sortDir }: { col: SortCol; sortBy: SortCol; sor
 export default function AccountingHubGLPage() {
   const search = useSearch();
   const urlParams = new URLSearchParams(search);
+  const {
+    companies,
+    activeCompany,
+    activeCompanyId,
+    isConsolidated,
+    isLoading: isCompanyLoading,
+  } = useCompany();
+  const urlHasCompanyFilter = urlParams.has("company_id");
+  const contextCompanyId =
+    !isConsolidated && typeof activeCompanyId === "number" && activeCompanyId > 0
+      ? String(activeCompanyId)
+      : "";
+  const initialCompanyId = urlHasCompanyFilter
+    ? (urlParams.get("company_id") ?? "")
+    : contextCompanyId;
 
   const [rows, setRows] = useState<GLRow[]>([]);
   const [total, setTotal] = useState(0);
@@ -133,7 +149,7 @@ export default function AccountingHubGLPage() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
-    company_id:     urlParams.get("company_id")     ?? "",
+    company_id:     initialCompanyId,
     date_from:      urlParams.get("date_from")      ?? "",
     date_to:        urlParams.get("date_to")        ?? "",
     source_module:  urlParams.get("source_module")  ?? "",
@@ -142,7 +158,7 @@ export default function AccountingHubGLPage() {
     payment_method: urlParams.get("payment_method") ?? "",
   });
   const [appliedFilters, setAppliedFilters] = useState({
-    company_id:     urlParams.get("company_id")     ?? "",
+    company_id:     initialCompanyId,
     date_from:      urlParams.get("date_from")      ?? "",
     date_to:        urlParams.get("date_to")        ?? "",
     source_module:  urlParams.get("source_module")  ?? "",
@@ -179,6 +195,25 @@ export default function AccountingHubGLPage() {
   const effectiveLimit = rowsPerPage === "all" ? 999999 : rowsPerPage;
   const queryOptionsRef = useRef({ sortBy, sortDir, rowsPerPage });
   queryOptionsRef.current = { sortBy, sortDir, rowsPerPage };
+
+  // A direct URL filter is an explicit audit/drill-down scope and must win over
+  // the global company switcher. Without an explicit URL scope, wait for the
+  // switcher to resolve before loading the ledger so a single-company session
+  // never flashes or requests consolidated data.
+  useEffect(() => {
+    if (urlHasCompanyFilter || isCompanyLoading) return;
+    const nextCompanyId = isConsolidated ? "" : contextCompanyId;
+    setFilters((current) =>
+      current.company_id === nextCompanyId
+        ? current
+        : { ...current, company_id: nextCompanyId },
+    );
+    setAppliedFilters((current) =>
+      current.company_id === nextCompanyId
+        ? current
+        : { ...current, company_id: nextCompanyId },
+    );
+  }, [contextCompanyId, isCompanyLoading, isConsolidated, urlHasCompanyFilter]);
 
   const applyMonthFilter = (m: string) => {
     setMonth(m);
@@ -245,10 +280,18 @@ export default function AccountingHubGLPage() {
   }, [appliedFilters]);
 
   useEffect(() => {
+    if (!urlHasCompanyFilter && isCompanyLoading) return;
+    if (!urlHasCompanyFilter && appliedFilters.company_id !== contextCompanyId) return;
     const { sortBy: currentSortBy, sortDir: currentSortDir, rowsPerPage: currentRowsPerPage } = queryOptionsRef.current;
     void load(1, currentSortBy, currentSortDir, currentRowsPerPage);
     setPage(1);
-  }, [load]);
+  }, [
+    appliedFilters.company_id,
+    contextCompanyId,
+    isCompanyLoading,
+    load,
+    urlHasCompanyFilter,
+  ]);
 
   const applyFilters = () => { setPage(1); setAppliedFilters({ ...filters }); };
 
@@ -323,6 +366,17 @@ export default function AccountingHubGLPage() {
     "bg-orange-100 text-orange-700";
 
   const drillAccountName = filters.account_name || (rows[0] ? `${rows[0].account_code} – ${rows[0].account_name}` : "");
+  const scopedCompanyId = Number(appliedFilters.company_id);
+  const scopedCompany =
+    appliedFilters.company_id && Number.isInteger(scopedCompanyId)
+      ? companies.find((company) => company.id === scopedCompanyId) ??
+        (activeCompany?.id === scopedCompanyId ? activeCompany : null)
+      : null;
+  const scopeLabel = appliedFilters.company_id
+    ? (scopedCompany
+        ? `${scopedCompany.companyCode} – ${scopedCompany.companyName}`
+        : `Perusahaan #${appliedFilters.company_id}`)
+    : "Multi-perusahaan";
 
   const seenEntries = new Set<number>();
 
@@ -375,7 +429,7 @@ export default function AccountingHubGLPage() {
                   </button>
                 </span>
               )}
-              <p className="text-xs text-muted-foreground">Multi-perusahaan · {total.toLocaleString("id-ID")} baris</p>
+              <p className="text-xs text-muted-foreground">{scopeLabel} · {total.toLocaleString("id-ID")} baris</p>
             </div>
           </div>
         </div>

@@ -194,11 +194,9 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
-      "/logistic-order": {
-        target: `http://localhost:${process.env.LOGISTIC_ORDER_PORT ?? 19368}`,
-        changeOrigin: true,
-        ws: true,
-      },
+      // Logistic Order is owned by this Customer Portal. Its compatibility
+      // aliases are handled by the SPA routes above; do not proxy them to the
+      // deprecated standalone redirect shim.
       "/wa-gateway": {
         target: `http://localhost:${process.env.WA_GATEWAY_PORT ?? 8000}`,
         changeOrigin: true,

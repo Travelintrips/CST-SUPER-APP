@@ -33,5 +33,15 @@ export async function runProductFirstFlowMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS qty_unit       TEXT;
   `);
 
+  await db.execute(sql`
+    ALTER TABLE portal_product_orders
+      ADD COLUMN IF NOT EXISTS shipment_selection_token TEXT;
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS portal_product_orders_shipment_selection_token_uniq
+      ON portal_product_orders (shipment_selection_token)
+      WHERE shipment_selection_token IS NOT NULL;
+  `);
+
   logger.info("Product-first flow migration: ok");
 }

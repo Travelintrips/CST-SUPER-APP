@@ -4,11 +4,11 @@
  * C1-REMEDIATION (dual-mode migration):
  *   - New logins: token is stored as HttpOnly cookie (portal_session) set by the server.
  *     Frontend does NOT write the token to localStorage for new logins.
- *   - Existing sessions: localStorage token (portal_token / portal_dev_token) is still
- *     accepted via Bearer header for backward compatibility.
+ *   - Existing localStorage tokens remain available only for explicit migration
+ *     calls; they are never treated as proof of an authenticated UI session.
  *   - All API calls include `credentials: 'include'` so the browser sends the session cookie.
- *   - `isAuthenticated()` checks localStorage token (legacy) OR the non-httponly hint
- *     cookie `portal_session_hint=1` (new cookie-based sessions).
+ *   - `isAuthenticated()` trusts only the server-set session hint. A stale or
+ *     forged localStorage token cannot unlock authenticated UI routes.
  *   - Legacy Bearer path will be removed after 2026-12-31 or next major release.
  *   - Profile cache (portal_profile) is UI-only; it is NOT the source of authorization.
  *
@@ -22,6 +22,8 @@ const PROFILE_KEY            = "portal_profile";
 const DEV_TOKEN_KEY          = "portal_dev_token";
 export const TRUSTED_DEVICE_KEY = "cst_trusted_device";
 export const REMEMBER_DAYS   = 30;
+let portalAuthBootstrapCache: PortalAuthBootstrap | null = null;
+let portalAuthBootstrapInFlight: Promise<PortalAuthBootstrap | null> | null = null;
 
 interface PortalProfile {
   customerId: number;
@@ -29,6 +31,42 @@ interface PortalProfile {
   name: string;
   email: string;
 }
+
+export type PortalAuthBootstrap = {
+  authenticated: true;
+  user: {
+    id: number;
+    name: string;
+    email: string;
+    phone: string | null;
+    company: string | null;
+    role: string;
+    customerType: string | null;
+  };
+  role: string;
+  onboardingComplete: boolean;
+  onboardingStatus: string;
+  customerType: string | null;
+  customerContext: {
+    status: string;
+    companyId: number | null;
+    company: unknown;
+    activeMemberships: unknown[];
+    pendingRequest: unknown;
+  };
+  vendorApprovalStatus: string | null;
+  allowedDestination: string;
+  safeReturnTo: string | null;
+  timings?: {
+    USER_PROFILE_MS: number;
+    ROLE_RESOLUTION_MS: number;
+    ONBOARDING_STATUS_MS: number;
+    COMPANY_CONTEXT_MS: number;
+    VENDOR_APPROVAL_MS: number;
+    REDIRECT_DECISION_MS: number;
+    TOTAL_RESOLUTION_MS: number;
+  };
+};
 
 interface TrustedDeviceData {
   phone: string;
@@ -136,18 +174,19 @@ export function setAuthToken(token: string): void {
 
 /**
  * C1 FIX: Setelah login, simpan token sebagai HttpOnly cookie di server.
- * Cookie adalah sumber auth utama; localStorage hanya sebagai fallback sementara.
- * Non-fatal: jika gagal, auth via Bearer header localStorage tetap bekerja.
+ * Cookie is the only browser-session proof used by protected UI routes.
  */
 export async function persistAuthCookie(token: string): Promise<void> {
   try {
-    await fetch("/api/portal/auth/set-cookie", {
+    const response = await fetch("/api/portal/auth/set-cookie", {
       method: "POST",
       credentials: "include",
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (!response.ok) throw new Error(`Cookie session setup failed (${response.status})`);
   } catch {
-    // Non-fatal: localStorage fallback masih aktif selama masa transisi
+    // Deliberately fail closed: without the server session cookie the UI
+    // remains unauthenticated even if a legacy token exists in storage.
   }
 }
 
@@ -155,10 +194,69 @@ export function removeAuthToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(PROFILE_KEY);
   localStorage.removeItem(DEV_TOKEN_KEY);
+  clearPortalAuthBootstrap();
   clearTrustedDevice();
   // C1 FIX: hapus HttpOnly cookie via server endpoint (best-effort)
   fetch("/api/portal/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
   if (supabase) supabase.auth.signOut().catch(() => {});
+}
+
+export function clearPortalAuthBootstrap(): void {
+  portalAuthBootstrapCache = null;
+  portalAuthBootstrapInFlight = null;
+}
+
+export function getCachedPortalAuthBootstrap(): PortalAuthBootstrap | null {
+  return portalAuthBootstrapCache;
+}
+
+function storePortalAuthBootstrap(data: PortalAuthBootstrap): PortalAuthBootstrap {
+  portalAuthBootstrapCache = data;
+  setPortalProfile({
+    customerId: data.user.id,
+    role: data.user.role,
+    name: data.user.name,
+    email: data.user.email,
+  });
+  return data;
+}
+
+/**
+ * Resolve all post-auth routing state with one server-side request.
+ * The in-flight/cache layer only prevents duplicate requests during the same
+ * browser transition; it is never used by API authorization.
+ */
+export async function fetchPortalAuthBootstrap(
+  requestedReturnTo?: string | null,
+): Promise<PortalAuthBootstrap | null> {
+  if (portalAuthBootstrapCache && !requestedReturnTo) return portalAuthBootstrapCache;
+  if (portalAuthBootstrapInFlight) return portalAuthBootstrapInFlight;
+
+  const token = hasCookieSession() ? null : await getSupabaseToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const query = requestedReturnTo
+    ? `?returnTo=${encodeURIComponent(requestedReturnTo)}`
+    : "";
+
+  portalAuthBootstrapInFlight = fetch(`/api/portal/auth/bootstrap${query}`, {
+    headers,
+    credentials: "include",
+  })
+    .then(async (res) => {
+      if (res.status === 401 || res.status === 403) {
+        removeAuthToken();
+        return null;
+      }
+      if (!res.ok) return null;
+      return storePortalAuthBootstrap(await res.json() as PortalAuthBootstrap);
+    })
+    .catch(() => null)
+    .finally(() => {
+      portalAuthBootstrapInFlight = null;
+    });
+
+  return portalAuthBootstrapInFlight;
 }
 
 /**
@@ -173,11 +271,12 @@ export function getAuthHeaders(): { Authorization?: string } {
 }
 
 /**
- * isAuthenticated — checks legacy localStorage token OR cookie session hint.
- * Synchronous, safe to call during route guard evaluation.
+ * isAuthenticated — checks only the server-issued cookie hint.
+ * Synchronous, safe to call during route guard evaluation. The hint is not an
+ * authorization credential; every protected route still validates /auth/me.
  */
 export function isAuthenticated(): boolean {
-  return !!getAuthToken() || hasCookieSession();
+  return hasCookieSession();
 }
 
 export function getPortalProfile(): PortalProfile | null {
@@ -204,10 +303,11 @@ export function isPortalAdmin(): boolean {
 
 /**
  * fetchAndStoreProfile — always uses credentials:'include' so cookie sessions work.
- * Falls back to Bearer header for legacy localStorage sessions.
+ * Supabase Bearer sessions are supported during migration, but a stale custom
+ * portal token is never sent when the server cookie hint is present.
  */
 export async function fetchAndStoreProfile(): Promise<PortalProfile | null> {
-  const token = (await getAuthTokenAsync()) ?? getAuthToken();
+  const token = hasCookieSession() ? null : await getSupabaseToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 

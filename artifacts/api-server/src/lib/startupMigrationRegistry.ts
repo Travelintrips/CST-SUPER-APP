@@ -84,6 +84,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["sport_center", "Sport Center migration", "schema"],
   ["sport_center_shadow_observer", "Sport Center shadow observer migration", "schema"],
   ["sport_center_canonical_finance_config", "Sport Center canonical finance config refresh", "repair"],
+  ["sport_center_dev_finance_baseline", "Sport Center DEV finance baseline certification", "repair"],
   ["sport_center_payment_mirror_refresh", "Sport Center payment mirror trigger refresh", "repair"],
   ["sport_center_legacy_payment_recovery_owner", "Sport Center legacy payment recovery owner", "repair"],
   ["sport_center_account_correction", "Sport Center account correction", "repair"],
@@ -142,6 +143,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["accounting_defaults_seed", "Accounting defaults seed", "seed"],
   ["development_coa_sync", "Development COA sync", "reconciliation"],
   ["additional_tax_seed", "Additional tax seed", "seed"],
+  ["pph15_tax_account_repair", "PPh 15 tax account repair", "repair"],
   ["expense_category_account_backfill", "Expense category account backfill", "backfill"],
   ["mdr_expense_category_backfill", "MDR expense category backfill", "backfill"],
   ["uom_seed", "UOM seed", "seed"],
@@ -174,6 +176,8 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
           ? 2
         : name === "customer_portal_product_coa"
           ? 1
+        : name === "pph15_tax_account_repair"
+          ? 2
         : 1,
     critical: true,
     category,

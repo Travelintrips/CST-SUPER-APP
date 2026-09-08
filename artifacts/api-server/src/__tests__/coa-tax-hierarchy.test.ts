@@ -180,6 +180,14 @@ describe("COA Tax Hierarchy — target structure completeness", () => {
     expect(sub!.name).toContain("PPh Final");
   });
 
+  it("2-1102 is the dedicated PPh Final Pasal 15 liability account", () => {
+    const sub = subaccounts.find((s) => s.baseCode === "2-1102");
+    expect(sub).toBeDefined();
+    expect(sub!.name).toBe("Hutang PPh Final Pasal 15");
+    expect(sub!.category).toBe("LIABILITY");
+    expect(sub!.normalBalance).toBe("CREDIT");
+  });
+
   it("all LIABILITY subaccounts have CREDIT normal balance", () => {
     const subs = subaccounts.filter((s) => s.category === "LIABILITY");
     expect(subs.every((s) => s.normalBalance === "CREDIT")).toBe(true);

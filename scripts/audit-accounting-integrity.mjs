@@ -38,7 +38,6 @@ const { name: DB_LABEL, url: DB_URL } = resolveSupabaseDatabaseUrl();
 
 const client = new Client({
   connectionString: DB_URL,
-  options: "-c search_path=public",
 });
 
 const RESET = "\x1b[0m";
@@ -304,6 +303,10 @@ async function main() {
   console.log(`DB    : ${DB_LABEL}`);
 
   await client.connect();
+  // Supabase pooler rejects search_path as a startup parameter. Apply the
+  // session setting after authentication so the same read-only audit works
+  // against the canonical production connection.
+  await client.query("SET search_path TO public");
 
   try {
     section("1. Kasbon/Talangan — entry_id merujuk jurnal yang hilang (dua arah)");

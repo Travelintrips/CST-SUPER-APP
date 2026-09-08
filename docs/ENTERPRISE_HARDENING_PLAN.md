@@ -512,7 +512,7 @@ users, companies, sessions
 4. Storage file hilang:
    → Cek Supabase Storage dashboard
    → File Supabase Storage tidak hilang saat deploy — persistent
-   → Jika policy salah: update env PUBLIC_OBJECT_SEARCH_PATHS
+    → Jika policy salah: periksa policy bucket `public-assets` / `private-uploads` di Supabase
 
 5. WA berhenti:
    → Cek FONNTE_TOKEN validity

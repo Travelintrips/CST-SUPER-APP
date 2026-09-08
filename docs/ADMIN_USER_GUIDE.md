@@ -197,8 +197,8 @@ Vessel: {{vesselName}} - ETD {{etd}}
 3. Klik icon **Download** untuk simpan lokal
 
 ### Catatan Storage
-- File tersimpan di Replit Object Storage (persistent, tidak hilang saat restart)
-- File privat: hanya bisa diakses dengan signed URL yang valid
+- Semua file tersimpan di Supabase Storage; Replit Object Storage tidak digunakan
+- File private: hanya bisa diakses dengan signed URL yang valid
 - File publik (gambar produk, dll.): dapat diakses langsung via URL
 
 ---

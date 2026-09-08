@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote } from "lucide-react";
@@ -35,7 +36,12 @@ const formatPostingError = (body: unknown, fallback: string) => {
 };
 
 interface VILine { id?: number; productId?: number; name: string; quantity: string; unit: string; unitCost: string; subtotal: string; taxAmount: string; coaAccountId?: string; taxType?: string; taxObject?: string; withholdingAmount?: string; liabilityAccountId?: string; notes: string; }
-interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null }>; }
+interface VIInvoiceBreakdownComponent {
+  withholding_tax_type?: string | null;
+  withholding_tax_amount?: number | null;
+}
+interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ id?: number; invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>; }
+interface LiabilityAccount { id: number; code: string; name: string; }
 type VendorInvoiceListItem = Record<string, unknown>;
 
 function parseVendorInvoiceList(payload: unknown): VendorInvoiceListItem[] {
@@ -263,6 +269,18 @@ export function VendorInvoiceEditorPage() {
     },
     enabled: !isNew && activeCompanyId != null,
   });
+  const { data: liabilityAccounts = [], isLoading: liabilityAccountsLoading } = useQuery<LiabilityAccount[]>({
+    queryKey: ["/api/purchase-workflow/vendor-invoices/liability-accounts", activeCompanyId],
+    queryFn: async () => {
+      const response = await apiFetch(`/purchase-workflow/vendor-invoices/liability-accounts?company=${activeCompanyId}`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error("Gagal memuat akun liabilitas PPh.");
+      }
+      return payload as LiabilityAccount[];
+    },
+    enabled: !isNew && activeCompanyId != null,
+  });
 
   const [form, setForm] = useState({ supplierName: "", vendorInvoiceRef: "", poId: sp.get("poId") ?? "", grId: sp.get("grId") ?? "", invoiceDate: new Date().toISOString().substring(0, 10), paymentTermDays: "30", notes: "" });
   const emptyLine = (): VILine => ({ name: "", quantity: "1", unit: "pcs", unitCost: "0", subtotal: "0", taxAmount: "0", coaAccountId: "", taxType: "", taxObject: "", withholdingAmount: "0", liabilityAccountId: "", notes: "" });
@@ -271,8 +289,14 @@ export function VendorInvoiceEditorPage() {
   useEffect(() => {
     if (vi) {
       setForm({ supplierName: vi.supplierName, vendorInvoiceRef: vi.vendorInvoiceRef ?? "", poId: String(vi.poId ?? ""), grId: String(vi.grId ?? ""), invoiceDate: vi.invoiceDate?.substring(0, 10) ?? new Date().toISOString().substring(0, 10), paymentTermDays: String(vi.paymentTermDays ?? 30), notes: "" });
-      setLines(vi.lines?.length ? vi.lines.map(l => {
-        const tax = vi.lineTaxes?.find((candidate) => candidate.invoiceLineId === l.id);
+       setLines(vi.lines?.length ? vi.lines.map((l, lineIndex) => {
+         const tax = vi.lineTaxes?.find((candidate) => candidate.invoiceLineId === l.id);
+         const breakdownTax = vi.invoiceBreakdown?.components?.[lineIndex];
+         const withholdingAmount = tax && Number(tax.taxAmount) > 0
+           ? String(tax.taxAmount)
+           : breakdownTax?.withholding_tax_amount != null
+             ? String(breakdownTax.withholding_tax_amount)
+             : "0";
         return {
           ...l,
           quantity: String(l.quantity),
@@ -280,14 +304,45 @@ export function VendorInvoiceEditorPage() {
           subtotal: String(l.subtotal),
           taxAmount: String(l.taxAmount),
           coaAccountId: l.coaAccountId ? String(l.coaAccountId) : "",
-          taxType: tax?.taxType ?? "",
-          taxObject: tax?.taxObject ?? "",
-          withholdingAmount: tax?.taxAmount ? String(tax.taxAmount) : "0",
+           taxType: tax?.taxType ?? breakdownTax?.withholding_tax_type ?? "",
+           taxObject: tax?.taxObject ?? breakdownTax?.withholding_tax_type ?? "",
+           withholdingAmount,
           liabilityAccountId: tax?.liabilityAccountId ? String(tax.liabilityAccountId) : "",
         };
       }) : []);
     }
   }, [vi]);
+
+  // The invoice carries the tax type and amount, while the GL account comes
+  // from the company's COA. Apply the company's deterministic tax-account
+  // convention as soon as both the invoice and liability account list exist.
+  // Users can still override the suggestion before posting.
+  useEffect(() => {
+    if (!liabilityAccounts.length) return;
+    setLines((current) => {
+      let changed = false;
+      const next = current.map((line) => {
+        if (line.liabilityAccountId || Number(line.withholdingAmount ?? 0) <= 0) return line;
+        const taxType = `${line.taxType ?? ""} ${line.taxObject ?? ""}`.toLowerCase();
+        const exactName = taxType.includes("4(2)") || taxType.includes("4 ayat 2")
+          ? /hutang pph final pasal 4 ayat 2/i
+          : taxType.includes("pph 15")
+            ? /hutang pph final pasal 15/i
+            : new RegExp(`hutang pph pasal ${taxType.match(/pph\\s*(\\d+)/i)?.[1] ?? "___"}`, "i");
+        const suggested = taxType.includes("pph 15")
+          ? liabilityAccounts.find(
+              (account) =>
+                account.code.startsWith("2-1102-") ||
+                /hutang pph final pasal 15/i.test(account.name),
+            )
+          : liabilityAccounts.find((account) => exactName.test(account.name));
+        if (!suggested) return line;
+        changed = true;
+        return { ...line, liabilityAccountId: String(suggested.id) };
+      });
+      return changed ? next : current;
+    });
+  }, [liabilityAccounts, lines]);
 
   const updateLine = (i: number, key: keyof VILine, value: string) => setLines(prev => {
     const updated = prev.map((l, idx) => idx === i ? { ...l, [key]: value } : l);
@@ -317,43 +372,38 @@ export function VendorInvoiceEditorPage() {
       const r = isNew ? await apiFetch("/purchase-workflow/vendor-invoices", { method: "POST", body: JSON.stringify(payload) }) : await apiFetch(`/purchase-workflow/vendor-invoices/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       if (!r.ok) throw new Error();
       const saved = await r.json() as VI;
-      const fresh = isNew ? saved : saved;
-      const reviewLines = lines.filter((line) => line.coaAccountId && line.id).map((line) => ({
-        lineId: line.id,
+      // PUT recreates invoice lines, so their database IDs may change. Always
+      // read the saved detail before Finance Review instead of submitting stale
+      // IDs from the form state.
+      const fresh = await apiFetch(`/purchase-workflow/vendor-invoices/${saved.id}?company=${activeCompanyId}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Invoice tersimpan, tetapi detail terbaru gagal dimuat.");
+          return response.json() as Promise<VI>;
+        });
+      const freshLines = fresh.lines ?? [];
+      const reviewLines = lines.map((line, index) => ({
+        lineId: freshLines[index]?.id,
         coaAccountId: Number(line.coaAccountId),
         mappingKey: line.name,
         saveReusableRule: true,
-      }));
-      const reviewTaxes = lines.filter((line) => Number(line.withholdingAmount ?? 0) > 0 && line.id && line.taxType && line.taxObject && line.liabilityAccountId).map((line) => ({
-        invoiceLineId: line.id,
+      })).filter((line) => line.lineId && line.coaAccountId);
+      const reviewTaxes = lines.map((line, index) => ({
+        invoiceLineId: freshLines[index]?.id,
         taxType: line.taxType,
         taxObject: line.taxObject,
+        baseAmount: Number(line.subtotal),
         taxAmount: Number(line.withholdingAmount),
         liabilityAccountId: Number(line.liabilityAccountId),
-      }));
-      // Newly-created line IDs are returned only after a fresh detail read.
-      if (isNew && saved.id && lines.some((line) => line.coaAccountId || Number(line.withholdingAmount ?? 0) > 0)) {
-        const detail = await apiFetch(`/purchase-workflow/vendor-invoices/${saved.id}`).then((response) => response.json() as Promise<VI>);
-        const detailLines = detail.lines ?? [];
-        reviewLines.splice(0, reviewLines.length, ...lines.map((line, index) => ({
-          lineId: detailLines[index]?.id,
-          coaAccountId: Number(line.coaAccountId),
-          mappingKey: line.name,
-          saveReusableRule: true,
-        })).filter((line) => line.lineId && line.coaAccountId));
-        reviewTaxes.splice(0, reviewTaxes.length, ...lines.map((line, index) => ({
-          invoiceLineId: detailLines[index]?.id,
-          taxType: line.taxType,
-          taxObject: line.taxObject,
-          taxAmount: Number(line.withholdingAmount),
-          liabilityAccountId: Number(line.liabilityAccountId),
-        })).filter((line) => line.invoiceLineId && line.taxAmount > 0 && line.taxType && line.taxObject && line.liabilityAccountId));
-      }
+      })).filter((line) => line.invoiceLineId && line.taxAmount > 0 && line.taxType && line.taxObject && line.liabilityAccountId);
       if (saved.id && (reviewLines.length > 0 || reviewTaxes.length > 0)) {
-        await apiFetch(`/purchase-workflow/vendor-invoices/${saved.id}/finance-review`, {
+        const reviewResponse = await apiFetch(`/purchase-workflow/vendor-invoices/${saved.id}/finance-review?company=${activeCompanyId}`, {
           method: "PUT",
           body: JSON.stringify({ lines: reviewLines, taxes: reviewTaxes }),
         });
+        if (!reviewResponse.ok) {
+          const body = await reviewResponse.json().catch(() => ({}));
+          throw new Error(formatPostingError(body, "Finance Review gagal disimpan."));
+        }
       }
       return fresh;
     },
@@ -362,7 +412,32 @@ export function VendorInvoiceEditorPage() {
   });
 
   const postMut = useMutation({
-    mutationFn: () => apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" }).then(async r => { if (!r.ok) { const body = await r.json().catch(() => ({})); throw new Error(formatPostingError(body, "Gagal posting")); } return r.json(); }),
+    mutationFn: async () => {
+      // Users commonly edit the imported values and click Post directly.
+      // Persist the current form and its Finance Review first so posting reads
+      // the same values and confirmed tax accounts visible on screen.
+      const reviewedTaxes = vi?.lineTaxes?.filter((tax) => Number(tax.taxAmount) > 0) ?? [];
+      const financeReviewComplete = reviewedTaxes.length > 0 && reviewedTaxes.every((tax) => {
+        const record = vi?.withholdingRecords?.find((candidate) =>
+          (tax.id != null && candidate.lineTaxId === tax.id) ||
+          candidate.invoiceLineId === tax.invoiceLineId,
+        );
+        return Boolean(
+          tax.liabilityAccountId &&
+          ["confirmed", "approved"].includes(String(tax.resolutionStatus)) &&
+          ["proof_pending", "proof_received", "posted"].includes(String(record?.status)),
+        );
+      });
+      if (!financeReviewComplete) {
+        await saveMut.mutateAsync();
+      }
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(formatPostingError(body, "Gagal posting"));
+      }
+      return r.json();
+    },
     onSuccess: async () => {
       toast.success("Invoice diposting & jurnal dibuat");
       await qcClient.invalidateQueries({
@@ -397,10 +472,19 @@ export function VendorInvoiceEditorPage() {
   const summarySubtotal = vi ? Number(vi.totalAmount) : totalAmount;
   const summaryTax = vi ? Number(vi.taxAmount) : taxAmount;
   const summaryGrandTotal = vi ? Number(vi.grandTotal) : summarySubtotal + summaryTax;
+  const lineWithholding = lines.reduce((sum, line) => sum + Number(line.withholdingAmount ?? 0), 0);
+  const summaryWithholding = vi
+    ? Math.max(Number(vi.withholdingTaxAmount ?? 0), lineWithholding)
+    : lineWithholding;
+  const withholdingLines = lines.filter((line) => Number(line.withholdingAmount ?? 0) > 0);
+  const incompleteWithholdingLines = withholdingLines.filter((line) =>
+    !line.taxType?.trim() || !line.taxObject?.trim() || !line.liabilityAccountId,
+  );
+  const estimatedNetPayment = Math.max(0, summaryGrandTotal - summaryWithholding);
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-6 max-w-5xl">
+      <div className="flex flex-col gap-6 max-w-7xl">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate("/purchase/vendor-invoices")}><ChevronLeft className="h-4 w-4" /></Button>
           <div className="flex-1">
@@ -415,8 +499,8 @@ export function VendorInvoiceEditorPage() {
           <div className="flex gap-2">
             {isDraft && <Button variant="outline" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>Simpan</Button>}
             {!isNew && isDraft && (
-              <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => postMut.mutate()} disabled={postMut.isPending}>
-                <Send className="mr-1 h-4 w-4" />Post Invoice
+              <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => postMut.mutate()} disabled={postMut.isPending || saveMut.isPending || liabilityAccountsLoading}>
+                <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
               </Button>
             )}
           </div>
@@ -430,6 +514,14 @@ export function VendorInvoiceEditorPage() {
               <p className="font-semibold">Invoice masih Draft</p>
               <p className="text-xs text-amber-700 mt-0.5">Klik <strong>"Post Invoice"</strong> untuk mengkonfirmasi & membuat jurnal. Setelah diposting, invoice bisa dibayar via Bank Disbursement.</p>
             </div>
+          </div>
+        )}
+        {!isNew && isDraft && incompleteWithholdingLines.length > 0 && (
+          <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+            <p className="font-semibold">Finance Review PPh belum lengkap</p>
+            <p className="mt-0.5 text-xs">
+              Pilih akun liabilitas PPh pada {incompleteWithholdingLines.length} line sebelum invoice dapat diposting.
+            </p>
           </div>
         )}
 
@@ -462,11 +554,16 @@ export function VendorInvoiceEditorPage() {
             </CardContent>
           </Card>
           <Card>
-            <CardHeader><CardTitle className="text-base">Ringkasan</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="text-base">Ringkasan Nilai Invoice</CardTitle>
+              <p className="text-xs text-muted-foreground">Grand Total adalah nilai bruto. PPh dipotong saat pembayaran vendor.</p>
+            </CardHeader>
             <CardContent className="space-y-2">
               <div className="flex justify-between text-slate-500"><span>Subtotal</span><span className="font-mono">{idr(summarySubtotal)}</span></div>
               <div className="flex justify-between text-slate-500"><span>Pajak (PPN)</span><span className="font-mono">{idr(summaryTax)}</span></div>
-              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
+              <div className="flex justify-between text-amber-600"><span>PPh dipotong saat bayar</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
+              <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total (bruto)</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
+              <div className="flex justify-between font-semibold text-blue-600 border-t pt-2"><span>Estimasi transfer (neto)</span><span className="font-mono">{idr(estimatedNetPayment)}</span></div>
               {vi && <div className="flex justify-between text-green-600"><span>Terbayar</span><span className="font-mono">{idr(Number(vi.amountPaid))}</span></div>}
               {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
             </CardContent>
@@ -475,34 +572,70 @@ export function VendorInvoiceEditorPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Item Invoice</CardTitle>
+            <div>
+              <CardTitle className="text-base">Rincian Item Invoice</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Masukkan nilai dalam rupiah. COA adalah akun beban; PPh adalah potongan pembayaran per baris.
+              </p>
+            </div>
             {isDraft && <Button size="sm" variant="outline" onClick={() => setLines(prev => [...prev, emptyLine()])}><Plus className="mr-1 h-4 w-4" />Tambah</Button>}
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1320px] text-sm">
                 <thead><tr className="border-b">
-                  <th className="text-left py-2 px-2">Nama</th>
-                  <th className="text-left py-2 px-2 w-20">Qty</th>
-                  <th className="text-left py-2 px-2 w-20">Satuan</th>
-                  <th className="text-left py-2 px-2 w-32">Harga</th>
-                  <th className="text-left py-2 px-2 w-28">Pajak</th>
-                   <th className="text-left py-2 px-2 w-24">COA ID</th>
-                   <th className="text-left py-2 px-2 w-24">PPh</th>
-                  <th className="text-right py-2 px-2 w-32">Subtotal</th>
+                  <th className="text-left py-2 px-2 min-w-52"><span className="text-xs uppercase tracking-wide text-muted-foreground">Nama item</span></th>
+                  <th className="text-left py-2 px-2 w-20"><span className="text-xs uppercase tracking-wide text-muted-foreground">Qty</span></th>
+                  <th className="text-left py-2 px-2 w-20"><span className="text-xs uppercase tracking-wide text-muted-foreground">Satuan</span></th>
+                  <th className="text-left py-2 px-2 w-40"><span className="text-xs uppercase tracking-wide text-muted-foreground">Harga satuan</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-left py-2 px-2 w-36"><span className="text-xs uppercase tracking-wide text-muted-foreground">PPN</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-left py-2 px-2 w-32"><span className="text-xs uppercase tracking-wide text-muted-foreground">COA beban</span><span className="block text-[10px] font-normal text-muted-foreground">(ID)</span></th>
+                  <th className="text-left py-2 px-2 w-40"><span className="text-xs uppercase tracking-wide text-muted-foreground">PPh dipotong</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
+                  <th className="text-left py-2 px-2 min-w-64"><span className="text-xs uppercase tracking-wide text-muted-foreground">Akun liabilitas PPh</span><span className="block text-[10px] font-normal text-muted-foreground">Wajib untuk Finance Review</span></th>
+                  <th className="text-right py-2 px-2 w-36"><span className="text-xs uppercase tracking-wide text-muted-foreground">Subtotal</span><span className="block text-[10px] font-normal text-muted-foreground">(Rp)</span></th>
                   {isDraft && <th className="w-10" />}
                 </tr></thead>
                 <tbody>
                   {lines.map((line, i) => (
-                    <tr key={i} className="border-b">
-                      <td className="py-1 px-2"><Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.quantity} onChange={e => updateLine(i, "quantity", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-8" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.taxAmount} onChange={e => updateLine(i, "taxAmount", e.target.value)} disabled={!isDraft} className="h-8" placeholder="PPN..." /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.coaAccountId ?? ""} onChange={e => updateLine(i, "coaAccountId", e.target.value)} disabled={!isDraft} className="h-8" placeholder="COA ID" /></td>
-                      <td className="py-1 px-2"><Input type="number" value={line.withholdingAmount ?? "0"} onChange={e => updateLine(i, "withholdingAmount", e.target.value)} disabled={!isDraft} className="h-8" placeholder="PPh" /></td>
-                      <td className="py-1 px-2 text-right font-mono text-xs">{idr(Number(line.subtotal))}</td>
+                    <tr key={i} className="border-b align-top">
+                      <td className="py-2 px-2"><Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-9 min-w-48" aria-label={`Nama item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.quantity} onChange={e => updateLine(i, "quantity", e.target.value)} disabled={!isDraft} className="h-9 w-20 text-right" aria-label={`Kuantitas item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-9 w-20" aria-label={`Satuan item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" aria-label={`Harga satuan item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.taxAmount} onChange={e => updateLine(i, "taxAmount", e.target.value)} disabled={!isDraft} className="h-9 w-32 text-right font-mono" placeholder="0" aria-label={`PPN item ${i + 1}`} /></td>
+                      <td className="py-2 px-2"><Input type="number" value={line.coaAccountId ?? ""} onChange={e => updateLine(i, "coaAccountId", e.target.value)} disabled={!isDraft} className="h-9 w-28 text-right font-mono" placeholder="ID akun" aria-label={`COA beban item ${i + 1}`} /></td>
+                      <td className="py-2 px-2">
+                        <Input type="number" value={line.withholdingAmount ?? "0"} onChange={e => updateLine(i, "withholdingAmount", e.target.value)} disabled={!isDraft} className="h-9 w-36 text-right font-mono" placeholder="0" aria-label={`PPh item ${i + 1}`} />
+                        {line.taxType && <span className="mt-1 block text-[10px] text-amber-600">{line.taxType}</span>}
+                      </td>
+                      <td className="py-2 px-2">
+                        {Number(line.withholdingAmount ?? 0) > 0 ? (
+                          <div>
+                            <Select
+                              value={line.liabilityAccountId || undefined}
+                              onValueChange={(value) => updateLine(i, "liabilityAccountId", value)}
+                              disabled={!isDraft || liabilityAccountsLoading}
+                            >
+                              <SelectTrigger className="h-9">
+                                <SelectValue placeholder={liabilityAccountsLoading ? "Memuat akun..." : "Pilih akun PPh"} />
+                              </SelectTrigger>
+                              <SelectContent searchPlaceholder="Cari kode atau nama akun...">
+                                {liabilityAccounts.map((account) => (
+                                  <SelectItem key={account.id} value={String(account.id)}>
+                                    {account.code} — {account.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {line.liabilityAccountId && (
+                              <span className="mt-1 block text-[10px] text-emerald-600">Usulan akun otomatis — dapat diubah Finance</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Tidak ada PPh</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-2 text-right font-mono text-xs whitespace-nowrap">{idr(Number(line.subtotal))}</td>
                       {isDraft && <td className="py-1 px-2"><Button size="icon" variant="ghost" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="h-8 w-8"><Trash2 className="h-4 w-4 text-destructive" /></Button></td>}
                     </tr>
                   ))}

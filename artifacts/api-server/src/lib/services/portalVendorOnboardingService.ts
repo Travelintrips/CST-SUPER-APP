@@ -53,22 +53,29 @@ export class OnboardingServiceError extends Error {
 
 // ── getOnboardingStatus ───────────────────────────────────────────────────────
 
-export async function getOnboardingStatus(customerId: number) {
-  const [profile] = await db
-    .select()
-    .from(userProfilesTable)
-    .where(eq(userProfilesTable.customerId, customerId));
+type OnboardingProfile = {
+  status?: string | null;
+  accountType?: string | null;
+  rejectionReason?: string | null;
+  fullName?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  ktpUrl?: string | null;
+} | null;
 
+/**
+ * Keep onboarding role/status semantics in one place so the auth bootstrap
+ * cannot drift from the existing onboarding endpoint.
+ */
+export function resolveOnboardingStatus(
+  profile: OnboardingProfile,
+  customerRole?: string | null,
+) {
   // portal_customers.role is the canonical account owner. Legacy
   // user_profiles.account_type can be stale (notably a vendor row left with
   // the old customer default), so never let it route an existing vendor into
   // customer organization completion.
-  const [customer] = await db
-    .select({ role: portalCustomersTable.role })
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, customerId))
-    .limit(1);
-  const role = customer?.role ?? profile?.accountType ?? "customer";
+  const role = customerRole ?? profile?.accountType ?? "customer";
   const accountType = role === "vendor" || role === "driver" || role === "employee"
     ? role
     : role === "customer"
@@ -79,10 +86,11 @@ export async function getOnboardingStatus(customerId: number) {
     return { status: "incomplete", accountType, role, hasProfile: false };
   }
 
-  const rejectionReason = profile.status === "rejected" ? profile.rejectionReason : undefined;
+  const status = profile.status ?? "incomplete";
+  const rejectionReason = status === "rejected" ? profile.rejectionReason : undefined;
   return {
     hasProfile: true,
-    status: profile.status,
+    status,
     accountType,
     role,
     ...(rejectionReason ? { rejectionReason } : {}),
@@ -93,6 +101,24 @@ export async function getOnboardingStatus(customerId: number) {
       ktpUrl: profile.ktpUrl,
     },
   };
+}
+
+export type OnboardingStatusResult = ReturnType<typeof resolveOnboardingStatus>;
+
+export async function getOnboardingStatus(customerId: number) {
+  const [[profile], [customer]] = await Promise.all([
+    db
+      .select()
+      .from(userProfilesTable)
+      .where(eq(userProfilesTable.customerId, customerId)),
+    db
+      .select({ role: portalCustomersTable.role })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId))
+      .limit(1),
+  ]);
+
+  return resolveOnboardingStatus(profile ?? null, customer?.role);
 }
 
 // ── runKtpOcr ─────────────────────────────────────────────────────────────────

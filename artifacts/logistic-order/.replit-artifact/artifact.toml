@@ -1,0 +1,10 @@
+kind = "web"
+previewPath = "/__disabled-logistic-order/"
+title = "Export Import & Logistic Ordering System (Deprecated)"
+version = "1.0.0"
+id = "artifacts/logistic-order"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"

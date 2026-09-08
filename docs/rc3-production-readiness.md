@@ -34,8 +34,7 @@ Presence only — no values inspected or printed.
 | `PAYLABS_*_SANDBOX` | ✅ Present | sandbox | none |
 | `PAYLABS_API_URL` | ❌ Missing | — | Falls back to Paylabs sandbox URL by default; verify intentional before go-live if prod endpoint differs |
 | `OPENAI_API_KEY` | ❌ Missing | — | Not a blocker — `AI_INTEGRATIONS_OPENAI_API_KEY` + `AI_INTEGRATIONS_OPENAI_BASE_URL` are present and used as the preferred path (per `openaiClient.ts` priority) |
-| Object storage (`DEFAULT_OBJECT_STORAGE_BUCKET_ID`) | ✅ Present | shared | none |
-| `REPLIT_OBJECT_STORAGE` | ❌ Missing | — | Not referenced directly in code; bucket id above is what's actually used |
+| Supabase Storage (`SUPABASE_URL` + service-role key) | ✅ Present | shared / environment-specific | Storage backend is Supabase only |
 
 ## Watchdog Status
 

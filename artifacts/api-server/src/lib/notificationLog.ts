@@ -33,8 +33,12 @@ export interface LogNotifOptions {
 }
 
 export async function logNotification(opts: LogNotifOptions): Promise<void> {
+  // Safe DEV/E2E sends are recorded as simulated, but they must still obey
+  // the same logical delivery identity as real sends. Otherwise a duplicate
+  // transition can create multiple simulated rows while production sends are
+  // protected by the unique dedup key.
   const dedupKey =
-    opts.status === "sent" && opts.context && opts.refId
+    (opts.status === "sent" || opts.status === "simulated") && opts.context && opts.refId
       ? computeDedupKey(opts.channel, opts.recipient, opts.context, opts.refId)
       : null;
 

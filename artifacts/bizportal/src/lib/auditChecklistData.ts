@@ -639,7 +639,7 @@ export const AUDIT_MODULES: AuditModule[] = [
         id: "12.3",
         title: "Media & Object Storage",
         items: [
-          { id: "12.3.1", text: "Object storage bucket terkonfigurasi (DEFAULT_OBJECT_STORAGE_BUCKET_ID)" },
+          { id: "12.3.1", text: "Supabase Storage bucket terkonfigurasi (public-assets / private-uploads)" },
           { id: "12.3.2", text: "File public (gambar produk, logo) dapat diakses tanpa autentikasi" },
           { id: "12.3.3", text: "File private (dokumen invoice, BL) memerlukan autentikasi untuk diakses" },
           { id: "12.3.4", text: "Media manager berfungsi untuk upload/delete/view aset" },

@@ -355,14 +355,22 @@ router.get("/hub/general-ledger", async (req, res) => {
     `).then(r => r.rows);
 
     // ── Summary stats (all display-filtered rows, all pages) ────────────────
-    // When filtering by payment_method we need the LATERAL join in the summary query too.
+    //
+    // `total` is the display/pagination count and may include audit-history
+    // rows (draft/voided) when the UI has not requested posted_only.
+    // Financial totals are a separate canonical concept: only posted rows in
+    // the balance scope contribute to canonicalTotal, totalDebit, and
+    // totalCredit. This keeps audit history available without mixing it into
+    // financial summary math, and keeps totals aligned with closingBalance
+    // even when source_module/payment_method are display-only filters.
+    //
+    // When filtering by payment_method we need the LATERAL join in the summary
+    // query too.
     const [displaySummary] = await db.execute<any>(
       f.paymentMethod
         ? sql`
           SELECT
-            COUNT(el.id)::int                       AS total,
-            COALESCE(SUM(el.debit::numeric),  0)    AS total_debit,
-            COALESCE(SUM(el.credit::numeric), 0)    AS total_credit
+             COUNT(el.id)::int AS total
           FROM accounting_entry_lines el
           JOIN accounting_entries e ON e.id = el.entry_id
           JOIN chart_of_accounts coa ON coa.id = el.account_id
@@ -373,14 +381,24 @@ router.get("/hub/general-ledger", async (req, res) => {
           WHERE ${sql.join([...displayConds, sql`ap.payment_method = ${f.paymentMethod}`], sql` AND `)}`
         : sql`
           SELECT
-            COUNT(el.id)::int                       AS total,
-            COALESCE(SUM(el.debit::numeric),  0)    AS total_debit,
-            COALESCE(SUM(el.credit::numeric), 0)    AS total_credit
+             COUNT(el.id)::int AS total
           FROM accounting_entry_lines el
           JOIN accounting_entries e ON e.id = el.entry_id
           JOIN chart_of_accounts coa ON coa.id = el.account_id
           ${displayWhere}`
     ).then(r => r.rows);
+
+    const [canonicalSummary] = await db.execute<any>(sql`
+      SELECT
+        COUNT(el.id)::int AS canonical_total,
+        COALESCE(SUM(el.debit::numeric), 0)  AS total_debit,
+        COALESCE(SUM(el.credit::numeric), 0) AS total_credit
+      FROM accounting_entry_lines el
+      JOIN accounting_entries e ON e.id = el.entry_id
+      JOIN chart_of_accounts coa ON coa.id = el.account_id
+      WHERE e.status = 'posted'
+        ${balanceAnd}
+    `).then(r => r.rows);
 
     // ── Opening balance for summary panel ────────────────────────────────────
     // Sum of ALL posted entries before dateFrom (ignores source_module).
@@ -435,12 +453,13 @@ router.get("/hub/general-ledger", async (req, res) => {
     res.json({
       data: rows,
       total:          displaySummary?.total    ?? 0,
+      canonicalTotal: canonicalSummary?.canonical_total ?? 0,
       page:           f.page,
       limit:          f.limit,
       openingBalance,
       closingBalance,
-      totalDebit:     Number(displaySummary?.total_debit  ?? 0),
-      totalCredit:    Number(displaySummary?.total_credit ?? 0),
+      totalDebit:     Number(canonicalSummary?.total_debit  ?? 0),
+      totalCredit:    Number(canonicalSummary?.total_credit ?? 0),
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message });
@@ -581,6 +600,11 @@ router.get("/hub/profit-loss", async (req, res) => {
     const rows = await db.execute<any>(sql`
       SELECT
         coa.type AS account_type, coa.id AS account_id, coa.code, coa.name,
+        CASE
+          WHEN coa.type = 'expense' AND (coa.code = '5-1000' OR coa.code LIKE '5-10%') THEN 'cogs'
+          WHEN coa.type = 'expense' THEN 'operating_expense'
+          ELSE NULL
+        END AS expense_group,
         e.company_id, e.branch_id, e.division_id,
         ${normModuleExpr()} AS source_module,
         TO_CHAR(e.date::date, 'YYYY-MM') AS period,
@@ -595,7 +619,12 @@ router.get("/hub/profit-loss", async (req, res) => {
       JOIN accounting_entries e   ON e.id = el.entry_id
       JOIN chart_of_accounts coa  ON coa.id = el.account_id
       ${where}
-      GROUP BY coa.type, coa.id, coa.code, coa.name,
+       GROUP BY coa.type, coa.id, coa.code, coa.name,
+                CASE
+                  WHEN coa.type = 'expense' AND (coa.code = '5-1000' OR coa.code LIKE '5-10%') THEN 'cogs'
+                  WHEN coa.type = 'expense' THEN 'operating_expense'
+                  ELSE NULL
+                END,
                e.company_id, e.branch_id, e.division_id,
                ${normModuleExpr()},
                TO_CHAR(e.date::date, 'YYYY-MM')
@@ -603,9 +632,21 @@ router.get("/hub/profit-loss", async (req, res) => {
     `).then(r => r.rows);
 
     const revenue = rows.filter(r => r.account_type === "revenue").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
-    const expense  = rows.filter(r => r.account_type === "expense").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const cogs = rows.filter(r => r.expense_group === "cogs").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const operatingExpense = rows.filter(r => r.expense_group === "operating_expense").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const expense = cogs + operatingExpense;
 
-    res.json({ data: rows, summary: { total_revenue: revenue, total_expense: expense, net_profit: revenue - expense } });
+    res.json({
+      data: rows,
+      summary: {
+        total_revenue: revenue,
+        total_cogs: cogs,
+        total_operating_expense: operatingExpense,
+        total_expense: expense,
+        gross_profit: revenue - cogs,
+        net_profit: revenue - expense,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message });
   }

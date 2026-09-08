@@ -49,9 +49,14 @@ interface CostCenter { id: number; code: string; name: string; isActive: boolean
 interface PLAccount { accountId: number; code: string; name: string; amount: number }
 interface PLData {
   revenues: PLAccount[];
+  cogs: PLAccount[];
+  operatingExpenses: PLAccount[];
   expenses: PLAccount[];
   totalRevenue: number;
+  totalCogs: number;
+  totalOperatingExpense: number;
   totalExpense: number;
+  grossProfit: number;
   netIncome: number;
 }
 
@@ -112,7 +117,8 @@ function InsightPanel({
     ? ((curr.totalExpense - prev.totalExpense) / Math.abs(prev.totalExpense)) * 100 : null;
   const netChg = prev && prev.netIncome !== 0
     ? ((curr.netIncome - prev.netIncome) / Math.abs(prev.netIncome)) * 100 : null;
-  const margin = curr.totalRevenue > 0 ? (curr.netIncome / curr.totalRevenue) * 100 : null;
+  const grossMargin = curr.totalRevenue > 0 ? (curr.grossProfit / curr.totalRevenue) * 100 : null;
+  const netMargin = curr.totalRevenue > 0 ? (curr.netIncome / curr.totalRevenue) * 100 : null;
 
   const top3Rev = [...curr.revenues].sort((a, b) => b.amount - a.amount).slice(0, 3);
   const top3Exp = [...curr.expenses].sort((a, b) => b.amount - a.amount).slice(0, 3);
@@ -146,7 +152,7 @@ function InsightPanel({
             {
               label: "Net Profit", value: idrShort(curr.netIncome),
               chg: netChg, color: curr.netIncome >= 0 ? "emerald" : "rose",
-              sub: margin !== null ? `Margin ${margin.toFixed(1)}%` : undefined,
+              sub: netMargin !== null ? `Net margin ${netMargin.toFixed(1)}%` : undefined,
             },
             {
               label: "Revenue", value: idrShort(curr.totalRevenue),
@@ -154,14 +160,14 @@ function InsightPanel({
               sub: `${curr.revenues.length} akun`,
             },
             {
-              label: "Total Beban", value: idrShort(curr.totalExpense),
-              chg: expChg !== null ? -expChg : null, color: expChg !== null && expChg > 5 ? "rose" : "slate",
-              sub: `${curr.expenses.length} akun`,
+              label: "HPP", value: idrShort(curr.totalCogs),
+              chg: null, color: "rose",
+              sub: `${curr.cogs.length} akun`,
             },
             {
-              label: "Gross Margin", value: margin !== null ? `${margin.toFixed(1)}%` : "N/A",
-              chg: null, color: margin !== null ? (margin > 20 ? "emerald" : margin > 5 ? "amber" : "rose") : "slate",
-              sub: "Revenue − Beban",
+              label: "Gross Margin", value: grossMargin !== null ? `${grossMargin.toFixed(1)}%` : "N/A",
+              chg: expChg !== null ? -expChg : null, color: grossMargin !== null ? (grossMargin > 20 ? "emerald" : grossMargin > 5 ? "amber" : "rose") : "slate",
+              sub: "Pendapatan − HPP",
             },
           ].map((item) => {
             const valColor = item.color === "emerald" ? "text-emerald-400"
@@ -206,7 +212,7 @@ interface CollapsibleAccountSectionProps {
   accounts: PLAccount[];
   prevMap: Map<number, number>;
   top3Ids: Set<number>;
-  color: "emerald" | "rose";
+  color: "emerald" | "rose" | "amber";
   onRowClick: (r: PLAccount) => void;
   onTotalClick: () => void;
   defaultOpen?: boolean;
@@ -216,42 +222,54 @@ function CollapsibleAccountSection({
   label, total, accounts, prevMap, top3Ids, color, onRowClick, onTotalClick, defaultOpen = false,
 }: CollapsibleAccountSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
-  const isEmerald = color === "emerald";
-
-  const borderColor = isEmerald ? "border-emerald-800/25" : "border-rose-800/25";
-  const bgColor = isEmerald ? "bg-emerald-950/20" : "bg-rose-950/20";
-  const headerHover = isEmerald ? "hover:bg-emerald-950/30" : "hover:bg-rose-950/30";
-  const totalColor = isEmerald ? "text-emerald-400" : "text-rose-400";
-  const rowHover = isEmerald ? "hover:bg-emerald-950/20" : "hover:bg-rose-950/20";
-  const rowHoverText = isEmerald ? "group-hover:text-emerald-400" : "group-hover:text-rose-400";
-  const chevronColor = isEmerald ? "text-emerald-500" : "text-rose-500";
-  const top3Border = isEmerald ? "border-l-4 border-emerald-500" : "border-l-4 border-rose-500";
-  const top3Bg = isEmerald ? "bg-emerald-950/25" : "bg-rose-950/25";
+  const styles = {
+    emerald: {
+      border: "border-emerald-800/25", bg: "bg-emerald-950/20",
+      hover: "hover:bg-emerald-950/30", text: "text-emerald-400",
+      rowHover: "hover:bg-emerald-950/20", rowText: "group-hover:text-emerald-400",
+      chevron: "text-emerald-500", topBorder: "border-l-4 border-emerald-500",
+      topBg: "bg-emerald-950/25", footer: "border-emerald-800/25 bg-emerald-950/20",
+    },
+    rose: {
+      border: "border-rose-800/25", bg: "bg-rose-950/20",
+      hover: "hover:bg-rose-950/30", text: "text-rose-400",
+      rowHover: "hover:bg-rose-950/20", rowText: "group-hover:text-rose-400",
+      chevron: "text-rose-500", topBorder: "border-l-4 border-rose-500",
+      topBg: "bg-rose-950/25", footer: "border-rose-800/25 bg-rose-950/20",
+    },
+    amber: {
+      border: "border-amber-800/25", bg: "bg-amber-950/20",
+      hover: "hover:bg-amber-950/30", text: "text-amber-400",
+      rowHover: "hover:bg-amber-950/20", rowText: "group-hover:text-amber-400",
+      chevron: "text-amber-500", topBorder: "border-l-4 border-amber-500",
+      topBg: "bg-amber-950/25", footer: "border-amber-800/25 bg-amber-950/20",
+    },
+  }[color];
 
   return (
-    <div className={`rounded-xl border ${borderColor} overflow-hidden`}>
+    <div className={`rounded-xl border ${styles.border} overflow-hidden`}>
       {/* Section Header — always visible, click to toggle */}
       <div
-        className={`flex items-center justify-between px-5 py-3.5 cursor-pointer select-none transition-colors ${headerHover} ${bgColor}`}
+        className={`flex items-center justify-between px-5 py-3.5 cursor-pointer select-none transition-colors ${styles.hover} ${styles.bg}`}
         onClick={() => setOpen((o) => !o)}
       >
         <div className="flex items-center gap-2.5">
-          {open ? <ChevronDown className={`h-4 w-4 ${totalColor}`} /> : <ChevronRight className={`h-4 w-4 ${totalColor}`} />}
-          <span className={`font-semibold text-sm ${totalColor}`}>{label}</span>
-          <Badge variant="outline" className={`text-xs px-2 py-0 h-5 ${isEmerald ? "border-emerald-800/30 text-emerald-400" : "border-rose-800/30 text-rose-400"}`}>
+          {open ? <ChevronDown className={`h-4 w-4 ${styles.text}`} /> : <ChevronRight className={`h-4 w-4 ${styles.text}`} />}
+          <span className={`font-semibold text-sm ${styles.text}`}>{label}</span>
+          <Badge variant="outline" className={`text-xs px-2 py-0 h-5 ${styles.text}`}>
             {accounts.length} akun
           </Badge>
         </div>
         <div className="flex items-center gap-3">
           <span
-            className={`font-bold text-base font-mono ${totalColor} cursor-pointer hover:underline`}
+            className={`font-bold text-base font-mono ${styles.text} cursor-pointer hover:underline`}
             onClick={(e) => { e.stopPropagation(); onTotalClick(); }}
             title="Klik untuk lihat semua transaksi"
           >
             {idr(total)}
           </span>
           <span
-            className={`h-3.5 w-3.5 ${totalColor} opacity-50 hover:opacity-100 transition-opacity cursor-pointer inline-flex`}
+            className={`h-3.5 w-3.5 ${styles.text} opacity-50 hover:opacity-100 transition-opacity cursor-pointer inline-flex`}
             onClick={(e) => { e.stopPropagation(); onTotalClick(); }}
             title="Lihat semua transaksi"
             role="button"
@@ -282,22 +300,22 @@ function CollapsibleAccountSection({
                   return (
                     <tr
                       key={r.accountId}
-                      className={`cursor-pointer transition-colors group ${rowHover} ${isTop3 ? `${top3Border} ${top3Bg}` : ""}`}
+                       className={`cursor-pointer transition-colors group ${styles.rowHover} ${isTop3 ? `${styles.topBorder} ${styles.topBg}` : ""}`}
                       onClick={() => onRowClick(r)}
                     >
                       <td className="px-5 py-2.5 font-mono text-[11px] text-muted-foreground">{r.code}</td>
-                      <td className={`px-2 py-2.5 ${rowHoverText} transition-colors`}>
+                       <td className={`px-2 py-2.5 ${styles.rowText} transition-colors`}>
                         <div className="flex items-center gap-1.5">
                           {isTop3 && (
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isEmerald ? "bg-emerald-600 text-white" : "bg-rose-600 text-white"}`}>
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${color === "emerald" ? "bg-emerald-600" : color === "amber" ? "bg-amber-600" : "bg-rose-600"} text-white`}>
                               TOP
                             </span>
                           )}
                           <span className="truncate max-w-[280px]">{r.name}</span>
-                          <ChevronRight className={`h-3 w-3 ${chevronColor} opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0`} />
+                           <ChevronRight className={`h-3 w-3 ${styles.chevron} opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0`} />
                         </div>
                       </td>
-                      <td className={`px-4 py-2.5 text-right font-mono font-medium ${totalColor}`}>{idr(r.amount)}</td>
+                       <td className={`px-4 py-2.5 text-right font-mono font-medium ${styles.text}`}>{idr(r.amount)}</td>
                       <td className="px-5 py-2.5 text-right">
                         <TrendBadge current={r.amount} prev={prevMap.get(r.accountId)} />
                       </td>
@@ -306,18 +324,18 @@ function CollapsibleAccountSection({
                 })}
               </tbody>
               {/* Subtotal */}
-              <tfoot className={`border-t ${isEmerald ? "border-emerald-800/25 bg-emerald-950/20" : "border-rose-800/25 bg-rose-950/20"}`}>
+               <tfoot className={`border-t ${styles.footer}`}>
                 <tr
                   className="cursor-pointer hover:opacity-80 transition-opacity group"
                   onClick={onTotalClick}
                 >
-                  <td colSpan={2} className={`px-5 py-2.5 font-semibold text-sm ${totalColor}`}>
+                   <td colSpan={2} className={`px-5 py-2.5 font-semibold text-sm ${styles.text}`}>
                     <span className="flex items-center gap-1">
                       Total {label}
                       <ChevronRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
                     </span>
                   </td>
-                  <td className={`px-4 py-2.5 text-right font-bold font-mono ${totalColor}`}>{idr(total)}</td>
+                   <td className={`px-4 py-2.5 text-right font-bold font-mono ${styles.text}`}>{idr(total)}</td>
                   <td className="px-5 py-2.5 text-right">
                     <TrendBadge
                       current={total}
@@ -431,7 +449,7 @@ export default function ProfitLossPage() {
   if (to) monthlyQp.set("to", new Date(to + "T23:59:59").toISOString());
   if (!isConsolidated && activeCompanyId) monthlyQp.set("company", String(activeCompanyId));
 
-  const { data: monthlyData, isLoading: isMonthlyLoading } = useQuery<{ months: { month: string; revenue: number; expense: number; netIncome: number }[] }>({
+  const { data: monthlyData, isLoading: isMonthlyLoading } = useQuery<{ months: { month: string; revenue: number; cogs: number; operatingExpense: number; expense: number; grossProfit: number; netIncome: number }[] }>({
     queryKey: ["pl-monthly", from, to, activeCompanyId, isConsolidated],
     queryFn: async () => {
       const res = await fetch(`/api/accounting/reports/profit-loss-monthly?${monthlyQp}`);
@@ -447,12 +465,24 @@ export default function ProfitLossPage() {
   const prevExpMap = useMemo(() =>
     new Map((prevData?.expenses ?? []).map((r) => [r.accountId, r.amount])),
     [prevData]);
+  const prevCogsMap = useMemo(() =>
+    new Map((prevData?.cogs ?? []).map((r) => [r.accountId, r.amount])),
+    [prevData]);
+  const prevOperatingMap = useMemo(() =>
+    new Map((prevData?.operatingExpenses ?? []).map((r) => [r.accountId, r.amount])),
+    [prevData]);
 
   const top3RevIds = useMemo(() => new Set(
     [...(data?.revenues ?? [])].sort((a, b) => b.amount - a.amount).slice(0, 3).map((r) => r.accountId)
   ), [data]);
   const top3ExpIds = useMemo(() => new Set(
     [...(data?.expenses ?? [])].sort((a, b) => b.amount - a.amount).slice(0, 3).map((r) => r.accountId)
+  ), [data]);
+  const top3CogsIds = useMemo(() => new Set(
+    [...(data?.cogs ?? [])].sort((a, b) => b.amount - a.amount).slice(0, 3).map((r) => r.accountId)
+  ), [data]);
+  const top3OperatingIds = useMemo(() => new Set(
+    [...(data?.operatingExpenses ?? [])].sort((a, b) => b.amount - a.amount).slice(0, 3).map((r) => r.accountId)
   ), [data]);
 
   const companyIdForTx = isConsolidated ? null : (activeCompanyId ?? null);
@@ -468,16 +498,21 @@ export default function ProfitLossPage() {
       ...data.revenues.map((r) => [r.code, r.name, r.amount]),
       ["", "Total Pendapatan", data.totalRevenue],
       ["", "", ""],
-      ["=== BEBAN ===", "", ""],
-      ...data.expenses.map((r) => [r.code, r.name, r.amount]),
-      ["", "Total Beban", data.totalExpense],
+      ["=== HPP ===", "", ""],
+      ...data.cogs.map((r) => [r.code, r.name, r.amount]),
+      ["", "Total HPP", data.totalCogs],
+      ["", "Laba Kotor", data.grossProfit],
+      ["", "", ""],
+      ["=== BEBAN OPERASIONAL / LAIN-LAIN ===", "", ""],
+      ...data.operatingExpenses.map((r) => [r.code, r.name, r.amount]),
+      ["", "Total Beban Operasional / Lain-lain", data.totalOperatingExpense],
       ["", "", ""],
       ["", "LABA (RUGI) BERSIH", data.netIncome],
     ] as (string | number | null | undefined)[][];
   }
 
   function buildMonthlyExportRows() {
-    return (monthlyData?.months ?? []).map((m) => [fmtMonth(m.month), m.revenue, m.expense, m.netIncome]);
+    return (monthlyData?.months ?? []).map((m) => [fmtMonth(m.month), m.revenue, m.cogs, m.operatingExpense, m.netIncome]);
   }
 
   const hasData = !!data;
@@ -517,7 +552,7 @@ export default function ProfitLossPage() {
                 </>
               )}
               {view === "monthly" && (
-                <Button variant="outline" size="sm" onClick={() => exportXlsx("Laba_Rugi_Bulanan", ["Bulan","Pendapatan","Beban","Laba/Rugi"], buildMonthlyExportRows())} disabled={!hasMonthly}>
+                <Button variant="outline" size="sm" onClick={() => exportXlsx("Laba_Rugi_Bulanan", ["Bulan","Pendapatan","HPP","Beban Operasional/Lain-lain","Laba/Rugi"], buildMonthlyExportRows())} disabled={!hasMonthly}>
                   <Download className="h-4 w-4 mr-1.5" />XLSX Bulanan
                 </Button>
               )}
@@ -598,17 +633,30 @@ export default function ProfitLossPage() {
                 onTotalClick={() => navigate(buildTxUrl({ accountGroup: "revenue", from, to, companyId: companyIdForTx, costCenterId, accountName: "Semua Pendapatan" }))}
               />
 
-              {/* ── Expense Section ── */}
+              {/* ── COGS / HPP Section ── */}
               <CollapsibleAccountSection
-                label="Beban"
-                total={data.totalExpense}
-                accounts={data.expenses as PLAccount[]}
-                prevMap={prevExpMap}
-                top3Ids={top3ExpIds}
+                label="HPP (Beban Pokok Penjualan)"
+                total={data.totalCogs}
+                accounts={data.cogs as PLAccount[]}
+                prevMap={prevCogsMap}
+                top3Ids={top3CogsIds}
                 color="rose"
-                defaultOpen={data.expenses.length <= 10}
+                defaultOpen={data.cogs.length <= 10}
                 onRowClick={(r) => navigate(buildTxUrl({ accountId: r.accountId, accountCode: r.code, accountName: r.name, from, to, companyId: companyIdForTx, costCenterId }))}
-                onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "Semua Beban" }))}
+                onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "HPP" }))}
+              />
+
+              {/* ── Operating Expense Section ── */}
+              <CollapsibleAccountSection
+                label="Beban Operasional / Lain-lain"
+                total={data.totalOperatingExpense}
+                accounts={data.operatingExpenses as PLAccount[]}
+                prevMap={prevOperatingMap}
+                top3Ids={top3OperatingIds}
+                color="amber"
+                defaultOpen={data.operatingExpenses.length <= 10}
+                onRowClick={(r) => navigate(buildTxUrl({ accountId: r.accountId, accountCode: r.code, accountName: r.name, from, to, companyId: companyIdForTx, costCenterId }))}
+                onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "Beban Operasional / Lain-lain" }))}
               />
 
               {/* ── Net Profit Bar ── */}
@@ -656,12 +704,13 @@ export default function ProfitLossPage() {
                       <XAxis dataKey="month" tickFormatter={fmtMonth} tick={{ fontSize: 11 }} />
                       <YAxis tickFormatter={idrShort} tick={{ fontSize: 11 }} width={70} />
                       <Tooltip
-                        formatter={(v: number, name: string) => [idr(v), name === "revenue" ? "Pendapatan" : name === "expense" ? "Beban" : "Laba/Rugi"]}
+                        formatter={(v: number, name: string) => [idr(v), name === "revenue" ? "Pendapatan" : name === "cogs" ? "HPP" : name === "operatingExpense" ? "Beban Operasional/Lain-lain" : "Laba/Rugi"]}
                         labelFormatter={fmtMonth}
                       />
-                      <Legend formatter={(v) => v === "revenue" ? "Pendapatan" : v === "expense" ? "Beban" : "Laba/Rugi Bersih"} />
+                      <Legend formatter={(v) => v === "revenue" ? "Pendapatan" : v === "cogs" ? "HPP" : v === "operatingExpense" ? "Beban Operasional/Lain-lain" : "Laba/Rugi Bersih"} />
                       <Bar dataKey="revenue" fill="#10b981" radius={[3,3,0,0]} />
-                      <Bar dataKey="expense" fill="#f43f5e" radius={[3,3,0,0]} />
+                      <Bar dataKey="cogs" fill="#f43f5e" radius={[3,3,0,0]} />
+                      <Bar dataKey="operatingExpense" fill="#f59e0b" radius={[3,3,0,0]} />
                       <Line dataKey="netIncome" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
                     </ComposedChart>
                   </ResponsiveContainer>
@@ -675,7 +724,8 @@ export default function ProfitLossPage() {
                       <tr>
                         <th className="text-left px-5 py-2.5 font-medium">Bulan</th>
                         <th className="text-right px-4 py-2.5 font-medium text-emerald-700">Pendapatan</th>
-                        <th className="text-right px-4 py-2.5 font-medium text-rose-700">Beban</th>
+                        <th className="text-right px-4 py-2.5 font-medium text-rose-700">HPP</th>
+                        <th className="text-right px-4 py-2.5 font-medium text-amber-700">Beban Operasional/Lain-lain</th>
                         <th className="text-right px-5 py-2.5 font-medium">Laba / Rugi</th>
                       </tr>
                     </thead>
@@ -684,7 +734,8 @@ export default function ProfitLossPage() {
                         <tr key={m.month} className="hover:bg-white/5 transition-colors duration-150">
                           <td className="px-5 py-2.5 font-medium">{fmtMonth(m.month)}</td>
                           <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{idr(m.revenue)}</td>
-                          <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(m.expense)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(m.cogs)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-amber-700">{idr(m.operatingExpense)}</td>
                           <td className={`px-5 py-2.5 text-right font-mono font-semibold ${m.netIncome >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                             {idr(m.netIncome)}
                           </td>
@@ -693,13 +744,15 @@ export default function ProfitLossPage() {
                       {(() => {
                         const ms = monthlyData!.months;
                         const totRev = ms.reduce((s, m) => s + m.revenue, 0);
-                        const totExp = ms.reduce((s, m) => s + m.expense, 0);
-                        const totNet = totRev - totExp;
+                        const totCogs = ms.reduce((s, m) => s + m.cogs, 0);
+                        const totOperating = ms.reduce((s, m) => s + m.operatingExpense, 0);
+                        const totNet = totRev - totCogs - totOperating;
                         return (
                           <tr className="font-bold border-t-2 bg-white/5">
                             <td className="px-5 py-2.5">Total</td>
                             <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{idr(totRev)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(totExp)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(totCogs)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-amber-700">{idr(totOperating)}</td>
                             <td className={`px-5 py-2.5 text-right font-mono ${totNet >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{idr(totNet)}</td>
                           </tr>
                         );

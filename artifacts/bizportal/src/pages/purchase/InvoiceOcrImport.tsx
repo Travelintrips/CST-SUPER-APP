@@ -157,6 +157,9 @@ interface DisplayLine {
   unit: string;
   unitPrice: string;
   taxAmount: string;
+  taxType: string;
+  taxObject: string;
+  withholdingAmount: string;
   notes: string;
   coaHint: string;
   coaAccountId: string;
@@ -218,6 +221,9 @@ function buildDisplayLines(ocr: OcrResult): DisplayLine[] {
         unit: "ls",
         unitPrice: component.dpp != null ? String(component.dpp / quantity) : "",
         taxAmount: component.ppn != null ? String(component.ppn) : "0",
+        taxType: component.withholding_tax_type ?? "",
+        taxObject: component.withholding_tax_type ?? "",
+        withholdingAmount: component.withholding_tax_amount != null ? String(component.withholding_tax_amount) : "0",
         notes: component.gross != null ? `Gross: ${component.gross}` : "",
         coaHint: sourceLine?.coa_hint ?? "",
         coaAccountId: "",
@@ -241,6 +247,9 @@ function buildDisplayLines(ocr: OcrResult): DisplayLine[] {
         unit: "ls",
         unitPrice: unitPrice != null ? String(unitPrice) : "",
         taxAmount: line.tax != null ? String(line.tax) : "0",
+        taxType: "",
+        taxObject: "",
+        withholdingAmount: "0",
         notes: "",
         coaHint: line.coa_hint ?? "",
         coaAccountId: "",
@@ -255,6 +264,9 @@ function buildDisplayLines(ocr: OcrResult): DisplayLine[] {
       unit: "ls",
       unitPrice: "",
       taxAmount: "0",
+      taxType: "",
+      taxObject: "",
+      withholdingAmount: "0",
       notes: "",
       coaHint: "",
       coaAccountId: "",
@@ -646,6 +658,14 @@ export default function InvoiceOcrImportPage() {
           unit: l.unit,
           unitCost: Number(l.unitPrice) || 0,
           taxAmount: Number(l.taxAmount) || 0,
+           withholdingTaxes: Number(l.withholdingAmount) > 0
+             ? [{
+                 taxType: l.taxType || result?.tax_review?.withholding_tax_type || "UNRESOLVED",
+                 taxObject: l.taxObject || result?.tax_review?.tax_object || "UNRESOLVED",
+                 taxAmount: Number(l.withholdingAmount),
+                 baseAmount: Number(l.unitPrice) * (Number(l.quantity) || 1),
+               }]
+             : undefined,
           coaHint: l.coaHint || undefined,
            coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
            coaResolutionStatus: l.coaAccountId ? "confirmed" : "unresolved",
@@ -1371,6 +1391,9 @@ export default function InvoiceOcrImportPage() {
                         unit: "ls",
                         unitPrice: "",
                         taxAmount: "0",
+                         taxType: "",
+                         taxObject: "",
+                         withholdingAmount: "0",
                         notes: "",
                         coaHint: "",
                         coaAccountId: "",
@@ -1392,6 +1415,7 @@ export default function InvoiceOcrImportPage() {
                         <th className="text-left py-2 px-2 w-20">Satuan</th>
                         <th className="text-left py-2 px-2 w-36">Harga Satuan</th>
                         <th className="text-left py-2 px-2">Catatan</th>
+                         <th className="text-right py-2 px-2 w-28">PPh</th>
                         <th className="text-left py-2 px-2 min-w-64">
                           COA Akun <span className="text-xs font-normal text-muted-foreground">(Supabase)</span>
                         </th>
@@ -1449,6 +1473,9 @@ export default function InvoiceOcrImportPage() {
                               className="h-8"
                               placeholder="—"
                             />
+                          </td>
+                          <td className="py-1 px-2 text-right font-mono text-xs">
+                            {idr(Number(line.withholdingAmount))}
                           </td>
                           <td className="py-1 px-2">
                             <select

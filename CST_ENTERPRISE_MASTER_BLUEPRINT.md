@@ -391,7 +391,7 @@ Customer (Buyer)
 
 - **Gambar/file biner wajib ke Supabase Storage**, tidak boleh disimpan di git atau DB blob.
 - Referensi di DB berupa URL Supabase Storage.
-- Private vs public bucket: `PRIVATE_OBJECT_DIR` dan `PUBLIC_OBJECT_SEARCH_PATHS` dikonfigurasi via secrets.
+- Bucket Supabase yang digunakan: `public-assets` untuk aset publik dan `private-uploads` untuk file privat; URL dan service-role key dipilih berdasarkan `APP_ENV`.
 
 ---
 

@@ -39,7 +39,11 @@ vi.mock("../lib/accounting.js", () => ({
   postEntryWithClient: vi.fn(),
 }));
 
-import { resolveContraAccount } from "../lib/reconciliation/unifiedMatchingEngine.js";
+import {
+  buildBankMutationJournalLines,
+  isValidInternalTransferTarget,
+  resolveContraAccount,
+} from "../lib/reconciliation/unifiedMatchingEngine.js";
 
 function mockClient(coaId = 5301) {
   return {
@@ -69,6 +73,52 @@ const baseArgs = {
 };
 
 describe("bank reconciliation contra-account mapping", () => {
+  it.each(["Kas Besar", "Kas Kecil"])(
+    "allows %s as an active postable cash_bank transfer target",
+    (name) => {
+      expect(isValidInternalTransferTarget({
+        type: "asset",
+        subtype: "cash_bank",
+        name,
+        code: name === "Kas Besar" ? "1-1010-CST" : "1-1011-CST",
+        is_active: true,
+        is_header: false,
+        is_postable: true,
+      })).toBe(true);
+    },
+  );
+
+  it.each([
+    { type: "expense", subtype: "expense", name: "Beban Operasional" },
+    { type: "liability", subtype: "accounts_payable", name: "Hutang Usaha" },
+    { type: "asset", subtype: "fixed_asset", name: "Kendaraan" },
+    { type: "asset", subtype: "receivable", name: "Piutang Usaha" },
+  ])("rejects non-cash transfer target %j", (account) => {
+    expect(isValidInternalTransferTarget({
+      ...account,
+      is_active: true,
+      is_header: false,
+      is_postable: true,
+    })).toBe(false);
+  });
+
+  it("creates a balanced OUT journal with debit to the cash target and credit to the source bank", () => {
+    const lines = buildBankMutationJournalLines(
+      "OUT",
+      1101,
+      1102,
+      2_500_000,
+      "Transfer ke Kas Kecil",
+    );
+
+    expect(lines).toEqual([
+      { accountId: 1102, debit: 2_500_000, credit: 0, description: "Transfer ke Kas Kecil" },
+      { accountId: 1101, debit: 0, credit: 2_500_000, description: "Transfer ke Kas Kecil" },
+    ]);
+    expect(lines.reduce((sum, line) => sum + line.debit, 0))
+      .toBe(lines.reduce((sum, line) => sum + line.credit, 0));
+  });
+
   it("maps bank administration fees to 5-3010 expense, never AP", async () => {
     const result = await resolveContraAccount(mockClient(5310), {
       ...baseArgs,

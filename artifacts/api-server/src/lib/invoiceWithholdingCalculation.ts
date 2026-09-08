@@ -9,6 +9,32 @@ export interface WithholdingCalculationResult {
   withholding: Record<string, unknown>;
   totals: Record<string, unknown>;
   flags: string[];
+  vendorPolicyApplied?: string | null;
+}
+
+const ANGKASA_PURA_POLICY = {
+  name: "PT Angkasa Pura Indonesia",
+  ppnRate: 11,
+  components: {
+    concession: { type: "PPh 23", rate: 15 },
+    electricity: { type: "PPh 4(2)", rate: 10 },
+    water: { type: "PPh 4(2)", rate: 10 },
+  } as Record<string, { type: string; rate: number }>,
+} as const;
+
+function resolveVendorPolicy(vendorName: string): typeof ANGKASA_PURA_POLICY | null {
+  const normalized = vendorName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (
+    normalized.includes("angkasa pura indonesia") ||
+    normalized.includes("angkasa pura i") ||
+    normalized.includes("pt angkasa pura")
+  ) {
+    return ANGKASA_PURA_POLICY;
+  }
+  return null;
 }
 
 function asNumber(value: unknown): number | null {
@@ -89,18 +115,37 @@ export function applyWithholdingCalculations(
   withholding: Record<string, unknown>,
   totals: Record<string, unknown>,
   sourceText = "",
+  vendorName = "",
 ): WithholdingCalculationResult {
   const hints = extractWithholdingRateHints(sourceText);
+  const vendorPolicy = resolveVendorPolicy(vendorName);
   const flags: string[] = [];
+  if (vendorPolicy) {
+    flags.push(
+      `POLICY_APPLIED: ${vendorPolicy.name}; PPN ${vendorPolicy.ppnRate}%; ` +
+      "Konsesi PPh 23 15% dan Listrik/Air PPh 4(2) 10% dihitung dari DPP.",
+    );
+  }
 
   const normalizedComponents: Record<string, unknown>[] = components.map((component): Record<string, unknown> => {
     const key = componentKeyFromLabel(component);
     const hint = hints.find((candidate) => candidate.component === key);
     const dpp = asNumber(component.dpp);
-    const gross = asNumber(component.gross);
+    const policyComponent = vendorPolicy?.components[key];
+    const policyPpn = vendorPolicy && dpp != null && dpp >= 0
+      ? Math.round((dpp * vendorPolicy.ppnRate) / 100)
+      : null;
+    const ppn = policyPpn ?? asNumber(component.ppn);
+    const gross = vendorPolicy && dpp != null && ppn != null
+      ? dpp + ppn
+      : asNumber(component.gross);
     const existingRate = asNumber(component.withholding_tax_rate);
-    const rate = existingRate != null && existingRate > 0 ? existingRate : hint?.rate ?? null;
-    const type = asText(component.withholding_tax_type) ?? hint?.type ?? null;
+    const rate = policyComponent?.rate
+      ?? (existingRate != null && existingRate > 0 ? existingRate : hint?.rate ?? null);
+    const type = policyComponent?.type
+      ?? asText(component.withholding_tax_type)
+      ?? hint?.type
+      ?? null;
     let amount = asNumber(component.withholding_tax_amount);
     let payable = asNumber(component.payable_amount);
     let calculated = false;
@@ -119,6 +164,8 @@ export function applyWithholdingCalculations(
 
     return {
       ...component,
+      ppn,
+      gross,
       withholding_tax_type: type,
       withholding_tax_rate: rate,
       withholding_tax_amount: amount,
@@ -135,6 +182,9 @@ export function applyWithholdingCalculations(
   let calculatedTotalPph: number | null = null;
   let calculatedPayable: number | null = null;
   let calculatedBase: number | null = null;
+  let calculatedDpp: number | null = null;
+  let calculatedPpn: number | null = null;
+  let calculatedGross: number | null = null;
   if (hasCalculatedWithholding) {
     const allAmountsKnown = normalizedComponents.every(
       (component) => asNumber(component.withholding_tax_amount) != null,
@@ -159,8 +209,22 @@ export function applyWithholdingCalculations(
       const dpp = asNumber(component["dpp"]);
       return sum + (rate != null && rate > 0 && dpp != null ? dpp : 0);
     }, 0);
+    if (vendorPolicy) {
+      const financialValues = normalizedComponents.map((component) => [
+        asNumber(component.dpp),
+        asNumber(component.ppn),
+        asNumber(component.gross),
+      ]);
+      if (financialValues.every((values) => values.every((value) => value != null))) {
+        calculatedDpp = financialValues.reduce((sum, values) => sum + (values[0] ?? 0), 0);
+        calculatedPpn = financialValues.reduce((sum, values) => sum + (values[1] ?? 0), 0);
+        calculatedGross = financialValues.reduce((sum, values) => sum + (values[2] ?? 0), 0);
+      }
+    }
     flags.push(
-      "CALCULATED: PPh dihitung dari DPP/NET per komponen dikali tarif PPh yang tercetak.",
+      vendorPolicy
+        ? "CALCULATED: PPh = DPP × tarif vendor; PPN = DPP × 11%; pembayaran = bruto − PPh."
+        : "CALCULATED: PPh dihitung dari DPP/NET per komponen dikali tarif PPh yang tercetak.",
     );
   }
 
@@ -182,10 +246,12 @@ export function applyWithholdingCalculations(
     amount: calculatedTotalPph ?? asNumber(withholding.amount),
     base_amount: calculatedBase ?? asNumber(withholding.base_amount),
     calculation_method: hasCalculatedWithholding
-      ? "calculated_from_printed_rate"
+      ? vendorPolicy ? "calculated_from_vendor_policy" : "calculated_from_printed_rate"
       : asText(withholding.calculation_method),
     evidence: hasCalculatedWithholding
-      ? "Tarif PPh tercetak; nominal dihitung dari NET/DPP per komponen."
+      ? vendorPolicy
+        ? "Kebijakan pajak vendor PT Angkasa Pura Indonesia; nominal dihitung dari DPP."
+        : "Tarif PPh tercetak; nominal dihitung dari NET/DPP per komponen."
       : asText(withholding.evidence),
   };
 
@@ -194,10 +260,43 @@ export function applyWithholdingCalculations(
     withholding: normalizedWithholding,
     totals: {
       ...totals,
+      dpp: calculatedDpp ?? asNumber(totals.dpp),
+      ppn: calculatedPpn ?? asNumber(totals.ppn),
+      gross: calculatedGross ?? asNumber(totals.gross),
       withholding_tax_amount:
         calculatedTotalPph ?? asNumber(totals.withholding_tax_amount),
       payable_amount: calculatedPayable ?? asNumber(totals.payable_amount),
     },
     flags,
+    vendorPolicyApplied: vendorPolicy?.name ?? null,
   };
+}
+
+export function recalculateVendorInvoiceBreakdown(
+  invoiceBreakdown: unknown,
+  vendorName: string,
+): WithholdingCalculationResult | null {
+  if (!invoiceBreakdown || typeof invoiceBreakdown !== "object" || Array.isArray(invoiceBreakdown)) {
+    return null;
+  }
+  const breakdown = invoiceBreakdown as Record<string, unknown>;
+  const components = Array.isArray(breakdown.components)
+    ? breakdown.components.filter(
+        (component): component is Record<string, unknown> =>
+          Boolean(component && typeof component === "object" && !Array.isArray(component)),
+      )
+    : [];
+  const withholding =
+    breakdown.withholding_tax &&
+    typeof breakdown.withholding_tax === "object" &&
+    !Array.isArray(breakdown.withholding_tax)
+      ? breakdown.withholding_tax as Record<string, unknown>
+      : {};
+  const totals =
+    breakdown.totals &&
+    typeof breakdown.totals === "object" &&
+    !Array.isArray(breakdown.totals)
+      ? breakdown.totals as Record<string, unknown>
+      : {};
+  return applyWithholdingCalculations(components, withholding, totals, "", vendorName);
 }
