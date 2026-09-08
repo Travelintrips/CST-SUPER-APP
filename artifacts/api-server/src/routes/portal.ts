@@ -1030,11 +1030,24 @@ router.get("/auth/me", requirePortalAuth, async (req, res) => {
 router.get("/auth/bootstrap", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   try {
-    const bootstrap = await getPortalAuthBootstrap(customerId, req.query.returnTo);
+    const authReq = req as PortalAuthReq;
+    const bootstrap = await getPortalAuthBootstrap(
+      customerId,
+      req.query.returnTo,
+      authReq.portalCustomer,
+    );
     const t = bootstrap.timings;
+    const authTiming = authReq.portalAuthTiming;
     res.setHeader(
       "Server-Timing",
       [
+        ...(authTiming ? [
+          `cookie-parse;dur=${Math.round(authTiming.COOKIE_PARSE_MS)}`,
+          `session-lookup;dur=${Math.round(authTiming.SESSION_LOOKUP_MS)}`,
+          `revocation-customer;dur=${Math.round(authTiming.REVOCATION_LOOKUP_MS)}`,
+          `auth-context;dur=${Math.round(authTiming.AUTH_CONTEXT_LOOKUP_MS)}`,
+          `auth-middleware;dur=${Math.round(authTiming.AUTH_MIDDLEWARE_TOTAL_MS)}`,
+        ] : []),
         `user-profile;dur=${t.USER_PROFILE_MS}`,
         `role-resolution;dur=${t.ROLE_RESOLUTION_MS}`,
         `onboarding-status;dur=${t.ONBOARDING_STATUS_MS}`,
@@ -1044,6 +1057,9 @@ router.get("/auth/bootstrap", requirePortalAuth, async (req, res) => {
         `total-resolution;dur=${t.TOTAL_RESOLUTION_MS}`,
       ].join(", "),
     );
+    if (authTiming) {
+      res.setHeader("X-Portal-Auth-Pool", `${authTiming.POOL_BEFORE}->${authTiming.POOL_AFTER}`);
+    }
     return res.json(bootstrap);
   } catch (err) {
     if (err instanceof PortalAuthBootstrapError) {

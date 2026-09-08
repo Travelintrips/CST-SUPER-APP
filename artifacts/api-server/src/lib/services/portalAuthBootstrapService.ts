@@ -87,6 +87,8 @@ export type PortalAuthBootstrap = {
   timings: PortalAuthBootstrapTiming;
 };
 
+export type PortalBootstrapCustomer = typeof portalCustomersTable.$inferSelect;
+
 export class PortalAuthBootstrapError extends Error {
   constructor(public readonly statusCode: 401 | 404, message: string) {
     super(message);
@@ -152,21 +154,24 @@ function resolveAllowedDestination(
 export async function getPortalAuthBootstrap(
   customerId: number,
   requestedReturnTo?: unknown,
+  authenticatedCustomer?: PortalBootstrapCustomer,
 ): Promise<PortalAuthBootstrap> {
   const totalStart = performance.now();
-  const [customer] = await db
-    .select({
-      id: portalCustomersTable.id,
-      name: portalCustomersTable.name,
-      email: portalCustomersTable.email,
-      phone: portalCustomersTable.phone,
-      company: portalCustomersTable.company,
-      role: portalCustomersTable.role,
-      customerType: portalCustomersTable.customerType,
-    })
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, customerId))
-    .limit(1);
+  const customer = authenticatedCustomer?.id === customerId
+    ? authenticatedCustomer
+    : (await db
+      .select({
+        id: portalCustomersTable.id,
+        name: portalCustomersTable.name,
+        email: portalCustomersTable.email,
+        phone: portalCustomersTable.phone,
+        company: portalCustomersTable.company,
+        role: portalCustomersTable.role,
+        customerType: portalCustomersTable.customerType,
+      })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId))
+      .limit(1))[0];
 
   if (!customer) {
     throw new PortalAuthBootstrapError(404, "Customer tidak ditemukan.");
