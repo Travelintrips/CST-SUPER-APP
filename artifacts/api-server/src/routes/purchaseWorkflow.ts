@@ -63,6 +63,8 @@ import {
   evaluateVendorInvoicePostingGate,
   normalizeVendorLineMappingKey,
 } from "../lib/vendorPaymentHardening.js";
+import { recalculateVendorInvoiceBreakdown } from "../lib/invoiceWithholdingCalculation.js";
+import { resolveDefaultWithholdingAccountId } from "../lib/vendorWithholdingAccounts.js";
 import {
   APPROVAL_STATES,
   loadOrCreateApprovalState,
@@ -1371,7 +1373,7 @@ router.post("/vendor-invoices", async (req, res) => {
   const headerNet   = body.headerNet   != null && Number.isFinite(Number(body.headerNet))   ? Number(body.headerNet)   : null;
   const headerVat   = body.headerVat   != null && Number.isFinite(Number(body.headerVat))   ? Number(body.headerVat)   : null;
   const headerGross = body.headerGross != null && Number.isFinite(Number(body.headerGross)) ? Number(body.headerGross) : null;
-  const withholdingTaxAmount =
+  const requestedWithholdingTaxAmount =
     body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
       ? Math.max(0, Number(body.withholdingTaxAmount))
       : 0;
@@ -1380,6 +1382,30 @@ router.post("/vendor-invoices", async (req, res) => {
   const taxReviewReason = body.taxReviewReason ? String(body.taxReviewReason) : null;
   const withholdingTaxType = body.withholdingTaxType ? String(body.withholdingTaxType) : null;
   const taxObject = body.taxObject ? String(body.taxObject) : null;
+  const rawInvoiceBreakdown =
+    body.invoiceBreakdown && typeof body.invoiceBreakdown === "object" && !Array.isArray(body.invoiceBreakdown)
+      ? body.invoiceBreakdown as Record<string, unknown>
+      : null;
+  const recalculatedBreakdown = rawInvoiceBreakdown
+    ? recalculateVendorInvoiceBreakdown(rawInvoiceBreakdown, supplierName)
+    : null;
+  const recalculatedWithholdingAmount = num(
+    recalculatedBreakdown?.withholding?.amount ??
+    recalculatedBreakdown?.totals?.withholding_tax_amount,
+  );
+  const canonicalInvoiceBreakdown = recalculatedBreakdown
+    ? {
+        ...rawInvoiceBreakdown,
+        components: recalculatedBreakdown.components,
+        withholding_tax: recalculatedBreakdown.withholding,
+        totals: recalculatedBreakdown.totals,
+        flags: Array.from(new Set([
+          ...(Array.isArray(rawInvoiceBreakdown?.flags) ? rawInvoiceBreakdown.flags : []),
+          ...recalculatedBreakdown.flags,
+        ])),
+        vendor_policy_applied: recalculatedBreakdown.vendorPolicyApplied,
+      }
+    : rawInvoiceBreakdown;
 
   const lineCommercialTotal = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
   const resolvedSapHeader = hasSapHeader
@@ -1387,7 +1413,7 @@ router.post("/vendor-invoices", async (req, res) => {
         subtotal: headerNet,
         tax: headerVat,
         total_amount: headerGross,
-        invoice_breakdown: body.invoiceBreakdown,
+         invoice_breakdown: canonicalInvoiceBreakdown,
       })
     : null;
   const totalAmount = hasSapHeader
@@ -1436,7 +1462,7 @@ router.post("/vendor-invoices", async (req, res) => {
     }
   }
 
-  const lineValues = await Promise.all(lines.map(async (l) => {
+  const lineValues = await Promise.all(lines.map(async (l, lineIndex) => {
     const productId = l.productId ? Number(l.productId) : undefined;
     // Reusable mappings follow the vendor's invoice-line description.
     // coa_hint is only an AI classification and may change between OCR runs.
@@ -1456,6 +1482,57 @@ router.post("/vendor-invoices", async (req, res) => {
     const coaResolutionStatus = explicitCoaId || mappedCoaId || l.coaResolutionStatus === "confirmed"
       ? "confirmed"
       : "unresolved";
+    const explicitWithholdingTaxes = (
+      Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []
+    ) as Record<string, unknown>[];
+    const breakdownComponent = recalculatedBreakdown?.components?.[lineIndex] as Record<string, unknown> | undefined;
+    const derivedWithholdingAmount = num(
+      breakdownComponent?.withholding_tax_amount ??
+      breakdownComponent?.withholdingAmount,
+    );
+    const withholdingTaxes = explicitWithholdingTaxes.length > 0
+      ? explicitWithholdingTaxes
+      : derivedWithholdingAmount > 0
+        ? [{
+            taxType: String(
+              breakdownComponent?.withholding_tax_type ??
+              recalculatedBreakdown?.withholding?.tax_type ??
+              withholdingTaxType ??
+              "UNRESOLVED",
+            ),
+            taxObject: String(
+              breakdownComponent?.withholding_tax_object ??
+              breakdownComponent?.label ??
+              taxObject ??
+              "UNRESOLVED",
+            ),
+            taxAmount: derivedWithholdingAmount,
+            baseAmount: num(breakdownComponent?.dpp) || num(l.quantity) * num(l.unitCost),
+          }]
+        : [];
+    const normalizedWithholdingTaxes: Record<string, unknown>[] = await Promise.all(withholdingTaxes.map(async (tax) => {
+      const canonicalTaxAmount = num(breakdownComponent?.withholding_tax_amount);
+      const taxType = String(
+        breakdownComponent?.withholding_tax_type ?? tax.taxType ?? "UNRESOLVED",
+      ).trim() || "UNRESOLVED";
+      const taxObjectValue = String(
+        breakdownComponent?.withholding_tax_object ?? tax.taxObject ?? breakdownComponent?.label ?? "UNRESOLVED",
+      ).trim() || "UNRESOLVED";
+      const explicitLiabilityAccountId = Number(tax.liabilityAccountId ?? tax.accountId);
+      const liabilityAccountId = Number.isInteger(explicitLiabilityAccountId) && explicitLiabilityAccountId > 0
+        ? explicitLiabilityAccountId
+        : await resolveDefaultWithholdingAccountId(companyId, taxType);
+      return {
+        ...tax,
+        taxType,
+        taxObject: taxObjectValue,
+        ...(canonicalTaxAmount > 0 ? { taxAmount: canonicalTaxAmount } : {}),
+        liabilityAccountId: liabilityAccountId ?? undefined,
+        reviewReason: liabilityAccountId
+          ? "Akun liability diusulkan otomatis; menunggu konfirmasi Finance."
+          : "Akun liability PPh belum ditemukan; wajib dipilih Finance.",
+      };
+    }));
     return {
       invoiceId: 0,
       productId,
@@ -1472,10 +1549,19 @@ router.post("/vendor-invoices", async (req, res) => {
       coaConfirmedAt: explicitCoaId || mappedCoaId ? new Date() : undefined,
       coaMappingKey: mappingKey || undefined,
       notes: l.notes ? String(l.notes) : undefined,
-      _withholdingTaxes: (Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []) as Record<string, unknown>[],
+      _withholdingTaxes: normalizedWithholdingTaxes,
     };
   }));
   const hasLineWithholding = lineValues.some((line) => line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0));
+  const lineWithholdingAmount = lineValues.reduce(
+    (sum, line) => sum + line._withholdingTaxes.reduce((lineSum, tax) => lineSum + num(tax.taxAmount), 0),
+    0,
+  );
+  const withholdingTaxAmount = lineWithholdingAmount > 0
+    ? lineWithholdingAmount
+    : recalculatedWithholdingAmount > 0
+      ? recalculatedWithholdingAmount
+      : requestedWithholdingTaxAmount;
 
   const [vi] = await db.insert(vendorInvoicesTable).values({
     invoiceNumber,
@@ -1498,9 +1584,7 @@ router.post("/vendor-invoices", async (req, res) => {
     taxObject,
     grandTotal: String(grandTotal),
     notes: body.notes ? String(body.notes) : undefined,
-    invoiceBreakdown: body.invoiceBreakdown && typeof body.invoiceBreakdown === "object"
-      ? body.invoiceBreakdown as Record<string, unknown>
-      : undefined,
+    invoiceBreakdown: canonicalInvoiceBreakdown ?? undefined,
     createdBy: body.createdBy ? String(body.createdBy) : undefined,
     ...(poCategoryKey ? { categoryKey: poCategoryKey, templateId: poTemplateId, templateVersion: poTemplateVersion, templateSnapshot: poTemplateSnapshot } : {}),
   }).returning();
@@ -1522,8 +1606,9 @@ router.post("/vendor-invoices", async (req, res) => {
           taxObject: String(tax.taxObject ?? "UNRESOLVED"),
           baseAmount: String(tax.baseAmount ?? lineValues[i]!.subtotal),
           taxAmount: String(tax.taxAmount),
+           liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
           resolutionStatus: "tax_review",
-          reviewReason: String(tax.reviewReason ?? "Menunggu review Finance per line"),
+           reviewReason: String(tax.reviewReason ?? "Menunggu review Finance per line"),
         });
       }
     }
@@ -1578,25 +1663,54 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
   const lines = (body.lines as Record<string, unknown>[]) ?? [];
   const totalAmount = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
   const taxAmount = lines.reduce((s, l) => s + num(l.taxAmount), 0);
-  const withholdingTaxAmount =
+  const requestedWithholdingTaxAmount =
     body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
       ? Math.max(0, Number(body.withholdingTaxAmount))
       : undefined;
-  const updatedLineValues = lines.map((l) => ({
-    productId: l.productId ? Number(l.productId) : undefined,
-    name: String(l.name ?? ""),
-    quantity: String(l.quantity ?? "1"),
-    unit: String(l.unit ?? "pcs"),
-    unitCost: String(l.unitCost ?? "0"),
-    subtotal: String(num(l.quantity) * num(l.unitCost)),
-    taxAmount: String(l.taxAmount ?? "0"),
-    coaHint: l.coaHint ? String(l.coaHint) : undefined,
-    coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
-    coaResolutionStatus: l.coaResolutionStatus === "confirmed" ? "confirmed" : "unresolved",
-    notes: l.notes ? String(l.notes) : undefined,
-    _withholdingTaxes: (Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []) as Record<string, unknown>[],
+  const updatedLineValues = await Promise.all(lines.map(async (l) => {
+    const withholdingTaxes = (
+      Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []
+    ) as Record<string, unknown>[];
+    const normalizedWithholdingTaxes: Record<string, unknown>[] = await Promise.all(withholdingTaxes.map(async (tax) => {
+      const taxType = String(tax.taxType ?? "UNRESOLVED").trim() || "UNRESOLVED";
+      const taxObject = String(tax.taxObject ?? "UNRESOLVED").trim() || "UNRESOLVED";
+      const explicitLiabilityAccountId = Number(tax.liabilityAccountId ?? tax.accountId);
+      const liabilityAccountId = Number.isInteger(explicitLiabilityAccountId) && explicitLiabilityAccountId > 0
+        ? explicitLiabilityAccountId
+        : await resolveDefaultWithholdingAccountId(cid, taxType);
+      return {
+        ...tax,
+        taxType,
+        taxObject,
+        liabilityAccountId: liabilityAccountId ?? undefined,
+        reviewReason: liabilityAccountId
+          ? "Akun liability diusulkan otomatis; menunggu konfirmasi Finance."
+          : "Akun liability PPh belum ditemukan; wajib dipilih Finance.",
+      };
+    }));
+    return {
+      productId: l.productId ? Number(l.productId) : undefined,
+      name: String(l.name ?? ""),
+      quantity: String(l.quantity ?? "1"),
+      unit: String(l.unit ?? "pcs"),
+      unitCost: String(l.unitCost ?? "0"),
+      subtotal: String(num(l.quantity) * num(l.unitCost)),
+      taxAmount: String(l.taxAmount ?? "0"),
+      coaHint: l.coaHint ? String(l.coaHint) : undefined,
+      coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
+      coaResolutionStatus: l.coaResolutionStatus === "confirmed" ? "confirmed" : "unresolved",
+      notes: l.notes ? String(l.notes) : undefined,
+      _withholdingTaxes: normalizedWithholdingTaxes,
+    };
   }));
   const updatedHasWithholding = updatedLineValues.some((line) => line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0));
+  const updatedWithholdingTaxAmount = updatedLineValues.reduce(
+    (sum, line) => sum + line._withholdingTaxes.reduce((lineSum, tax) => lineSum + num(tax.taxAmount), 0),
+    0,
+  );
+  const withholdingTaxAmount = updatedWithholdingTaxAmount > 0
+    ? updatedWithholdingTaxAmount
+    : requestedWithholdingTaxAmount;
   const [vi] = await db.update(vendorInvoicesTable).set({
     vendorInvoiceRef: body.vendorInvoiceRef ? String(body.vendorInvoiceRef) : undefined,
     supplierName: body.supplierName ? String(body.supplierName) : undefined,
@@ -1641,8 +1755,9 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
           taxObject: String(tax.taxObject ?? "UNRESOLVED"),
           baseAmount: String(tax.baseAmount ?? updatedLineValues[i]!.subtotal),
           taxAmount: String(tax.taxAmount),
+          liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
           resolutionStatus: "tax_review",
-          reviewReason: "Menunggu review Finance per line",
+          reviewReason: String(tax.reviewReason ?? "Menunggu review Finance per line"),
         });
       }
     }
@@ -1787,18 +1902,36 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
     }
   }
 
+  const taxSummaryRows = taxReviews.length > 0
+    ? await db.execute<{ tax_amount: string; tax_types: string | null }>(sql`
+        SELECT
+          COALESCE(SUM(tax_amount), 0)::text AS tax_amount,
+          STRING_AGG(DISTINCT tax_type, ' + ' ORDER BY tax_type) AS tax_types
+        FROM vendor_invoice_line_taxes
+        WHERE company_id = ${cid}
+          AND invoice_line_id IN (
+            SELECT id FROM vendor_invoice_lines WHERE invoice_id = ${id}
+          )
+      `)
+    : null;
+  const taxSummary = ((taxSummaryRows as any)?.rows?.[0] ?? null) as {
+    tax_amount?: string;
+    tax_types?: string | null;
+  } | null;
+
   await db.update(vendorInvoicesTable).set({
     taxReviewStatus: taxReviews.length > 0 ? "not_required" : vi.taxReviewStatus,
     taxReviewReason: taxReviews.length > 0 ? null : vi.taxReviewReason,
     withholdingReviewStatus: taxReviews.length > 0 ? "reviewed" : vi.withholdingReviewStatus,
     withholdingReviewCompletedBy: reviewer,
     withholdingReviewCompletedAt: new Date(),
-    withholdingTaxType: taxReviews.length > 0 ? null : vi.withholdingTaxType,
-    taxObject: taxReviews.length > 0 ? null : vi.taxObject,
-    // Reviewed line-level withholding records become the source of truth.
-    // The legacy header column is non-null, so clear it to zero rather than
-    // writing null and risking a second withholding amount during settlement.
-    withholdingTaxAmount: taxReviews.length > 0 ? "0" : vi.withholdingTaxAmount,
+    withholdingTaxType: taxReviews.length > 0 ? (taxSummary?.tax_types ?? vi.withholdingTaxType) : vi.withholdingTaxType,
+    taxObject: taxReviews.length > 0 ? "Per-line withholding tax" : vi.taxObject,
+    // Keep the legacy header as a visible aggregate for compatibility. The
+    // line-tax rows remain authoritative for multi-rate settlement.
+    withholdingTaxAmount: taxReviews.length > 0
+      ? String(num(taxSummary?.tax_amount))
+      : vi.withholdingTaxAmount,
     updatedAt: new Date(),
   }).where(eq(vendorInvoicesTable.id, id));
 

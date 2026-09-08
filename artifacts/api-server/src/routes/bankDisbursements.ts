@@ -63,6 +63,7 @@ import { getOpenAI } from "../lib/openaiClient.js";
 import { imagePdfUpload } from "../lib/uploadMiddleware.js";
 import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { recalculateVendorInvoiceBreakdown } from "../lib/invoiceWithholdingCalculation.js";
+import { resolveDefaultWithholdingAccountId } from "../lib/vendorWithholdingAccounts.js";
 import { createRequire as _bdCreateRequire } from "node:module";
 import * as _bdFs from "node:fs/promises";
 import * as _bdOs from "node:os";
@@ -112,45 +113,6 @@ type DisbRow = {
   source_number: string | null;
   expense_id: number | null;
 };
-
-async function resolveDefaultWithholdingAccountId(companyId: number, taxType: string): Promise<number | null> {
-  const normalizedTaxType = taxType.trim().toLowerCase();
-  if (!normalizedTaxType) return null;
-
-  // PPh 15 has a dedicated company COA. Prefer it over legacy
-  // accounting_taxes rows that may still point to the generic 2-1030 account.
-  if (normalizedTaxType.includes("pph 15")) {
-    const dedicatedRows = execRows<{ account_id: number }>(await db.execute(sql`
-      SELECT coa.id AS account_id
-      FROM chart_of_accounts coa
-      WHERE coa.company_id = ${companyId}
-        AND coa.code LIKE '2-1102-%'
-        AND coa.type = 'liability'
-        AND coa.is_active = true
-        AND coa.is_postable = true
-      ORDER BY coa.id
-      LIMIT 1
-    `));
-    if (dedicatedRows[0]?.account_id) return Number(dedicatedRows[0].account_id);
-  }
-
-  const rows = execRows<{ account_id: number }>(await db.execute(sql`
-    SELECT at.account_id
-    FROM accounting_taxes at
-    INNER JOIN chart_of_accounts coa ON coa.id = at.account_id
-    WHERE at.company_id = ${companyId}
-      AND at.is_active = true
-      AND at.kind = 'withholding'
-      AND at.account_id IS NOT NULL
-      AND coa.type = 'liability'
-      AND LOWER(at.name) LIKE ${`%${normalizedTaxType}%`}
-    ORDER BY
-      CASE WHEN LOWER(at.name) = ${normalizedTaxType} THEN 0 ELSE 1 END,
-      at.id ASC
-    LIMIT 1
-  `));
-  return rows[0]?.account_id ? Number(rows[0].account_id) : null;
-}
 
 type ItemRow = {
   id: number;

@@ -82,7 +82,7 @@ describe("invoice withholding calculation", () => {
         gross: 21780420,
         pph: 2943300,
         payable: 18837120,
-        type: "PPh 15",
+        type: "PPh 23",
         rate: 15,
       },
       {
@@ -102,5 +102,30 @@ describe("invoice withholding calculation", () => {
       payable_amount: 32711730,
     });
     expect(result.withholding.calculation_method).toBe("calculated_from_vendor_policy");
+  });
+
+  it("matches the Sport Center Angkasa Pura invoice PPh total", () => {
+    const result = applyWithholdingCalculations(
+      [
+        { component: "concession", label: "Pendapatan Konsesi", dpp: 13000000 },
+        { component: "electricity", label: "Pemakaian Listrik", dpp: 10566250 },
+        { component: "water", label: "Pemakaian Air", dpp: 1638810 },
+      ],
+      {},
+      {},
+      sourceText,
+      "PT Angkasa Pura Indonesia",
+    );
+
+    expect(result.components.map((component) => component.withholding_tax_amount)).toEqual([
+      1950000,
+      1056625,
+      163881,
+    ]);
+    expect(result.withholding.amount).toBe(3170506);
+    expect(result.totals.withholding_tax_amount).toBe(3170506);
+    expect(result.components[0]?.withholding_tax_type).toBe("PPh 23");
+    expect(result.components[1]?.withholding_tax_type).toBe("PPh 4(2)");
+    expect(result.components[2]?.withholding_tax_type).toBe("PPh 4(2)");
   });
 });

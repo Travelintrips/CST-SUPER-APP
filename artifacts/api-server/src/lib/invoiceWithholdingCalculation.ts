@@ -16,7 +16,7 @@ const ANGKASA_PURA_POLICY = {
   name: "PT Angkasa Pura Indonesia",
   ppnRate: 11,
   components: {
-    concession: { type: "PPh 15", rate: 15 },
+    concession: { type: "PPh 23", rate: 15 },
     electricity: { type: "PPh 4(2)", rate: 10 },
     water: { type: "PPh 4(2)", rate: 10 },
   } as Record<string, { type: string; rate: number }>,
@@ -123,7 +123,7 @@ export function applyWithholdingCalculations(
   if (vendorPolicy) {
     flags.push(
       `POLICY_APPLIED: ${vendorPolicy.name}; PPN ${vendorPolicy.ppnRate}%; ` +
-      "Konsesi PPh 15% dan Listrik/Air PPh 4(2) 10% dihitung dari DPP.",
+      "Konsesi PPh 23 15% dan Listrik/Air PPh 4(2) 10% dihitung dari DPP.",
     );
   }
 
