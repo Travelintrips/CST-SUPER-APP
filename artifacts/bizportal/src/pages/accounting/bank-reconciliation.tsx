@@ -701,6 +701,44 @@ interface OutstandingVendorInvoice {
   settlementStatus?: "outstanding" | "partially_settled" | "settled_unlinked" | "settled" | string;
   settlementLinkOnly?: boolean;
   settlementMatchMutationId?: number | null;
+  invoiceBreakdown?: {
+    components?: Array<{
+      component?: string | null;
+      label?: string | null;
+      dpp?: number | null;
+      ppn?: number | null;
+      gross?: number | null;
+      withholding_tax_type?: string | null;
+      withholding_tax_amount?: number | null;
+      withholding_tax_rate?: number | null;
+      payable_amount?: number | null;
+    }>;
+    withholding_tax?: {
+      type?: string | null;
+      rate?: number | null;
+      amount?: number | null;
+      evidence?: string | null;
+    } | null;
+    totals?: {
+      dpp?: number | null;
+      ppn?: number | null;
+      gross?: number | null;
+      withholding_tax_amount?: number | null;
+      payable_amount?: number | null;
+    } | null;
+  } | null;
+  expenseLines?: Array<{
+    lineId: number;
+    description: string;
+    quantity?: number | null;
+    unit?: string | null;
+    amount: number;
+    taxAmount?: number;
+    coaAccountId?: number | null;
+    coaCode?: string | null;
+    coaName?: string | null;
+    coaResolutionStatus?: string | null;
+  }>;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -2813,7 +2851,7 @@ function VendorInvoicePaymentDialog({
   onSaved: () => Promise<void> | void;
 }) {
   const { toast } = useToast();
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [saving, setSaving] = useState(false);
   const companyId = mutation?.company_id ?? null;
   const mutationAmount = Number(mutation?.amount ?? 0);
@@ -2823,12 +2861,6 @@ function VendorInvoicePaymentDialog({
     enabled: open && Number.isInteger(companyId) && Number(companyId) > 0,
     queryFn: async () => {
       const response = await fetch(`/api/bank-reconciliation/${mutation?.id}/vendor-invoice-candidates`, {
-      const params = new URLSearchParams({
-        company: String(companyId),
-        includeSettlementUnlinked: "true",
-        ...(mutation?.id ? { mutationId: String(mutation.id) } : {}),
-      });
-      const response = await fetch(`/api/accounting/bank-disbursements/vendor-invoices/outstanding?${params}`, {
         credentials: "include",
         headers: { "x-company-id": String(companyId) },
       });
@@ -2839,118 +2871,103 @@ function VendorInvoicePaymentDialog({
     staleTime: 0,
   });
 
-  const invoices = (invoicesQuery.data ?? []).filter((invoice) => invoice.source === "vendor_invoice");
-  const selected = invoices.find((invoice) => String(invoice.id) === selectedId) ?? null;
-  const linkOnly = selected?.settlementMode === "link_only";
+  const invoices = (invoicesQuery.data ?? []).filter(
+    (invoice) =>
+      invoice.source === "vendor_invoice"
+      && Number(invoice.outstanding) > 0.01
+      && invoice.settlementStatus !== "settled"
+      && invoice.settlementStatus !== "settled_unlinked",
+  );
+  const selectedInvoices = invoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const selectedTotal = selectedInvoices.reduce(
+    (sum, invoice) =>
+      sum + (selectedInvoices.length === 1
+        ? Math.min(Number(invoice.outstanding), mutationAmount)
+        : Number(invoice.outstanding)),
+    0,
+  );
+  const selectionFitsMutation = Math.abs(selectedTotal - mutationAmount) <= 0.01;
+  const selectedHasWithholdingReview = selectedInvoices.some(
+    (invoice) =>
+      Number(invoice.withholdingTaxAmount ?? 0) > 0
+      || Boolean(invoice.taxReviewStatus && invoice.taxReviewStatus !== "not_required"),
+  );
 
   useEffect(() => {
     if (!open) {
-      setSelectedId("");
+      setSelectedIds([]);
       setSaving(false);
     }
   }, [open, mutation?.id]);
 
+  const toggleInvoice = (invoiceId: number, checked: boolean) => {
+    setSelectedIds((current) =>
+      checked
+        ? [...current, invoiceId]
+        : current.filter((id) => id !== invoiceId),
+    );
+  };
+
   const save = async () => {
-    if (!mutation || !selected) {
-      toast({ title: "Pilih invoice vendor terlebih dahulu", variant: "destructive" });
+    if (!mutation || selectedInvoices.length === 0) {
+      toast({ title: "Pilih minimal satu invoice vendor", variant: "destructive" });
       return;
     }
-    if (linkOnly) {
-      setSaving(true);
-      try {
-        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-link`, {
-    if (selected.settlementLinkOnly) {
-      setSaving(true);
-      try {
-        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-settlement-link`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-            "x-company-id": String(companyId ?? ""),
-          },
-          body: JSON.stringify({ vendor_invoice_id: selected.id }),
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error ?? "Link pembayaran invoice gagal diproses");
-        toast({
-          title: "Settlement berhasil ditautkan",
-          description: `${selected.billNumber ?? selected.docNumber} — ${idr(mutationAmount)} ditautkan ke ${body.disbursementNumber ?? "Bank Disbursement"} tanpa jurnal baru.`,
-        if (!response.ok) throw new Error(body.error ?? "Settlement invoice vendor gagal ditautkan");
-        toast({
-          title: "Settlement invoice berhasil ditautkan",
-          description: `${selected.billNumber ?? selected.docNumber} — tidak ada jurnal atau pembayaran baru yang dibuat.`,
-        });
-        onClose();
-        await onSaved();
-      } catch (error) {
-        toast({
-          title: "Gagal menautkan settlement",
-          description: error instanceof Error ? error.message : String(error),
-          variant: "destructive",
-        });
-      } finally {
-        setSaving(false);
-      }
-    } else if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
+    if (!selectionFitsMutation) {
+      toast({
+        title: "Total pilihan belum sama dengan nominal mutasi",
+        description: `Alokasi terpilih ${idr(selectedTotal)}; nominal mutasi ${idr(mutationAmount)}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (selectedHasWithholdingReview) {
+      toast({
+        title: "Review PPh masih diperlukan",
+        description: "Invoice dengan withholding tax atau nominal PPh yang belum tervalidasi harus dibayar melalui Bank Disbursement.",
+        variant: "destructive",
+      });
       return;
     }
 
-    if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
-      setSaving(true);
-      try {
-        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-idempotency-key": crypto.randomUUID(),
-            "x-company-id": String(companyId ?? ""),
-          },
-          body: JSON.stringify({
-            vendor_invoice_id: selected.id,
-            amount: mutationAmount,
-          }),
-        });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error ?? "Pembayaran invoice vendor gagal diproses");
-        toast({
-          title: "Pembayaran invoice berhasil dialokasikan",
-          description: `${selected.billNumber ?? selected.docNumber} — ${idr(mutationAmount)} masuk ke Hutang Vendor/AP.`,
-        });
-        onClose();
-        await onSaved();
-      } catch (error) {
-        toast({
-          title: "Gagal mengalokasikan pembayaran",
-          description: error instanceof Error ? error.message : String(error),
-          variant: "destructive",
-        });
-      } finally {
-        setSaving(false);
-      }
-    } else {
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment-batch`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-idempotency-key": crypto.randomUUID(),
+          "x-company-id": String(companyId ?? ""),
+        },
+        body: JSON.stringify({ vendor_invoice_ids: selectedIds }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? "Pembayaran invoice vendor gagal diproses");
       toast({
-        title: "Nominal melebihi sisa invoice",
-        description: `Sisa invoice ${idr(selected.outstanding)} sedangkan mutasi ${idr(mutationAmount)}.`,
+        title: "Pembayaran invoice berhasil dialokasikan",
+        description: `${selectedInvoices.length} invoice — ${idr(mutationAmount)} masuk ke Hutang Vendor/AP.`,
+      });
+      onClose();
+      await onSaved();
+    } catch (error) {
+      toast({
+        title: "Gagal mengalokasikan pembayaran",
+        description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[88vh] max-w-6xl overflow-y-auto">
         <DialogHeader>
-            <DialogTitle>Match / Link Invoice Vendor</DialogTitle>
-          <DialogDescription>
-              {linkOnly
-                ? "Pembayaran Bank Disbursement yang sudah tercatat akan ditautkan tanpa jurnal atau pembayaran baru."
-                : "Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru."}
           <DialogTitle>Match / Link Invoice Vendor</DialogTitle>
           <DialogDescription>
-            Invoice outstanding akan dijurnal sebagai pelunasan hutang. Invoice yang sudah lunas hanya ditautkan ke settlement tanpa pembayaran atau jurnal baru.
+            Pilih satu atau beberapa invoice hasil ekstrak yang masih memiliki saldo. Pembayaran akan dijurnal sebagai pelunasan Hutang Vendor/AP, bukan beban baru.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -2962,6 +2979,10 @@ function VendorInvoicePaymentDialog({
             <div className="mt-1 text-xs">
               Jurnal: <strong>Debit Hutang Vendor/AP</strong> — <strong>Kredit Bank</strong>
             </div>
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Invoice yang sudah tersettle penuh tidak ditampilkan. Untuk beberapa invoice, total sisa yang dicentang harus sama persis dengan nominal mutasi.
           </div>
 
           {invoicesQuery.isLoading && (
@@ -2976,54 +2997,121 @@ function VendorInvoicePaymentDialog({
           )}
           {!invoicesQuery.isLoading && !invoicesQuery.error && invoices.length === 0 && (
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Tidak ada invoice vendor outstanding pada perusahaan aktif.
+              Tidak ada invoice vendor dengan saldo belum tersettle pada perusahaan aktif.
             </p>
           )}
           {invoices.length > 0 && (
-            <div className="space-y-2">
-              <Label>Invoice vendor</Label>
-              <Select value={selectedId} onValueChange={setSelectedId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pilih invoice vendor…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {invoices.map((invoice) => (
-                    <SelectItem key={invoice.id} value={String(invoice.id)}>
-                       {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — {invoice.settlementMode === "link_only" ? `link ${idr(invoice.linkedPaymentAmount ?? mutationAmount)}` : `sisa ${idr(invoice.outstanding)}`}
-                      {invoice.settlementLinkOnly ? "[Link Settlement] " : ""}
-                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — sisa {idr(invoice.outstanding)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selected && (
-                <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
-                  <div className="flex justify-between"><span>DPP / subtotal</span><strong>{idr(selected.subtotal)}</strong></div>
-                  <div className="flex justify-between"><span>PPN</span><strong>{idr(selected.taxAmount)}</strong></div>
-                  <div className="flex justify-between"><span>Total invoice</span><strong>{idr(selected.grandTotal)}</strong></div>
-                  <div className="flex justify-between">
-                    <span>Nilai sebelum PPN</span>
-                    <strong>{idr(Math.max(0, selected.grandTotal - Number(selected.taxAmount ?? 0)))}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>PPN Masukan</span>
-                    <strong>{idr(Number(selected.taxAmount ?? 0))}</strong>
-                  </div>
-                  <div className="flex justify-between"><span>Sudah dibayar</span><strong>{idr(selected.amountPaid)}</strong></div>
-                  <div className="flex justify-between"><span>Sisa</span><strong>{idr(selected.outstanding)}</strong></div>
-                   {selected.taxReviewStatus && selected.taxReviewStatus !== "not_required" && (
-                     <p className="mt-2 text-amber-700">
-                       Status review PPh: {selected.taxReviewStatus}. Nilai PPN ditampilkan sebagai rincian, bukan pembayaran terpisah.
-                     </p>
-                  )}
-                   {linkOnly && selected.linkedDisbursementNumber && (
-                     <p className="mt-2 text-emerald-700">
-                       Pembayaran cocok dengan {selected.linkedDisbursementNumber}; settlement hanya akan ditautkan.
-                     </p>
-                   )}
-                   {!linkOnly && (selected.withholdingTaxAmount ?? 0) > 0 && (
-                    <p className="mt-2 text-amber-700">Invoice memiliki withholding tax; gunakan Bank Disbursement.</p>
-                  )}
+            <div className="overflow-x-auto rounded-md border">
+              <Table className="min-w-[1050px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10" />
+                    <TableHead>Invoice / vendor</TableHead>
+                    <TableHead>Hasil ekstrak</TableHead>
+                    <TableHead>Komponen & COA</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Dibayar</TableHead>
+                    <TableHead className="text-right">Sisa</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {invoices.map((invoice) => {
+                    const checked = selectedIds.includes(invoice.id);
+                    const reviewRequired =
+                      Number(invoice.withholdingTaxAmount ?? 0) > 0
+                      || Boolean(invoice.taxReviewStatus && invoice.taxReviewStatus !== "not_required");
+                    const components = invoice.invoiceBreakdown?.components ?? [];
+                    const expenseLines = invoice.expenseLines ?? [];
+                    const componentRowCount = Math.max(components.length, expenseLines.length);
+                    return (
+                      <TableRow key={invoice.id} className={checked ? "bg-emerald-50/70" : undefined}>
+                        <TableCell className="align-top pt-4">
+                          <Checkbox
+                            checked={checked}
+                            disabled={saving || reviewRequired}
+                            onCheckedChange={(value) => toggleInvoice(invoice.id, value === true)}
+                            aria-label={`Pilih invoice ${invoice.billNumber ?? invoice.docNumber}`}
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <div className="font-medium">{invoice.billNumber ?? invoice.docNumber}</div>
+                          <div className="text-xs text-muted-foreground">{invoice.supplierName}</div>
+                          {invoice.dueDate && <div className="text-xs text-muted-foreground">Jatuh tempo {invoice.dueDate}</div>}
+                          {reviewRequired && (
+                            <Badge variant="outline" className="mt-1 border-amber-300 text-amber-700">
+                              Review PPh
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="align-top text-xs">
+                          {components.length > 0 ? (
+                            <div className="space-y-1">
+                              {components.map((component, index) => (
+                                <div key={`${invoice.id}-component-${index}`} className="rounded border bg-white px-2 py-1">
+                                  <div className="font-medium">{component.label ?? component.component ?? `Komponen ${index + 1}`}</div>
+                                  <div>DPP {idr(component.dpp ?? 0)} · PPN {idr(component.ppn ?? 0)} · Gross {idr(component.gross ?? 0)}</div>
+                                  {component.withholding_tax_amount == null && (component.withholding_tax_rate != null || invoice.taxReviewStatus !== "not_required") && (
+                                    <div className="text-amber-700">PPh: nominal belum tercetak; review manual</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-muted-foreground">Breakdown OCR tidak tersedia</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="align-top text-xs">
+                          {componentRowCount > 0 ? (
+                            <div className="space-y-1">
+                              {Array.from({ length: componentRowCount }, (_, index) => {
+                                const component = components[index];
+                                const line = expenseLines[index];
+                                return (
+                                  <div key={`${invoice.id}-coa-${line?.lineId ?? index}`} className="rounded border bg-white px-2 py-1">
+                                    <div className="font-medium">
+                                      {component?.label ?? component?.component ?? line?.description ?? `Komponen ${index + 1}`}
+                                    </div>
+                                    {component && (
+                                      <div className="text-muted-foreground">
+                                        DPP {idr(component.dpp ?? 0)} · PPN {idr(component.ppn ?? 0)} · Gross {idr(component.gross ?? 0)}
+                                      </div>
+                                    )}
+                                    <div className={line?.coaCode ? "text-emerald-700" : "text-amber-700"}>
+                                      {line?.coaCode ? `${line.coaCode} — ${line.coaName ?? "COA"}` : "COA belum dipetakan"}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="text-amber-700">Belum ada line COA</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="align-top text-right">{idr(invoice.grandTotal)}</TableCell>
+                        <TableCell className="align-top text-right">{idr(invoice.amountPaid)}</TableCell>
+                        <TableCell className="align-top text-right font-semibold text-emerald-700">{idr(invoice.outstanding)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {selectedInvoices.length > 0 && (
+            <div className={`rounded-md border px-3 py-2 text-sm ${selectionFitsMutation ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              <div className="flex flex-wrap justify-between gap-3">
+                <span>{selectedInvoices.length} invoice dipilih</span>
+                <span>Alokasi {idr(selectedTotal)} dari mutasi {idr(mutationAmount)}</span>
+              </div>
+              {!selectionFitsMutation && (
+                <div className="mt-1 text-xs">
+                  Pilih invoice lain atau ubah pilihan sampai total alokasi sama dengan nominal mutasi.
+                </div>
+              )}
+              {selectedHasWithholdingReview && (
+                <div className="mt-1 text-xs text-amber-700">
+                  Pilihan mengandung PPh/review tax. Gunakan Bank Disbursement agar jurnal gross AP, bank net, dan hutang pajak tetap seimbang.
                 </div>
               )}
             </div>
@@ -3034,15 +3122,10 @@ function VendorInvoicePaymentDialog({
           <Button
             className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             onClick={save}
-            disabled={saving || !selected || (!linkOnly && (selected.withholdingTaxAmount ?? 0) > 0)}
+            disabled={saving || selectedInvoices.length === 0 || !selectionFitsMutation || selectedHasWithholdingReview}
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving ? "Memproses…" : linkOnly ? "Link Settlement" : "Match & Bayar Invoice"}
-            {saving
-              ? "Memproses…"
-              : selected?.settlementLinkOnly
-                ? "Link Settlement"
-                : "Match & Bayar Invoice"}
+            {saving ? "Memproses…" : "Match & Bayar Invoice"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -31,3 +31,17 @@ does not create a journal or increment amount_paid.
 **Why:** A valid Bank Disbursement can settle the invoice financially before a
 bank mutation is linked. Hiding that invoice forever loses settlement evidence,
 while treating the link as a new payment double-settles AP.
+
+For a bank mutation that covers several vendor invoices, the reviewer may select
+multiple positive-outstanding invoices, but the selected allocation must equal the
+mutation exactly (with a single invoice allowed to receive a partial payment).
+The settlement is one atomic AP-debit/bank-credit journal and updates every
+invoice under row locks.
+
+**Why:** A checkbox list is only safe when the UI total and the backend total use
+the same outstanding-balance contract; separate sequential payments can race or
+leave a bank mutation partially accounted.
+
+**How to apply:** Keep batch selection company-scoped, reject fully settled or
+withholding-review invoices, lock the mutation and invoices in one transaction,
+and create one approved reconciliation match carrying the batch identity.

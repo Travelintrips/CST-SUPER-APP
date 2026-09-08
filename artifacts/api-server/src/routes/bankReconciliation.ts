@@ -5326,6 +5326,248 @@ router.post(
 // A bank mutation that settles a posted vendor invoice must debit AP, not the
 // expense COA used by the invoice journal. This path keeps the bank mutation,
 // payment journal, invoice amount_paid, and reconciliation link atomic.
+router.post(
+  "/:mutationId/vendor-invoice-payment-batch",
+  createIdempotencyMiddleware("reconciliation:vendor-invoice-payment-batch"),
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const rawIds = Array.isArray(req.body?.vendor_invoice_ids) ? req.body.vendor_invoice_ids : [];
+    const numericIds: number[] = rawIds.map((value: unknown): number => Number(value));
+    const vendorInvoiceIds: number[] = Array.from(new Set<number>(numericIds));
+    const actor = String((req as any).user?.email ?? "admin");
+
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (
+      vendorInvoiceIds.length === 0
+      || vendorInvoiceIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    ) {
+      return res.status(400).json({ error: "Minimal satu invoice vendor yang valid wajib dipilih" });
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const { rows: mutationRows } = await tx.execute(sql`
+          SELECT id, amount, direction, transaction_date, mutation_key,
+                 company_id, bank_account_id, journal_entry_id, status
+          FROM bank_mutations
+          WHERE id = ${mutationId}
+          FOR UPDATE
+        `);
+        const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+        if (!mutation) throw Object.assign(new Error("Mutasi bank tidak ditemukan"), { httpStatus: 404 });
+
+        const companyId = Number(mutation.company_id);
+        const mutationAmount = Number(mutation.amount);
+        if (!Number.isInteger(companyId) || companyId <= 0) {
+          throw Object.assign(new Error("Mutasi tidak memiliki company context yang valid"), { httpStatus: 422 });
+        }
+        if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+          throw Object.assign(new Error("Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor"), { httpStatus: 422 });
+        }
+        if (
+          mutation.journal_entry_id != null
+          || ["approved", "posted", "approved_pending_posting"].includes(String(mutation.status))
+        ) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
+        }
+        const { rows: activeMatches } = await tx.execute(sql`
+          SELECT id FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId} AND status IN ('candidate', 'approved')
+          LIMIT 1
+        `);
+        if (activeMatches.length > 0) {
+          throw Object.assign(new Error("Mutasi sudah memiliki settlement matching aktif"), { httpStatus: 409 });
+        }
+
+        const { rows: invoiceRows } = await tx.execute(sql`
+          SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
+                 total_amount, tax_amount, invoice_breakdown, status,
+                 withholding_tax_amount, tax_review_status
+          FROM vendor_invoices
+          WHERE id IN (${sql.join(vendorInvoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND company_id = ${companyId}
+            AND cancelled_at IS NULL
+          ORDER BY id
+          FOR UPDATE
+        `);
+        if (invoiceRows.length !== vendorInvoiceIds.length) {
+          throw Object.assign(new Error("Satu atau lebih invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
+        }
+
+        const allocations = (invoiceRows as Array<Record<string, unknown>>).map((invoice) => {
+          const invoiceNumber = String(invoice.invoice_number ?? invoice.id);
+          if (!["posted", "matched"].includes(String(invoice.status))) {
+            throw Object.assign(new Error(`Invoice ${invoiceNumber} harus berstatus posted atau matched sebelum dibayar`), { httpStatus: 422 });
+          }
+          if (
+            Number(invoice.withholding_tax_amount ?? 0) > 0
+            || String(invoice.tax_review_status ?? "not_required") !== "not_required"
+          ) {
+            throw Object.assign(new Error(`Invoice ${invoiceNumber} memiliki withholding tax/review. Gunakan Bank Disbursement.`), { httpStatus: 422 });
+          }
+          const financials = resolveVendorInvoiceFinancialAmounts({
+            totalAmount: invoice.total_amount,
+            taxAmount: invoice.tax_amount,
+            grandTotal: invoice.grand_total,
+            invoiceBreakdown: invoice.invoice_breakdown,
+          });
+          const amountPaid = Number(invoice.amount_paid ?? 0);
+          const outstanding = Math.max(0, financials.grandTotal - amountPaid);
+          if (!Number.isFinite(financials.grandTotal) || financials.grandTotal <= 0 || outstanding <= 0.01) {
+            throw Object.assign(new Error(`Invoice ${invoiceNumber} sudah lunas atau nominalnya tidak valid`), { httpStatus: 409 });
+          }
+          return {
+            invoice,
+            invoiceNumber,
+            financials,
+            amountPaid,
+            outstanding,
+            amount: invoiceRows.length === 1 ? Math.min(mutationAmount, outstanding) : outstanding,
+          };
+        });
+        const totalAllocation = allocations.reduce((sum, item) => sum + item.amount, 0);
+        if (
+          !Number.isFinite(mutationAmount)
+          || mutationAmount <= 0
+          || Math.abs(totalAllocation - mutationAmount) > 0.01
+        ) {
+          throw Object.assign(
+            new Error(`Total sisa invoice terpilih (${totalAllocation.toFixed(2)}) harus sama dengan nominal mutasi (${mutationAmount.toFixed(2)}).`),
+            { httpStatus: 422 },
+          );
+        }
+
+        const { rows: settingsRows } = await tx.execute(sql`
+          SELECT default_bank_account_id, ap_account_id, bank_journal_id
+          FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+        `);
+        const settings = settingsRows[0] as Record<string, unknown> | undefined;
+        let bankCoaId = settings?.default_bank_account_id == null ? null : Number(settings.default_bank_account_id);
+        const bankAccountId = mutation.bank_account_id == null ? null : Number(mutation.bank_account_id);
+        if (bankAccountId != null && Number.isInteger(bankAccountId)) {
+          const { rows: bankRows } = await tx.execute(sql`
+            SELECT coa_id FROM company_bank_accounts
+            WHERE id = ${bankAccountId} AND company_id = ${companyId} LIMIT 1
+          `);
+          if (bankRows[0]?.coa_id != null) bankCoaId = Number(bankRows[0].coa_id);
+        }
+        const apCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        let journalId = settings?.bank_journal_id == null ? null : Number(settings.bank_journal_id);
+        if (!bankCoaId || !apCoaId) {
+          throw Object.assign(new Error("COA bank atau COA Hutang Vendor belum dikonfigurasi"), { httpStatus: 422 });
+        }
+        if (!journalId) {
+          const { rows: journalRows } = await tx.execute(sql`
+            SELECT id FROM accounting_journals
+            WHERE company_id = ${companyId}
+              AND (LOWER(name) LIKE '%bank%' OR LOWER(code) LIKE '%bank%' OR type = 'bank')
+            ORDER BY id ASC LIMIT 1
+          `);
+          journalId = journalRows[0]?.id == null ? null : Number(journalRows[0].id);
+        }
+        if (!journalId) throw Object.assign(new Error("Jurnal bank belum dikonfigurasi"), { httpStatus: 422 });
+        const { rows: journalRows } = await tx.execute(sql`
+          SELECT code FROM accounting_journals WHERE id = ${journalId} AND company_id = ${companyId} LIMIT 1
+        `);
+        const journalCode = String(journalRows[0]?.code ?? "BANK");
+        const description = `Pembayaran ${allocations.length} invoice vendor — ${String(mutation.mutation_key ?? "")}`.slice(0, 200);
+        const entry = await postEntryWithClient(
+          tx as any,
+          {
+            journalId,
+            date: new Date(String(mutation.transaction_date)),
+            ref: String(mutation.mutation_key ?? "").slice(0, 100),
+            description,
+            source: "bank_reconciliation",
+            sourceModule: "vendor_invoice_payment",
+            sourceId: mutationId,
+            createdById: actor,
+            companyId,
+            lines: [
+              ...allocations.map((item) => ({
+                accountId: apCoaId,
+                debit: item.amount,
+                credit: 0,
+                description: `Pembayaran invoice vendor ${item.invoiceNumber}`.slice(0, 200),
+              })),
+              { accountId: bankCoaId, debit: 0, credit: mutationAmount, description },
+            ],
+          },
+          journalCode,
+          "draft",
+        );
+
+        for (const item of allocations) {
+          const newPaid = Math.round((item.amountPaid + item.amount) * 100) / 100;
+          await tx.execute(sql`
+            UPDATE vendor_invoices
+            SET amount_paid = ${String(newPaid)},
+                status = ${newPaid >= item.financials.grandTotal - 0.01 ? "paid" : "posted"},
+                updated_at = NOW()
+            WHERE id = ${Number(item.invoice.id)}
+          `);
+        }
+        const invoiceIdsText = allocations.map((item) => Number(item.invoice.id)).join(",");
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'approved_pending_posting', journal_entry_id = ${entry.id},
+              approved_by = ${actor}, approved_at = NOW(), updated_at = NOW()
+          WHERE id = ${mutationId}
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match,
+             status, candidate_source, is_manual)
+          VALUES
+            (${mutationId}, 'vendor_invoice', ${Number(allocations[0].invoice.id)}, 100,
+             ${`vendor invoice batch payment; invoice_ids:${invoiceIdsText}`},
+             TRUE, FALSE, TRUE, FALSE, FALSE, 'approved', 'vendor_invoice_batch', TRUE)
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId}, 'MATCH_APPROVED', ${actor},
+            ${JSON.stringify({
+              candidate_type: "vendor_invoice_batch",
+              candidate_ids: allocations.map((item) => Number(item.invoice.id)),
+              amounts: allocations.map((item) => item.amount),
+              total_amount: mutationAmount,
+              journal_entry_id: entry.id,
+              payment_type: "vendor_invoice_settlement",
+            })}
+          )
+        `);
+
+        return {
+          mutationId,
+          journalEntryId: entry.id,
+          totalAmount: mutationAmount,
+          invoices: allocations.map((item) => ({
+            vendorInvoiceId: Number(item.invoice.id),
+            invoiceNumber: item.invoiceNumber,
+            amount: item.amount,
+            outstanding: Math.max(0, item.outstanding - item.amount),
+          })),
+        };
+      });
+      audit(req, {
+        action: "vendor-invoice-payment-batch-allocated",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error: any) {
+      const status = Number(error?.httpStatus) || 400;
+      logger.warn({ err: error?.message ?? error, mutationId, vendorInvoiceIds }, "[bankRecon/vendor-invoice-payment-batch] rejected");
+      return res.status(status).json({ error: error?.message ?? "Pembayaran invoice vendor gagal diproses" });
+    }
+  },
+);
+
 router.get(
   "/:mutationId/vendor-invoice-candidates",
   async (req, res) => {
@@ -5405,6 +5647,57 @@ router.get(
         ORDER BY vi.due_date ASC NULLS LAST, vi.id ASC
       `);
 
+      const invoiceIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+      const expenseLinesByInvoice = new Map<number, Array<{
+        lineId: number;
+        description: string;
+        quantity: number;
+        unit: string;
+        amount: number;
+        taxAmount: number;
+        coaAccountId: number | null;
+        coaCode: string | null;
+        coaName: string | null;
+        coaResolutionStatus: string | null;
+      }>>();
+      if (invoiceIds.length > 0) {
+        const { rows: lineRows } = await db.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vil.id AS line_id,
+            vil.name AS description,
+            vil.quantity,
+            vil.unit,
+            vil.subtotal AS amount,
+            vil.tax_amount,
+            vil.coa_account_id,
+            vil.coa_resolution_status,
+            coa.code AS coa_code,
+            coa.name AS coa_name
+          FROM vendor_invoice_lines vil
+          LEFT JOIN chart_of_accounts coa ON coa.id = vil.coa_account_id
+          WHERE vil.invoice_id IN (${sql.join(invoiceIds.map((id) => sql`${id}`), sql`, `)})
+          ORDER BY vil.invoice_id, vil.id
+        `);
+        for (const line of lineRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(line.invoice_id);
+          const current = expenseLinesByInvoice.get(invoiceId) ?? [];
+          current.push({
+            lineId: Number(line.line_id),
+            description: String(line.description ?? ""),
+            quantity: Number(line.quantity ?? 0),
+            unit: String(line.unit ?? ""),
+            amount: Number(line.amount ?? 0),
+            taxAmount: Number(line.tax_amount ?? 0),
+            coaAccountId: line.coa_account_id == null ? null : Number(line.coa_account_id),
+            coaCode: line.coa_code == null ? null : String(line.coa_code),
+            coaName: line.coa_name == null ? null : String(line.coa_name),
+            coaResolutionStatus: line.coa_resolution_status == null ? null : String(line.coa_resolution_status),
+          });
+          expenseLinesByInvoice.set(invoiceId, current);
+        }
+      }
+
       const invoices = rows.map((row) => {
         const financials = resolveVendorInvoiceFinancialAmounts({
           totalAmount: row.total_amount,
@@ -5429,6 +5722,8 @@ router.get(
           withholdingTaxAmount: Number(row.withholding_tax_amount ?? 0),
           dueDate: row.due_date ?? null,
           source: "vendor_invoice",
+           invoiceBreakdown: row.invoice_breakdown ?? null,
+           expenseLines: expenseLinesByInvoice.get(Number(row.id)) ?? [],
           settlementMode: linkOnly ? "link_only" : "payment",
           linkedDisbursementId: linkOnly ? Number(row.linked_disbursement_id) : null,
           linkedDisbursementNumber: linkOnly ? String(row.linked_disbursement_number ?? "") : null,
