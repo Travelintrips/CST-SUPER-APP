@@ -510,7 +510,10 @@ router.post("/runs/:id/approve", async (req, res) => {
   const kasbonByAccountMap = new Map<number, number>();
   for (const allocation of allAllocations) {
     const adv = advanceById.get(allocation.cash_advance_id);
-    if (!adv?.receivableAccountId) continue;
+    if (!adv?.receivableAccountId) {
+      res.status(409).json({ message: `COA piutang kasbon ${allocation.cash_advance_id} belum terisi.` });
+      return;
+    }
     kasbonByAccountMap.set(
       adv.receivableAccountId,
       (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(allocation.amount),
