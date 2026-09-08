@@ -17,6 +17,12 @@ through COA selection or Rule AI.
 be forced into AP settlement. Forcing the invoice dialog can hide the correct
 no-candidate accounting path and risks duplicating an already-posted expense or AP.
 
-**How to apply:** Keep the no-candidate path available for COA/Rule AI, and treat
-the vendor-invoice dialog as a separate allocation flow that requires an actually
-outstanding invoice in the active company.
+**How to apply:** Keep the no-candidate path available for COA/Rule AI. In the
+bank-reconciliation dialog, an outstanding invoice may use Match & Bayar; an
+already-paid invoice may appear only when it has no active vendor-invoice
+settlement match, and must use a reconciliation-only Link Settlement path that
+does not create a journal or increment amount_paid.
+
+**Why:** A valid Bank Disbursement can settle the invoice financially before a
+bank mutation is linked. Hiding that invoice forever loses settlement evidence,
+while treating the link as a new payment double-settles AP.

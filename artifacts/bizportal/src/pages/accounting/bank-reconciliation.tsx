@@ -693,6 +693,9 @@ interface OutstandingVendorInvoice {
   withholdingTaxAmount?: number;
   dueDate?: string | null;
   source?: string;
+  settlementStatus?: "outstanding" | "partially_settled" | "settled_unlinked" | "settled" | string;
+  settlementLinkOnly?: boolean;
+  settlementMatchMutationId?: number | null;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -2811,10 +2814,14 @@ function VendorInvoicePaymentDialog({
   const mutationAmount = Number(mutation?.amount ?? 0);
 
   const invoicesQuery = useQuery({
-    queryKey: ["bank-reconciliation-vendor-invoices", companyId],
+    queryKey: ["bank-reconciliation-vendor-invoices", companyId, mutation?.id],
     enabled: open && Number.isInteger(companyId) && Number(companyId) > 0,
     queryFn: async () => {
-      const params = new URLSearchParams({ company: String(companyId) });
+      const params = new URLSearchParams({
+        company: String(companyId),
+        includeSettlementUnlinked: "true",
+        ...(mutation?.id ? { mutationId: String(mutation.id) } : {}),
+      });
       const response = await fetch(`/api/accounting/bank-disbursements/vendor-invoices/outstanding?${params}`, {
         credentials: "include",
         headers: { "x-company-id": String(companyId) },
@@ -2841,6 +2848,39 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Pilih invoice vendor terlebih dahulu", variant: "destructive" });
       return;
     }
+    if (selected.settlementLinkOnly) {
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-settlement-link`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+            "x-company-id": String(companyId ?? ""),
+          },
+          body: JSON.stringify({ vendor_invoice_id: selected.id }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error ?? "Settlement invoice vendor gagal ditautkan");
+        toast({
+          title: "Settlement invoice berhasil ditautkan",
+          description: `${selected.billNumber ?? selected.docNumber} — tidak ada jurnal atau pembayaran baru yang dibuat.`,
+        });
+        onClose();
+        await onSaved();
+      } catch (error) {
+        toast({
+          title: "Gagal menautkan settlement",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
       setSaving(true);
       try {
@@ -2887,9 +2927,9 @@ function VendorInvoicePaymentDialog({
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Match ke Invoice Vendor</DialogTitle>
+          <DialogTitle>Match / Link Invoice Vendor</DialogTitle>
           <DialogDescription>
-            Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru.
+            Invoice outstanding akan dijurnal sebagai pelunasan hutang. Invoice yang sudah lunas hanya ditautkan ke settlement tanpa pembayaran atau jurnal baru.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -2928,6 +2968,7 @@ function VendorInvoicePaymentDialog({
                 <SelectContent>
                   {invoices.map((invoice) => (
                     <SelectItem key={invoice.id} value={String(invoice.id)}>
+                      {invoice.settlementLinkOnly ? "[Link Settlement] " : ""}
                       {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — sisa {idr(invoice.outstanding)}
                     </SelectItem>
                   ))}
@@ -2969,7 +3010,11 @@ function VendorInvoicePaymentDialog({
             disabled={saving || !selected || (selected.withholdingTaxAmount ?? 0) > 0}
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving ? "Memproses…" : "Match & Bayar Invoice"}
+            {saving
+              ? "Memproses…"
+              : selected?.settlementLinkOnly
+                ? "Link Settlement"
+                : "Match & Bayar Invoice"}
           </Button>
         </DialogFooter>
       </DialogContent>
