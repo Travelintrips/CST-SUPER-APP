@@ -206,6 +206,7 @@ interface OutstandingInvoice {
   id: number;
   docNumber: string;
   billNumber: string | null;
+  vendorInvoiceRef?: string | null;
   supplierId: number | null;
   supplierName: string;
   grandTotal: number;
@@ -216,6 +217,14 @@ interface OutstandingInvoice {
   dueDate: string | null;
   currency: string;
   source: "purchase_document" | "vendor_invoice";
+  expenseLines?: Array<{
+    lineId: number;
+    description: string;
+    amount: number;
+    coaAccountId: number | null;
+    coaCode: string | null;
+    coaName: string | null;
+  }>;
   withholdingLines?: Array<{
     lineTaxId: number;
     invoiceLineId: number;
@@ -833,9 +842,10 @@ interface VendorInvoicePanelProps {
   selectedVendorId?: string | null;
   onSelectedVendorIdChange?: (id: string | null) => void;
   onSupplierCreated?: (supplier: { id: number; name: string }) => void;
+  onInvoiceAutoFill?: (invoice: OutstandingInvoice, vendorKey: string) => void;
 }
 
-function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, onLinesChange, whtAccounts, allAccounts, selectedVendorId: selectedVendorIdProp, onSelectedVendorIdChange, onSupplierCreated }: VendorInvoicePanelProps) {
+function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, onLinesChange, whtAccounts, allAccounts, selectedVendorId: selectedVendorIdProp, onSelectedVendorIdChange, onSupplierCreated, onInvoiceAutoFill }: VendorInvoicePanelProps) {
   const expenseAccounts = allAccounts.filter((a) => a.type === "expense" || a.type === "asset" || a.type === "liability");
   const [selectedVendorIdLocal, setSelectedVendorIdLocal] = useState<string | null>(null);
   const selectedVendorId = selectedVendorIdProp !== undefined ? selectedVendorIdProp : selectedVendorIdLocal;
@@ -933,7 +943,7 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         ? Math.max(0, inv.outstanding - withholdingAmount)
         : baseBreakdown.dpp;
       const taxAmount = withholdingLines.length > 0 ? withholdingAmount : baseBreakdown.taxAmount;
-      onLinesChange([...lines, {
+       onLinesChange([...lines, {
         purchaseDocumentId: inv.source === "purchase_document" ? inv.id : null,
         vendorInvoiceId: inv.source === "vendor_invoice" ? inv.id : null,
         lineKey: key,
@@ -953,8 +963,16 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         taxType: withholdingLines.map((line) => line.taxType).join(", ") || "ppn",
         dpp,
         taxAmount,
-        expenseAccountId: null,
+         expenseAccountId: (() => {
+           const coaIds = Array.from(new Set(
+             (inv.expenseLines ?? [])
+               .map((expenseLine) => expenseLine.coaAccountId)
+               .filter((accountId): accountId is number => accountId != null),
+           ));
+           return coaIds.length === 1 ? coaIds[0]! : null;
+         })(),
       }]);
+       onInvoiceAutoFill?.(inv, resolveInvoiceKey(inv));
     }
   };
 
@@ -1242,6 +1260,21 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
                           ))}
                         </SelectContent>
                       </Select>
+                      {line.whtAmount > 0 && (
+                        <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px]">
+                          <span className="font-semibold text-emerald-300">WHT otomatis:</span>{" "}
+                          <span className="text-slate-300">
+                            {line.withholdingAllocations?.length
+                              ? line.withholdingAllocations.map((allocation) => {
+                                const account = allAccounts.find((candidate) => candidate.id === allocation.liabilityAccountId);
+                                return account ? `${account.code} — ${account.name}` : `akun #${allocation.liabilityAccountId}`;
+                              }).join("; ")
+                              : line.whtAccountId
+                                ? `akun #${line.whtAccountId}`
+                                : "akun liability belum ditemukan"}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* ── 4. Ringkasan Pembayaran (SAP-style) ── */}
@@ -1297,13 +1330,44 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
                   <div className="col-span-2 px-3 pb-3">
                   </div>
                   <div className="col-span-2">
-                    <Label className="text-[10px] text-slate-500 mb-0.5 block">Akun Pengeluaran (COA) <span className="text-red-500">*</span></Label>
-                    <AccountCombobox
-                      accounts={expenseAccounts}
-                      value={line.expenseAccountId ?? null}
-                      onChange={(id) => updateLine(key, "expenseAccountId", id)}
-                      placeholder="Pilih akun COA pengeluaran..."
-                    />
+                    {(() => {
+                      const detectedExpenseLines = (inv.expenseLines ?? []).filter(
+                        (expenseLine) => expenseLine.coaAccountId != null,
+                      );
+                      const hasMultipleDetectedCoas = new Set(
+                        detectedExpenseLines.map((expenseLine) => expenseLine.coaAccountId),
+                      ).size > 1;
+                      if (hasMultipleDetectedCoas) {
+                        return (
+                          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs">
+                            <p className="font-semibold text-emerald-300">COA otomatis dari rincian invoice</p>
+                            <div className="mt-1 space-y-0.5 text-slate-300">
+                              {detectedExpenseLines.map((expenseLine) => (
+                                <div key={expenseLine.lineId} className="flex justify-between gap-3">
+                                  <span className="truncate">{expenseLine.description}</span>
+                                  <span className="shrink-0 font-mono text-emerald-200">
+                                    {expenseLine.coaCode ?? "—"} — {expenseLine.coaName ?? "COA"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <>
+                          <Label className="text-[10px] text-slate-500 mb-0.5 block">Akun Pengeluaran (COA)</Label>
+                          <AccountCombobox
+                            accounts={expenseAccounts}
+                            value={line.expenseAccountId ?? null}
+                            onChange={(id) => updateLine(key, "expenseAccountId", id)}
+                            placeholder={detectedExpenseLines.length === 1
+                              ? `${detectedExpenseLines[0]!.coaCode ?? "COA"} — ${detectedExpenseLines[0]!.coaName ?? "terdeteksi"}`
+                              : "Pilih akun COA pengeluaran..."}
+                          />
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -3114,6 +3178,18 @@ function CreateDisbDialog({
                   allAccounts={allAccounts}
                   selectedVendorId={selectedVendorIdForPanel}
                   onSelectedVendorIdChange={setSelectedVendorIdForPanel}
+                   onInvoiceAutoFill={(inv, vendorKey) => {
+                     const reference = inv.vendorInvoiceRef || inv.billNumber || inv.docNumber;
+                     setForm((prev) => ({
+                       ...prev,
+                       ref: prev.ref || reference,
+                       counterpartyName: prev.counterpartyName || inv.supplierName,
+                       counterpartyType: "supplier",
+                       counterpartyId: prev.counterpartyId || (inv.supplierId != null ? String(inv.supplierId) : ""),
+                     }));
+                     setCpSearchQuery((prev) => prev || inv.supplierName);
+                     setSelectedVendorIdForPanel(vendorKey);
+                   }}
                   onSupplierCreated={(s) => {
                     // Inject new supplier into outstanding data so the combobox shows it immediately
                     setOutstandingData((prev) =>

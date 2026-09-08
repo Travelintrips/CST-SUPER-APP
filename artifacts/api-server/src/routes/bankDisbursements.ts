@@ -113,6 +113,27 @@ type DisbRow = {
   expense_id: number | null;
 };
 
+async function resolveDefaultWithholdingAccountId(companyId: number, taxType: string): Promise<number | null> {
+  const normalizedTaxType = taxType.trim().toLowerCase();
+  if (!normalizedTaxType) return null;
+  const rows = execRows<{ account_id: number }>(await db.execute(sql`
+    SELECT at.account_id
+    FROM accounting_taxes at
+    INNER JOIN chart_of_accounts coa ON coa.id = at.account_id
+    WHERE at.company_id = ${companyId}
+      AND at.is_active = true
+      AND at.kind = 'withholding'
+      AND at.account_id IS NOT NULL
+      AND coa.type = 'liability'
+      AND LOWER(at.name) LIKE ${`%${normalizedTaxType}%`}
+    ORDER BY
+      CASE WHEN LOWER(at.name) = ${normalizedTaxType} THEN 0 ELSE 1 END,
+      at.id ASC
+    LIMIT 1
+  `));
+  return rows[0]?.account_id ? Number(rows[0].account_id) : null;
+}
+
 type ItemRow = {
   id: number;
   disbursement_id: number;
@@ -563,6 +584,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       grand_total: string;
       amount_paid: string | null;
       invoice_breakdown: Record<string, unknown> | null;
+      vendor_invoice_ref: string | null;
       tax_review_status: string | null;
       withholding_tax_amount: string | null;
       due_date: string | null;
@@ -580,6 +602,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           pd.grand_total,
           pd.amount_paid,
           NULL::jsonb AS invoice_breakdown,
+          NULL::text AS vendor_invoice_ref,
           NULL::text AS tax_review_status,
           NULL::numeric AS withholding_tax_amount,
           LEFT(pd.due_date, 10) AS due_date,
@@ -603,6 +626,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.grand_total,
           vi.amount_paid,
           vi.invoice_breakdown,
+          vi.vendor_invoice_ref,
           vi.tax_review_status,
            vi.withholding_tax_amount,
           to_char(vi.due_date, 'YYYY-MM-DD') AS due_date,
@@ -639,31 +663,83 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
         status: string;
       }>(await db.execute(sql`
         SELECT
-          vwr.vendor_invoice_id,
-          vwr.line_tax_id,
-          vwr.invoice_line_id,
-          vwr.tax_type,
-          vwr.tax_object,
-          vwr.tax_amount,
-          vwr.liability_account_id,
-          vwr.status
-        FROM vendor_withholding_records vwr
-        WHERE vwr.company_id = ${companyId}
-          AND vwr.vendor_invoice_id IN (${sql.join(vendorInvoiceIds.map((invoiceId) => sql`${invoiceId}`), sql`, `)})
-        ORDER BY vwr.vendor_invoice_id, vwr.invoice_line_id, vwr.id
+          vil.invoice_id AS vendor_invoice_id,
+          vit.id AS line_tax_id,
+          vit.invoice_line_id,
+          vit.tax_type,
+          vit.tax_object,
+          vit.tax_amount,
+          COALESCE(vwr.liability_account_id, vit.liability_account_id) AS liability_account_id,
+          COALESCE(vwr.status, vit.resolution_status) AS status
+        FROM vendor_invoice_line_taxes vit
+        INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+        INNER JOIN vendor_invoices vi ON vi.id = vil.invoice_id
+        LEFT JOIN vendor_withholding_records vwr ON vwr.line_tax_id = vit.id
+        WHERE vi.company_id = ${companyId}
+          AND vil.invoice_id IN (${sql.join(vendorInvoiceIds.map((invoiceId) => sql`${invoiceId}`), sql`, `)})
+          AND vit.tax_amount > 0
+        ORDER BY vil.invoice_id, vit.invoice_line_id, vit.id
       `));
       for (const row of withholdingRows) {
         const list = withholdingByInvoice.get(row.vendor_invoice_id) ?? [];
+        const resolvedLiabilityAccountId = row.liability_account_id
+          ? Number(row.liability_account_id)
+          : await resolveDefaultWithholdingAccountId(companyId, row.tax_type);
         list.push({
           lineTaxId: row.line_tax_id,
           invoiceLineId: row.invoice_line_id,
           taxType: row.tax_type,
           taxObject: row.tax_object,
           taxAmount: Number(row.tax_amount),
-          liabilityAccountId: row.liability_account_id,
+          liabilityAccountId: resolvedLiabilityAccountId,
           status: row.status,
         });
         withholdingByInvoice.set(row.vendor_invoice_id, list);
+      }
+    }
+
+    const expenseLinesByInvoice = new Map<number, Array<{
+      lineId: number;
+      description: string;
+      amount: number;
+      coaAccountId: number | null;
+      coaCode: string | null;
+      coaName: string | null;
+    }>>();
+    if (vendorInvoiceIds.length > 0) {
+      const expenseRows = execRows<{
+        invoice_id: number;
+        line_id: number;
+        description: string;
+        amount: string;
+        coa_account_id: number | null;
+        coa_code: string | null;
+        coa_name: string | null;
+      }>(await db.execute(sql`
+        SELECT
+          vil.invoice_id,
+          vil.id AS line_id,
+          vil.name AS description,
+          vil.subtotal AS amount,
+          vil.coa_account_id,
+          coa.code AS coa_code,
+          coa.name AS coa_name
+        FROM vendor_invoice_lines vil
+        LEFT JOIN chart_of_accounts coa ON coa.id = vil.coa_account_id
+        WHERE vil.invoice_id IN (${sql.join(vendorInvoiceIds.map((invoiceId) => sql`${invoiceId}`), sql`, `)})
+        ORDER BY vil.invoice_id, vil.id
+      `));
+      for (const row of expenseRows) {
+        const list = expenseLinesByInvoice.get(row.invoice_id) ?? [];
+        list.push({
+          lineId: Number(row.line_id),
+          description: row.description ?? "",
+          amount: Number(row.amount ?? 0),
+          coaAccountId: row.coa_account_id == null ? null : Number(row.coa_account_id),
+          coaCode: row.coa_code ?? null,
+          coaName: row.coa_name ?? null,
+        });
+        expenseLinesByInvoice.set(row.invoice_id, list);
       }
     }
 
@@ -705,6 +781,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
         dueDate: r.due_date,
         currency: "IDR",
         source: r.source,
+         vendorInvoiceRef: r.vendor_invoice_ref,
+         expenseLines: r.source === "vendor_invoice" ? (expenseLinesByInvoice.get(r.id) ?? []) : [],
         withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],
       };
     });
@@ -1118,18 +1196,25 @@ router.post("/", async (req, res) => {
 
         let whtAccountId: number | null = null;
         if (whtAmt > 0) {
-          if (!ip.whtAccountId) {
+          const rawAllocations = Array.isArray(ip.withholdingAllocations)
+            ? ip.withholdingAllocations as Array<Record<string, unknown>>
+            : [];
+          const hasCompleteAllocationAccounts = rawAllocations.length > 0
+            && rawAllocations.every((allocation) => Number(allocation.liabilityAccountId ?? allocation.accountId) > 0);
+          if (!ip.whtAccountId && !hasCompleteAllocationAccounts) {
             return res.status(400).json({ message: `${itemLabel}: wht_account_id wajib jika wht_amount > 0` });
           }
-          const [whtAcct] = await db
-            .select({ id: chartOfAccountsTable.id, type: chartOfAccountsTable.type, name: chartOfAccountsTable.name })
-            .from(chartOfAccountsTable)
-            .where(eq(chartOfAccountsTable.id, Number(ip.whtAccountId)));
-          if (!whtAcct) return res.status(400).json({ message: `${itemLabel}: akun WHT tidak ditemukan` });
-          if (whtAcct.type !== "liability") {
-            return res.status(400).json({ message: `${itemLabel}: akun WHT "${whtAcct.name}" harus bertipe Utang/Liability` });
+          if (ip.whtAccountId) {
+            const [whtAcct] = await db
+              .select({ id: chartOfAccountsTable.id, type: chartOfAccountsTable.type, name: chartOfAccountsTable.name })
+              .from(chartOfAccountsTable)
+              .where(eq(chartOfAccountsTable.id, Number(ip.whtAccountId)));
+            if (!whtAcct) return res.status(400).json({ message: `${itemLabel}: akun WHT tidak ditemukan` });
+            if (whtAcct.type !== "liability") {
+              return res.status(400).json({ message: `${itemLabel}: akun WHT "${whtAcct.name}" harus bertipe Utang/Liability` });
+            }
+            whtAccountId = whtAcct.id;
           }
-          whtAccountId = whtAcct.id;
         }
 
         // ── Path A: vendor_invoice (standalone invoice dari AI Import / direct create) ──
@@ -1160,17 +1245,25 @@ router.post("/", async (req, res) => {
            const taxRows = execRows<{
              id: number;
              invoice_line_id: number;
+              tax_type: string;
              tax_amount: string;
              liability_account_id: number | null;
              resolution_status: string;
            }>(await db.execute(sql`
-             SELECT id, invoice_line_id, tax_amount, liability_account_id, resolution_status
+              SELECT id, invoice_line_id, tax_type, tax_amount, liability_account_id, resolution_status
              FROM vendor_invoice_line_taxes
              WHERE company_id = ${companyId} AND invoice_line_id IN (
                SELECT id FROM vendor_invoice_lines WHERE invoice_id = ${vi.id}
              )
              ORDER BY id
            `));
+            const effectiveTaxAccountIds = new Map<number, number>();
+            for (const tax of taxRows) {
+              const accountId = tax.liability_account_id
+                ? Number(tax.liability_account_id)
+                : await resolveDefaultWithholdingAccountId(companyId, tax.tax_type);
+              if (accountId) effectiveTaxAccountIds.set(tax.id, accountId);
+            }
            const rawAllocations = Array.isArray(ip.withholdingAllocations)
              ? ip.withholdingAllocations as Array<Record<string, unknown>>
              : [];
@@ -1184,7 +1277,12 @@ router.post("/", async (req, res) => {
                      lineTaxId,
                      invoiceLineId: matched?.invoice_line_id ?? Number(allocation.invoiceLineId),
                      amount: round2(Number(allocation.amount)),
-                     accountId: Number(allocation.liabilityAccountId ?? allocation.accountId),
+                      accountId: Number(
+                        allocation.liabilityAccountId
+                        ?? allocation.accountId
+                        ?? (matched ? effectiveTaxAccountIds.get(matched.id) : undefined)
+                        ?? 0,
+                      ),
                      matched,
                    };
                  })
@@ -1193,7 +1291,11 @@ router.post("/", async (req, res) => {
                      lineTaxId: taxRows[0]!.id,
                      invoiceLineId: taxRows[0]!.invoice_line_id,
                      amount: whtAmt,
-                     accountId: Number(taxRows[0]!.liability_account_id ?? ip.whtAccountId),
+                      accountId: Number(
+                        effectiveTaxAccountIds.get(taxRows[0]!.id)
+                        ?? ip.whtAccountId
+                        ?? 0,
+                      ),
                      matched: taxRows[0],
                    }]
                  : [];
@@ -1206,7 +1308,11 @@ router.post("/", async (req, res) => {
                !allocation.matched ||
                allocation.matched.resolution_status !== "confirmed" ||
                !Number.isInteger(allocation.accountId) ||
-               allocation.accountId !== Number(allocation.matched.liability_account_id) ||
+                allocation.accountId !== Number(
+                  effectiveTaxAccountIds.get(allocation.matched.id)
+                  ?? allocation.matched.liability_account_id
+                  ?? 0,
+                ) ||
                allocation.amount <= 0 ||
                allocation.amount > Number(allocation.matched.tax_amount) + 0.01
              )) {
