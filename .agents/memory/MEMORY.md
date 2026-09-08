@@ -4,6 +4,7 @@
 - [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — one-off portal proofs must use the Secret Manager loader and correct DB isolation; bootstrap failures stay fail-closed.
 - [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
 - [Recon sheet COA display](recon-sheet-coa-display.md) — write contra-account COA and name to the result sheet, excluding the bank/cash COA.
 - [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
