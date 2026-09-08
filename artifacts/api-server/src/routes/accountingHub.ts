@@ -600,6 +600,11 @@ router.get("/hub/profit-loss", async (req, res) => {
     const rows = await db.execute<any>(sql`
       SELECT
         coa.type AS account_type, coa.id AS account_id, coa.code, coa.name,
+        CASE
+          WHEN coa.type = 'expense' AND (coa.code = '5-1000' OR coa.code LIKE '5-10%') THEN 'cogs'
+          WHEN coa.type = 'expense' THEN 'operating_expense'
+          ELSE NULL
+        END AS expense_group,
         e.company_id, e.branch_id, e.division_id,
         ${normModuleExpr()} AS source_module,
         TO_CHAR(e.date::date, 'YYYY-MM') AS period,
@@ -614,7 +619,12 @@ router.get("/hub/profit-loss", async (req, res) => {
       JOIN accounting_entries e   ON e.id = el.entry_id
       JOIN chart_of_accounts coa  ON coa.id = el.account_id
       ${where}
-      GROUP BY coa.type, coa.id, coa.code, coa.name,
+       GROUP BY coa.type, coa.id, coa.code, coa.name,
+                CASE
+                  WHEN coa.type = 'expense' AND (coa.code = '5-1000' OR coa.code LIKE '5-10%') THEN 'cogs'
+                  WHEN coa.type = 'expense' THEN 'operating_expense'
+                  ELSE NULL
+                END,
                e.company_id, e.branch_id, e.division_id,
                ${normModuleExpr()},
                TO_CHAR(e.date::date, 'YYYY-MM')
@@ -622,9 +632,21 @@ router.get("/hub/profit-loss", async (req, res) => {
     `).then(r => r.rows);
 
     const revenue = rows.filter(r => r.account_type === "revenue").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
-    const expense  = rows.filter(r => r.account_type === "expense").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const cogs = rows.filter(r => r.expense_group === "cogs").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const operatingExpense = rows.filter(r => r.expense_group === "operating_expense").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
+    const expense = cogs + operatingExpense;
 
-    res.json({ data: rows, summary: { total_revenue: revenue, total_expense: expense, net_profit: revenue - expense } });
+    res.json({
+      data: rows,
+      summary: {
+        total_revenue: revenue,
+        total_cogs: cogs,
+        total_operating_expense: operatingExpense,
+        total_expense: expense,
+        gross_profit: revenue - cogs,
+        net_profit: revenue - expense,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message });
   }
