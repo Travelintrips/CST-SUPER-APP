@@ -322,40 +322,6 @@ router.post("/runs/:id/calculate", async (req, res) => {
     const list = schedulesByAdvance.get(schedule.advance_id) ?? [];
     list.push(schedule);
     schedulesByAdvance.set(schedule.advance_id, list);
-  const results = [];
-  for (const { item, employee } of items) {
-    if (!employee) { results.push({ itemId: item.id, matched: false }); continue; }
-    const adv = resolveAdvanceForEmployee(outstanding, employee);
-
-    const gross = n(item.baseSalary) + n(item.allowance);
-    const nonKasbonDeductions = n(item.bpjsJhtEmployee) + n(item.bpjsKesEmployee) + n(item.pph21) + n(item.otherDeductions);
-    const payCapacity = Math.max(0, gross - nonKasbonDeductions);
-
-    let deduction = 0;
-    let cashAdvanceId: number | null = null;
-    let kasbonBalanceAfter = 0;
-    if (adv) {
-      const remaining = n(adv.remainingAmount);
-      const planned = adv.repaymentMethod === "installment" && adv.installmentAmount != null
-        ? Number(adv.installmentAmount)
-        : remaining; // one_time: pay off in full this run
-      deduction = Math.min(planned, remaining, payCapacity);
-      cashAdvanceId = adv.id;
-      kasbonBalanceAfter = remaining - deduction;
-    }
-
-    const totalDeductions = nonKasbonDeductions + deduction;
-    const netSalary = gross - totalDeductions;
-
-    await db.update(payrollItemsTable).set({
-      kasbonDeduction: String(deduction),
-      cashAdvanceId,
-      totalDeductions: String(totalDeductions),
-      netSalary: String(netSalary),
-      kasbonBalanceAfter: String(kasbonBalanceAfter),
-    }).where(eq(payrollItemsTable.id, item.id));
-
-    results.push({ itemId: item.id, matched: !!adv, deduction, cashAdvanceId });
   }
 
   const results: Array<{

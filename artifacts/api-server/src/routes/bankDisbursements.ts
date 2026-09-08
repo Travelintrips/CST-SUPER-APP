@@ -729,25 +729,6 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       }
     }
 
-    const invoices = rows.map((r) => ({
-      id: r.id,
-      docNumber: r.doc_number,
-      billNumber: r.bill_number,
-      supplierId: r.supplier_id,
-      supplierName: r.supplier_name ?? "—",
-      subtotal: Number(r.total_amount ?? 0),
-      taxAmount: Number(r.tax_amount ?? 0),
-      grandTotal: Number(r.grand_total),
-      amountPaid: Number(r.amount_paid ?? 0),
-      outstanding: Number(r.grand_total) - Number(r.amount_paid ?? 0),
-      taxReviewStatus: r.tax_review_status ?? "not_required",
-      withholdingTaxAmount: Number(r.withholding_tax_amount ?? 0),
-      payableToSupplier: Math.max(0, Number(r.grand_total) - Number(r.withholding_tax_amount ?? 0)),
-      dueDate: r.due_date,
-      currency: "IDR",
-      source: r.source,
-      withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],
-    }));
     const expenseLinesByInvoice = new Map<number, Array<{
       lineId: number;
       description: string;
