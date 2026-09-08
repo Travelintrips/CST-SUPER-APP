@@ -20,6 +20,7 @@
 - [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle; maintenance wajib memakai `SUPABASE_DATABASE_URL`, bukan migration URL atau DB pane.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
+- [BizPortal GL canonical summary](bizportal-gl-canonical-summary-boundary.md) — debit/kredit/saldo/detail harus memakai scope posted canonical yang sama; voided tetap audit-only.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
