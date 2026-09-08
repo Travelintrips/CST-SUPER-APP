@@ -286,7 +286,8 @@ settlement delay   = 1
 config ambiguities = 0
 ```
 
-The live DEV resolver is not a certified semantic baseline:
+The live DEV resolver was not a certified semantic baseline before the
+owner-approved DEV repair recorded below:
 
 ```text
 effective identity = sport_center:2:2:3:1:1
@@ -307,6 +308,45 @@ settlement delay   = 1
 
 This is an owner-approved semantic decision point, not a safe numeric-ID
 copy. No DEV or PROD configuration was changed.
+
+### DEV baseline certification — 2026-09-08
+
+The owner-approved DEV semantic baseline is now recorded by business identity,
+not by copying PROD surrogate IDs:
+
+| Semantic field | Certified value |
+|---|---|
+| Project / company | `sport_center` / company `1` |
+| Payment / provider | `QRIS` / `mandiri_direct` |
+| Bank account number | `1640006707220` |
+| `RECEIVING_BANK` COA code | `1-1023-CST` |
+| `REVENUE` COA code | `4-1017-CST` |
+| `TAX_OUTPUT` COA code | `2-1020-CST` |
+| `MDR_EXPENSE` COA code | `5-3050-CST` |
+| Currency / MDR | `IDR` / `0.003` |
+| Fixed fee / fee tax | `0` / `0` |
+| Settlement delay | `1` business day |
+| Tax rule | `11%`, direction `output` |
+
+The DEV-only canonical finance stage resolves the company bank account and
+each COA from those local natural keys, then updates the existing effective
+payment and role rows atomically. It never uses a PROD numeric ID. The
+stage marker completed at version `9`.
+
+The read-only CF-SC-13B rerun returned:
+
+```text
+DEV resolver rows             = 1
+DEV certified baseline        = PASS
+PROD certified baseline       = PASS
+DEV/PROD semantic parity      = PASS
+read-only transactions        = true
+```
+
+The complete wrapper remains nonzero only because the existing historical
+canonical-link check reports `50 invalid canonical settlement FK reference(s)`.
+That historical repair is outside this baseline task; no settlement, bank,
+journal, processor, or production configuration write was issued by the audit.
 
 ### Function parity and contract classification
 
@@ -414,7 +454,7 @@ CF-SC-13                         = BLOCKED
 FOUNDATION COLUMN PARITY         = PASS (classified extensions excluded)
 PROCESSING CONTRACT              = PASS
 PROD CONFIG PARITY               = PASS
-DEV CERTIFIED BASELINE           = BLOCKED
+DEV CERTIFIED BASELINE           = PASS
 FUNCTION SIGNATURE PARITY        = PASS
 FUNCTION CONTRACT PARITY         = REVIEW
 SETTLEMENT FK/UNIQUE GATE        = BLOCKED (51 historical public-link rows)
@@ -429,7 +469,7 @@ PROD CENTRAL                     = NO
 PROD CUTOVER                     = NO
 PROD PROCESSOR RUNS              = 0
 PROD BUSINESS EFFECTS            = 0
-READY FOR SHADOW ASSESSMENT      = NO
+READY FOR SHADOW ASSESSMENT      = NO (historical canonical-link blocker)
 ```
 
 Required owner decisions before a retry:

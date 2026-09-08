@@ -128,7 +128,7 @@ import { registerWorker, startAll } from "./lib/startupOrchestrator.js";
 import { startTokenCleanupWorker } from "./workers/tokenCleanupWorker.js";
 import { initAlertsBroadcast } from "./lib/alertsBroadcast.js";
 import { warmupMailer } from "./lib/mailer.js";
-import { ensureCanonicalSettlementContracts, ensureSportPaymentMirrorTrigger, ensureSportCenterLegacyPaymentRecoveryOwner, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureCanonicalSettlementContracts, ensureSportPaymentMirrorTrigger, ensureSportCenterLegacyPaymentRecoveryOwner, repairDevelopmentSportCenterFinanceBaseline, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { startRecurringExpenseWorker } from "./modules/sport-center/recurringExpenseWorker.js";
 import { startMemberReminderWorker } from "./modules/sport-center/memberReminderWorker.js";
@@ -2130,6 +2130,7 @@ async function startServer() {
     .then(() => runWithRetry("Sport Center migration", runSportCenterMigration))
     .then(() => runWithRetry("Sport Center shadow observer migration", runSportCenterShadowObserverMigration))
       .then(() => runWithRetry("Sport Center canonical finance config refresh", ensureCanonicalSettlementContracts))
+       .then(() => runWithRetry("Sport Center DEV finance baseline certification", repairDevelopmentSportCenterFinanceBaseline))
      // Refresh additive Sport Center payment projection DDL even when the
      // long migration is already marked complete in an existing database.
      .then(() => runWithRetry("Sport Center payment mirror trigger refresh", ensureSportPaymentMirrorTrigger))

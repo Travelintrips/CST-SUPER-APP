@@ -1166,6 +1166,169 @@ async function repairCanonicalBankCoaIdentity(): Promise<void> {
   }
 }
 
+const SPORT_CENTER_DEV_BASELINE = {
+  companyId: 1,
+  projectCode: "sport_center",
+  paymentMethod: "QRIS",
+  providerCode: "mandiri_direct",
+  bankAccountNumber: "1640006707220",
+  roleCoaCodes: {
+    RECEIVING_BANK: "1-1023-CST",
+    REVENUE: "4-1017-CST",
+    TAX_OUTPUT: "2-1020-CST",
+    MDR_EXPENSE: "5-3050-CST",
+  },
+} as const;
+
+/**
+ * Repair the DEV Sport Center finance baseline from owner-approved business
+ * identities.  DEV and PROD deliberately have different surrogate IDs, so
+ * this must resolve every reference by company-scoped natural key.
+ */
+export async function repairDevelopmentSportCenterFinanceBaseline(): Promise<void> {
+  const environment = process.env.APP_ENV ?? process.env.NODE_ENV ?? "development";
+  if (environment !== "development") return;
+
+  await db.transaction(async (tx) => {
+    const requiredTables = await tx.execute(sql`
+      SELECT
+        to_regclass('public.finance_project_configs') IS NOT NULL AS configs,
+        to_regclass('public.finance_project_payment_configs') IS NOT NULL AS payments,
+        to_regclass('public.finance_project_coa_mappings') IS NOT NULL AS coa_mappings,
+        to_regclass('public.company_bank_accounts') IS NOT NULL AS bank_accounts
+    `);
+    const tables = requiredTables.rows[0] as Record<string, boolean> | undefined;
+    if (!tables?.configs || !tables.payments || !tables.coa_mappings || !tables.bank_accounts) {
+      logger.info("Sport Center DEV semantic baseline skipped; shared finance tables are not ready");
+      return;
+    }
+
+    const configs = await tx.execute(sql`
+      SELECT id
+        FROM public.finance_project_configs
+       WHERE project_code = ${SPORT_CENTER_DEV_BASELINE.projectCode}
+         AND company_id = ${SPORT_CENTER_DEV_BASELINE.companyId}
+         AND is_active = TRUE
+         AND effective_from <= CURRENT_DATE
+         AND (effective_to IS NULL OR CURRENT_DATE < effective_to)
+    `);
+    if (configs.rows.length !== 1) {
+      throw new Error(
+        `SPORT_CENTER_DEV_BASELINE_CONFIG_${configs.rows.length === 0 ? "MISSING" : "AMBIGUOUS"}: ` +
+        `expected one effective ${SPORT_CENTER_DEV_BASELINE.projectCode} config, found ${configs.rows.length}`,
+      );
+    }
+    const configId = Number((configs.rows[0] as { id: number }).id);
+
+    const bankAccounts = await tx.execute(sql`
+      SELECT id
+        FROM public.company_bank_accounts
+       WHERE company_id = ${SPORT_CENTER_DEV_BASELINE.companyId}
+         AND account_number::text = ${SPORT_CENTER_DEV_BASELINE.bankAccountNumber}
+         AND is_active = TRUE
+    `);
+    if (bankAccounts.rows.length !== 1) {
+      throw new Error(
+        `SPORT_CENTER_DEV_BASELINE_BANK_${bankAccounts.rows.length === 0 ? "MISSING" : "AMBIGUOUS"}: ` +
+        `expected one active company bank account for ${SPORT_CENTER_DEV_BASELINE.bankAccountNumber}, ` +
+        `found ${bankAccounts.rows.length}`,
+      );
+    }
+    const bankAccountId = Number((bankAccounts.rows[0] as { id: number }).id);
+
+    const payments = await tx.execute(sql`
+      SELECT id
+        FROM public.finance_project_payment_configs
+       WHERE finance_project_config_id = ${configId}
+         AND upper(btrim(payment_method)) = upper(${SPORT_CENTER_DEV_BASELINE.paymentMethod})
+         AND lower(btrim(provider_code)) = lower(${SPORT_CENTER_DEV_BASELINE.providerCode})
+         AND is_active = TRUE
+         AND effective_from <= CURRENT_DATE
+         AND (effective_to IS NULL OR CURRENT_DATE < effective_to)
+    `);
+    if (payments.rows.length !== 1) {
+      throw new Error(
+        `SPORT_CENTER_DEV_BASELINE_PAYMENT_${payments.rows.length === 0 ? "MISSING" : "AMBIGUOUS"}: ` +
+        `expected one effective QRIS/${SPORT_CENTER_DEV_BASELINE.providerCode} payment config, ` +
+        `found ${payments.rows.length}`,
+      );
+    }
+    const paymentConfigId = Number((payments.rows[0] as { id: number }).id);
+    await tx.execute(sql`
+      UPDATE public.finance_project_payment_configs
+         SET bank_account_id = ${bankAccountId}
+       WHERE id = ${paymentConfigId}
+    `);
+
+    for (const [role, coaCode] of Object.entries(SPORT_CENTER_DEV_BASELINE.roleCoaCodes)) {
+      const coaRows = await tx.execute(sql`
+        SELECT id
+          FROM public.chart_of_accounts
+         WHERE company_id = ${SPORT_CENTER_DEV_BASELINE.companyId}
+           AND code = ${coaCode}
+           AND is_active = TRUE
+           AND is_postable = TRUE
+           AND is_header = FALSE
+      `);
+      if (coaRows.rows.length !== 1) {
+        throw new Error(
+          `SPORT_CENTER_DEV_BASELINE_COA_${coaRows.rows.length === 0 ? "MISSING" : "AMBIGUOUS"}: ` +
+          `role=${role} code=${coaCode} found=${coaRows.rows.length}`,
+        );
+      }
+      const coaId = Number((coaRows.rows[0] as { id: number }).id);
+      const mappings = await tx.execute(sql`
+        SELECT cm.id
+          FROM public.finance_project_coa_mappings cm
+         WHERE cm.finance_project_config_id = ${configId}
+           AND cm.account_role = ${role}
+           AND (cm.payment_method IS NULL OR upper(btrim(cm.payment_method)) = upper(${SPORT_CENTER_DEV_BASELINE.paymentMethod}))
+           AND (cm.provider_code IS NULL OR lower(btrim(cm.provider_code)) = lower(${SPORT_CENTER_DEV_BASELINE.providerCode}))
+           AND cm.is_active = TRUE
+           AND cm.effective_from <= CURRENT_DATE
+           AND (cm.effective_to IS NULL OR CURRENT_DATE < cm.effective_to)
+           AND NOT EXISTS (
+             SELECT 1
+               FROM public.finance_project_coa_mappings specific
+              WHERE specific.finance_project_config_id = cm.finance_project_config_id
+                AND specific.account_role = cm.account_role
+                AND specific.is_active = TRUE
+                AND specific.effective_from <= CURRENT_DATE
+                AND (specific.effective_to IS NULL OR CURRENT_DATE < specific.effective_to)
+                AND (specific.payment_method IS NULL OR upper(btrim(specific.payment_method)) = upper(${SPORT_CENTER_DEV_BASELINE.paymentMethod}))
+                AND (specific.provider_code IS NULL OR lower(btrim(specific.provider_code)) = lower(${SPORT_CENTER_DEV_BASELINE.providerCode}))
+                AND (
+                  (specific.payment_method IS NOT NULL)::integer
+                  + (specific.provider_code IS NOT NULL)::integer
+                ) > (cm.payment_method IS NOT NULL)::integer + (cm.provider_code IS NOT NULL)::integer
+           )
+      `);
+      if (mappings.rows.length !== 1) {
+        throw new Error(
+          `SPORT_CENTER_DEV_BASELINE_MAPPING_${mappings.rows.length === 0 ? "MISSING" : "AMBIGUOUS"}: ` +
+          `role=${role} found=${mappings.rows.length}`,
+        );
+      }
+      const mappingId = Number((mappings.rows[0] as { id: number }).id);
+      await tx.execute(sql`
+        UPDATE public.finance_project_coa_mappings
+           SET coa_id = ${coaId}
+         WHERE id = ${mappingId}
+      `);
+    }
+  });
+
+  logger.info(
+    {
+      projectCode: SPORT_CENTER_DEV_BASELINE.projectCode,
+      companyId: SPORT_CENTER_DEV_BASELINE.companyId,
+      bankAccountNumber: SPORT_CENTER_DEV_BASELINE.bankAccountNumber,
+      roleCoaCodes: SPORT_CENTER_DEV_BASELINE.roleCoaCodes,
+    },
+    "Sport Center DEV semantic finance baseline certified",
+  );
+}
+
 export async function ensureCanonicalSettlementContracts(): Promise<void> {
   await repairCanonicalBankCoaIdentity();
 
