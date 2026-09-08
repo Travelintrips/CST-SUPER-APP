@@ -52,6 +52,7 @@ import {
   ensureAccountingSettings,
   seedAccountingDefaults,
 } from "../lib/accountingSeed.js";
+import { syncAccountingSequences } from "../lib/accountingMigration.js";
 import { logger } from "../lib/logger.js";
 import { postEntry, createDraftEntry, type PostingLine } from "../lib/accounting.js";
 import { recalculatePaymentStatus } from "../lib/services/index.js";
@@ -373,8 +374,7 @@ router.post("/accounts/:id/child", async (req, res) => {
 
   const companyId = resolveCompanyId(req);
 
-  try {
-    const created = await db.transaction(async (tx) => {
+  const createChild = async () => db.transaction(async (tx) => {
       const parentResult = await tx.execute(sql`
         SELECT
           coa.id,
@@ -455,11 +455,13 @@ router.post("/accounts/:id/child", async (req, res) => {
       const usesTensSequence = siblingNumbers.length > 0 &&
         siblingNumbers.every((value: number) => (value - baseNumber) % 10 === 0);
       const increment = siblingNumbers.length === 0 || usesTensSequence ? 10 : 1;
+      // Some older runtime databases still retain a legacy global code
+      // constraint. Check every company here so the generated code is safe
+      // under both the current scoped index and that legacy constraint.
       const usedCodesResult = await tx.execute(sql`
         SELECT code
         FROM chart_of_accounts
-        WHERE (company_id IS NULL OR company_id = ${companyId})
-          AND code LIKE ${`${prefix}%`}
+        WHERE code LIKE ${`${prefix}%`}
       `);
       const usedCodes = new Set(
         ((usedCodesResult as any).rows ?? []).map((row: { code?: unknown }) => String(row.code ?? "")),
@@ -497,15 +499,38 @@ router.post("/accounts/:id/child", async (req, res) => {
       return inserted;
     });
 
+  try {
+    let created;
+    try {
+      created = await createChild();
+    } catch (err: unknown) {
+      const pgError = err as { code?: string; constraint?: string; message?: string };
+      // Bulk imports can leave SERIAL's sequence behind the actual max(id).
+      // Repair that known condition and retry the same idempotent calculation
+      // once; the parent row lock serializes concurrent child creation.
+      if (pgError.code === "23505" && pgError.constraint === "chart_of_accounts_pkey") {
+        await syncAccountingSequences();
+        created = await createChild();
+      } else {
+        throw err;
+      }
+    }
+
     return res.status(201).json(serializeAccount(created!));
   } catch (err: unknown) {
     const status = Number((err as Error & { status?: number }).status);
     if (status >= 400 && status < 500) {
       return res.status(status).json({ message: (err as Error).message });
     }
+    const pgError = err as { code?: string; constraint?: string; message?: string };
+    if (pgError.code === "23505" && pgError.constraint === "coa_company_code_uniq") {
+      return res.status(409).json({
+        message: "Kode COA tersebut sudah digunakan oleh perusahaan ini. Silakan coba lagi.",
+      });
+    }
     return res.status(409).json({
-      message: "Nomor COA otomatis bentrok. Silakan coba lagi.",
-      error: String((err as Error)?.message ?? err),
+      message: "COA belum dapat ditambahkan. Silakan coba lagi.",
+      error: String(pgError.message ?? err),
     });
   }
 });
