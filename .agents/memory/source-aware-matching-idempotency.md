@@ -31,3 +31,16 @@ matching runs, and deleting them would destroy reconciliation evidence.
 
 **How to apply:** Run the guarded cleanup before creating the partial unique
 index, verify active uniqueness afterward, and preserve all superseded rows.
+
+An unmatched audit with `count=0` is a historical result, not proof that the
+source is still ineligible. If a payment mirror or its method/date metadata is
+corrected later, rerun the mutation with the non-final rematch path before
+diagnosing the current candidate predicate.
+
+**Why:** Candidate rows are persisted from the matching run; the UI can remain
+empty even when the current source row now satisfies the live amount, company,
+date, status, and source-rail rules.
+
+**How to apply:** Compare the source `updated_at` with the last match audit,
+then use `rematch_non_final` for the specific unmatched mutation. Do not
+mutate or approve production data merely to refresh stale evidence.
