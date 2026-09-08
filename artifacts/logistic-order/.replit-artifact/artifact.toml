@@ -17,14 +17,7 @@ localPort = 19368
 [services.development]
 run = "bash start-dev.sh"
 
-[services.production]
-build = [ "pnpm", "--filter", "@workspace/logistic-order", "run", "build" ]
-publicDir = "artifacts/logistic-order/dist/public"
-serve = "static"
-
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+# Compatibility artifact only. Production ownership belongs to Customer Portal.
 
 [services.env]
 PORT = "19368"

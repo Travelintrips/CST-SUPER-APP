@@ -42,7 +42,6 @@ fi
 API_PORT=8080
 BIZPORTAL_PORT=6800
 CUSTOMER_PORT=23435
-LOGISTIC_ORDER_PORT=19368
 GATEWAY_PORT=5000
 
 # The unified Gateway is also the Replit preview entry point. Preview must use
@@ -127,23 +126,11 @@ else
     "cd artifacts/customer-portal && APP_ENV=development NODE_ENV=development PORT=$CUSTOMER_PORT BASE_PATH=/ node ../api-server/load-secrets.mjs node node_modules/vite/bin/vite.js --config vite.config.ts --host 0.0.0.0 --port $CUSTOMER_PORT"
 fi
 
-# Logistic Order: use vite preview (pre-built dist/) if available, else dev server
-if [ -f "artifacts/logistic-order/dist/public/index.html" ]; then
-  echo "[start] Logistic Order using pre-built dist/ (vite preview)"
-  start_if_free "Logistic Order" "$LOGISTIC_ORDER_PORT" \
-    "cd artifacts/logistic-order && PORT=$LOGISTIC_ORDER_PORT BASE_PATH=/logistic-order/ $PNPM_BIN exec vite preview --config vite.config.ts --host 0.0.0.0 --port $LOGISTIC_ORDER_PORT"
-else
-  echo "[start] Logistic Order using dev server (no dist/ found)"
-  start_if_free "Logistic Order" "$LOGISTIC_ORDER_PORT" \
-    "cd artifacts/logistic-order && PORT=$LOGISTIC_ORDER_PORT BASE_PATH=/logistic-order/ pnpm exec vite --config vite.config.ts --host 0.0.0.0 --port $LOGISTIC_ORDER_PORT"
-fi
-
 echo "[start] Gateway on :$GATEWAY_PORT..."
 PORT=$GATEWAY_PORT \
 API_PORT=$API_PORT \
 BIZPORTAL_PORT=$BIZPORTAL_PORT \
 CUSTOMER_PORT=$CUSTOMER_PORT \
-LOGISTIC_ORDER_PORT=$LOGISTIC_ORDER_PORT \
 node gateway.mjs &
 GW_PID=$!
 

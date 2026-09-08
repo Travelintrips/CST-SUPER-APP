@@ -29,7 +29,6 @@ export API_PORT=18444
 export BIZPORTAL_PORT=18442
 export BIZPORTAL_VITE_PORT=18449
 export CUSTOMER_PORT=23434
-export LOGISTIC_ORDER_PORT=19368
 
 trap "kill 0 2>/dev/null; exit" TERM INT EXIT
 
@@ -91,7 +90,6 @@ echo "[start] Gateway on :5000 — checking upstream services..."
 spawn_with_restart 18444 "api-server" pnpm --filter @workspace/api-server run dev:secure
 spawn_with_restart 18442 "bizportal"  env PORT=18442 BASE_PATH=/bizportal/ pnpm --filter @workspace/bizportal run dev
 spawn_with_restart 23434 "customer-portal" env PORT=23434 BASE_PATH=/ pnpm --filter @workspace/customer-portal run dev
-spawn_with_restart 19368 "logistic-order" env PORT=19368 BASE_PATH=/logistic-order/ pnpm --filter @workspace/logistic-order run dev
 
 # ── Tunggu API Server sehat sebelum lanjut ────────────────────────────────
 wait_for_api_healthy() {
@@ -114,7 +112,6 @@ wait_for_api_healthy
 
 wait_for_port 18442 "BizPortal" 30 &
 wait_for_port 23434 "Customer Portal" 30 &
-wait_for_port 19368 "Logistic Order" 30 &
 
 # ── Watchdog (control plane) ───────────────────────────────────────────────
 export WATCHDOG_PORT=3001

@@ -26,9 +26,8 @@
  *   /q/*                   → API Server      :8080
  *   /s/*                   → API Server      :8080
  *   /bizportal/*           → BizPortal       :6800
- *   /logistic-order/*      → Logistic Order  :19368
  *   /sport-center/*        → 302 /bizportal/sport-center/*
- *   /*                     → Customer Portal :8080 (falls back to API)
+ *   /*                     → Customer Portal
  */
 
 import http from "node:http";
@@ -47,7 +46,6 @@ const RETRYABLE_CODES  = new Set(["ECONNREFUSED","ECONNRESET","ETIMEDOUT","ENOTF
 const API_PORT            = Number(process.env.API_PORT            ?? 8080);
 const BIZPORTAL_PORT      = Number(process.env.BIZPORTAL_PORT      ?? API_PORT);
 const CUSTOMER_PORT       = Number(process.env.CUSTOMER_PORT       ?? API_PORT);
-const LOGISTIC_ORDER_PORT = Number(process.env.LOGISTIC_ORDER_PORT ?? API_PORT);
 
 const ROUTES = [
   { prefix: "/api",             upstream: { host: "localhost", port: API_PORT } },
@@ -55,7 +53,6 @@ const ROUTES = [
   { prefix: "/q",               upstream: { host: "localhost", port: API_PORT } },
   { prefix: "/s",               upstream: { host: "localhost", port: API_PORT } },
   { prefix: "/bizportal",       upstream: { host: "localhost", port: BIZPORTAL_PORT } },
-  { prefix: "/logistic-order",  upstream: { host: "localhost", port: LOGISTIC_ORDER_PORT } },
   { prefix: "/sport-center",    upstream: null, redirectMapTo: "/bizportal/sport-center",    redirectDefaultSuffix: "/dashboard" },
 
   { prefix: "/sales",                upstream: null, redirectMapTo: "/bizportal/sales",                redirectDefaultSuffix: "/documents" },
@@ -102,7 +99,6 @@ const SERVICE_NAMES = {
   [API_PORT]:            "API Server",
   [BIZPORTAL_PORT]:      "BizPortal",
   [CUSTOMER_PORT]:       "Customer Portal",
-  [LOGISTIC_ORDER_PORT]: "Logistic Order",
 };
 
 // ── Route resolution ──────────────────────────────────────────────────────────
@@ -411,7 +407,6 @@ async function startGateway() {
         console.log(`[gw]   DATA PLANE:`);
         console.log(`[gw]     /api/*            → :${API_PORT} (API Server)`);
         console.log(`[gw]     /bizportal/*       → :${BIZPORTAL_PORT} (BizPortal)`);
-        console.log(`[gw]     /logistic-order/*  → :${LOGISTIC_ORDER_PORT} (Logistic Order)`);
         console.log(`[gw]     /*                 → :${CUSTOMER_PORT} (Customer Portal)`);
         console.log(`[gw]   CONTROL PLANE (→ Watchdog :${WATCHDOG_PORT} — fixed):`);
         console.log(`[gw]     /system/health          → inline liveness`);
