@@ -290,6 +290,20 @@ function qrisCandidateSourcePaymentMethodSql(
 }
 
 /**
+ * bank_reconciliation_matches.candidate_id is a polymorphic legacy text
+ * column, while source tables use integer/bigint primary keys. Invalid
+ * historical identities remain non-matching instead of aborting the list
+ * query with `integer = text`.
+ */
+function candidateIdAsBigIntSql(alias = "m"): string {
+  return `(CASE
+    WHEN ${alias}.candidate_id::text ~ '^[0-9]+$'
+      THEN ${alias}.candidate_id::text::bigint
+    ELSE NULL
+  END)`;
+}
+
+/**
  * The public match-result projection is source-aware. Legacy QRIS matches
  * (including pre-source rows with NULL) are historical evidence only and must
  * not become visible again merely because cleanup/replay recreates them with
@@ -322,27 +336,27 @@ function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): str
   return `(
     (${matchAlias}.candidate_type = 'accounting_payment' AND EXISTS (
       SELECT 1 FROM accounting_payments ap_match
-      WHERE ap_match.id = ${matchAlias}.candidate_id
+      WHERE ap_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND ap_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'invoice' AND EXISTS (
       SELECT 1 FROM sales_documents sd_match
-      WHERE sd_match.id = ${matchAlias}.candidate_id
+      WHERE sd_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND COALESCE(sd_match.invoice_date::text, sd_match.created_at::date::text) = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'expense' AND EXISTS (
       SELECT 1 FROM expenses e_match
-      WHERE e_match.id = ${matchAlias}.candidate_id
+      WHERE e_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND e_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'logistic_order' AND EXISTS (
       SELECT 1 FROM logistic_orders lo_match
-      WHERE lo_match.id = ${matchAlias}.candidate_id
+      WHERE lo_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND lo_match.created_at::date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'tenant_invoice' AND EXISTS (
       SELECT 1 FROM tenant_invoices ti_match
-      WHERE ti_match.id = ${matchAlias}.candidate_id
+      WHERE ti_match.id = ${candidateIdAsBigIntSql(matchAlias)}
         AND ti_match.created_at::date::text = ${mutationDate}
     ))
   )`;
@@ -4192,7 +4206,7 @@ router.get("/mutations", async (req, res) => {
     ? `EXISTS (
          SELECT 1
          FROM sport_center.expected_bank_settlements ebs_h1
-         WHERE ebs_h1.settlement_id = m.candidate_id
+          WHERE ebs_h1.settlement_id = ${candidateIdAsBigIntSql("m")}
            AND ebs_h1.settlement_date::text = bm.transaction_date::text
        )`
     : "FALSE";
@@ -4203,7 +4217,7 @@ router.get("/mutations", async (req, res) => {
       AND EXISTS (
         SELECT 1
         FROM sport_payments sp_h1
-        WHERE sp_h1.id = m.candidate_id
+        WHERE sp_h1.id = ${candidateIdAsBigIntSql("m")}
           AND (
             -- Non-QRIS Sport Center payments are ordinary bank-transfer
             -- evidence and must not be hidden by the QRIS H-1 gate.
@@ -4227,7 +4241,7 @@ router.get("/mutations", async (req, res) => {
           AND EXISTS (
             SELECT 1
             FROM qris_settlements qs_h1
-            WHERE qs_h1.id = m.candidate_id
+            WHERE qs_h1.id = ${candidateIdAsBigIntSql("m")}
               AND qs_h1.settlement_date::text = bm.transaction_date::text
           )
         )
@@ -4487,7 +4501,7 @@ router.get("/mutations", async (req, res) => {
           'sourceType', ap.source_type
         )
         FROM accounting_payments ap
-        WHERE ap.id = m.candidate_id
+        WHERE ap.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'sport_payment' THEN (
         SELECT jsonb_build_object(
@@ -4521,7 +4535,7 @@ router.get("/mutations", async (req, res) => {
         FROM sport_payments sp
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
         LEFT JOIN customers c ON c.id = sb.customer_id
-        WHERE sp.id = m.candidate_id
+        WHERE sp.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'recon_rule' THEN (
         SELECT jsonb_build_object(
@@ -4556,7 +4570,7 @@ router.get("/mutations", async (req, res) => {
           'sourceType', 'recon_rule'
         )
         FROM recon_rules rr
-        WHERE rr.id = m.candidate_id
+        WHERE rr.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}' THEN (
@@ -4598,7 +4612,7 @@ router.get("/mutations", async (req, res) => {
            ), '[]'::jsonb)
         )
         FROM qris_settlements qs
-        WHERE qs.id = m.candidate_id
+        WHERE qs.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}' THEN
@@ -4616,7 +4630,7 @@ router.get("/mutations", async (req, res) => {
           'paymentStatus', sd.payment_status
         )
         FROM sales_documents sd
-        WHERE sd.id = m.candidate_id
+        WHERE sd.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'expense' THEN (
         SELECT jsonb_build_object(
@@ -4626,7 +4640,7 @@ router.get("/mutations", async (req, res) => {
           'reference', e.expense_number
         )
         FROM expenses e
-        WHERE e.id = m.candidate_id
+        WHERE e.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'logistic_order' THEN (
         SELECT jsonb_build_object(
@@ -4637,7 +4651,7 @@ router.get("/mutations", async (req, res) => {
           'status', lo.status
         )
         FROM logistic_orders lo
-        WHERE lo.id = m.candidate_id
+        WHERE lo.id = ${candidateIdAsBigIntSql("m")}
       )
       WHEN m.candidate_type = 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
@@ -4649,7 +4663,7 @@ router.get("/mutations", async (req, res) => {
         )
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
-        WHERE ti.id = m.candidate_id
+        WHERE ti.id = ${candidateIdAsBigIntSql("m")}
       )
       ELSE NULL
     END
@@ -4746,7 +4760,7 @@ router.get("/mutations", async (req, res) => {
          (
            SELECT ${sportPaymentTypeSql("sp_type")}
            FROM bank_reconciliation_matches m_type
-           JOIN sport_payments sp_type ON sp_type.id = m_type.candidate_id
+           JOIN sport_payments sp_type ON sp_type.id = ${candidateIdAsBigIntSql("m_type")}
            WHERE m_type.mutation_id = bm.id
              AND m_type.candidate_type = 'sport_payment'
              AND m_type.status IN ('candidate', 'approved')
@@ -4784,7 +4798,7 @@ router.get("/mutations", async (req, res) => {
                 AND EXISTS (
                   SELECT 1
                   FROM sales_documents sd_paid
-                  WHERE sd_paid.id = m.candidate_id
+                  WHERE sd_paid.id = ${candidateIdAsBigIntSql("m")}
                     AND sd_paid.payment_status = 'paid'
                 )
               )
@@ -4793,7 +4807,7 @@ router.get("/mutations", async (req, res) => {
                 AND EXISTS (
                   SELECT 1
                   FROM tenant_invoices ti_paid
-                  WHERE ti_paid.id = m.candidate_id
+                  WHERE ti_paid.id = ${candidateIdAsBigIntSql("m")}
                     AND ti_paid.status = 'paid'
                 )
               )
@@ -5155,7 +5169,7 @@ router.get("/mutations", async (req, res) => {
                      used.mutation_id = bm.id
                      OR (
                        used.candidate_type = 'qris_settlement'
-                       AND used.candidate_id = psb.id
+                        AND ${candidateIdAsBigIntSql("used")} = psb.id
                        AND used.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
                      )
                    )
