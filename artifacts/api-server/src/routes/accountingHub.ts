@@ -6,6 +6,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { logger } from "../lib/logger.js";
+import { calculateProfitLossSummary } from "../lib/accounting/profitLoss.js";
 import {
   accountingEntriesTable,
   accountingEntryLinesTable,
@@ -634,17 +635,17 @@ router.get("/hub/profit-loss", async (req, res) => {
     const revenue = rows.filter(r => r.account_type === "revenue").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
     const cogs = rows.filter(r => r.expense_group === "cogs").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
     const operatingExpense = rows.filter(r => r.expense_group === "operating_expense").reduce((s, r) => s + parseFloat(r.net_amount ?? "0"), 0);
-    const expense = cogs + operatingExpense;
+    const summary = calculateProfitLossSummary({ revenue, cogs, operatingExpense });
 
     res.json({
       data: rows,
       summary: {
-        total_revenue: revenue,
-        total_cogs: cogs,
-        total_operating_expense: operatingExpense,
-        total_expense: expense,
-        gross_profit: revenue - cogs,
-        net_profit: revenue - expense,
+        total_revenue: summary.totalRevenue,
+        total_cogs: summary.totalCogs,
+        total_operating_expense: summary.totalOperatingExpense,
+        total_expense: summary.totalExpense,
+        gross_profit: summary.grossProfit,
+        net_profit: summary.netIncome,
       },
     });
   } catch (err: any) {

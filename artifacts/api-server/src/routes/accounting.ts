@@ -76,6 +76,10 @@ import {
   postDepreciationJournal,
   getJournalMappingSummary,
 } from "../lib/journalMappingService.js";
+import {
+  calculateProfitLossSummary,
+  splitProfitLossExpenses,
+} from "../lib/accounting/profitLoss.js";
 
 function serializeCompany(c: typeof companiesTable.$inferSelect) {
   return { ...c, createdAt: c.createdAt.toISOString() };
@@ -3367,11 +3371,6 @@ router.get("/reports/general-ledger", async (req, res) => {
   });
 });
 
-function isCogsAccountCode(code: string): boolean {
-  // HPP is the 5-10xx branch; company leaf accounts may carry a suffix.
-  return code === "5-1000" || code.startsWith("5-10");
-}
-
 router.get("/reports/profit-loss", async (req, res) => {
   const scope = resolveCompanyScope(req);
   const range = parseDateRange(req);
@@ -3409,12 +3408,15 @@ router.get("/reports/profit-loss", async (req, res) => {
       amount: Math.round(-(totals.get(a.id) ?? 0) * 100) / 100,
     }))
     .filter((r) => r.amount !== 0);
-  const cogs = expenses.filter((r) => isCogsAccountCode(r.code));
-  const operatingExpenses = expenses.filter((r) => !isCogsAccountCode(r.code));
+  const { cogs, operatingExpenses } = splitProfitLossExpenses(expenses);
   const totalRevenue = revenues.reduce((s, r) => s + r.amount, 0);
   const totalCogs = cogs.reduce((s, r) => s + r.amount, 0);
   const totalOperatingExpense = operatingExpenses.reduce((s, r) => s + r.amount, 0);
-  const totalExpense = expenses.reduce((s, r) => s + r.amount, 0);
+  const summary = calculateProfitLossSummary({
+    revenue: totalRevenue,
+    cogs: totalCogs,
+    operatingExpense: totalOperatingExpense,
+  });
   return res.json({
     from: range.from?.toISOString() ?? null,
     to: range.to?.toISOString() ?? null,
@@ -3422,12 +3424,7 @@ router.get("/reports/profit-loss", async (req, res) => {
     cogs,
     operatingExpenses,
     expenses,
-    totalRevenue: Math.round(totalRevenue * 100) / 100,
-    totalCogs: Math.round(totalCogs * 100) / 100,
-    totalOperatingExpense: Math.round(totalOperatingExpense * 100) / 100,
-    totalExpense: Math.round(totalExpense * 100) / 100,
-    grossProfit: Math.round((totalRevenue - totalCogs) * 100) / 100,
-    netIncome: Math.round((totalRevenue - totalExpense) * 100) / 100,
+    ...summary,
   });
 });
 
