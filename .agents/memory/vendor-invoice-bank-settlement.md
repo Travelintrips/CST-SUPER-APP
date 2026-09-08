@@ -14,3 +14,20 @@ For a vendor invoice that is already fully paid, bank reconciliation must use a 
 **Why:** Split payments can make the aggregate invoice balance zero before each bank mutation has been linked to its corresponding posted disbursement. Treating the final link as another payment creates duplicate AP settlement and blocks valid reconciliation.
 
 **How to apply:** Require company-scoped, posted disbursement evidence and an unused exact item/amount match under row locks; record an approved reconciliation match and audit event, then mark only the bank mutation reconciled.
+Reconciliation governance is candidate-first: use invoice matching only when a valid
+vendor-invoice candidate exists; otherwise let the admin classify the bank mutation
+through COA selection or Rule AI.
+
+**Why:** A missing outstanding invoice is not evidence that the bank mutation should
+be forced into AP settlement. Forcing the invoice dialog can hide the correct
+no-candidate accounting path and risks duplicating an already-posted expense or AP.
+
+**How to apply:** Keep the no-candidate path available for COA/Rule AI. In the
+bank-reconciliation dialog, an outstanding invoice may use Match & Bayar; an
+already-paid invoice may appear only when it has no active vendor-invoice
+settlement match, and must use a reconciliation-only Link Settlement path that
+does not create a journal or increment amount_paid.
+
+**Why:** A valid Bank Disbursement can settle the invoice financially before a
+bank mutation is linked. Hiding that invoice forever loses settlement evidence,
+while treating the link as a new payment double-settles AP.

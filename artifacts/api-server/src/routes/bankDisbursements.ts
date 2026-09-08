@@ -556,6 +556,11 @@ router.get("/", async (req, res) => {
 router.get("/vendor-invoices/outstanding", async (req, res) => {
   try {
     const companyId = resolveCompanyId(req);
+    const includeSettlementUnlinked =
+      String(req.query["includeSettlementUnlinked"] ?? "").toLowerCase() === "true";
+    const reconciliationMutationId = Number(req.query["mutationId"] ?? 0);
+    const hasReconciliationMutationId =
+      Number.isInteger(reconciliationMutationId) && reconciliationMutationId > 0;
 
     const settingsRows = execRows<{ ap_account_id: number | null }>(
       await db.execute<{ ap_account_id: number | null }>(sql`
@@ -589,6 +594,8 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       withholding_tax_amount: string | null;
       due_date: string | null;
       source: "purchase_document" | "vendor_invoice";
+      has_active_settlement_match?: boolean;
+      settlement_match_mutation_id?: number | null;
     }>(
       await db.execute(sql`
         SELECT
@@ -606,7 +613,9 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           NULL::text AS tax_review_status,
           NULL::numeric AS withholding_tax_amount,
           LEFT(pd.due_date, 10) AS due_date,
-          'purchase_document' AS source
+          'purchase_document' AS source,
+          FALSE AS has_active_settlement_match,
+          NULL::integer AS settlement_match_mutation_id
         FROM purchase_documents pd
         WHERE pd.company_id = ${companyId}
           AND pd.bill_status = 'billed'
@@ -630,12 +639,54 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
           vi.tax_review_status,
            vi.withholding_tax_amount,
           to_char(vi.due_date, 'YYYY-MM-DD') AS due_date,
-          'vendor_invoice' AS source
+          'vendor_invoice' AS source,
+          EXISTS (
+            SELECT 1
+            FROM bank_reconciliation_matches brm
+            WHERE brm.candidate_type = 'vendor_invoice'
+              AND brm.candidate_id::text = vi.id::text
+              AND brm.status IN ('candidate', 'approved')
+              ${hasReconciliationMutationId
+                ? sql`AND brm.mutation_id = ${reconciliationMutationId}`
+                : sql``}
+          ) AS has_active_settlement_match,
+          (
+            SELECT brm.mutation_id
+            FROM bank_reconciliation_matches brm
+            WHERE brm.candidate_type = 'vendor_invoice'
+              AND brm.candidate_id::text = vi.id::text
+              AND brm.status IN ('candidate', 'approved')
+            ORDER BY brm.created_at DESC, brm.id DESC
+            LIMIT 1
+          ) AS settlement_match_mutation_id
         FROM vendor_invoices vi
         WHERE vi.company_id = ${companyId}
-          AND vi.status IN ('posted', 'matched')
+          AND vi.status IN ('posted', 'matched', 'paid')
           AND vi.cancelled_at IS NULL
-          AND vi.grand_total > COALESCE(vi.amount_paid, 0)
+          ${hasReconciliationMutationId
+            ? sql`AND NOT EXISTS (
+                SELECT 1
+                FROM bank_reconciliation_matches current_mutation_match
+                WHERE current_mutation_match.mutation_id = ${reconciliationMutationId}
+                  AND current_mutation_match.candidate_type = 'vendor_invoice'
+                  AND current_mutation_match.candidate_id::text = vi.id::text
+                  AND current_mutation_match.status IN ('candidate', 'approved')
+              )`
+            : sql``}
+          AND (
+            vi.grand_total > COALESCE(vi.amount_paid, 0)
+            OR (
+              ${includeSettlementUnlinked}
+              AND vi.grand_total <= COALESCE(vi.amount_paid, 0)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM bank_reconciliation_matches settled_match
+                WHERE settled_match.candidate_type = 'vendor_invoice'
+                  AND settled_match.candidate_id::text = vi.id::text
+                  AND settled_match.status IN ('candidate', 'approved')
+              )
+            )
+          )
 
         ORDER BY due_date ASC NULLS LAST, id ASC
       `)
@@ -757,6 +808,12 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
             grandTotal: Number(r.grand_total),
           };
       const amountPaid = Number(r.amount_paid ?? 0);
+      const hasActiveSettlementMatch = Boolean(r.has_active_settlement_match);
+      const isSettled = financials.grandTotal <= amountPaid + 0.01;
+      const settlementLinkOnly =
+        r.source === "vendor_invoice" &&
+        isSettled &&
+        !hasActiveSettlementMatch;
       const recalculatedWithholding = r.source === "vendor_invoice"
         ? recalculateVendorInvoiceBreakdown(r.invoice_breakdown, r.supplier_name ?? "")
         : null;
@@ -781,6 +838,11 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
         dueDate: r.due_date,
         currency: "IDR",
         source: r.source,
+        settlementStatus: isSettled
+          ? (settlementLinkOnly ? "settled_unlinked" : "settled")
+          : (hasActiveSettlementMatch ? "partially_settled" : "outstanding"),
+        settlementLinkOnly,
+        settlementMatchMutationId: r.settlement_match_mutation_id ?? null,
          vendorInvoiceRef: r.vendor_invoice_ref,
          expenseLines: r.source === "vendor_invoice" ? (expenseLinesByInvoice.get(r.id) ?? []) : [],
         withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],

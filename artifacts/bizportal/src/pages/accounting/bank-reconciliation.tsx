@@ -698,6 +698,9 @@ interface OutstandingVendorInvoice {
   linkedDisbursementNumber?: string | null;
   linkedDisbursementItemId?: number | null;
   linkedPaymentAmount?: number | null;
+  settlementStatus?: "outstanding" | "partially_settled" | "settled_unlinked" | "settled" | string;
+  settlementLinkOnly?: boolean;
+  settlementMatchMutationId?: number | null;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -2820,6 +2823,12 @@ function VendorInvoicePaymentDialog({
     enabled: open && Number.isInteger(companyId) && Number(companyId) > 0,
     queryFn: async () => {
       const response = await fetch(`/api/bank-reconciliation/${mutation?.id}/vendor-invoice-candidates`, {
+      const params = new URLSearchParams({
+        company: String(companyId),
+        includeSettlementUnlinked: "true",
+        ...(mutation?.id ? { mutationId: String(mutation.id) } : {}),
+      });
+      const response = await fetch(`/api/accounting/bank-disbursements/vendor-invoices/outstanding?${params}`, {
         credentials: "include",
         headers: { "x-company-id": String(companyId) },
       });
@@ -2850,6 +2859,10 @@ function VendorInvoicePaymentDialog({
       setSaving(true);
       try {
         const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-link`, {
+    if (selected.settlementLinkOnly) {
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-settlement-link`, {
           method: "POST",
           credentials: "include",
           headers: {
@@ -2864,6 +2877,10 @@ function VendorInvoicePaymentDialog({
         toast({
           title: "Settlement berhasil ditautkan",
           description: `${selected.billNumber ?? selected.docNumber} — ${idr(mutationAmount)} ditautkan ke ${body.disbursementNumber ?? "Bank Disbursement"} tanpa jurnal baru.`,
+        if (!response.ok) throw new Error(body.error ?? "Settlement invoice vendor gagal ditautkan");
+        toast({
+          title: "Settlement invoice berhasil ditautkan",
+          description: `${selected.billNumber ?? selected.docNumber} — tidak ada jurnal atau pembayaran baru yang dibuat.`,
         });
         onClose();
         await onSaved();
@@ -2877,6 +2894,10 @@ function VendorInvoicePaymentDialog({
         setSaving(false);
       }
     } else if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
+      return;
+    }
+
+    if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
       setSaving(true);
       try {
         const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment`, {
@@ -2927,6 +2948,9 @@ function VendorInvoicePaymentDialog({
               {linkOnly
                 ? "Pembayaran Bank Disbursement yang sudah tercatat akan ditautkan tanpa jurnal atau pembayaran baru."
                 : "Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru."}
+          <DialogTitle>Match / Link Invoice Vendor</DialogTitle>
+          <DialogDescription>
+            Invoice outstanding akan dijurnal sebagai pelunasan hutang. Invoice yang sudah lunas hanya ditautkan ke settlement tanpa pembayaran atau jurnal baru.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -2966,6 +2990,8 @@ function VendorInvoicePaymentDialog({
                   {invoices.map((invoice) => (
                     <SelectItem key={invoice.id} value={String(invoice.id)}>
                        {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — {invoice.settlementMode === "link_only" ? `link ${idr(invoice.linkedPaymentAmount ?? mutationAmount)}` : `sisa ${idr(invoice.outstanding)}`}
+                      {invoice.settlementLinkOnly ? "[Link Settlement] " : ""}
+                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — sisa {idr(invoice.outstanding)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -3012,6 +3038,11 @@ function VendorInvoicePaymentDialog({
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {saving ? "Memproses…" : linkOnly ? "Link Settlement" : "Match & Bayar Invoice"}
+            {saving
+              ? "Memproses…"
+              : selected?.settlementLinkOnly
+                ? "Link Settlement"
+                : "Match & Bayar Invoice"}
           </Button>
         </DialogFooter>
       </DialogContent>

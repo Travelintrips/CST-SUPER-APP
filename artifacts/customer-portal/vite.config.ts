@@ -194,7 +194,11 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
-      "/logistic-order": {
+      // Only proxy the standalone logistic-order service path. A plain string
+      // prefix would also capture the Customer Portal SPA route
+      // /logistic-order-success and return a proxy 500 when that optional
+      // service is not running.
+      "^/logistic-order(?:/|$)": {
         target: `http://localhost:${process.env.LOGISTIC_ORDER_PORT ?? 19368}`,
         changeOrigin: true,
         ws: true,
