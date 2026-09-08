@@ -1562,6 +1562,12 @@ router.post("/vendor-invoices", async (req, res) => {
     : recalculatedWithholdingAmount > 0
       ? recalculatedWithholdingAmount
       : requestedWithholdingTaxAmount;
+  const hasUnresolvedWithholding = lineValues.some((line) =>
+    line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0 && !tax.liabilityAccountId),
+  );
+  const withholdingNeedsReview =
+    withholdingTaxAmount > 0
+    && (!hasLineWithholding || hasUnresolvedWithholding);
 
   const [vi] = await db.insert(vendorInvoicesTable).values({
     invoiceNumber,
@@ -1577,9 +1583,9 @@ router.post("/vendor-invoices", async (req, res) => {
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
     withholdingTaxAmount: String(withholdingTaxAmount),
-    taxReviewStatus: taxReviewRequired || hasLineWithholding ? "required" : "not_required",
-    taxReviewReason,
-    withholdingReviewStatus: taxReviewRequired || hasLineWithholding ? "required" : "not_required",
+    taxReviewStatus: withholdingNeedsReview ? "required" : "not_required",
+    taxReviewReason: withholdingNeedsReview ? taxReviewReason : null,
+    withholdingReviewStatus: withholdingNeedsReview ? "required" : "not_required",
     withholdingTaxType,
     taxObject,
     grandTotal: String(grandTotal),
@@ -1607,8 +1613,10 @@ router.post("/vendor-invoices", async (req, res) => {
           baseAmount: String(tax.baseAmount ?? lineValues[i]!.subtotal),
           taxAmount: String(tax.taxAmount),
            liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
-          resolutionStatus: "tax_review",
-           reviewReason: String(tax.reviewReason ?? "Menunggu review Finance per line"),
+          resolutionStatus: tax.liabilityAccountId ? "confirmed" : "tax_review",
+          reviewReason: tax.liabilityAccountId
+            ? null
+            : String(tax.reviewReason ?? "COA Hutang PPh belum terpetakan"),
         });
       }
     }
@@ -1711,6 +1719,12 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
   const withholdingTaxAmount = updatedWithholdingTaxAmount > 0
     ? updatedWithholdingTaxAmount
     : requestedWithholdingTaxAmount;
+  const updatedHasUnresolvedWithholding = updatedLineValues.some((line) =>
+    line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0 && !tax.liabilityAccountId),
+  );
+  const updatedWithholdingNeedsReview =
+    Number(withholdingTaxAmount ?? 0) > 0
+    && (!updatedHasWithholding || updatedHasUnresolvedWithholding);
   const [vi] = await db.update(vendorInvoicesTable).set({
     vendorInvoiceRef: body.vendorInvoiceRef ? String(body.vendorInvoiceRef) : undefined,
     supplierName: body.supplierName ? String(body.supplierName) : undefined,
@@ -1723,9 +1737,9 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
     taxAmount: String(taxAmount),
     grandTotal: String(totalAmount + taxAmount),
     ...(withholdingTaxAmount !== undefined ? { withholdingTaxAmount: String(withholdingTaxAmount) } : {}),
-    taxReviewStatus: updatedHasWithholding ? "required" : "not_required",
-    taxReviewReason: updatedHasWithholding ? "PPh line menunggu review Finance." : null,
-    withholdingReviewStatus: updatedHasWithholding ? "required" : "not_required",
+    taxReviewStatus: updatedWithholdingNeedsReview ? "required" : "not_required",
+    taxReviewReason: updatedWithholdingNeedsReview ? "COA Hutang PPh belum terpetakan." : null,
+    withholdingReviewStatus: updatedWithholdingNeedsReview ? "required" : "not_required",
     notes: body.notes ? String(body.notes) : undefined,
     ...(body.invoiceBreakdown !== undefined
       ? {
@@ -1756,8 +1770,10 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
           baseAmount: String(tax.baseAmount ?? updatedLineValues[i]!.subtotal),
           taxAmount: String(tax.taxAmount),
           liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
-          resolutionStatus: "tax_review",
-          reviewReason: String(tax.reviewReason ?? "Menunggu review Finance per line"),
+          resolutionStatus: tax.liabilityAccountId ? "confirmed" : "tax_review",
+          reviewReason: tax.liabilityAccountId
+            ? null
+            : String(tax.reviewReason ?? "COA Hutang PPh belum terpetakan"),
         });
       }
     }

@@ -2887,11 +2887,6 @@ function VendorInvoicePaymentDialog({
     0,
   );
   const selectionFitsMutation = Math.abs(selectedTotal - mutationAmount) <= 0.01;
-  const selectedHasWithholdingReview = selectedInvoices.some(
-    (invoice) =>
-      Number(invoice.withholdingTaxAmount ?? 0) > 0
-      || Boolean(invoice.taxReviewStatus && invoice.taxReviewStatus !== "not_required"),
-  );
 
   useEffect(() => {
     if (!open) {
@@ -2921,15 +2916,6 @@ function VendorInvoicePaymentDialog({
       });
       return;
     }
-    if (selectedHasWithholdingReview) {
-      toast({
-        title: "Review PPh masih diperlukan",
-        description: "Invoice dengan withholding tax atau nominal PPh yang belum tervalidasi harus dibayar melalui Bank Disbursement.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     setSaving(true);
     try {
       const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment-batch`, {
@@ -2977,7 +2963,8 @@ function VendorInvoicePaymentDialog({
               <strong>{idr(mutationAmount)}</strong>
             </div>
             <div className="mt-1 text-xs">
-              Jurnal: <strong>Debit Hutang Vendor/AP</strong> — <strong>Kredit Bank</strong>
+              Jurnal: <strong>Debit Hutang Vendor/AP</strong> — <strong>Kredit Bank</strong>.
+              Jika pelunasan bersih penuh, PPh otomatis dikredit ke COA Hutang PPh.
             </div>
           </div>
 
@@ -3017,9 +3004,7 @@ function VendorInvoicePaymentDialog({
                 <TableBody>
                   {invoices.map((invoice) => {
                     const checked = selectedIds.includes(invoice.id);
-                    const reviewRequired =
-                      Number(invoice.withholdingTaxAmount ?? 0) > 0
-                      || Boolean(invoice.taxReviewStatus && invoice.taxReviewStatus !== "not_required");
+                    const hasWithholding = Number(invoice.withholdingTaxAmount ?? 0) > 0;
                     const components = invoice.invoiceBreakdown?.components ?? [];
                     const expenseLines = invoice.expenseLines ?? [];
                     const componentRowCount = Math.max(components.length, expenseLines.length);
@@ -3028,7 +3013,7 @@ function VendorInvoicePaymentDialog({
                         <TableCell className="align-top pt-4">
                           <Checkbox
                             checked={checked}
-                            disabled={saving || reviewRequired}
+                            disabled={saving}
                             onCheckedChange={(value) => toggleInvoice(invoice.id, value === true)}
                             aria-label={`Pilih invoice ${invoice.billNumber ?? invoice.docNumber}`}
                           />
@@ -3037,9 +3022,9 @@ function VendorInvoicePaymentDialog({
                           <div className="font-medium">{invoice.billNumber ?? invoice.docNumber}</div>
                           <div className="text-xs text-muted-foreground">{invoice.supplierName}</div>
                           {invoice.dueDate && <div className="text-xs text-muted-foreground">Jatuh tempo {invoice.dueDate}</div>}
-                          {reviewRequired && (
-                            <Badge variant="outline" className="mt-1 border-amber-300 text-amber-700">
-                              Review PPh
+                          {hasWithholding && (
+                            <Badge variant="outline" className="mt-1 border-blue-300 text-blue-700">
+                              PPh auto ke COA
                             </Badge>
                           )}
                         </TableCell>
@@ -3109,11 +3094,6 @@ function VendorInvoicePaymentDialog({
                   Pilih invoice lain atau ubah pilihan sampai total alokasi sama dengan nominal mutasi.
                 </div>
               )}
-              {selectedHasWithholdingReview && (
-                <div className="mt-1 text-xs text-amber-700">
-                  Pilihan mengandung PPh/review tax. Gunakan Bank Disbursement agar jurnal gross AP, bank net, dan hutang pajak tetap seimbang.
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -3122,7 +3102,7 @@ function VendorInvoicePaymentDialog({
           <Button
             className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             onClick={save}
-            disabled={saving || selectedInvoices.length === 0 || !selectionFitsMutation || selectedHasWithholdingReview}
+            disabled={saving || selectedInvoices.length === 0 || !selectionFitsMutation}
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {saving ? "Memproses…" : "Match & Bayar Invoice"}

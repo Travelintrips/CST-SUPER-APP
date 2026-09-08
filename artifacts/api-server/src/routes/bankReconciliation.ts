@@ -5396,16 +5396,43 @@ router.post(
           throw Object.assign(new Error("Satu atau lebih invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
         }
 
+        const { rows: withholdingRows } = await tx.execute(sql`
+          SELECT
+            vil.invoice_id,
+            vit.tax_type,
+            vit.tax_amount,
+            vit.liability_account_id
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          WHERE vil.invoice_id IN (${sql.join(vendorInvoiceIds.map((id) => sql`${id}`), sql`, `)})
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vil.invoice_id, vit.id
+        `);
+        const withholdingByInvoice = new Map<number, Array<{
+          taxType: string;
+          amount: number;
+          liabilityAccountId: number | null;
+        }>>();
+        for (const row of withholdingRows as Array<Record<string, unknown>>) {
+          const invoiceId = Number(row.invoice_id);
+          const amount = Number(row.tax_amount ?? 0);
+          if (!Number.isFinite(amount) || amount <= 0) continue;
+          const list = withholdingByInvoice.get(invoiceId) ?? [];
+          list.push({
+            taxType: String(row.tax_type ?? "PPh"),
+            amount,
+            liabilityAccountId: row.liability_account_id == null
+              ? null
+              : Number(row.liability_account_id),
+          });
+          withholdingByInvoice.set(invoiceId, list);
+        }
+
         const allocations = (invoiceRows as Array<Record<string, unknown>>).map((invoice) => {
           const invoiceNumber = String(invoice.invoice_number ?? invoice.id);
           if (!["posted", "matched"].includes(String(invoice.status))) {
             throw Object.assign(new Error(`Invoice ${invoiceNumber} harus berstatus posted atau matched sebelum dibayar`), { httpStatus: 422 });
-          }
-          if (
-            Number(invoice.withholding_tax_amount ?? 0) > 0
-            || String(invoice.tax_review_status ?? "not_required") !== "not_required"
-          ) {
-            throw Object.assign(new Error(`Invoice ${invoiceNumber} memiliki withholding tax/review. Gunakan Bank Disbursement.`), { httpStatus: 422 });
           }
           const financials = resolveVendorInvoiceFinancialAmounts({
             totalAmount: invoice.total_amount,
@@ -5418,13 +5445,27 @@ router.post(
           if (!Number.isFinite(financials.grandTotal) || financials.grandTotal <= 0 || outstanding <= 0.01) {
             throw Object.assign(new Error(`Invoice ${invoiceNumber} sudah lunas atau nominalnya tidak valid`), { httpStatus: 409 });
           }
+          const withholdingTaxes = withholdingByInvoice.get(Number(invoice.id)) ?? [];
+          const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
+          const amount = invoiceRows.length === 1 ? Math.min(mutationAmount, outstanding) : outstanding;
+          // A full net settlement is the one case where the bank mutation
+          // proves both the supplier payment and the withholding allocation.
+          // Partial cash payments remain ordinary AP settlements and must not
+          // recognize the entire PPh amount prematurely.
+          const settlesNetAmount =
+            withholdingTaxTotal > 0
+            && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
+          const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
           return {
             invoice,
             invoiceNumber,
             financials,
             amountPaid,
             outstanding,
-            amount: invoiceRows.length === 1 ? Math.min(mutationAmount, outstanding) : outstanding,
+            amount,
+            grossAmount: amount + withholdingCredit,
+            withholdingTaxes,
+            withholdingCredit,
           };
         });
         const totalAllocation = allocations.reduce((sum, item) => sum + item.amount, 0);
@@ -5488,9 +5529,30 @@ router.post(
             lines: [
               ...allocations.map((item) => ({
                 accountId: apCoaId,
-                debit: item.amount,
+                debit: item.grossAmount,
                 credit: 0,
                 description: `Pembayaran invoice vendor ${item.invoiceNumber}`.slice(0, 200),
+              })),
+              ...Array.from(
+                allocations.reduce((byAccount, item) => {
+                  if (item.withholdingCredit <= 0) return byAccount;
+                  for (const tax of item.withholdingTaxes) {
+                    if (tax.amount <= 0 || tax.liabilityAccountId == null) {
+                      throw Object.assign(
+                        new Error(`COA Hutang PPh untuk invoice ${item.invoiceNumber} belum terpetakan`),
+                        { httpStatus: 422 },
+                      );
+                    }
+                    const accountId = Number(tax.liabilityAccountId);
+                    byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                  }
+                  return byAccount;
+                }, new Map<number, number>()),
+              ).map(([accountId, amount]) => ({
+                accountId,
+                debit: 0,
+                credit: amount,
+                description: `Hutang PPh — matching invoice vendor`,
               })),
               { accountId: bankCoaId, debit: 0, credit: mutationAmount, description },
             ],
@@ -5500,7 +5562,7 @@ router.post(
         );
 
         for (const item of allocations) {
-          const newPaid = Math.round((item.amountPaid + item.amount) * 100) / 100;
+          const newPaid = Math.round((item.amountPaid + item.grossAmount) * 100) / 100;
           await tx.execute(sql`
             UPDATE vendor_invoices
             SET amount_paid = ${String(newPaid)},
@@ -5534,6 +5596,8 @@ router.post(
               candidate_type: "vendor_invoice_batch",
               candidate_ids: allocations.map((item) => Number(item.invoice.id)),
               amounts: allocations.map((item) => item.amount),
+            gross_amounts: allocations.map((item) => item.grossAmount),
+            withholding_amounts: allocations.map((item) => item.withholdingCredit),
               total_amount: mutationAmount,
               journal_entry_id: entry.id,
               payment_type: "vendor_invoice_settlement",
@@ -5549,6 +5613,8 @@ router.post(
             vendorInvoiceId: Number(item.invoice.id),
             invoiceNumber: item.invoiceNumber,
             amount: item.amount,
+            grossAmount: item.grossAmount,
+            withholdingAmount: item.withholdingCredit,
             outstanding: Math.max(0, item.outstanding - item.amount),
           })),
         };
@@ -6002,17 +6068,26 @@ router.post(
           );
         }
 
-        // Withholding requires the specialized Bank Disbursement flow because
-        // the cash amount is net while AP settlement is gross.
-        if (
-          Number(invoice.withholding_tax_amount ?? 0) > 0
-          || String(invoice.withholding_review_status ?? "not_required") !== "not_required"
-        ) {
-          throw Object.assign(
-            new Error("Invoice memiliki withholding tax. Gunakan Bank Disbursement agar jurnal gross AP, bank net, dan hutang pajak tetap seimbang."),
-            { httpStatus: 422 },
-          );
-        }
+        const { rows: withholdingRows } = await tx.execute(sql`
+          SELECT vit.tax_type, vit.tax_amount, vit.liability_account_id
+          FROM vendor_invoice_line_taxes vit
+          INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
+          WHERE vil.invoice_id = ${vendorInvoiceId}
+            AND vit.company_id = ${companyId}
+            AND vit.tax_amount > 0
+          ORDER BY vit.id
+        `);
+        const withholdingTaxes = (withholdingRows as Array<Record<string, unknown>>).map((row) => ({
+          taxType: String(row.tax_type ?? "PPh"),
+          amount: Number(row.tax_amount ?? 0),
+          liabilityAccountId: row.liability_account_id == null ? null : Number(row.liability_account_id),
+        })).filter((tax) => Number.isFinite(tax.amount) && tax.amount > 0);
+        const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
+        const settlesNetAmount =
+          withholdingTaxTotal > 0
+          && Math.abs(amount - Math.max(0, outstanding - withholdingTaxTotal)) <= 0.01;
+        const withholdingCredit = settlesNetAmount ? withholdingTaxTotal : 0;
+        const grossAmount = amount + withholdingCredit;
 
         const { rows: settingsRows } = await tx.execute(sql`
           SELECT default_bank_account_id, ap_account_id, bank_journal_id
@@ -6075,7 +6150,27 @@ router.post(
             createdById: actor,
             companyId,
             lines: [
-              { accountId: apCoaId, debit: amount, credit: 0, description },
+              { accountId: apCoaId, debit: grossAmount, credit: 0, description },
+              ...(() => {
+                if (withholdingCredit <= 0) return [];
+                const byAccount = new Map<number, number>();
+                for (const tax of withholdingTaxes) {
+                  if (tax.liabilityAccountId == null) {
+                    throw Object.assign(
+                      new Error(`COA Hutang PPh untuk invoice ${invoiceNumber} belum terpetakan`),
+                      { httpStatus: 422 },
+                    );
+                  }
+                  const accountId = Number(tax.liabilityAccountId);
+                  byAccount.set(accountId, (byAccount.get(accountId) ?? 0) + tax.amount);
+                }
+                return Array.from(byAccount, ([accountId, taxAmount]) => ({
+                  accountId,
+                  debit: 0,
+                  credit: taxAmount,
+                  description: "Hutang PPh — matching invoice vendor",
+                }));
+              })(),
               { accountId: bankCoaId, debit: 0, credit: amount, description },
             ],
           },
@@ -6083,7 +6178,7 @@ router.post(
           "draft",
         );
 
-        const newPaid = Math.round((alreadyPaid + amount) * 100) / 100;
+        const newPaid = Math.round((alreadyPaid + grossAmount) * 100) / 100;
         const invoiceStatus = newPaid >= grandTotal - 0.01 ? "paid" : "posted";
         await tx.execute(sql`
           UPDATE vendor_invoices
@@ -6123,6 +6218,8 @@ router.post(
               candidate_id: vendorInvoiceId,
               invoice_number: invoiceNumber,
               amount,
+              gross_amount: grossAmount,
+              withholding_amount: withholdingCredit,
               journal_entry_id: entry.id,
               payment_type: "vendor_invoice_settlement",
             })}
