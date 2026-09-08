@@ -8,17 +8,3 @@ router = "path"
 [[integratedSkills]]
 name = "react-vite"
 version = "1.0.0"
-
-[[services]]
-name = "web"
-paths = [ "/logistic-order/" ]
-localPort = 19368
-
-[services.development]
-run = "bash start-dev.sh"
-
-# Compatibility artifact only. Production ownership belongs to Customer Portal.
-
-[services.env]
-PORT = "19368"
-BASE_PATH = "/logistic-order/"
