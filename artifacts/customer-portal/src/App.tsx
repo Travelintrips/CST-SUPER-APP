@@ -137,7 +137,7 @@ if (typeof window !== "undefined" && window.location.hostname === "bizportal.cst
 }
 
 // Routes that show NO navbar/footer shell
-const LOGISTIC_ROUTES = ["/book", "/logistic-order-success", "/logistic-admin", "/order-produk"];
+const LOGISTIC_ROUTES = ["/book", "/logistic-order", "/logistic-order-success", "/logistic-admin", "/order-produk"];
 const NO_SHELL_PREFIXES = [
   "/jasa/", "/services/", "/vendor-response", "/vendor-product-approval",
   "/approve", "/confirm", "/vendor-quote", "/vendor-confirm", "/vendor-form",
@@ -356,6 +356,14 @@ function AppShell() {
         <Route path="/freight-forwarding" component={FreightForwarding} />
         <Route path="/pabean" component={Pabean} />
         <Route path="/custom-clearance" component={CustomClearance} />
+        {/* Compatibility aliases: Logistic Order is owned by Customer Portal. */}
+        <Route path="/logistic-order" component={LogisticBook} />
+        <Route path="/logistic-order/book" component={LogisticBook} />
+        <Route path="/logistic-order/order-success" component={LogisticOrderSuccess} />
+        <Route path="/logistic-order/track/:orderNumber" component={LogisticTrack} />
+        <Route path="/logistic-order/track" component={LogisticTrack} />
+        <Route path="/logistic-order/admin/orders/:id" component={LogisticAdminOrderDetail} />
+        <Route path="/logistic-order/admin" component={LogisticAdmin} />
         <Route path="/book" component={LogisticBook} />
         <Route path="/logistic-order-success" component={LogisticOrderSuccess} />
         <Route path="/track/:orderNumber" component={LogisticTrack} />

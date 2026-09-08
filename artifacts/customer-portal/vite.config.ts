@@ -194,15 +194,9 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
-      // Only proxy the standalone logistic-order service path. A plain string
-      // prefix would also capture the Customer Portal SPA route
-      // /logistic-order-success and return a proxy 500 when that optional
-      // service is not running.
-      "^/logistic-order(?:/|$)": {
-        target: `http://localhost:${process.env.LOGISTIC_ORDER_PORT ?? 19368}`,
-        changeOrigin: true,
-        ws: true,
-      },
+      // Logistic Order is owned by this Customer Portal. Its compatibility
+      // aliases are handled by the SPA routes above; do not proxy them to the
+      // deprecated standalone redirect shim.
       "/wa-gateway": {
         target: `http://localhost:${process.env.WA_GATEWAY_PORT ?? 8000}`,
         changeOrigin: true,
