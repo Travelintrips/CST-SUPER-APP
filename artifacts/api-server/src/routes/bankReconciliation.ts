@@ -5304,6 +5304,287 @@ router.post(
 // A bank mutation that settles a posted vendor invoice must debit AP, not the
 // expense COA used by the invoice journal. This path keeps the bank mutation,
 // payment journal, invoice amount_paid, and reconciliation link atomic.
+router.get(
+  "/:mutationId/vendor-invoice-candidates",
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+
+    try {
+      const { rows: mutationRows } = await db.execute(sql`
+        SELECT id, amount, direction, company_id, journal_entry_id, status
+        FROM bank_mutations
+        WHERE id = ${mutationId}
+        LIMIT 1
+      `);
+      const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+      if (!mutation) return res.status(404).json({ error: "Mutasi bank tidak ditemukan" });
+
+      const companyId = Number(mutation.company_id);
+      const mutationAmount = Number(mutation.amount);
+      if (!Number.isInteger(companyId) || companyId <= 0 || !Number.isFinite(mutationAmount) || mutationAmount <= 0) {
+        return res.status(422).json({ error: "Mutasi tidak memiliki company context atau nominal yang valid" });
+      }
+      if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+        return res.status(422).json({ error: "Hanya mutasi uang keluar yang dapat dialokasikan ke invoice vendor" });
+      }
+
+      const { rows } = await db.execute(sql`
+        SELECT
+          vi.id,
+          vi.invoice_number AS doc_number,
+          vi.invoice_number AS bill_number,
+          vi.supplier_name,
+          vi.total_amount,
+          vi.tax_amount,
+          vi.grand_total,
+          vi.amount_paid,
+          vi.invoice_breakdown,
+          vi.tax_review_status,
+          vi.withholding_tax_amount,
+          vi.due_date,
+          linked.disbursement_id AS linked_disbursement_id,
+          linked.disbursement_number AS linked_disbursement_number,
+          linked.disbursement_item_id AS linked_disbursement_item_id,
+          linked.payment_amount AS linked_payment_amount
+        FROM vendor_invoices vi
+        LEFT JOIN LATERAL (
+          SELECT
+            bdi.id AS disbursement_item_id,
+            bd.id AS disbursement_id,
+            bd.disbursement_number,
+            bdi.amount AS payment_amount
+          FROM bank_disbursement_items bdi
+          INNER JOIN bank_disbursements bd ON bd.id = bdi.disbursement_id
+          WHERE bdi.vendor_invoice_id = vi.id
+            AND bdi.transaction_type = 'supplier_payment'
+            AND bd.company_id = vi.company_id
+            AND bd.status = 'posted'
+            AND ABS(CAST(bdi.amount AS numeric) - ${mutationAmount}) <= 0.01
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_matches used_link
+              WHERE used_link.status = 'approved'
+                AND used_link.candidate_source = 'bank_disbursement'
+                AND used_link.match_reason LIKE ('bank_disbursement_item:' || bdi.id::text || ';%')
+            )
+          ORDER BY bd.date DESC, bd.id DESC, bdi.id DESC
+          LIMIT 1
+        ) linked ON TRUE
+        WHERE vi.company_id = ${companyId}
+          AND vi.status IN ('posted', 'matched', 'paid')
+          AND vi.cancelled_at IS NULL
+          AND (
+            vi.grand_total > COALESCE(vi.amount_paid, 0)
+            OR linked.disbursement_item_id IS NOT NULL
+          )
+        ORDER BY vi.due_date ASC NULLS LAST, vi.id ASC
+      `);
+
+      const invoices = rows.map((row) => {
+        const financials = resolveVendorInvoiceFinancialAmounts({
+          totalAmount: row.total_amount,
+          taxAmount: row.tax_amount,
+          grandTotal: row.grand_total,
+          invoiceBreakdown: row.invoice_breakdown,
+        });
+        const amountPaid = Number(row.amount_paid ?? 0);
+        const outstanding = Math.max(0, financials.grandTotal - amountPaid);
+        const linkOnly = row.linked_disbursement_item_id != null;
+        return {
+          id: Number(row.id),
+          docNumber: String(row.doc_number ?? ""),
+          billNumber: row.bill_number == null ? null : String(row.bill_number),
+          supplierName: String(row.supplier_name ?? "—"),
+          subtotal: financials.subtotal,
+          taxAmount: financials.taxAmount,
+          grandTotal: financials.grandTotal,
+          amountPaid,
+          outstanding,
+          taxReviewStatus: row.tax_review_status ?? "not_required",
+          withholdingTaxAmount: Number(row.withholding_tax_amount ?? 0),
+          dueDate: row.due_date ?? null,
+          source: "vendor_invoice",
+          settlementMode: linkOnly ? "link_only" : "payment",
+          linkedDisbursementId: linkOnly ? Number(row.linked_disbursement_id) : null,
+          linkedDisbursementNumber: linkOnly ? String(row.linked_disbursement_number ?? "") : null,
+          linkedDisbursementItemId: linkOnly ? Number(row.linked_disbursement_item_id) : null,
+          linkedPaymentAmount: linkOnly ? Number(row.linked_payment_amount ?? 0) : null,
+        };
+      });
+
+      return res.json({ invoices });
+    } catch (error: any) {
+      logger.error({ err: error, mutationId }, "[bankRecon/vendor-invoice-candidates] failed");
+      return res.status(500).json({ error: "Gagal memuat kandidat invoice vendor" });
+    }
+  },
+);
+
+// A previously posted Bank Disbursement can be linked to its bank mutation
+// without creating another journal or increasing vendor_invoices.amount_paid.
+router.post(
+  "/:mutationId/vendor-invoice-link",
+  createIdempotencyMiddleware("reconciliation:vendor-invoice-link"),
+  async (req, res) => {
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const vendorInvoiceId = Number(req.body?.vendor_invoice_id);
+    const actor = String((req as any).user?.email ?? "admin");
+
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (!Number.isInteger(vendorInvoiceId) || vendorInvoiceId <= 0) {
+      return res.status(400).json({ error: "Invoice vendor tidak valid" });
+    }
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        const { rows: mutationRows } = await tx.execute(sql`
+          SELECT id, amount, direction, company_id, journal_entry_id, status
+          FROM bank_mutations
+          WHERE id = ${mutationId}
+          FOR UPDATE
+        `);
+        const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+        if (!mutation) throw Object.assign(new Error("Mutasi bank tidak ditemukan"), { httpStatus: 404 });
+
+        const companyId = Number(mutation.company_id);
+        const mutationAmount = Number(mutation.amount);
+        if (!Number.isInteger(companyId) || companyId <= 0) {
+          throw Object.assign(new Error("Mutasi tidak memiliki company context yang valid"), { httpStatus: 422 });
+        }
+        if (String(mutation.direction ?? "").toUpperCase() !== "OUT") {
+          throw Object.assign(new Error("Hanya mutasi uang keluar yang dapat ditautkan ke pembayaran vendor"), { httpStatus: 422 });
+        }
+        if (mutation.journal_entry_id != null || ["approved", "posted", "approved_pending_posting", "reconciled"].includes(String(mutation.status))) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki jurnal atau sudah diproses"), { httpStatus: 409 });
+        }
+
+        const { rows: existingRows } = await tx.execute(sql`
+          SELECT id
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId}
+            AND status = 'approved'
+          LIMIT 1
+        `);
+        if (existingRows.length > 0) {
+          throw Object.assign(new Error("Mutasi ini sudah memiliki reconciliation match"), { httpStatus: 409 });
+        }
+
+        const { rows: linkRows } = await tx.execute(sql`
+          SELECT
+            bdi.id AS disbursement_item_id,
+            bd.id AS disbursement_id,
+            bd.disbursement_number,
+            bd.date,
+            bdi.amount AS payment_amount,
+            bdi.wht_amount
+          FROM bank_disbursement_items bdi
+          INNER JOIN bank_disbursements bd ON bd.id = bdi.disbursement_id
+          WHERE bdi.vendor_invoice_id = ${vendorInvoiceId}
+            AND bdi.transaction_type = 'supplier_payment'
+            AND bd.company_id = ${companyId}
+            AND bd.status = 'posted'
+            AND ABS(CAST(bdi.amount AS numeric) - ${mutationAmount}) <= 0.01
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_matches used_link
+              WHERE used_link.status = 'approved'
+                AND used_link.candidate_source = 'bank_disbursement'
+                AND used_link.match_reason LIKE ('bank_disbursement_item:' || bdi.id::text || ';%')
+            )
+          ORDER BY bd.date DESC, bd.id DESC, bdi.id DESC
+          LIMIT 1
+          FOR UPDATE OF bdi, bd
+        `);
+        const link = linkRows[0] as Record<string, unknown> | undefined;
+        if (!link) {
+          throw Object.assign(
+            new Error("Tidak ditemukan Bank Disbursement posted dengan invoice dan nominal bank yang cocok"),
+            { httpStatus: 409 },
+          );
+        }
+
+        const { rows: invoiceRows } = await tx.execute(sql`
+          SELECT id, invoice_number, supplier_name, company_id
+          FROM vendor_invoices
+          WHERE id = ${vendorInvoiceId}
+            AND company_id = ${companyId}
+            AND cancelled_at IS NULL
+          FOR UPDATE
+        `);
+        const invoice = invoiceRows[0] as Record<string, unknown> | undefined;
+        if (!invoice) {
+          throw Object.assign(new Error("Invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
+        }
+
+        const matchReason = `bank_disbursement_item:${Number(link.disbursement_item_id)};disbursement:${Number(link.disbursement_id)}`;
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match,
+             status, candidate_source)
+          VALUES
+            (${mutationId}, 'vendor_invoice', ${vendorInvoiceId}, 100, ${matchReason},
+             TRUE, FALSE, TRUE, FALSE, FALSE,
+             'approved', 'bank_disbursement')
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId},
+            'MATCH_APPROVED',
+            ${actor},
+            ${JSON.stringify({
+              candidate_type: "vendor_invoice",
+              candidate_id: vendorInvoiceId,
+              invoice_number: String(invoice.invoice_number ?? ""),
+              amount: mutationAmount,
+              link_only: true,
+              bank_disbursement_id: Number(link.disbursement_id),
+              bank_disbursement_item_id: Number(link.disbursement_item_id),
+            })}
+          )
+        `);
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'reconciled',
+              updated_at = NOW()
+          WHERE id = ${mutationId}
+        `);
+
+        return {
+          mutationId,
+          vendorInvoiceId,
+          invoiceNumber: String(invoice.invoice_number ?? ""),
+          disbursementId: Number(link.disbursement_id),
+          disbursementNumber: String(link.disbursement_number ?? ""),
+          amount: mutationAmount,
+          linkOnly: true,
+        };
+      });
+
+      audit(req, {
+        action: "vendor-invoice-payment-linked",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      return res.json({ ok: true, ...result });
+    } catch (error: any) {
+      const status = Number(error?.httpStatus) || 400;
+      logger.warn(
+        { err: error?.message ?? error, mutationId, vendorInvoiceId },
+        "[bankRecon/vendor-invoice-link] rejected",
+      );
+      return res.status(status).json({ error: error?.message ?? "Link pembayaran invoice vendor gagal diproses" });
+    }
+  },
+);
+
 router.post(
   "/:mutationId/vendor-invoice-payment",
   createIdempotencyMiddleware("reconciliation:vendor-invoice-payment"),

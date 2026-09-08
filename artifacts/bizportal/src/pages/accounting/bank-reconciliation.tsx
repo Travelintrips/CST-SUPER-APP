@@ -693,6 +693,11 @@ interface OutstandingVendorInvoice {
   withholdingTaxAmount?: number;
   dueDate?: string | null;
   source?: string;
+  settlementMode?: "payment" | "link_only";
+  linkedDisbursementId?: number | null;
+  linkedDisbursementNumber?: string | null;
+  linkedDisbursementItemId?: number | null;
+  linkedPaymentAmount?: number | null;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -2811,11 +2816,10 @@ function VendorInvoicePaymentDialog({
   const mutationAmount = Number(mutation?.amount ?? 0);
 
   const invoicesQuery = useQuery({
-    queryKey: ["bank-reconciliation-vendor-invoices", companyId],
+    queryKey: ["bank-reconciliation-vendor-invoices", companyId, mutation?.id],
     enabled: open && Number.isInteger(companyId) && Number(companyId) > 0,
     queryFn: async () => {
-      const params = new URLSearchParams({ company: String(companyId) });
-      const response = await fetch(`/api/accounting/bank-disbursements/vendor-invoices/outstanding?${params}`, {
+      const response = await fetch(`/api/bank-reconciliation/${mutation?.id}/vendor-invoice-candidates`, {
         credentials: "include",
         headers: { "x-company-id": String(companyId) },
       });
@@ -2828,6 +2832,7 @@ function VendorInvoicePaymentDialog({
 
   const invoices = (invoicesQuery.data ?? []).filter((invoice) => invoice.source === "vendor_invoice");
   const selected = invoices.find((invoice) => String(invoice.id) === selectedId) ?? null;
+  const linkOnly = selected?.settlementMode === "link_only";
 
   useEffect(() => {
     if (!open) {
@@ -2841,7 +2846,37 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Pilih invoice vendor terlebih dahulu", variant: "destructive" });
       return;
     }
-    if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
+    if (linkOnly) {
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-link`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": crypto.randomUUID(),
+            "x-company-id": String(companyId ?? ""),
+          },
+          body: JSON.stringify({ vendor_invoice_id: selected.id }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error ?? "Link pembayaran invoice gagal diproses");
+        toast({
+          title: "Settlement berhasil ditautkan",
+          description: `${selected.billNumber ?? selected.docNumber} — ${idr(mutationAmount)} ditautkan ke ${body.disbursementNumber ?? "Bank Disbursement"} tanpa jurnal baru.`,
+        });
+        onClose();
+        await onSaved();
+      } catch (error) {
+        toast({
+          title: "Gagal menautkan settlement",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setSaving(false);
+      }
+    } else if (Math.abs(selected.outstanding - mutationAmount) < 0.01 || selected.outstanding >= mutationAmount - 0.01) {
       setSaving(true);
       try {
         const response = await fetch(`/api/bank-reconciliation/${mutation.id}/vendor-invoice-payment`, {
@@ -2887,9 +2922,11 @@ function VendorInvoicePaymentDialog({
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Match ke Invoice Vendor</DialogTitle>
+            <DialogTitle>Match / Link Invoice Vendor</DialogTitle>
           <DialogDescription>
-            Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru.
+              {linkOnly
+                ? "Pembayaran Bank Disbursement yang sudah tercatat akan ditautkan tanpa jurnal atau pembayaran baru."
+                : "Mutasi ini akan dijurnal sebagai pelunasan hutang, bukan beban baru."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -2928,7 +2965,7 @@ function VendorInvoicePaymentDialog({
                 <SelectContent>
                   {invoices.map((invoice) => (
                     <SelectItem key={invoice.id} value={String(invoice.id)}>
-                      {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — sisa {idr(invoice.outstanding)}
+                       {invoice.billNumber ?? invoice.docNumber} — {invoice.supplierName} — total {idr(invoice.grandTotal)} — {invoice.settlementMode === "link_only" ? `link ${idr(invoice.linkedPaymentAmount ?? mutationAmount)}` : `sisa ${idr(invoice.outstanding)}`}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2948,12 +2985,17 @@ function VendorInvoicePaymentDialog({
                   </div>
                   <div className="flex justify-between"><span>Sudah dibayar</span><strong>{idr(selected.amountPaid)}</strong></div>
                   <div className="flex justify-between"><span>Sisa</span><strong>{idr(selected.outstanding)}</strong></div>
-                  {selected.taxReviewStatus && selected.taxReviewStatus !== "not_required" && (
-                    <p className="mt-2 text-amber-700">
-                      Status review PPN: {selected.taxReviewStatus}. Nilai PPN ditampilkan sebagai rincian, bukan pembayaran terpisah.
-                    </p>
+                   {selected.taxReviewStatus && selected.taxReviewStatus !== "not_required" && (
+                     <p className="mt-2 text-amber-700">
+                       Status review PPh: {selected.taxReviewStatus}. Nilai PPN ditampilkan sebagai rincian, bukan pembayaran terpisah.
+                     </p>
                   )}
-                  {(selected.withholdingTaxAmount ?? 0) > 0 && (
+                   {linkOnly && selected.linkedDisbursementNumber && (
+                     <p className="mt-2 text-emerald-700">
+                       Pembayaran cocok dengan {selected.linkedDisbursementNumber}; settlement hanya akan ditautkan.
+                     </p>
+                   )}
+                   {!linkOnly && (selected.withholdingTaxAmount ?? 0) > 0 && (
                     <p className="mt-2 text-amber-700">Invoice memiliki withholding tax; gunakan Bank Disbursement.</p>
                   )}
                 </div>
@@ -2966,10 +3008,10 @@ function VendorInvoicePaymentDialog({
           <Button
             className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
             onClick={save}
-            disabled={saving || !selected || (selected.withholdingTaxAmount ?? 0) > 0}
+            disabled={saving || !selected || (!linkOnly && (selected.withholdingTaxAmount ?? 0) > 0)}
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving ? "Memproses…" : "Match & Bayar Invoice"}
+            {saving ? "Memproses…" : linkOnly ? "Link Settlement" : "Match & Bayar Invoice"}
           </Button>
         </DialogFooter>
       </DialogContent>
