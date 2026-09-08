@@ -369,7 +369,7 @@ async function checkLegacyCompletion() {
     && reloginContext.data?.customerType === "individual"
     && !["legacy_unresolved", "company_unresolved"].includes(reloginStatus)
     && onboardingSource.includes("if (isExistingCustomerWithUnresolvedOrganization)")
-    && onboardingSource.includes("else if (d.status === \"active\")");
+    && onboardingSource.includes('bootstrap.allowedDestination !== "/onboarding"');
   record(
     "logout then login preserves individual completion",
     logout.status === 200

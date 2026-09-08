@@ -120,6 +120,7 @@ type LegacyQuoteOrder = { orderNumber: string; id: number };
 async function insertLegacyQuote(params: {
   resolvedName: string;
   resolvedEmail: string;
+  portalCustomerId: number | null;
   portalCompanyId: number | null;
   resolvedPhone: string;
   effectiveShippingAddress: string | null;
@@ -186,6 +187,14 @@ async function insertLegacyQuote(params: {
             orderNumber: existingRow.order_number,
             id: Number(existingRow.id),
           };
+        }
+
+        if (params.portalCustomerId) {
+          await tx.execute(sql`
+            UPDATE portal_product_orders
+               SET portal_customer_id = ${params.portalCustomerId}
+             WHERE id = ${hdr!.id}
+          `);
         }
 
         await tx.insert(portalProductOrderItemsTable).values({
@@ -256,6 +265,7 @@ export async function retryLegacyCompatibilityWrite(params: {
   return insertLegacyQuote({
     resolvedName: buyerName,
     resolvedEmail: buyerEmail,
+    portalCustomerId: typeof payload.portalCustomerId === "number" ? payload.portalCustomerId : null,
     portalCompanyId: typeof payload.companyId === "number" ? payload.companyId : null,
     resolvedPhone: buyerPhone,
     effectiveShippingAddress: typeof payload.shippingAddress === "string" ? payload.shippingAddress : null,
@@ -517,6 +527,7 @@ export async function submitMarketplaceQuote(params: {
     order = await insertLegacyQuote({
       resolvedName,
       resolvedEmail,
+      portalCustomerId,
       portalCompanyId,
       resolvedPhone,
       effectiveShippingAddress,

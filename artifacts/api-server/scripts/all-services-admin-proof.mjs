@@ -28,6 +28,7 @@ const pool = new pg.Pool({
 
 const created = {
   marketplace: [],
+  productOrders: [],
   ocean: [],
   air: [],
   trucking: [],
@@ -72,6 +73,14 @@ function fixturePhone(label) {
   return `08${String(hash >>> 0).padStart(10, "0")}`;
 }
 
+function fixtureIp(label) {
+  let hash = 2166136261;
+  for (const char of `${marker}:ip:${label}`) {
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  }
+  return `198.51.${((hash >>> 8) % 254) + 1}.${(hash % 254) + 1}`;
+}
+
 async function db(sql, params = []) {
   return (await pool.query(sql, params)).rows;
 }
@@ -106,6 +115,7 @@ async function signupFixture(label) {
       phone: fixturePhone(label),
       customerType: "individual",
     }),
+    headers: { "x-forwarded-for": fixtureIp(label) },
   }, [201]);
   const token = String(signup.body?.token ?? "");
   const id = Number(signup.body?.user?.id ?? signup.body?.profile?.id);
@@ -208,6 +218,17 @@ async function createFixtures() {
   const marketplaceId = Number(marketplace.body?.rfqId ?? marketplace.body?.rfq?.id);
   created.marketplace.push(marketplaceId);
   check("Marketplace customer submit", marketplaceId > 0, `rfq ${marketplaceId}`);
+  let marketplacePortalOrderId = 0;
+  for (let attempt = 0; attempt < 20 && !marketplacePortalOrderId; attempt += 1) {
+    const linked = await db(
+      "SELECT portal_order_id FROM mkt_dual_write_log WHERE mkt_rfq_id = $1 AND portal_order_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+      [marketplaceId],
+    );
+    marketplacePortalOrderId = Number(linked[0]?.portal_order_id ?? 0);
+    if (!marketplacePortalOrderId) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  created.productOrders.push(marketplacePortalOrderId);
+  check("Marketplace Product Order dual-write", marketplacePortalOrderId > 0, `order ${marketplacePortalOrderId}`);
 
   const vendor = (await db(
     "SELECT id FROM suppliers WHERE is_active = TRUE ORDER BY id LIMIT 1",
@@ -367,6 +388,7 @@ async function proveAdminReadModel() {
 
   const mappings = [
     ["marketplace", created.marketplace[0], "Marketplace"],
+    ["product-order", created.productOrders[0], "Marketplace Product Order"],
     ["ocean-freight", created.ocean[0], "Ocean Freight"],
     ["air-freight", created.air[0], "Air Freight"],
     ["domestic-trucking", created.trucking[0], "Domestic/Trucking"],
@@ -394,8 +416,32 @@ async function proveAdminReadModel() {
     check(`${label} detail`, Number(detail.body?.id) === Number(id), `detail id=${detail.body?.id}`);
   }
 
+  const productFeed = await http("/api/portal/product-orders", {
+    headers: customerHeaders(),
+  });
+  const crmFeed = await http("/api/portal/orders", {
+    headers: customerHeaders(),
+  });
+  const logisticFeed = await http("/api/portal/logistic-orders", {
+    headers: customerHeaders(),
+  });
+  const rfqReference = (await db("SELECT rfq_number FROM mkt_rfqs WHERE id = $1", [created.marketplace[0]]))[0]?.rfq_number;
+  check("Customer /orders CRM source endpoint",
+    crmFeed.status === 200 && Array.isArray(crmFeed.body),
+    `status=${crmFeed.status}, rows=${Array.isArray(crmFeed.body) ? crmFeed.body.length : 0}`);
+  check("Customer /orders logistic source endpoint",
+    logisticFeed.status === 200 && Array.isArray(logisticFeed.body),
+    `status=${logisticFeed.status}, rows=${Array.isArray(logisticFeed.body) ? logisticFeed.body.length : 0}`);
+  check("Customer Product Order feed visibility",
+    productFeed.body?.some((row) => Number(row.id) === Number(created.productOrders[0])),
+    `rows=${Array.isArray(productFeed.body) ? productFeed.body.length : 0}`);
+  check("Pending Marketplace RFQ excluded from Product Order feed",
+    !productFeed.body?.some((row) => row.orderNumber === rfqReference),
+    `rfq=${rfqReference}`);
+
   for (const [service, id, label] of mappings) {
     const sourceStatus = service === "marketplace" ? "customer_review"
+      : service === "product-order" ? "Quote Request"
       : service === "ocean-freight" ? "waiting_rate"
       : service === "air-freight" ? "waiting_rate"
       : service === "domestic-trucking" ? "pending_review"
@@ -565,20 +611,42 @@ async function proveSseOwnership() {
     throw new Error("Customer SSE stream body unavailable");
   }
 
-  const readChunk = async (reader, timeoutMs) => {
-    const timer = new Promise((resolve) => setTimeout(() => resolve(""), timeoutMs));
-    const next = reader.read().then(({ value }) => value ? new TextDecoder().decode(value) : "");
-    return Promise.race([next, timer]);
+  const readUntil = async (reader, needle, timeoutMs) => {
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + timeoutMs;
+    let text = "";
+    while (Date.now() < deadline) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const timer = new Promise((resolve) => setTimeout(() => resolve(null), remaining));
+      const next = reader.read().then(({ value, done }) => ({
+        text: value ? decoder.decode(value) : "",
+        done,
+      }));
+      const result = await Promise.race([next, timer]);
+      if (!result) return text;
+      text += result.text;
+      if (text.includes(needle) || result.done) return text;
+    }
+    return text;
   };
 
   try {
+    // The endpoint flushes an initial comment frame before registering the
+    // connection. Consume that frame first so the lifecycle event below is
+    // tested rather than the connection handshake.
+    const firstConnected = await readUntil(firstReader, ": connected", 1000);
+    const secondConnected = await readUntil(secondReader, ": connected", 1000);
+    check("Customer SSE connection frames flushed",
+      String(firstConnected).includes(": connected") &&
+      String(secondConnected).includes(": connected"));
+
     await http(`/api/ocean-freight/${created.ocean[0]}/status`, {
       method: "PATCH",
       headers: internalHeaders(),
       body: JSON.stringify({ status: "approved" }),
     }, [200]);
-    const firstEvent = await readChunk(firstReader, 3000);
-    const secondEvent = await readChunk(secondReader, 500);
+    const firstEvent = await readUntil(firstReader, "customer_notification", 3000);
+    const secondEvent = await readUntil(secondReader, "customer_notification", 500);
     check("Customer SSE receives owned event", String(firstEvent).includes("customer_notification"));
     check("Customer SSE does not receive another customer's event", !String(secondEvent).includes("customer_notification"));
   } finally {
@@ -656,6 +724,7 @@ async function proveNotifications() {
     headers: adminHeaders(),
   });
   const unreadBeforeRead = Number(beforeBadge.body?.unreadNotifications ?? 0);
+  const wasUnread = row?.read_at == null;
 
   const notificationId = Number(row.id);
   await http(`/api/portal/admin/service-operations/notifications/${notificationId}/read`, {
@@ -669,8 +738,10 @@ async function proveNotifications() {
     headers: adminHeaders(),
   });
   check("Unread badge decreases after read",
-    Number(afterReadList.body?.unreadNotifications) < unreadBeforeRead,
-    `${unreadBeforeRead} → ${afterReadList.body?.unreadNotifications}`);
+    wasUnread
+      ? Number(afterReadList.body?.unreadNotifications) < unreadBeforeRead
+      : Number(afterReadList.body?.unreadNotifications) === unreadBeforeRead,
+    `${unreadBeforeRead} → ${afterReadList.body?.unreadNotifications}; wasUnread=${wasUnread}`);
 }
 
 async function proveVendorDiscovery() {
