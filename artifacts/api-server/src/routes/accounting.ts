@@ -383,12 +383,15 @@ router.post("/accounts/:id/child", async (req, res) => {
           coa.type,
           coa.account_category,
           coa.normal_balance,
-          coa.status,
-          c.company_code
+          coa.status
         FROM chart_of_accounts coa
-        LEFT JOIN companies c ON c.id = ${companyId}
         WHERE coa.id = ${parentId}
         FOR UPDATE
+      `);
+      const companyResult = await tx.execute(sql`
+        SELECT company_code
+        FROM companies
+        WHERE id = ${companyId}
       `);
       const parent = (parentResult as any).rows?.[0] as {
         id: number;
@@ -398,8 +401,8 @@ router.post("/accounts/:id/child", async (req, res) => {
         account_category: typeof chartOfAccountsTable.$inferInsert.accountCategory;
         normal_balance: typeof chartOfAccountsTable.$inferInsert.normalBalance;
         status: string;
-        company_code: string | null;
       } | undefined;
+      const companyCode = ((companyResult as any).rows?.[0] as { company_code?: string | null } | undefined)?.company_code ?? null;
 
       if (!parent) {
         const error = new Error("Parent account not found");
@@ -427,8 +430,8 @@ router.post("/accounts/:id/child", async (req, res) => {
       const [, prefix, numericPart, parentSuffix] = codeMatch;
       const suffix = parentSuffix
         ? `-${parentSuffix}`
-        : parent.company_code
-          ? `-${String(parent.company_code).trim().toUpperCase()}`
+        : companyCode
+          ? `-${String(companyCode).trim().toUpperCase()}`
           : "";
       const siblingResult = await tx.execute(sql`
         SELECT code
