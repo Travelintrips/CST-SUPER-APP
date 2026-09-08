@@ -1,6 +1,6 @@
 kind = "web"
-previewPath = "/logistic-order/"
-title = "Export Import & Logistic Ordering System"
+previewPath = "/__disabled-logistic-order/"
+title = "Export Import & Logistic Ordering System (Deprecated)"
 version = "1.0.0"
 id = "artifacts/logistic-order"
 router = "path"
