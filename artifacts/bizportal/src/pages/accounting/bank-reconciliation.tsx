@@ -2852,6 +2852,7 @@ function VendorInvoicePaymentDialog({
 }) {
   const { toast } = useToast();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [allocationAmounts, setAllocationAmounts] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
   const companyId = mutation?.company_id ?? null;
   const mutationAmount = Number(mutation?.amount ?? 0);
@@ -2879,33 +2880,63 @@ function VendorInvoicePaymentDialog({
       && invoice.settlementStatus !== "settled_unlinked",
   );
   const selectedInvoices = invoices.filter((invoice) => selectedIds.includes(invoice.id));
+  const withholdingForInvoice = (invoice: OutstandingVendorInvoice) =>
+    Math.max(
+      0,
+      Number(invoice.withholdingTaxAmount ?? invoice.invoiceBreakdown?.totals?.withholding_tax_amount ?? 0),
+    );
+  const defaultAllocationForInvoice = (invoice: OutstandingVendorInvoice, selectedWithoutInvoice: number[]) => {
+    const allocatedElsewhere = invoices
+      .filter((candidate) => selectedWithoutInvoice.includes(candidate.id))
+      .reduce((sum, candidate) => sum + Number(allocationAmounts[candidate.id] ?? 0), 0);
+    return Math.max(0, Math.min(Number(invoice.outstanding), mutationAmount - allocatedElsewhere));
+  };
   const selectedTotal = selectedInvoices.reduce(
-    (sum, invoice) =>
-      sum + (selectedInvoices.length === 1
-        ? Math.min(Number(invoice.outstanding), mutationAmount)
-        : Number(invoice.outstanding)),
+    (sum, invoice) => sum + Number(allocationAmounts[invoice.id] ?? 0),
     0,
   );
+  const selectedAmountsValid = selectedInvoices.every((invoice) => {
+    const amount = Number(allocationAmounts[invoice.id] ?? 0);
+    return Number.isFinite(amount) && amount > 0 && amount <= Number(invoice.outstanding) + 0.01;
+  });
   const wrongTransferAmount = Math.max(
     0,
     Math.round((mutationAmount - selectedTotal) * 100) / 100,
   );
   const selectionFitsMutation =
-    selectedInvoices.length > 0 && selectedTotal <= mutationAmount + 0.01;
+    selectedInvoices.length > 0
+    && selectedAmountsValid
+    && selectedTotal <= mutationAmount + 0.01;
 
   useEffect(() => {
     if (!open) {
       setSelectedIds([]);
+      setAllocationAmounts({});
       setSaving(false);
     }
   }, [open, mutation?.id]);
 
   const toggleInvoice = (invoiceId: number, checked: boolean) => {
-    setSelectedIds((current) =>
-      checked
-        ? [...current, invoiceId]
-        : current.filter((id) => id !== invoiceId),
-    );
+    const invoice = invoices.find((candidate) => candidate.id === invoiceId);
+    setSelectedIds((current) => {
+      if (checked) {
+        if (current.includes(invoiceId)) return current;
+        const next = [...current, invoiceId];
+        if (invoice) {
+          setAllocationAmounts((amounts) => ({
+            ...amounts,
+            [invoiceId]: amounts[invoiceId] ?? String(defaultAllocationForInvoice(invoice, current)),
+          }));
+        }
+        return next;
+      }
+      setAllocationAmounts((amounts) => {
+        const next = { ...amounts };
+        delete next[invoiceId];
+        return next;
+      });
+      return current.filter((id) => id !== invoiceId);
+    });
   };
 
   const save = async () => {
@@ -2931,7 +2962,13 @@ function VendorInvoicePaymentDialog({
           "x-idempotency-key": crypto.randomUUID(),
           "x-company-id": String(companyId ?? ""),
         },
-        body: JSON.stringify({ vendor_invoice_ids: selectedIds }),
+        body: JSON.stringify({
+          vendor_invoice_ids: selectedIds,
+          allocations: selectedInvoices.map((invoice) => ({
+            vendor_invoice_id: invoice.id,
+            amount: Number(allocationAmounts[invoice.id] ?? 0),
+          })),
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error ?? "Pembayaran invoice vendor gagal diproses");
@@ -3009,6 +3046,7 @@ function VendorInvoicePaymentDialog({
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead className="text-right">Dibayar</TableHead>
                     <TableHead className="text-right">Sisa</TableHead>
+                    <TableHead className="text-right">Alokasi nominal</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -3084,7 +3122,30 @@ function VendorInvoicePaymentDialog({
                         </TableCell>
                         <TableCell className="align-top text-right">{idr(invoice.grandTotal)}</TableCell>
                         <TableCell className="align-top text-right">{idr(invoice.amountPaid)}</TableCell>
-                        <TableCell className="align-top text-right font-semibold text-emerald-700">{idr(invoice.outstanding)}</TableCell>
+                           <TableCell className="align-top text-right font-semibold text-emerald-700">{idr(invoice.outstanding)}</TableCell>
+                           <TableCell className="align-top text-right">
+                             <Input
+                               type="number"
+                               min="0"
+                               step="0.01"
+                               value={allocationAmounts[invoice.id] ?? ""}
+                               disabled={!checked || saving}
+                               onChange={(event) =>
+                                 setAllocationAmounts((amounts) => ({
+                                   ...amounts,
+                                   [invoice.id]: event.target.value,
+                                 }))
+                               }
+                               className="ml-auto w-36 text-right"
+                               placeholder={checked ? "Masukkan nominal" : "Pilih invoice"}
+                               aria-label={`Nominal alokasi ${invoice.billNumber ?? invoice.docNumber}`}
+                             />
+                             {checked && withholdingForInvoice(invoice) > 0 && (
+                               <div className="mt-1 text-[11px] text-muted-foreground">
+                                 Net penuh setelah PPh: {idr(Math.max(0, Number(invoice.outstanding) - withholdingForInvoice(invoice)))}
+                               </div>
+                             )}
+                           </TableCell>
                       </TableRow>
                     );
                   })}

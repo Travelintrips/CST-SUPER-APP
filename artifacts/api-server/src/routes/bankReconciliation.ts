@@ -163,7 +163,7 @@ async function resolveWrongTransferAccount(tx: any, companyId: number): Promise<
   `);
   const row = rows[0] as Record<string, unknown> | undefined;
   const accountId = row?.id == null ? null : Number(row.id);
-  if (!Number.isInteger(accountId) || accountId <= 0) {
+  if (accountId == null || !Number.isInteger(accountId) || accountId <= 0) {
     throw Object.assign(
       new Error(`COA ${WRONG_TRANSFER_COA_CODE} — ${WRONG_TRANSFER_COA_NAME} belum tersedia atau belum aktif untuk perusahaan ini`),
       { httpStatus: 422 },
@@ -5367,6 +5367,28 @@ router.post(
     const rawIds = Array.isArray(req.body?.vendor_invoice_ids) ? req.body.vendor_invoice_ids : [];
     const numericIds: number[] = rawIds.map((value: unknown): number => Number(value));
     const vendorInvoiceIds: number[] = Array.from(new Set<number>(numericIds));
+    const rawAllocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
+    const requestedAllocationByInvoice = new Map<number, number>();
+    for (const rawAllocation of rawAllocations as Array<Record<string, unknown>>) {
+      const invoiceId = Number(rawAllocation.vendor_invoice_id ?? rawAllocation.invoice_id);
+      const amount = Number(rawAllocation.amount);
+      if (
+        !Number.isSafeInteger(invoiceId)
+        || invoiceId <= 0
+        || !Number.isFinite(amount)
+        || amount <= 0
+        || requestedAllocationByInvoice.has(invoiceId)
+      ) {
+        return res.status(400).json({ error: "Alokasi invoice tidak valid atau duplikat" });
+      }
+      requestedAllocationByInvoice.set(invoiceId, Math.round(amount * 100) / 100);
+    }
+    if (
+      requestedAllocationByInvoice.size > 0
+      && Array.from(requestedAllocationByInvoice.keys()).some((id) => !vendorInvoiceIds.includes(id))
+    ) {
+      return res.status(400).json({ error: "Alokasi hanya boleh dikirim untuk invoice yang dipilih" });
+    }
     const actor = String((req as any).user?.email ?? "admin");
 
     if (!Number.isInteger(mutationId) || mutationId <= 0) {
@@ -5480,7 +5502,18 @@ router.post(
           }
           const withholdingTaxes = withholdingByInvoice.get(Number(invoice.id)) ?? [];
           const withholdingTaxTotal = withholdingTaxes.reduce((sum, tax) => sum + tax.amount, 0);
-          const amount = invoiceRows.length === 1 ? Math.min(mutationAmount, outstanding) : outstanding;
+          const requestedAmount = requestedAllocationByInvoice.get(Number(invoice.id));
+          const amount = requestedAmount != null
+            ? requestedAmount
+            : invoiceRows.length === 1
+              ? Math.min(mutationAmount, outstanding)
+              : outstanding;
+          if (!Number.isFinite(amount) || amount <= 0 || amount > outstanding + 0.01) {
+            throw Object.assign(
+              new Error(`Alokasi invoice ${invoiceNumber} harus lebih dari nol dan tidak boleh melebihi sisa invoice (${outstanding.toFixed(2)}).`),
+              { httpStatus: 422 },
+            );
+          }
           // A full net settlement is the one case where the bank mutation
           // proves both the supplier payment and the withholding allocation.
           // Partial cash payments remain ordinary AP settlements and must not
