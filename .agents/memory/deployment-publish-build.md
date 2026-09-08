@@ -15,7 +15,7 @@ Conflict markers can be removed while duplicate JSX wrappers or state declaratio
 
 **Why:** The failed publish contained marker-free merge leftovers that only the production compiler exposed.
 
-**How to apply:** Treat `bash build-prod.sh` as the final gate after conflict resolution, not only `git diff --check` or an individual artifact build.
+**How to apply:** Treat `bash build-prod.sh` as the final gate after conflict resolution, not only `git diff --check` or an individual artifact build. Also run API TypeScript checking with an explicit larger Node heap: bundling can pass unresolved identifiers, while the default typecheck heap can OOM before reporting them.
 
 ## Artifact entrypoint compatibility
 When an artifact manifest starts a historical dist entrypoint, the build must either emit that exact file or create a byte-for-byte compatibility alias after bundling. Prefer detecting the actual bundler output so the alias step is a no-op when the current source already emits the manifest path.

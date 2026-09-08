@@ -515,32 +515,6 @@ router.post("/runs/:id/approve", async (req, res) => {
       adv.receivableAccountId,
       (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(allocation.amount),
     );
-  const usedAdvanceIds = new Set<number>();
-  const kasbonByAccountMap = new Map<number, number>();
-  for (const i of kasbonItems) {
-    const adv = advanceById.get(i.cashAdvanceId!);
-    if (!adv) {
-      res.status(409).json({ message: `Kasbon untuk payroll item ${i.id} tidak ditemukan.` });
-      return;
-    }
-    if (usedAdvanceIds.has(adv.id)) {
-      res.status(409).json({ message: `Kasbon ${adv.id} dipakai lebih dari satu item payroll.` });
-      return;
-    }
-    usedAdvanceIds.add(adv.id);
-    if (adv.employeeId != null && String(adv.employeeId) !== String(i.employeeId)) {
-      res.status(409).json({ message: `Kasbon ${adv.id} tidak cocok dengan karyawan payroll item ${i.id}.` });
-      return;
-    }
-    if (n(i.kasbonDeduction) > n(adv.remainingAmount) + 0.005) {
-      res.status(409).json({ message: `Potongan kasbon item ${i.id} melebihi saldo kasbon ${adv.id}.` });
-      return;
-    }
-    if (!adv.receivableAccountId) {
-      res.status(409).json({ message: `COA piutang kasbon ${adv.id} belum terisi.` });
-      return;
-    }
-    kasbonByAccountMap.set(adv.receivableAccountId, (kasbonByAccountMap.get(adv.receivableAccountId) ?? 0) + n(i.kasbonDeduction));
   }
   const kasbonByAccount = [...kasbonByAccountMap.entries()].map(([accountId, amount]) => ({ accountId, amount }));
 
@@ -711,6 +685,7 @@ router.post("/runs/:id/pay", async (req, res) => {
   }
   const amount = items.reduce((s, i) => s + n(i.netSalary), 0);
   const period = `${run.year}-${String(run.month).padStart(2, "0")}`;
+  const paymentMethod = "bank";
   const evidenceResult = await db.execute<{
     mutation_id: number;
     payment_id: number;
@@ -758,6 +733,20 @@ router.post("/runs/:id/pay", async (req, res) => {
 
   try {
     const paidBy = (req.user as { id?: string } | undefined)?.id ?? null;
+    const result = await PayrollJournalService.postPaymentJournal({
+      companyId,
+      payrollRunId: runId,
+      bankMutationId: evidenceResult.rows[0]!.mutation_id,
+      accountingPaymentId: evidenceResult.rows[0]!.payment_id,
+      date: evidenceResult.rows[0]!.transaction_date,
+      salaryPayableAccountId: mapping.salaryPayableAccountId,
+      cashBankAccountId,
+      actor: paidBy ?? "payroll-payment",
+      paidBy,
+    });
+    const { entryId } = result;
+    await assertPostedAccountingEntry(entryId, companyId, "Journal pembayaran payroll");
+
     await db.transaction(async (tx) => {
       await tx.update(payrollRunsTable).set({
         status: "paid", paymentEntryId: entryId, postedAt: new Date(),
@@ -779,19 +768,7 @@ router.post("/runs/:id/pay", async (req, res) => {
              WHERE sp.payroll_item_id = pi.id
            )
        `);
-    const result = await PayrollJournalService.postPaymentJournal({
-      companyId,
-      payrollRunId: runId,
-      bankMutationId: evidenceResult.rows[0]!.mutation_id,
-      accountingPaymentId: evidenceResult.rows[0]!.payment_id,
-      date: evidenceResult.rows[0]!.transaction_date,
-      salaryPayableAccountId: mapping.salaryPayableAccountId,
-      cashBankAccountId,
-      actor: paidBy ?? "payroll-payment",
-      paidBy,
     });
-    const { entryId } = result;
-    await assertPostedAccountingEntry(entryId, companyId, "Journal pembayaran payroll");
 
     auditFromReq(req, { action: "payroll_run_paid", module: "payroll", referenceId: String(runId), newData: { entryId, payment: result } });
     const data = await loadRunWithItems(runId, companyId);

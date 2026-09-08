@@ -36,7 +36,6 @@ export const cashAdvancesTable = pgTable("cash_advances", {
   voidReason: text("void_reason"),
   reversalJournalId: integer("reversal_journal_id"),
   repaymentJournalId: integer("repayment_journal_id"),
-  employeeId: integer("employee_id"),
   settledAmount: numeric("settled_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   receiptUrl: text("receipt_url"),
   ocrRawData: text("ocr_raw_data"),
