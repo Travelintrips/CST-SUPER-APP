@@ -1687,8 +1687,14 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
     $function$;
   `));
 
+  // Source-owned accounting owner. Keep the public one-argument entry point
+  // below as a stable wrapper so DEV and PROD can be compared independently
+  // without treating the wrapper itself as the posting implementation.
   await db.execute(sql.raw(`
-    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft(p_payment_id integer)
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft_owner(
+      p_payment_id integer,
+      p_legacy_public_entry_id integer DEFAULT NULL
+    )
     RETURNS integer
     LANGUAGE plpgsql
     SECURITY DEFINER
@@ -1737,14 +1743,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_selected_bank_account_id integer;
 
         v_journal_date text;
-        v_legacy_public_entry_id integer;
     BEGIN
-        v_legacy_public_entry_id :=
-            NULLIF(
-                current_setting('sport_center.legacy_recovery_entry_id', true),
-                ''
-            )::integer;
-
         -- --------------------------------------------------------
         -- Serialize per payment to avoid concurrent duplicates.
         -- --------------------------------------------------------
@@ -1856,9 +1855,9 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         IF v_existing_accounting_payment_id IS NOT NULL
            OR v_existing_accounting_entry_id IS NOT NULL
         THEN
-            IF v_legacy_public_entry_id IS NOT NULL
+            IF p_legacy_public_entry_id IS NOT NULL
                AND v_existing_accounting_payment_id IS NULL
-               AND v_existing_accounting_entry_id = v_legacy_public_entry_id
+               AND v_existing_accounting_entry_id = p_legacy_public_entry_id
             THEN
                 -- A separately validated recovery call may complete the
                 -- canonical owner from an exact, posted legacy public entry.
@@ -2307,6 +2306,24 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft(
+      p_payment_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      RETURN sport_center.create_payment_accounting_draft_owner(
+        p_payment_id,
+        NULL
+      );
+    END;
+    $function$
+  `));
+
+  await db.execute(sql.raw(`
     CREATE OR REPLACE FUNCTION sport_center.recover_payment_accounting_draft(
       p_payment_id integer,
       p_public_entry_id integer
@@ -2474,12 +2491,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           p_payment_id;
       END IF;
 
-      PERFORM set_config(
-        'sport_center.legacy_recovery_entry_id',
-        p_public_entry_id::text,
-        true
+      RETURN sport_center.create_payment_accounting_draft_owner(
+        p_payment_id,
+        p_public_entry_id
       );
-      RETURN sport_center.create_payment_accounting_draft(p_payment_id);
     END;
     $function$
   `));

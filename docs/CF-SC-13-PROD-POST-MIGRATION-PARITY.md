@@ -356,19 +356,28 @@ search paths are present in PROD. The remaining body differences are:
 - `create_payment_settlement_supplemental_batch` uses typed integer joins in
   PROD where DEV uses equivalent text casts. The read-only comparison found no
   semantic difference.
-- PROD exposes the public
-  `create_payment_accounting_draft(integer)` as a thin wrapper around the live
-  `create_payment_accounting_draft_owner(integer, integer)`. The owner body
-  preserves the DEV idempotency, confirmed-payment, finance-mode, resolver,
-  balance, and draft-line behavior. It differs only by using an explicit
-  recovery argument instead of reading the transaction setting, and by a
-  typed integer comparison.
+- Both environments expose the same two-level contract:
+  `create_payment_accounting_draft(integer)` is the stable public wrapper, and
+  `create_payment_accounting_draft_owner(integer, integer)` owns the
+  accounting-draft behavior. The public wrapper passes `NULL` as the recovery
+  entry; the separately validated legacy-recovery path passes the exact public
+  entry ID explicitly.
+- The DEV source-of-truth for both definitions is the canonical settlement
+  contract migration in
+  `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  `ensureCanonicalSettlementContracts()`. The owner body preserves the
+  idempotency, confirmed-payment, finance-mode, resolver, balance, and
+  draft-line behavior. Its recovery context is an explicit argument rather
+  than a transaction setting.
+- `payment-accounting-draft-contract.test.ts` proves that the owner is the
+  only implementation, the public signature remains unchanged, the wrapper
+  performs no finance writes, and the owner retains the fail-closed posting
+  contract. This is a source and migration-ownership proof; it does not
+  execute a finance function.
 
-These are runtime implementation variants, not signature failures. The owner
-routine is nevertheless not represented as an independently certified DEV
-baseline in the current source, so the function gate remains `REVIEW` until
-the DEV semantic baseline and owner provenance are resolved. No finance
-function was called.
+These are runtime implementation variants, not signature failures. The DEV
+owner provenance is now independently reproducible and the function-contract
+gate can close without finance posting. No finance function was called.
 
 ### Historical canonical-link classification
 
@@ -456,7 +465,7 @@ PROCESSING CONTRACT              = PASS
 PROD CONFIG PARITY               = PASS
 DEV CERTIFIED BASELINE           = PASS
 FUNCTION SIGNATURE PARITY        = PASS
-FUNCTION CONTRACT PARITY         = REVIEW
+FUNCTION CONTRACT PARITY         = PASS (public wrapper/owner contract source-verified)
 SETTLEMENT FK/UNIQUE GATE        = BLOCKED (51 historical public-link rows)
 MUTATION CONTRACT                = PASS for public identity columns/index
 HISTORICAL COMPATIBILITY         = BLOCKED
@@ -477,10 +486,10 @@ Required owner decisions before a retry:
 1. certify/correct the DEV role-to-COA and bank-account baseline without
    copying numeric IDs across environments;
 2. certify the PROD public-bank canonical-link ownership boundary and provide
-   a governed historical repair plan for the 51 reconciled batches; and
-3. certify the PROD accounting-owner routine provenance if exact source parity
-   is required.
+   a governed historical repair plan for the 51 reconciled batches.
 
-Until those decisions are complete, no additive PROD constraint promotion,
+Until those two decisions are complete, no additive PROD constraint promotion,
 historical link rewrite, shadow enablement, central-mode change, or processor
-execution is authorized by this report.
+execution is authorized by this report. Any future PROD owner-definition
+change must remain synchronized with the source-owned wrapper/owner contract
+and its focused contract test.
