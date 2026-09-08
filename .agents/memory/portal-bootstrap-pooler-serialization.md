@@ -3,8 +3,8 @@ name: Portal bootstrap pooler serialization
 description: Auth bootstrap query concurrency can be slower than sequential reads on the development Supabase transaction pooler.
 ---
 
-The portal auth bootstrap should keep its canonical profile and company-context reads serialized when running through the Supabase transaction pooler; concurrent reads can contend and add seconds even when each query is fast alone.
+The portal auth path should preserve the measured bootstrap read ordering on the Supabase transaction pooler. In DEV, the remaining ~1.7s can sit in the combined revocation/customer lookup inside auth middleware even when the bootstrap handler itself is ~0.45s and the app pool has no waiters.
 
-**Why:** Live DEV measurements showed two independent bootstrap reads taking about 1.5–1.8 seconds in parallel, while sequential reads completed in roughly 0.45 seconds and reduced the end-to-end bootstrap to under 0.7 seconds.
+**Why:** API-only and portal-active runs were both about 2.2s, with bootstrap handler timings around 0.44–0.45s and auth middleware/revocation-customer timings around 1.76–1.79s. Public portal request bursts did not materially change the bootstrap median.
 
-**How to apply:** Preserve the measured sequential pattern for this bootstrap path unless a different pool/connection configuration is proven in the target environment; remeasure both query-level and end-to-end latency before reverting to `Promise.all`.
+**How to apply:** Do not attribute this latency to frontend business-request bursts without an API-only comparison. Preserve the measured bootstrap ordering unless a different pool/connection configuration is proven, and profile auth connection/query latency separately before changing authorization logic or increasing pool size.
