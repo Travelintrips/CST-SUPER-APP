@@ -152,3 +152,4 @@
 - [Payroll kasbon settlement boundary](payroll-kasbon-settlement-boundary.md) — post deductions atomically, but never infer the remaining salary payment without deterministic bank evidence.
 - [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
+- [P&L generated contract](pnl-generated-contract.md) — when P&L response fields change or are consumed, regenerate the OpenAPI client before trusting BizPortal typecheck.

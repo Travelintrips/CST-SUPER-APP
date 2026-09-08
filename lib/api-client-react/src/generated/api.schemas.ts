@@ -1429,9 +1429,14 @@ export interface ProfitLossReport {
   from?: string | null;
   to?: string | null;
   revenues: PnlRow[];
+  cogs: PnlRow[];
+  operatingExpenses: PnlRow[];
   expenses: PnlRow[];
   totalRevenue: number;
+  totalCogs: number;
+  totalOperatingExpense: number;
   totalExpense: number;
+  grossProfit: number;
   netIncome: number;
 }
 

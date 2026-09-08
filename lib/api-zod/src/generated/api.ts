@@ -3513,11 +3513,13 @@ export const UpdateAccountingSettingsResponse = zod.object({
   purchaseExpenseAccountId: zod.number().nullish(),
   defaultBankAccountId: zod.number().nullish(),
   defaultCashAccountId: zod.number().nullish(),
+  qrisAccountId: zod.number().nullish(),
   ppnOutputAccountId: zod.number().nullish(),
   ppnInputAccountId: zod.number().nullish(),
   salesJournalId: zod.number().nullish(),
   purchaseJournalId: zod.number().nullish(),
   bankJournalId: zod.number().nullish(),
+  qrisJournalId: zod.number().nullish(),
   cashJournalId: zod.number().nullish(),
   defaultSalesTaxId: zod.number().nullish(),
   defaultPurchaseTaxId: zod.number().nullish(),
@@ -3641,6 +3643,22 @@ export const GetProfitLossResponse = zod.object({
       amount: zod.number(),
     }),
   ),
+  cogs: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      code: zod.string(),
+      name: zod.string(),
+      amount: zod.number(),
+    }),
+  ),
+  operatingExpenses: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      code: zod.string(),
+      name: zod.string(),
+      amount: zod.number(),
+    }),
+  ),
   expenses: zod.array(
     zod.object({
       accountId: zod.number(),
@@ -3650,7 +3668,10 @@ export const GetProfitLossResponse = zod.object({
     }),
   ),
   totalRevenue: zod.number(),
+  totalCogs: zod.number(),
+  totalOperatingExpense: zod.number(),
   totalExpense: zod.number(),
+  grossProfit: zod.number(),
   netIncome: zod.number(),
 });
 

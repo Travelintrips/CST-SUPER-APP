@@ -505,14 +505,14 @@ export default function ProfitLossPage() {
       ["", "", ""],
       ["=== BEBAN OPERASIONAL / LAIN-LAIN ===", "", ""],
       ...data.operatingExpenses.map((r) => [r.code, r.name, r.amount]),
-      ["", "Total Beban Operasional / Lain-lain", data.totalOperatingExpense],
+      ["", "Total Beban Operasional", data.totalOperatingExpense],
       ["", "", ""],
       ["", "LABA (RUGI) BERSIH", data.netIncome],
     ] as (string | number | null | undefined)[][];
   }
 
   function buildMonthlyExportRows() {
-    return (monthlyData?.months ?? []).map((m) => [fmtMonth(m.month), m.revenue, m.cogs, m.operatingExpense, m.netIncome]);
+    return (monthlyData?.months ?? []).map((m) => [fmtMonth(m.month), m.revenue, m.cogs, m.grossProfit, m.operatingExpense, m.netIncome]);
   }
 
   const hasData = !!data;
@@ -552,7 +552,7 @@ export default function ProfitLossPage() {
                 </>
               )}
               {view === "monthly" && (
-                <Button variant="outline" size="sm" onClick={() => exportXlsx("Laba_Rugi_Bulanan", ["Bulan","Pendapatan","HPP","Beban Operasional/Lain-lain","Laba/Rugi"], buildMonthlyExportRows())} disabled={!hasMonthly}>
+                  <Button variant="outline" size="sm" onClick={() => exportXlsx("Laba_Rugi_Bulanan", ["Bulan","Pendapatan","HPP","Laba Kotor","Beban Operasional","Laba/Rugi"], buildMonthlyExportRows())} disabled={!hasMonthly}>
                   <Download className="h-4 w-4 mr-1.5" />XLSX Bulanan
                 </Button>
               )}
@@ -646,9 +646,28 @@ export default function ProfitLossPage() {
                 onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "HPP" }))}
               />
 
+               {/* ── Gross Profit subtotal ── */}
+               <div className="rounded-xl border-2 border-sky-800/40 bg-sky-950/20 px-5 py-4 flex items-center justify-between">
+                 <div>
+                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-0.5">Laba Kotor</p>
+                   <p className={`text-2xl font-bold font-mono ${data.grossProfit >= 0 ? "text-sky-400" : "text-rose-400"}`}>
+                     {idr(data.grossProfit)}
+                   </p>
+                   {data.totalRevenue > 0 && (
+                     <p className="text-xs text-muted-foreground mt-1">
+                       Pendapatan − HPP · Margin {((data.grossProfit / data.totalRevenue) * 100).toFixed(1)}%
+                     </p>
+                   )}
+                 </div>
+                 <div className="text-right text-xs text-muted-foreground">
+                   <p>{idr(data.totalRevenue)} Pendapatan</p>
+                   <p>− {idr(data.totalCogs)} HPP</p>
+                 </div>
+               </div>
+
               {/* ── Operating Expense Section ── */}
               <CollapsibleAccountSection
-                label="Beban Operasional / Lain-lain"
+                 label="Beban Operasional"
                 total={data.totalOperatingExpense}
                 accounts={data.operatingExpenses as PLAccount[]}
                 prevMap={prevOperatingMap}
@@ -656,7 +675,7 @@ export default function ProfitLossPage() {
                 color="amber"
                 defaultOpen={data.operatingExpenses.length <= 10}
                 onRowClick={(r) => navigate(buildTxUrl({ accountId: r.accountId, accountCode: r.code, accountName: r.name, from, to, companyId: companyIdForTx, costCenterId }))}
-                onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "Beban Operasional / Lain-lain" }))}
+                 onTotalClick={() => navigate(buildTxUrl({ accountGroup: "expense", from, to, companyId: companyIdForTx, costCenterId, accountName: "Beban Operasional" }))}
               />
 
               {/* ── Net Profit Bar ── */}
@@ -703,13 +722,14 @@ export default function ProfitLossPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                       <XAxis dataKey="month" tickFormatter={fmtMonth} tick={{ fontSize: 11 }} />
                       <YAxis tickFormatter={idrShort} tick={{ fontSize: 11 }} width={70} />
-                      <Tooltip
-                        formatter={(v: number, name: string) => [idr(v), name === "revenue" ? "Pendapatan" : name === "cogs" ? "HPP" : name === "operatingExpense" ? "Beban Operasional/Lain-lain" : "Laba/Rugi"]}
+                       <Tooltip
+                         formatter={(v: number, name: string) => [idr(v), name === "revenue" ? "Pendapatan" : name === "cogs" ? "HPP" : name === "grossProfit" ? "Laba Kotor" : name === "operatingExpense" ? "Beban Operasional" : "Laba/Rugi"]}
                         labelFormatter={fmtMonth}
                       />
-                      <Legend formatter={(v) => v === "revenue" ? "Pendapatan" : v === "cogs" ? "HPP" : v === "operatingExpense" ? "Beban Operasional/Lain-lain" : "Laba/Rugi Bersih"} />
+                       <Legend formatter={(v) => v === "revenue" ? "Pendapatan" : v === "cogs" ? "HPP" : v === "grossProfit" ? "Laba Kotor" : v === "operatingExpense" ? "Beban Operasional" : "Laba/Rugi Bersih"} />
                       <Bar dataKey="revenue" fill="#10b981" radius={[3,3,0,0]} />
                       <Bar dataKey="cogs" fill="#f43f5e" radius={[3,3,0,0]} />
+                       <Line dataKey="grossProfit" stroke="#38bdf8" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
                       <Bar dataKey="operatingExpense" fill="#f59e0b" radius={[3,3,0,0]} />
                       <Line dataKey="netIncome" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
                     </ComposedChart>
@@ -725,7 +745,8 @@ export default function ProfitLossPage() {
                         <th className="text-left px-5 py-2.5 font-medium">Bulan</th>
                         <th className="text-right px-4 py-2.5 font-medium text-emerald-700">Pendapatan</th>
                         <th className="text-right px-4 py-2.5 font-medium text-rose-700">HPP</th>
-                        <th className="text-right px-4 py-2.5 font-medium text-amber-700">Beban Operasional/Lain-lain</th>
+                         <th className="text-right px-4 py-2.5 font-medium text-sky-700">Laba Kotor</th>
+                         <th className="text-right px-4 py-2.5 font-medium text-amber-700">Beban Operasional</th>
                         <th className="text-right px-5 py-2.5 font-medium">Laba / Rugi</th>
                       </tr>
                     </thead>
@@ -735,6 +756,7 @@ export default function ProfitLossPage() {
                           <td className="px-5 py-2.5 font-medium">{fmtMonth(m.month)}</td>
                           <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{idr(m.revenue)}</td>
                           <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(m.cogs)}</td>
+                           <td className="px-4 py-2.5 text-right font-mono text-sky-700">{idr(m.grossProfit)}</td>
                           <td className="px-4 py-2.5 text-right font-mono text-amber-700">{idr(m.operatingExpense)}</td>
                           <td className={`px-5 py-2.5 text-right font-mono font-semibold ${m.netIncome >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                             {idr(m.netIncome)}
@@ -745,6 +767,7 @@ export default function ProfitLossPage() {
                         const ms = monthlyData!.months;
                         const totRev = ms.reduce((s, m) => s + m.revenue, 0);
                         const totCogs = ms.reduce((s, m) => s + m.cogs, 0);
+                         const totGross = ms.reduce((s, m) => s + m.grossProfit, 0);
                         const totOperating = ms.reduce((s, m) => s + m.operatingExpense, 0);
                         const totNet = totRev - totCogs - totOperating;
                         return (
@@ -752,6 +775,7 @@ export default function ProfitLossPage() {
                             <td className="px-5 py-2.5">Total</td>
                             <td className="px-4 py-2.5 text-right font-mono text-emerald-700">{idr(totRev)}</td>
                             <td className="px-4 py-2.5 text-right font-mono text-rose-700">{idr(totCogs)}</td>
+                           <td className="px-4 py-2.5 text-right font-mono text-sky-700">{idr(totGross)}</td>
                             <td className="px-4 py-2.5 text-right font-mono text-amber-700">{idr(totOperating)}</td>
                             <td className={`px-5 py-2.5 text-right font-mono ${totNet >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{idr(totNet)}</td>
                           </tr>

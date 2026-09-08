@@ -10,12 +10,20 @@ import { RefreshCw, TrendingUp, TrendingDown, ArrowLeft, AlertTriangle } from "l
 
 interface PLRow {
   account_type: string; account_id: number; code: string; name: string;
+  expense_group: "cogs" | "operating_expense" | null;
   company_id: number; branch_id: number | null; division_id: number | null;
   source_module: string; period: string;
   total_debit: string; total_credit: string; net_amount: string;
 }
 
-interface Summary { total_revenue: number; total_expense: number; net_profit: number }
+interface Summary {
+  total_revenue: number;
+  total_cogs: number;
+  total_operating_expense: number;
+  total_expense: number;
+  gross_profit: number;
+  net_profit: number;
+}
 
 const fmt = (v: number | string) =>
   new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Number(v));
@@ -53,7 +61,8 @@ export default function AccountingHubPLPage() {
   useEffect(() => { void load(); }, [load]);
 
   const revenues = rows.filter(r => r.account_type === "revenue");
-  const expenses  = rows.filter(r => r.account_type === "expense");
+  const cogs = rows.filter(r => r.expense_group === "cogs");
+  const operatingExpenses = rows.filter(r => r.expense_group === "operating_expense");
 
   return (
     <div className="p-6 space-y-4">
@@ -106,7 +115,7 @@ export default function AccountingHubPLPage() {
 
       {/* Summary cards */}
       {summary && (
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <Card>
             <CardContent className="pt-4">
               <div className="flex items-center gap-2">
@@ -123,10 +132,24 @@ export default function AccountingHubPLPage() {
               <div className="flex items-center gap-2">
                 <TrendingDown className="h-5 w-5 text-red-600" />
                 <div>
-                  <p className="text-xs text-muted-foreground">Total Beban</p>
-                  <p className="text-lg font-bold text-red-700">{fmt(summary.total_expense)}</p>
+                  <p className="text-xs text-muted-foreground">Total HPP</p>
+                  <p className="text-lg font-bold text-red-700">{fmt(summary.total_cogs)}</p>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">Laba Kotor</p>
+              <p className={`text-lg font-bold ${summary.gross_profit >= 0 ? "text-sky-700" : "text-red-700"}`}>
+                {fmt(summary.gross_profit)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">Beban Operasional</p>
+              <p className="text-lg font-bold text-orange-700">{fmt(summary.total_operating_expense)}</p>
             </CardContent>
           </Card>
           <Card className={summary.net_profit >= 0 ? "border-green-400" : "border-red-400"}>
@@ -150,13 +173,38 @@ export default function AccountingHubPLPage() {
         </CardContent>
       </Card>
 
-      {/* Expense */}
+      {/* HPP */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base text-orange-700">Beban</CardTitle>
+          <CardTitle className="text-base text-red-700">HPP (Beban Pokok Penjualan)</CardTitle>
         </CardHeader>
         <CardContent>
-          <PLTable rows={expenses} />
+          <PLTable rows={cogs} />
+        </CardContent>
+      </Card>
+
+      {/* Gross profit */}
+      {summary && (
+        <Card className={summary.gross_profit >= 0 ? "border-sky-300 bg-sky-50" : "border-red-300 bg-red-50"}>
+          <CardContent className="py-4 flex items-center justify-between">
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wide">Laba Kotor</p>
+              <p className={`text-xl font-bold ${summary.gross_profit >= 0 ? "text-sky-700" : "text-red-700"}`}>
+                {fmt(summary.gross_profit)}
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground">Pendapatan − HPP</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Operating expense */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base text-orange-700">Beban Operasional</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PLTable rows={operatingExpenses} />
         </CardContent>
       </Card>
     </div>
