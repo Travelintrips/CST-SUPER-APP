@@ -1,5 +1,6 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { getVendorWithholdingAccountRule } from "./vendorWithholdingAccountRules.js";
 
 type AccountRow = {
   id: number;
@@ -34,16 +35,9 @@ export async function resolveDefaultWithholdingAccountId(
   `));
 
   const companyRank = (row: AccountRow) => row.company_id === companyId ? 0 : 1;
-  const codePrefixes =
-    normalized.includes("pph 23") ? ["2-1094-", "2-1032-"] :
-    normalized.includes("pph 4(2)") || normalized.includes("pph 4 ayat 2")
-      ? ["2-1098-"]
-      : normalized.includes("pph 15") ? ["2-1102-"] : [];
-  const namePattern =
-    normalized.includes("pph 23") ? /hutang\s+pph\s+pasal\s+23/i :
-    normalized.includes("pph 4(2)") || normalized.includes("pph 4 ayat 2")
-      ? /hutang\s+pph.*4\s*ayat\s*2/i
-      : normalized.includes("pph 15") ? /hutang\s+pph.*15/i : null;
+  const rule = getVendorWithholdingAccountRule(normalized);
+  const codePrefixes = rule?.codePrefixes ?? [];
+  const namePattern = rule?.namePattern ?? null;
 
   const dedicated = accountRows
     .filter((row) =>
