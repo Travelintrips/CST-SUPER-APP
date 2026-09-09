@@ -1444,13 +1444,19 @@ type QrisAutoPostDiagnostic = {
 
 function qrisAutoPostDiagnostic(error: any): QrisAutoPostDiagnostic {
   const postgresError = findPostgresError(error);
-  const code = String(error?.code ?? postgresError?.code ?? "QRIS_AUTO_POST_FAILED");
   const message = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
     .replace(/^Failed query:\s*/i, "")
     .trim()
     .slice(0, 500);
+  // Database-owned Sport Center functions can surface a domain code inside
+  // the exception message rather than as the driver error code. Preserve that
+  // code for the reviewer instead of collapsing it into P0001/QRIS_AUTO_POST_FAILED.
+  const embeddedCode = message.match(/\bPORTAL_SCP_ORIGIN_INVALID\b/)?.[0];
+  const code = embeddedCode
+    ?? String(error?.code ?? postgresError?.code ?? "QRIS_AUTO_POST_FAILED");
   const stage = String(error?.qrisStage ?? (
-    code.includes("CONFIG") ? "konfigurasi MDR" :
+    code.includes("ORIGIN") ? "source payment Sport Center" :
+      code.includes("CONFIG") ? "konfigurasi MDR" :
       code.includes("COA") ? "COA bank canonical" :
         code.includes("JOURNAL") ? "jurnal settlement" :
           code.includes("PAYMENT") ? "validasi payment" :
@@ -1458,6 +1464,10 @@ function qrisAutoPostDiagnostic(error: any): QrisAutoPostDiagnostic {
               "settlement canonical"
   ));
   const mapping: Record<string, { revision: string; action: string }> = {
+    PORTAL_SCP_ORIGIN_INVALID: {
+      revision: "Identitas origin/source payment pada Sport Center",
+      action: "Periksa payment yang dipilih dan pulihkan origin canonical melalui workflow sumber Sport Center. Jangan membuat settlement atau jurnal manual; setelah source valid, generate kandidat QRIS baru lalu retry scoped.",
+    },
     PAYMENT_NOT_CONFIRMED: {
       revision: "Status payment di Sport Center",
       action: "Konfirmasi payment, lalu buat kandidat QRIS ulang.",
@@ -4766,6 +4776,7 @@ router.get("/mutations", async (req, res) => {
         FROM bank_reconciliation_matches approved_mutation_match
         WHERE approved_mutation_match.mutation_id = bm.id
           AND approved_mutation_match.status = 'approved'
+          AND ${currentReconciliationMatchResultSql("approved_mutation_match")}
       ) AS has_approved_match,
       (
         SELECT COALESCE(jsonb_agg(
