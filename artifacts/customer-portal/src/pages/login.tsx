@@ -124,6 +124,7 @@ export default function Login() {
     try {
       const bootstrap = await fetchPortalAuthBootstrap(
         requestedReturnTo ? safeCustomerReturnTo(requestedReturnTo) : null,
+        { force: true },
       );
       if (bootstrap) {
         setLocation(bootstrap.allowedDestination);

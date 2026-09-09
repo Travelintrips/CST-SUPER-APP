@@ -412,13 +412,16 @@ async function listByType(type: string) {
 
 // GET /api/portal/services  — item_type = 'jasa' (active only, public)
 router.get("/services", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
+  // Public catalog data changes through admin workflows, not per request.
+  // A short browser/CDN cache avoids making every public page wait for the
+  // same relatively expensive catalog joins.
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("jasa"));
 });
 
 // GET /api/portal/products  — item_type = 'barang'
 router.get("/products", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("barang"));
 });
 

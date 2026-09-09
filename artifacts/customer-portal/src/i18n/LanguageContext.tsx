@@ -1,6 +1,6 @@
 // @refresh reset
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
-import { TRANSLATIONS, SUPPORTED_LOCALES, RTL_LOCALES, loadLocale, getCachedLocale, type SupportedLocale } from "./translations";
+import { SUPPORTED_LOCALES, RTL_LOCALES, loadLocale, getCachedLocale, type SupportedLocale } from "./translations";
 
 const STORAGE_KEY = "app_language";
 const CACHE_PREFIX = "trs_cache_v1_";
