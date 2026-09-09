@@ -134,6 +134,28 @@ export async function setMarketplaceDealPrice(
       }
 
       const updatedAt = new Date();
+      const [updatedQuote] = await tx
+        .update(mktVendorQuotesTable)
+        .set({
+          negotiatedBy: input.actorId,
+          negotiatedAt: updatedAt,
+          negotiatedNotes: input.dealNotes?.trim() || null,
+          updatedAt,
+        })
+        .where(and(
+          eq(mktVendorQuotesTable.id, input.quoteId),
+          eq(mktVendorQuotesTable.updatedAt, quote.quoteUpdatedAt),
+        ))
+        .returning({ quoteId: mktVendorQuotesTable.id });
+
+      if (!updatedQuote) {
+        return {
+          ok: false as const,
+          code: "STALE_DEAL_PRICE" as const,
+          message: "Quote sudah berubah. Muat ulang sebelum menyimpan harga deal.",
+        };
+      }
+
       const resultLines: DealPriceResultLine[] = [];
       let dealTotal = 0;
 
@@ -171,19 +193,6 @@ export async function setMarketplaceDealPrice(
           previousDealSubtotal: line.negotiatedSubtotal ?? null,
         });
       }
-
-      await tx
-        .update(mktVendorQuotesTable)
-        .set({
-          negotiatedBy: input.actorId,
-          negotiatedAt: updatedAt,
-          negotiatedNotes: input.dealNotes?.trim() || null,
-          updatedAt,
-        })
-        .where(and(
-          eq(mktVendorQuotesTable.id, input.quoteId),
-          eq(mktVendorQuotesTable.updatedAt, quote.quoteUpdatedAt),
-        ));
 
       return {
         ok: true as const,
