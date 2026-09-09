@@ -77,7 +77,6 @@
 - [Safe DEV accounting fixture drift](safe-dev-accounting-fixture.md) — runtime harnesses must resolve accounting fixtures semantically; shared DEV IDs can drift and block otherwise safe proofs.
 - [Trial balance parent rollup](trial-balance-parent-rollup.md) — hierarchical reports must roll child lines to ancestors and preserve the authenticated company/period scope in proofs.
 - [Bank matching direction semantics](bank-matching-direction-semantics.md) — accept operational transfer types for bank candidates and gate Sport Center candidates on QRIS evidence.
-- [GitHub push authentication](github-push-authentication.md) — secret presence does not prove a PAT has valid repository write access; prefer verified GitHub connection or scoped replacement.
 - [Health readiness contract](health-readiness-contract.md) — liveness must precede auth middleware; readiness may remain starting during the serial migration chain.
 - [Persistent gate readiness timing](persistent-gate-readiness-timing.md) — initialize migration timing before the gated pre-start callback, because a completed marker can skip that callback on restart.
 - [Persistent gate failure safety](persistent-gate-failure-safety.md) — gated stage callbacks must propagate failures; compatibility marker writes need lock-aware context to avoid false completion and recursive advisory-lock waits.
