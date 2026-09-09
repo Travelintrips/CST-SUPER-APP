@@ -146,6 +146,18 @@ describe("voidApprovedJournal metadata failure", () => {
     expect(source).toContain("ensurePostedEntryVoidTransitionGuard");
   });
 
+  it("pins canonical lifecycle checks to the public source-aware match table", () => {
+    const source = readFileSync(
+      new URL("../routes/bankReconciliation.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("FROM public.bank_reconciliation_matches");
+    expect(source).toContain("candidate_type::text = 'qris_settlement'");
+    expect(source).toContain("candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'");
+    expect(source).toContain("status::text IN ('approved', 'candidate')");
+  });
+
   it("does not create a duplicate reversal when retrying the partial state", async () => {
     mockExecute
       // First attempt: original lookup, reversal lookup, original lines,

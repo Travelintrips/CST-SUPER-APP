@@ -7255,11 +7255,11 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   try {
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       LIMIT 2
     `));
     if (canonicalMatches.length > 0) {
@@ -7550,11 +7550,11 @@ router.post("/:mutationId/void-journal", async (req, res) => {
   try {
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       LIMIT 2
     `));
     if (canonicalMatches.length > 0) {
@@ -7701,11 +7701,11 @@ router.post("/:mutationId/reopen", async (req, res) => {
     // returns both mutations to unmatched. It must never create a reversal.
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       ORDER BY id
       LIMIT 2
     `));
@@ -7798,11 +7798,11 @@ router.post("/:mutationId/reject", async (req, res) => {
 
   const { rows: canonicalMatches } = await db.execute(sql.raw(`
     SELECT id
-    FROM bank_reconciliation_matches
+    FROM public.bank_reconciliation_matches
     WHERE mutation_id = ${mutId}
-      AND candidate_type = 'qris_settlement'
-      AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-      AND status IN ('approved', 'candidate')
+      AND candidate_type::text = 'qris_settlement'
+      AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+      AND status::text IN ('approved', 'candidate')
     LIMIT 2
   `));
   if (canonicalMatches.length > 0) {

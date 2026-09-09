@@ -143,3 +143,4 @@
 - [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
 - [Legacy portal ownership](legacy-portal-ownership.md) — all-null historical Ocean/Trucking ownership is orphaned; never auto-map by mutable contact fields.
 - [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
+- [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.
