@@ -195,7 +195,10 @@ import { runBtkiMigration } from "./lib/btkiMigration.js";
 import { runFinancialPeriodMigration } from "./lib/financialPeriodMigration.js";
 import { runFinancialClosingMigration } from "./lib/financialClosingMigration.js";
 import { runSapHardeningMigration } from "./lib/sapHardeningMigration.js";
-import { runFinanceGovernanceMigration } from "./lib/financeGovernanceMigration.js";
+import {
+  ensurePostedEntryVoidTransitionGuard,
+  runFinanceGovernanceMigration,
+} from "./lib/financeGovernanceMigration.js";
 import { startDriftMonitorWorker } from "./lib/monitoring/dataDriftDetector.js";
 import { runBankDisbursementMigration, runExpenseDisbursementBridgeMigration } from "./lib/bankDisbursementMigration.js";
 import { runVendorPaymentsMigration } from "./lib/vendorPaymentsMigration.js";
@@ -2052,6 +2055,12 @@ async function startServer() {
         ensureVendorInvoiceCaptureSchema,
       );
       logger.info("Vendor Invoice capture schema ready");
+      logger.info("Pre-start migration: posted-entry void transition guard starting");
+      await runPreStartSubstepWithRetry(
+        "posted_entry_void_transition_guard_v1",
+        ensurePostedEntryVoidTransitionGuard,
+      );
+      logger.info("Posted-entry void transition guard ready");
       return timeStartupStage("Pre-start schema migrations", async () => {
       console.log("[startup] Migration registry initialization complete");
       for (let attempt = 1; attempt <= 10; attempt++) {

@@ -124,6 +124,28 @@ describe("voidApprovedJournal metadata failure", () => {
     expect(result).toMatchObject({ ok: true, voidEntryId: 20 });
   });
 
+  it("keeps every startup trigger repair compatible with linked reversals", () => {
+    const source = readFileSync(
+      new URL("../lib/accountingHubMigration.ts", import.meta.url),
+      "utf8",
+    );
+    const repair = source.slice(
+      source.indexOf("export async function runSportCenterPaymentAccountingMetadataBackfill"),
+    );
+
+    expect(repair).toContain("NEW.status = 'voided'");
+    expect(repair).toContain("NEW.void_entry_id IS NOT NULL");
+    expect(repair).toContain("NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit");
+    expect(repair).toContain("NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit");
+  });
+
+  it("refreshes the linked-reversal guard before startup readiness", () => {
+    const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("posted_entry_void_transition_guard_v1");
+    expect(source).toContain("ensurePostedEntryVoidTransitionGuard");
+  });
+
   it("does not create a duplicate reversal when retrying the partial state", async () => {
     mockExecute
       // First attempt: original lookup, reversal lookup, original lines,

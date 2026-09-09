@@ -7,6 +7,49 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
+/**
+ * Refresh the defense-in-depth posted-entry trigger before the API is ready.
+ * This stays outside persistent migration markers because older environments
+ * can retain a stale function that blocks a valid linked reversal.
+ */
+export async function ensurePostedEntryVoidTransitionGuard(): Promise<void> {
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION fn_block_posted_entry_update()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    BEGIN
+      IF OLD.status = 'posted' THEN
+        IF NEW.status = 'draft' AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
+          RETURN NEW;
+        END IF;
+        IF NEW.status = 'voided'
+           AND NEW.void_entry_id IS NOT NULL
+           AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
+           AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
+           AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
+           AND NEW.date         IS NOT DISTINCT FROM OLD.date
+           AND NEW.source       IS NOT DISTINCT FROM OLD.source
+           AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
+        THEN
+          RETURN NEW;
+        END IF;
+        IF NEW.status IS NOT DISTINCT FROM OLD.status
+          AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
+          AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
+          AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
+          AND NEW.date         IS NOT DISTINCT FROM OLD.date
+          AND NEW.source       IS NOT DISTINCT FROM OLD.source
+          AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
+        THEN
+          RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'IMMUTABILITY_VIOLATION: Cannot modify a posted journal entry (id=%). Posted entries are immutable. Use a reversal entry.', OLD.id;
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+  `);
+}
+
 export async function runFinanceGovernanceMigration(): Promise<void> {
   logger.info("[finance-governance] Running migration...");
 
@@ -204,47 +247,7 @@ export async function runFinanceGovernanceMigration(): Promise<void> {
   // The only safe correction path for financial changes remains reversal.
   // Note: ae_immutability_fn (ledgerGuard) enforces the same policy with more detail.
   // This function is kept for defense-in-depth but must stay consistent with ledgerGuard.
-  await db.execute(sql`
-    CREATE OR REPLACE FUNCTION fn_block_posted_entry_update()
-    RETURNS TRIGGER LANGUAGE plpgsql AS $$
-    BEGIN
-      IF OLD.status = 'posted' THEN
-        -- Izinkan cancellation: status posted → draft dengan cancel_reason terisi
-        IF NEW.status = 'draft' AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
-          RETURN NEW;
-        END IF;
-        -- Izinkan posted → voided hanya sebagai metadata completion setelah
-        -- reversal entry yang balance sudah dibuat. Financial fields tetap
-        -- immutable dan void_entry_id wajib menunjuk ke reversal tersebut.
-        IF NEW.status = 'voided'
-           AND NEW.void_entry_id IS NOT NULL
-           AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
-           AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
-           AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
-           AND NEW.date         IS NOT DISTINCT FROM OLD.date
-           AND NEW.source       IS NOT DISTINCT FROM OLD.source
-           AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
-        THEN
-          RETURN NEW;
-        END IF;
-        -- Izinkan metadata-only update (payment_method dll.) selama data finansial
-        -- dan status tidak berubah. Konsisten dengan ae_immutability_fn di ledgerGuard.
-        IF NEW.status IS NOT DISTINCT FROM OLD.status
-          AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
-          AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
-          AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
-          AND NEW.date         IS NOT DISTINCT FROM OLD.date
-          AND NEW.source       IS NOT DISTINCT FROM OLD.source
-          AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
-        THEN
-          RETURN NEW;
-        END IF;
-        RAISE EXCEPTION 'IMMUTABILITY_VIOLATION: Cannot modify a posted journal entry (id=%). Posted entries are immutable. Use a reversal entry.', OLD.id;
-      END IF;
-      RETURN NEW;
-    END;
-    $$;
-  `);
+  await ensurePostedEntryVoidTransitionGuard();
   await db.execute(sql`
     DO $$ BEGIN
       IF NOT EXISTS (
