@@ -66,6 +66,7 @@ import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.j
 import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.js";
 import { postEntryWithClient } from "../lib/accounting.js";
 import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
+import { resolveVendorPayableAccountId } from "../lib/vendorPayableAccount.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { extractBankProofOcr } from "../lib/bankProofOcr.js";
@@ -5585,7 +5586,10 @@ router.post(
           `);
           if (bankRows[0]?.coa_id != null) bankCoaId = Number(bankRows[0].coa_id);
         }
-        const apCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        const configuredApCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        const apCoaId = configuredApCoaId
+          ? await resolveVendorPayableAccountId(tx as any, companyId, configuredApCoaId)
+          : null;
         let journalId = settings?.bank_journal_id == null ? null : Number(settings.bank_journal_id);
         if (!bankCoaId || !apCoaId) {
           throw Object.assign(new Error("COA bank atau COA Hutang Vendor belum dikonfigurasi"), { httpStatus: 422 });
@@ -6265,7 +6269,10 @@ router.post(
         if (!bankCoaId && settings?.default_bank_account_id != null) {
           bankCoaId = Number(settings.default_bank_account_id);
         }
-        const apCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        const configuredApCoaId = settings?.ap_account_id == null ? null : Number(settings.ap_account_id);
+        const apCoaId = configuredApCoaId
+          ? await resolveVendorPayableAccountId(tx as any, companyId, configuredApCoaId)
+          : null;
         let journalId = settings?.bank_journal_id == null ? null : Number(settings.bank_journal_id);
 
         if (!bankCoaId || !apCoaId) {
