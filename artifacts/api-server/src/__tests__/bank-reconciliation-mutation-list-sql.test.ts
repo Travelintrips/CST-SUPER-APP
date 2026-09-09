@@ -15,4 +15,16 @@ describe("bank reconciliation mutation list SQL", () => {
       "company_bank_accounts cba ON cba.id = bm.bank_account_id",
     );
   });
+
+  it("projects approved-match ownership independently of visible candidates", () => {
+    expect(routeSource).toContain(
+      "EXISTS (\n" +
+        "        SELECT 1\n" +
+        "        FROM bank_reconciliation_matches approved_mutation_match\n" +
+        "        WHERE approved_mutation_match.mutation_id = bm.id\n" +
+        "          AND approved_mutation_match.status = 'approved'\n" +
+        "      ) AS has_approved_match",
+    );
+    expect(routeSource).toContain("FALSE AS has_approved_match");
+  });
 });

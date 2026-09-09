@@ -1,0 +1,10 @@
+---
+name: Production vendor invoice orphan boundary
+description: Production audit rule for journals and bank settlements whose vendor invoice master row is missing.
+---
+
+Treat a missing `vendor_invoices` row as a data-integrity incident, not as permission to delete or recreate a posted journal. Audit the journal source, bank mutation, bank-disbursement item, reconciliation candidate, and purchase-document identity together.
+
+**Why:** Production can retain posted AP settlement and purchase-bill journals after the vendor invoice master disappears. Legacy references may disagree across `vendor_invoice_id`, reconciliation candidate IDs, textual invoice numbers, and `source_id`; changing one record in isolation can duplicate or erase financial evidence.
+
+**How to apply:** First classify each row as posted payment, posted purchase recognition, draft/duplicate, or stale candidate. Preserve posted ledger evidence, fail closed on identity mismatch, and use an explicitly governed repair or reversal path rather than direct deletion.

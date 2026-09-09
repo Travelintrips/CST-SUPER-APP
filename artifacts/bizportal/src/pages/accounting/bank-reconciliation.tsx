@@ -647,6 +647,8 @@ interface BankMutation {
   sport_payment_type?: "bank_transfer" | "qris" | "paylabs" | null;
   provider_order_id: string | null;
   status: MutationStatus;
+  /** True when this bank mutation is already linked to an approved match. */
+  has_approved_match?: boolean | null;
   matched_payment_id: number | null;
   matched_order_id: number | null;
   candidates: Candidate[] | null;
@@ -1100,9 +1102,11 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 }
 
 function hasApprovedReconciliationMatch(m: BankMutation): boolean {
-  return m.candidates?.some(
-    candidate => String(candidate.status ?? "").toLowerCase() === "approved",
-  ) ?? false;
+  return m.has_approved_match === true
+    || String(m.has_approved_match ?? "").toLowerCase() === "true"
+    || (m.candidates?.some(
+      candidate => String(candidate.status ?? "").toLowerCase() === "approved",
+    ) ?? false);
 }
 
 function isFullyUsedQrisCandidate(candidate: Candidate): boolean {
@@ -1671,6 +1675,12 @@ function candidateBusinessPriority(candidate: Candidate): number {
  * which contract applies.
  */
 function visibleCandidates(m: BankMutation): Candidate[] {
+  // An approved match owns this bank mutation. Keep the mutation itself
+  // visible for audit/duplicate review, but never expose its remaining
+  // candidate cards as actionable matching evidence. The backend approval
+  // guard already rejects a second link; the read-side must not invite it.
+  if (hasApprovedReconciliationMatch(m)) return [];
+
   const seen = new Set<string>();
   const eligible = (m.candidates ?? [])
     .filter(candidate => {

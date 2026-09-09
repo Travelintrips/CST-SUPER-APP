@@ -94,6 +94,7 @@
 - [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
 - [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
 - [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
+- [Approved match read projection](approved-match-read-projection.md) — project mutation ownership separately from visible candidates so filtered history cannot offer duplicate approval.
 - [Managed workflow secret refresh](workflow-secret-refresh.md) — restart artifact workflows after secret availability changes before diagnosing loader or database failures.
 - [Shadow observer test import](shadow-observer-test-import.md) — keep the DB-backed finance resolver lazy so mode and zero-effect tests run without a test database.
 - [Production startup lock deadlock](production-startup-lock-deadlock.md) — a new deployment can stay unready when an older backend retains a per-stage advisory lock; do not bypass markers or terminate production sessions casually.
@@ -155,3 +156,4 @@
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
 - [P&L generated contract](pnl-generated-contract.md) — when P&L response fields change or are consumed, regenerate the OpenAPI client before trusting BizPortal typecheck.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
+- [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
