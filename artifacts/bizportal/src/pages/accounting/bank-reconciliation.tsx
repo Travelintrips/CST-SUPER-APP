@@ -87,6 +87,15 @@ interface Company {
   companyName: string;
 }
 
+interface ReconciliationAccount {
+  id: number;
+  name: string;
+  account_type: string | null;
+  bank_name: string | null;
+  account_number: string | null;
+  is_active: boolean;
+}
+
 interface TestResult {
   ok: boolean;
   stage?: string;
@@ -6960,6 +6969,7 @@ export default function BankReconciliationPage() {
   const [filterDir,      setFilterDir]      = useState("all");
   const [filterProvider, setFilterProvider] = useState("all");
   const [filterPaymentType, setFilterPaymentType] = useState<"all" | SportPaymentType>("all");
+  const [filterBankAccountId, setFilterBankAccountId] = useState("all");
   const [filterFrom,     setFilterFrom]     = useState("");
   const [filterTo,       setFilterTo]       = useState("");
   const [filterSearch,   setFilterSearch]   = useState(
@@ -7026,6 +7036,7 @@ export default function BankReconciliationPage() {
     filterDir,
     filterProvider,
     filterPaymentType,
+    filterBankAccountId,
     filterFrom,
     filterTo,
     filterSearch,
@@ -7040,7 +7051,8 @@ export default function BankReconciliationPage() {
       if (filterStatus !== "all")   params.set("status",    filterStatus);
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
-       if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
+      if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
+      if (filterBankAccountId !== "all") params.set("bank_account_id", filterBankAccountId);
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
       if (filterSearch) params.set("search", filterSearch);
@@ -7055,6 +7067,21 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
     refetchOnWindowFocus: true,
   });
+
+  const { data: reconciliationAccountsData, isLoading: reconciliationAccountsLoading } = useQuery({
+    queryKey: ["bank-reconciliation-accounts", qrisCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ companyId: String(qrisCompanyId) });
+      const response = await fetch(`/api/cash-bank/accounts?${params}`, { credentials: "include" });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json() as Promise<{ data: ReconciliationAccount[] }>;
+    },
+    enabled: qrisCompanyId != null,
+    staleTime: 60_000,
+  });
+  const reconciliationAccounts = (reconciliationAccountsData?.data ?? []).filter(
+    (account) => account.is_active !== false,
+  );
 
   const { data: summary } = useQuery({
     queryKey: ["bank-reconciliation-summary", activeCompanyId],
@@ -8390,6 +8417,7 @@ export default function BankReconciliationPage() {
 
   const resetFilters = () => {
     setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
+    setFilterBankAccountId("all");
     setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setPage(0);
   };
 
@@ -9205,6 +9233,37 @@ export default function BankReconciliationPage() {
             <Card>
               <CardContent className="p-3">
                 <div className="flex flex-wrap gap-2 items-end">
+                  <div className="space-y-1">
+                    <Label htmlFor="reconciliation-bank-account" className="text-[11px] text-muted-foreground">
+                      Rekening pencocokan
+                    </Label>
+                    <Select
+                      value={filterBankAccountId}
+                      onValueChange={value => {
+                        setFilterBankAccountId(value);
+                        setPage(0);
+                      }}
+                    >
+                      <SelectTrigger id="reconciliation-bank-account" className="h-8 w-[250px] text-xs">
+                        <SelectValue placeholder="Semua rekening" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua rekening</SelectItem>
+                        {reconciliationAccounts.map(account => {
+                          const accountNumber = account.account_number?.trim();
+                          const suffix = accountNumber ? ` · ${accountNumber}` : "";
+                          return (
+                            <SelectItem key={account.id} value={String(account.id)}>
+                              {account.name}{suffix}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                    {reconciliationAccountsLoading && (
+                      <p className="text-[10px] text-muted-foreground">Memuat daftar rekening...</p>
+                    )}
+                  </div>
                   <Select value={filterProvider} onValueChange={v => { setFilterProvider(v); setPage(0); }}>
                     <SelectTrigger className="w-[140px] h-8 text-xs"><SelectValue placeholder="Provider" /></SelectTrigger>
                     <SelectContent>
@@ -9279,12 +9338,12 @@ export default function BankReconciliationPage() {
                 <div className="text-center">
                   <p className="font-medium">Tidak ada data ditemukan</p>
                   <p className="text-sm">
-                     {filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch
+                    {filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterBankAccountId !== "all" || filterSearch
                       ? "Coba ubah filter atau reset pencarian"
                       : "Import mutasi bank atau sync Google Sheet untuk memulai"}
                   </p>
                 </div>
-                {(filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch) && (
+                {(filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterBankAccountId !== "all" || filterSearch) && (
                   <Button variant="outline" size="sm" onClick={resetFilters}>Reset Filter</Button>
                 )}
               </CardContent>

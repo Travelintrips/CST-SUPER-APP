@@ -4423,12 +4423,20 @@ router.get("/mutations", async (req, res) => {
     company_id,
     mutation_id,
     payment_type,
+    bank_account_id,
   } = req.query as Record<string, string>;
   const lim = Math.min(parseInt(limit) || 100, 500);
   const off = parseInt(offset) || 0;
   const requestedMutationId = mutation_id == null ? null : Number(mutation_id);
   if (requestedMutationId != null && (!Number.isInteger(requestedMutationId) || requestedMutationId <= 0)) {
     return res.status(400).json({ error: "mutation_id tidak valid" });
+  }
+  const requestedBankAccountId = bank_account_id == null ? null : Number(bank_account_id);
+  if (
+    requestedBankAccountId != null
+    && (!Number.isInteger(requestedBankAccountId) || requestedBankAccountId <= 0)
+  ) {
+    return res.status(400).json({ error: "bank_account_id tidak valid" });
   }
 
   // ── Filter helpers ────────────────────────────────────────────────────────
@@ -4453,6 +4461,12 @@ router.get("/mutations", async (req, res) => {
   if (from)       bmFilters.push(`bm.transaction_date >= '${esc(from)}'`);
   if (to)         bmFilters.push(`bm.transaction_date <= '${esc(to)}'`);
   if (company_id) bmFilters.push(`bm.company_id = ${Number(company_id)}`);
+  if (requestedBankAccountId != null) {
+    // bank_account_id is historically mixed between integer and text
+    // representations. Compare as trimmed text so legacy rows remain
+    // filterable without an unsafe integer=text cast.
+    bmFilters.push(`BTRIM(bm.bank_account_id::text) = '${requestedBankAccountId}'`);
+  }
   if (search) {
     const s = esc(search);
     bmFilters.push(`(bm.description ILIKE '%${s}%' OR bm.normalized_description ILIKE '%${s}%' OR bm.provider_order_id ILIKE '%${s}%' OR bm.mutation_key ILIKE '%${s}%')`);
@@ -4482,6 +4496,9 @@ router.get("/mutations", async (req, res) => {
   else if (status === "duplicate_need_review") bmiFilters.push(`bmi.status = 'NEED_REVIEW'`);
   if (direction === "IN")  bmiFilters.push(`COALESCE(bmi.credit, 0) > 0`);
   if (direction === "OUT") bmiFilters.push(`COALESCE(bmi.debit, 0) > 0 AND COALESCE(bmi.credit, 0) = 0`);
+  if (requestedBankAccountId != null) {
+    bmiFilters.push(`BTRIM(bmi.bank_account_id::text) = '${requestedBankAccountId}'`);
+  }
   if (payment_type && payment_type !== "all") {
     const importedEvidence = `UPPER(CONCAT_WS(' ',
       COALESCE(bmi.payment_method::text, ''),
