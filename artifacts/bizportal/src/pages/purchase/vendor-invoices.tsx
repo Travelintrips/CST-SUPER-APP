@@ -99,9 +99,12 @@ export function VendorInvoicesListPage() {
   };
 
   const handleRecover = async (id: number) => {
+    if (!window.confirm("Promosikan journal draft yang tertaut menjadi posted? Journal lain/orphan tidak akan diubah.")) {
+      return;
+    }
     setRecoveringId(id);
     try {
-      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}/post?company=${activeCompanyId}`, { method: "POST" });
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}/recover-journal?company=${activeCompanyId}`, { method: "POST" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(formatPostingError(body, "Gagal memulihkan jurnal"));
       toast.success("Journal invoice berhasil dipulihkan menjadi posted");
@@ -223,7 +226,7 @@ export function VendorInvoicesListPage() {
                                 {postingId === Number(vi.id) ? "..." : "Post"}
                               </Button>
                             )}
-                            {vi.status !== "draft" && vi.journalStatus === "draft" && (
+                            {vi.status === "posted" && vi.journalStatus === "draft" && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -479,7 +482,7 @@ export function VendorInvoiceEditorPage() {
 
   const recoverMut = useMutation({
     mutationFn: async () => {
-      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" });
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/recover-journal?company=${activeCompanyId}`, { method: "POST" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(formatPostingError(body, "Gagal memulihkan jurnal"));
       return body;
@@ -547,7 +550,7 @@ export function VendorInvoiceEditorPage() {
                 <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
               </Button>
             )}
-            {!isNew && vi?.status !== "draft" && vi?.journalStatus === "draft" && (
+            {!isNew && vi?.status === "posted" && vi?.journalStatus === "draft" && (
               <Button
                 variant="outline"
                 className="text-amber-700 border-amber-300 hover:bg-amber-50"

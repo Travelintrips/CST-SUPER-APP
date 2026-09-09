@@ -2025,58 +2025,10 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
   if (vi.status !== "draft") {
-    // Recovery for an interrupted system post: an earlier idempotent retry
-    // could have left a balanced purchase journal in draft while the invoice
-    // itself was marked posted. Finalize only that exact linked journal.
-    if (vi.journalEntryId != null) {
-      const [draftEntry] = await db
-        .select({
-          id: accountingEntriesTable.id,
-          status: accountingEntriesTable.status,
-          source: accountingEntriesTable.source,
-          sourceId: accountingEntriesTable.sourceId,
-          companyId: accountingEntriesTable.companyId,
-        })
-        .from(accountingEntriesTable)
-        .where(and(
-          eq(accountingEntriesTable.id, vi.journalEntryId),
-          eq(accountingEntriesTable.companyId, vi.companyId ?? cid),
-        ))
-        .limit(1);
-      if (
-        draftEntry?.status === "draft"
-        && draftEntry.source === "purchase_bill"
-        && Number(draftEntry.sourceId) === id
-      ) {
-        const draftLines = await db
-          .select({
-            debit: accountingEntryLinesTable.debit,
-            credit: accountingEntryLinesTable.credit,
-          })
-          .from(accountingEntryLinesTable)
-          .where(eq(accountingEntryLinesTable.entryId, draftEntry.id));
-        const debit = draftLines.reduce((sum, line) => sum + num(line.debit), 0);
-        const credit = draftLines.reduce((sum, line) => sum + num(line.credit), 0);
-        if (draftLines.length === 0 || Math.abs(debit - credit) > 0.01) {
-          res.status(422).json({
-            error: "vendor_invoice_draft_journal_unbalanced",
-            message: "Journal invoice tersimpan sebagai draft tetapi tidak balance; perlu koreksi Finance.",
-          });
-          return;
-        }
-        await db.update(accountingEntriesTable)
-          .set({ status: "posted", postedAt: new Date() })
-          .where(and(
-            eq(accountingEntriesTable.id, draftEntry.id),
-            eq(accountingEntriesTable.status, "draft"),
-          ));
-        const [recovered] = await db.select().from(vendorInvoicesTable)
-          .where(eq(vendorInvoicesTable.id, id));
-        res.json(recovered ?? vi);
-        return;
-      }
-    }
-    res.status(400).json({ error: "Already posted" });
+    res.status(409).json({
+      error: "vendor_invoice_already_posted",
+      message: "Invoice sudah bukan draft. Gunakan aksi Pulihkan Journal untuk journal draft yang tertaut.",
+    });
     return;
   }
 
@@ -2376,6 +2328,160 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   // ── END SAP LOCK SNAPSHOT ──────────────────────────────────────────────────
 
   res.json(updated);
+});
+
+/**
+ * Controlled recovery for the split-brain state:
+ * vendor invoice is already posted, but its exact linked purchase journal is
+ * still draft. This route must never create a second journal and must never
+ * scan or promote an unrelated/orphan journal.
+ */
+router.post("/vendor-invoices/:id/recover-journal", async (req, res) => {
+  const id = Number(String(req.params.id));
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "invalid_vendor_invoice_id" });
+    return;
+  }
+
+  const [owner] = await db
+    .select({ companyId: vendorInvoicesTable.companyId })
+    .from(vendorInvoicesTable)
+    .where(eq(vendorInvoicesTable.id, id))
+    .limit(1);
+  if (!owner) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  if (!await assertCompanyAccess(owner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
+
+  const result = await db.transaction(async (tx) => {
+    const invoiceResult = await tx.execute(sql`
+      SELECT id, company_id, status, journal_entry_id
+      FROM vendor_invoices
+      WHERE id = ${id} AND company_id = ${owner.companyId ?? cid}
+      FOR UPDATE
+    `);
+    const invoice = (invoiceResult as any).rows?.[0] as
+      | { id: number; company_id: number | null; status: string; journal_entry_id: number | null }
+      | undefined;
+
+    if (!invoice) {
+      return {
+        ok: false as const,
+        status: 404,
+        error: "vendor_invoice_not_found",
+        message: "Invoice tidak ditemukan pada company aktif.",
+      };
+    }
+    if (invoice.status === "draft") {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "vendor_invoice_still_draft",
+        message: "Invoice masih draft. Gunakan aksi Post Invoice, bukan recovery journal.",
+      };
+    }
+    if (invoice.status !== "posted") {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "vendor_invoice_recovery_status_not_allowed",
+        message: `Recovery hanya diperbolehkan untuk invoice berstatus posted; status saat ini ${invoice.status}.`,
+      };
+    }
+    if (invoice.journal_entry_id == null) {
+      return {
+        ok: false as const,
+        status: 422,
+        error: "vendor_invoice_journal_missing",
+        message: "Invoice sudah posted tetapi tidak memiliki journal tertaut. Jangan membuat journal baru dari recovery ini; lakukan review Finance.",
+      };
+    }
+
+    const journalResult = await tx.execute(sql`
+      SELECT id, entry_number, status, source, source_id, company_id
+      FROM accounting_entries
+      WHERE id = ${invoice.journal_entry_id}
+        AND company_id = ${invoice.company_id ?? cid}
+      FOR UPDATE
+    `);
+    const journal = (journalResult as any).rows?.[0] as
+      | { id: number; entry_number: string; status: string; source: string; source_id: number | null; company_id: number | null }
+      | undefined;
+
+    if (!journal) {
+      return {
+        ok: false as const,
+        status: 422,
+        error: "vendor_invoice_journal_not_found",
+        message: "Journal tertaut tidak ditemukan pada company yang sama; review Finance diperlukan.",
+      };
+    }
+    if (journal.status !== "draft") {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "vendor_invoice_journal_not_draft",
+        message: `Journal ${journal.entry_number} sudah berstatus ${journal.status}; tidak ada recovery yang dilakukan.`,
+      };
+    }
+    if (journal.source !== "purchase_bill" || Number(journal.source_id) !== id) {
+      return {
+        ok: false as const,
+        status: 422,
+        error: "vendor_invoice_journal_identity_mismatch",
+        message: `Journal ${journal.entry_number} bukan journal purchase bill yang tepat untuk invoice ini; tidak ada recovery yang dilakukan.`,
+      };
+    }
+
+    const lineResult = await tx.execute(sql`
+      SELECT debit, credit
+      FROM accounting_entry_lines
+      WHERE entry_id = ${journal.id}
+    `);
+    const lines = ((lineResult as any).rows ?? []) as Array<{ debit: unknown; credit: unknown }>;
+    const debit = lines.reduce((sum, line) => sum + num(line.debit), 0);
+    const credit = lines.reduce((sum, line) => sum + num(line.credit), 0);
+    if (lines.length === 0 || Math.abs(debit - credit) > 0.01) {
+      return {
+        ok: false as const,
+        status: 422,
+        error: "vendor_invoice_draft_journal_unbalanced",
+        message: `Journal ${journal.entry_number} masih draft dan tidak balance (debit ${debit.toFixed(2)}, credit ${credit.toFixed(2)}); koreksi Finance diperlukan.`,
+      };
+    }
+
+    const promoted = await tx.execute(sql`
+      UPDATE accounting_entries
+      SET status = 'posted',
+          posted_at = COALESCE(posted_at, NOW())
+      WHERE id = ${journal.id} AND status = 'draft'
+      RETURNING id, entry_number, status, posted_at
+    `);
+    const promotedRow = (promoted as any).rows?.[0];
+    if (!promotedRow) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "vendor_invoice_journal_recovery_race",
+        message: "Journal berubah oleh proses lain sebelum recovery selesai; muat ulang dan periksa status terbaru.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      invoiceId: id,
+      journal: promotedRow,
+    };
+  });
+
+  if (!result.ok) {
+    res.status(result.status).json(result);
+    return;
+  }
+  res.json(result);
 });
 
 router.post("/vendor-invoices/:id/cancel", async (req, res) => {
