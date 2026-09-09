@@ -89,6 +89,64 @@ router.use(async (req, res, next) => {
 function num(v: unknown): number { return Number(v ?? 0); }
 function idr(n: number): string { return n.toFixed(2); }
 
+async function resolveVendorPayableAccountId(
+  companyId: number,
+  configuredApAccountId: number,
+): Promise<number> {
+  const configuredResult = await db.execute(sql`
+    SELECT id, name, is_postable
+    FROM chart_of_accounts
+    WHERE id = ${configuredApAccountId}
+      AND company_id = ${companyId}
+    LIMIT 1
+  `);
+  const configured = ((configuredResult as any).rows ?? [])[0] as
+    | { id: number; name: string; is_postable: boolean }
+    | undefined;
+  if (!configured) {
+    throw new Error("Akun hutang pada Accounting Settings tidak ditemukan untuk perusahaan aktif.");
+  }
+
+  // Some companies configure the final posting account directly. Preserve
+  // that valid setup; otherwise treat the configured AP account as the parent
+  // and require exactly one vendor-payable child.
+  if (
+    configured.is_postable &&
+    /hutang\s+(pemasok|vendor)|vendor\s+payable|accounts?\s+payable/i.test(configured.name)
+  ) {
+    return Number(configured.id);
+  }
+
+  const childResult = await db.execute(sql`
+    SELECT id, code, name
+    FROM chart_of_accounts
+    WHERE company_id = ${companyId}
+      AND parent_id = ${configuredApAccountId}
+      AND is_postable = TRUE
+      AND (
+        name ILIKE '%Hutang Pemasok%'
+        OR name ILIKE '%Hutang Vendor%'
+        OR name ILIKE '%Vendor Payable%'
+        OR name ILIKE '%Accounts Payable%'
+      )
+    ORDER BY code, id
+    LIMIT 2
+  `);
+  const children = ((childResult as any).rows ?? []) as Array<{
+    id: number;
+    code: string;
+    name: string;
+  }>;
+  if (children.length !== 1) {
+    throw new Error(
+      children.length === 0
+        ? "Child COA Hutang Pemasok/Vendor belum tersedia di bawah akun hutang pada Accounting Settings."
+        : "Terdapat lebih dari satu child COA Hutang Pemasok/Vendor; Finance harus menetapkan satu akun posting.",
+    );
+  }
+  return Number(children[0]!.id);
+}
+
 async function findApprovedVendorCoaMapping(input: {
   companyId: number;
   supplierId?: number;
@@ -2209,6 +2267,20 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
         message: "Invoice tidak dapat diposting: jurnal pembelian atau akun hutang belum dikonfigurasi.",
       });
     }
+    let vendorPayableAccountId: number;
+    try {
+      vendorPayableAccountId = await resolveVendorPayableAccountId(
+        invoiceCompanyId,
+        settings.apAccountId,
+      );
+    } catch (error) {
+      return res.status(422).json({
+        error: "vendor_payable_account_required",
+        message: error instanceof Error
+          ? error.message
+          : "COA Hutang Pemasok/Vendor tidak dapat ditentukan.",
+      });
+    }
     if (taxAmount > 0 && !settings.ppnInputAccountId) {
       return res.status(422).json({
         message: "Invoice tidak dapat diposting: akun PPN Masukan belum dikonfigurasi.",
@@ -2223,7 +2295,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       })),
       ppnInputAccountId: settings.ppnInputAccountId,
       taxAmount,
-      apAccountId: settings.apAccountId,
+      apAccountId: vendorPayableAccountId,
       grandTotal,
     });
     const lineNet = invoiceLines.reduce((sum, line) => sum + num(line.subtotal), 0);
