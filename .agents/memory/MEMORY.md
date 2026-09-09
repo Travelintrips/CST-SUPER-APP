@@ -139,3 +139,4 @@
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
 - [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
+- [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
