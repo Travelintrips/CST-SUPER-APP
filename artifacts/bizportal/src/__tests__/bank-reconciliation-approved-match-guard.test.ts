@@ -21,6 +21,7 @@ type CandidateFixture = {
 type MutationFixture = {
   status: string;
   candidates: CandidateFixture[];
+  has_approved_match?: boolean;
   canonicalSettlementStatus: string;
   qrisSnapshotPaymentIds?: number[];
   currentPaymentIds?: number[];
@@ -42,13 +43,19 @@ function isClosedQrisSettlement(mutation: MutationFixture): boolean {
 }
 
 function hasApprovedMatch(mutation: MutationFixture): boolean {
-  return mutation.candidates.some(
-    candidate => candidate.status.toLowerCase() === "approved",
-  );
+  return mutation.has_approved_match === true
+    || mutation.candidates.some(
+      candidate => candidate.status.toLowerCase() === "approved",
+    );
+}
+
+function visibleActionableCandidates(mutation: MutationFixture): CandidateFixture[] {
+  if (hasApprovedMatch(mutation)) return [];
+  return mutation.candidates;
 }
 
 function isCanonicalApprovalEligible(mutation: MutationFixture): boolean {
-  const canonicalCandidates = mutation.candidates.filter(
+  const canonicalCandidates = visibleActionableCandidates(mutation).filter(
     item =>
       item.candidate_type === "qris_settlement" &&
       item.candidate_source === "sport_center.payment_settlement_batches" &&
@@ -140,6 +147,21 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
   });
 
+  it("hides actionable candidates when the API reports an approved match", () => {
+    const mutation: MutationFixture = {
+      status: "matched",
+      has_approved_match: true,
+      candidates: [canonicalCandidate],
+      canonicalSettlementStatus: "posted",
+      qrisSnapshotPaymentIds: [11],
+      currentPaymentIds: [11],
+    };
+
+    expect(hasApprovedMatch(mutation)).toBe(true);
+    expect(visibleActionableCandidates(mutation)).toEqual([]);
+    expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
+  });
+
   it("keeps a clean posted canonical candidate eligible", () => {
     const mutation: MutationFixture = {
       status: "matched",
@@ -201,6 +223,8 @@ describe("bank reconciliation approved-match UI guard", () => {
 
   it("asserts the rendered component uses the approved-match guard", () => {
     expect(componentSource).toContain("function hasApprovedReconciliationMatch");
+    expect(componentSource).toContain("m.has_approved_match === true");
+    expect(componentSource).toContain("if (hasApprovedReconciliationMatch(m)) return [];");
     expect(componentSource).toContain(
       "if (m.status === \"matched\" && hasApprovedReconciliationMatch(m)) return \"Perlu Diperiksa\";",
     );
