@@ -13,6 +13,7 @@
 - [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
+- [Accounting draft idempotency](accounting-draft-idempotency.md) — retry auto-post must resume only balanced linked drafts; returning a draft as success can hide ledger entries from posted reports.
 - [Vendor withholding lifecycle](vendor-withholding-lifecycle.md) — invoice boleh posted saat bukti potong pending; settlement tetap gross AP dan status paid menunggu proof_received.
 - [Vendor invoice bank settlement](vendor-invoice-bank-settlement.md) — pembayaran invoice vendor harus clear AP, bukan memilih COA beban yang dapat menggandakan expense.
 - [Vendor line FK migration](vendor-line-fk-migration.md) — legacy line tables may lack live uniqueness despite source schema; restore the key invariant before adding child FKs.

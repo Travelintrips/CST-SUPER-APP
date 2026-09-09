@@ -38,6 +38,8 @@ import {
   productsTable,
   accountingSettingsTable,
   chartOfAccountsTable,
+  accountingEntriesTable,
+  accountingEntryLinesTable,
   whStockTable,
   whMovementsTable,
 } from "@workspace/db";
@@ -1990,7 +1992,58 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  if (vi.status !== "draft") { res.status(400).json({ error: "Already posted" }); return; }
+  if (vi.status !== "draft") {
+    // Recovery for an interrupted system post: an earlier idempotent retry
+    // could have left a balanced purchase journal in draft while the invoice
+    // itself was marked posted. Finalize only that exact linked journal.
+    if (vi.journalEntryId != null) {
+      const [draftEntry] = await db
+        .select({
+          id: accountingEntriesTable.id,
+          status: accountingEntriesTable.status,
+          source: accountingEntriesTable.source,
+          sourceId: accountingEntriesTable.sourceId,
+          companyId: accountingEntriesTable.companyId,
+        })
+        .from(accountingEntriesTable)
+        .where(and(
+          eq(accountingEntriesTable.id, vi.journalEntryId),
+          eq(accountingEntriesTable.companyId, vi.companyId ?? cid),
+        ))
+        .limit(1);
+      if (
+        draftEntry?.status === "draft"
+        && draftEntry.source === "purchase_bill"
+        && Number(draftEntry.sourceId) === id
+      ) {
+        const draftLines = await db
+          .select({
+            debit: accountingEntryLinesTable.debit,
+            credit: accountingEntryLinesTable.credit,
+          })
+          .from(accountingEntryLinesTable)
+          .where(eq(accountingEntryLinesTable.entryId, draftEntry.id));
+        const debit = draftLines.reduce((sum, line) => sum + num(line.debit), 0);
+        const credit = draftLines.reduce((sum, line) => sum + num(line.credit), 0);
+        if (draftLines.length === 0 || Math.abs(debit - credit) > 0.01) {
+          res.status(422).json({
+            error: "vendor_invoice_draft_journal_unbalanced",
+            message: "Journal invoice tersimpan sebagai draft tetapi tidak balance; perlu koreksi Finance.",
+          });
+          return;
+        }
+        await db.update(accountingEntriesTable)
+          .set({ status: "posted" })
+          .where(eq(accountingEntriesTable.id, draftEntry.id));
+        const [recovered] = await db.select().from(vendorInvoicesTable)
+          .where(eq(vendorInvoicesTable.id, id));
+        res.json(recovered ?? vi);
+        return;
+      }
+    }
+    res.status(400).json({ error: "Already posted" });
+    return;
+  }
 
   const invoiceLines = await db.select().from(vendorInvoiceLinesTable)
     .where(eq(vendorInvoiceLinesTable.invoiceId, id))
@@ -2228,7 +2281,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       if (lines.length >= 2) {
         const entry = await postEntry({
           journalId: settings.purchaseJournalId!,
-          date: new Date(),
+          date: vi.invoiceDate ?? new Date(),
           ref: vi.invoiceNumber,
           description: `[SPORT_CENTER] Vendor Invoice ${vi.invoiceNumber} — ${vi.supplierName}`,
           source: "sport_center_operational_expense",
@@ -2255,7 +2308,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
         description: line.description ?? "",
       })));
       if (lines.length >= 2) {
-         const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: invoiceCompanyId, lines }, "PUR");
+        const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: vi.invoiceDate ?? new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: invoiceCompanyId, lines }, "PUR");
          await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       } else {
         await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));

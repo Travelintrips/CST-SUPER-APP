@@ -386,6 +386,44 @@ async function _postEntryCore(
   const source = input.source ?? "manual";
   const sourceId = input.sourceId ?? null;
 
+  /**
+   * An earlier attempt may have inserted the journal and its lines, then
+   * stopped before the final draft→posted transition. Returning that draft
+   * from the idempotency branch makes callers mark their source document as
+   * posted while the ledger remains invisible to reports.
+   *
+   * Only an explicitly requested system post may promote an existing draft.
+   * Manual/governance drafts remain drafts until their approval workflow does
+   * the transition.
+   */
+  const resumeExistingDraft = async (
+    existing: typeof accountingEntriesTable.$inferSelect,
+  ): Promise<typeof accountingEntriesTable.$inferSelect> => {
+    if (initialStatus !== "posted" || existing.status !== "draft") return existing;
+
+    const existingLines = await client
+      .select({
+        debit: accountingEntryLinesTable.debit,
+        credit: accountingEntryLinesTable.credit,
+      })
+      .from(accountingEntryLinesTable)
+      .where(eq(accountingEntryLinesTable.entryId, existing.id));
+    const debit = round2(existingLines.reduce((sum, line) => sum + Number(line.debit ?? 0), 0));
+    const credit = round2(existingLines.reduce((sum, line) => sum + Number(line.credit ?? 0), 0));
+    if (existingLines.length === 0 || Math.abs(debit - credit) > 0.01) {
+      throw new Error(
+        `Cannot promote incomplete draft journal ${existing.entryNumber}: debit=${debit} credit=${credit}`,
+      );
+    }
+
+    const [promoted] = await client
+      .update(accountingEntriesTable)
+      .set({ status: "posted" })
+      .where(eq(accountingEntriesTable.id, existing.id))
+      .returning();
+    return promoted ?? existing;
+  };
+
   // ── Idempotency check SEBELUM generate entry number ──────────────────────────
   // Mencegah race condition: dua concurrent call keduanya generate nomor berbeda
   // tapi untuk source+sourceId yang sama → keduanya berhasil insert (duplikasi).
@@ -404,7 +442,7 @@ async function _postEntryCore(
       .limit(1);
     if (existing[0]) {
       logger.info(`[accounting] Skipping duplicate auto-post source=${source} sourceId=${sourceId} companyId=${input.companyId}`);
-      return existing[0];
+      return resumeExistingDraft(existing[0]);
     }
   }
 
@@ -559,7 +597,7 @@ async function _postEntryCore(
         .limit(1);
       if (existing) {
         logger.info(`[accounting] Entry already inserted by concurrent call source=${source} sourceId=${sourceId} companyId=${input.companyId}`);
-        return existing;
+        return resumeExistingDraft(existing);
       }
     }
 
