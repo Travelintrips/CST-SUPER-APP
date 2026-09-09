@@ -67,7 +67,6 @@
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS stale settlement reset](qris-stale-settlement-reset.md) — reset status stale hanya pada sumber canonical, wajib audit reason, dan fail-closed bila ada item settlement aktif.
 - [QRIS provider mirror unique key](qris-provider-rule-mirror-unique-key.md) — legacy mirror unik tanpa effective_until; repair boundary harus mendahului insert-if-missing.
-- [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
 - [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
 - [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.
@@ -82,19 +81,12 @@
 - [Persistent gate failure safety](persistent-gate-failure-safety.md) — gated stage callbacks must propagate failures; compatibility marker writes need lock-aware context to avoid false completion and recursive advisory-lock waits.
 - [Steady-state startup gate](steady-state-startup-gate.md) — use authoritative registry initialization as DB readiness; snapshot only completed matches and retain locked fallback semantics.
 - [Bank recon workflow gate](bank-recon-workflow-gate.md) — queued matching is not completion; QRIS candidate generation must be explicit and blocked while matching is active.
-- [Customer Portal asset fallback](customer-portal-asset-fallback.md) — legacy image paths can return JSON 400; use verified Storage fallbacks and regenerate the source-derived manifest.
 - [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
-- [Supabase missing-object status](supabase-storage-missing-status.md) — public Storage may wrap a semantic 404/NoSuchKey as HTTP 400; verify body plus listing absence.
 - [Portal functional recovery boundary](portal-functional-recovery-boundary.md) — SMTP health and controlled auth proof are required; public catalog publication responses must not be cached.
-- [Accounting payment provider metadata](accounting-payment-provider.md) — provider disimpan nullable di accounting payment/entry dan boleh dikoreksi tanpa mengubah nilai finansial posted.
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
 - [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
-- [Legacy organization context](legacy-organization-context.md) — NULL customer_type stays unresolved even with stale memberships until canonical organization completion reconciles them.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
-- [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
-- [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
-- [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
 - [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
 - [Approved match read projection](approved-match-read-projection.md) — project mutation ownership separately from visible candidates so filtered history cannot offer duplicate approval.
 - [Managed workflow secret refresh](workflow-secret-refresh.md) — restart artifact workflows after secret availability changes before diagnosing loader or database failures.
@@ -117,6 +109,7 @@
 - [Atomic Rule AI approval](atomic-rule-ai-approval.md) — manual COA approval must persist Rule AI, its runtime mirror, and the draft journal in one idempotent transaction.
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
 - [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
+- [Vendor invoice payment correction](vendor-invoice-payment-correction.md) — reset amount paid only for exact orphaned settlements with no payment journal; reverse bank posting first otherwise.
 - [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
 - [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
@@ -128,7 +121,6 @@
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
 - [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
-- [Portal service operations runtime schema](portal-service-ops-runtime-schema.md) — cross-service UNION read models must match live Supabase columns; missing fields need typed constants, not assumptions.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
 - [QRIS snapshot publish boundary](qris-snapshot-publish-boundary.md) — a corrected production snapshot can be superseded by an older deployed generator until the matching code is published.
