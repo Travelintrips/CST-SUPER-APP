@@ -141,3 +141,4 @@
 - [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
 - [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
 - [Legacy portal ownership](legacy-portal-ownership.md) — all-null historical Ocean/Trucking ownership is orphaned; never auto-map by mutable contact fields.
+- [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
