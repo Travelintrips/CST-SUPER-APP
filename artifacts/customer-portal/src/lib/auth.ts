@@ -7,8 +7,9 @@
  *   - Existing localStorage tokens remain available only for explicit migration
  *     calls; they are never treated as proof of an authenticated UI session.
  *   - All API calls include `credentials: 'include'` so the browser sends the session cookie.
- *   - `isAuthenticated()` trusts only the server-set session hint. A stale or
- *     forged localStorage token cannot unlock authenticated UI routes.
+ *   - `isAuthenticated()` trusts the server-set session hint or a bootstrap
+ *     response that was just verified by the server. A stale or forged
+ *     localStorage token cannot unlock authenticated UI routes.
  *   - Legacy Bearer path will be removed after 2026-12-31 or next major release.
  *   - Profile cache (portal_profile) is UI-only; it is NOT the source of authorization.
  *
@@ -271,12 +272,16 @@ export function getAuthHeaders(): { Authorization?: string } {
 }
 
 /**
- * isAuthenticated — checks only the server-issued cookie hint.
- * Synchronous, safe to call during route guard evaluation. The hint is not an
- * authorization credential; every protected route still validates /auth/me.
+ * isAuthenticated — checks the server-issued cookie hint or a successful
+ * canonical bootstrap cached during this browser transition.
+ *
+ * The hint is not an authorization credential; every protected API still
+ * validates the session. The bootstrap cache is only useful after the server
+ * has already verified the HttpOnly cookie, including legacy sessions that do
+ * not have the readable hint cookie.
  */
 export function isAuthenticated(): boolean {
-  return hasCookieSession();
+  return hasCookieSession() || portalAuthBootstrapCache !== null;
 }
 
 export function getPortalProfile(): PortalProfile | null {

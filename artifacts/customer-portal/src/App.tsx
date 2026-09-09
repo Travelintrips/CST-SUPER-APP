@@ -234,7 +234,10 @@ function OAuthRedirectHandler() {
       });
     };
 
-    if ((path === "/" || path === "/login") && isAuthenticated()) {
+    // `/login` is also a session recovery boundary. Do not require the
+    // readable hint first: older valid HttpOnly sessions can predate the hint
+    // cookie, and the canonical bootstrap endpoint is the authority.
+    if (path === "/login" || (path === "/" && isAuthenticated())) {
       void resolvePostAuth();
     }
 
@@ -266,15 +269,11 @@ function OAuthRedirectHandler() {
 // ── Route guard: redirect to /login if not authenticated ────────────────────
 function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
   const [location, navigate] = useLocation();
-  const authed = isAuthenticated();
   const [authorized, setAuthorized] = useState(false);
 
   useEffect(() => {
     let disposed = false;
-    if (!authed) {
-      navigate("/login");
-      return () => { disposed = true; };
-    }
+    setAuthorized(false);
 
     (async () => {
       const bootstrap = getCachedPortalAuthBootstrap() ?? await fetchPortalAuthBootstrap();
@@ -311,9 +310,9 @@ function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
     })();
 
     return () => { disposed = true; };
-  }, [authed, location, navigate]);
+  }, [location, navigate]);
 
-  if (!authed || !authorized) return <PageFallback />;
+  if (!authorized) return <PageFallback />;
   return <Comp />;
 }
 

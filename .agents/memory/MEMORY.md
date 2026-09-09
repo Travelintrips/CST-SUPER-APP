@@ -28,6 +28,7 @@
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
+- [Portal auth bootstrap recovery](portal-auth-bootstrap-recovery.md) — a valid HttpOnly session without the readable hint must recover through canonical bootstrap, not remain on `/login`.
 - [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
@@ -96,7 +97,6 @@
 - [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
 - [Approved match read projection](approved-match-read-projection.md) — project mutation ownership separately from visible candidates so filtered history cannot offer duplicate approval.
 - [Managed workflow secret refresh](workflow-secret-refresh.md) — restart artifact workflows after secret availability changes before diagnosing loader or database failures.
-- [Shadow observer test import](shadow-observer-test-import.md) — keep the DB-backed finance resolver lazy so mode and zero-effect tests run without a test database.
 - [Production startup lock deadlock](production-startup-lock-deadlock.md) — a new deployment can stay unready when an older backend retains a per-stage advisory lock; do not bypass markers or terminate production sessions casually.
 - [Accounting seed posted-ledger safety](accounting-seed-posted-ledger.md) — COA deduplication must preserve posted journal line identities and reroute only mutable references.
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
@@ -139,7 +139,6 @@
 - [Rule AI direct bank allocation](rule-ai-direct-bank-allocation.md) — `recon_rule` classifies the bank mutation directly; it is not a business document with a source journal.
 - [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
 - [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
-- [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
 - [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
 - [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.
