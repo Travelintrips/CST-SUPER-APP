@@ -11,6 +11,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { getLinkedSupplier } from "./portalVendorCatalogService.js";
+import { getPortalCustomerContext } from "./portalCustomerContextService.js";
 
 // ─── Return shapes ────────────────────────────────────────────────────────────
 
@@ -121,19 +122,34 @@ async function getAdminStats(): Promise<AdminDashboardStats> {
 // ─── Customer branch ──────────────────────────────────────────────────────────
 
 async function getCustomerStats(customerId: number): Promise<CustomerDashboardStats> {
+  const context = await getPortalCustomerContext(customerId);
+  if (!context.customerType) {
+    throw new Error("Customer Portal belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new Error("Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+
+  const logisticOwnership = context.customerType === "individual"
+    ? sql`portal_customer_id = ${customerId}`
+    : sql`company_id = ${context.companyId}`;
+  const invoiceOwnership = context.customerType === "company"
+    ? sql`company_id = ${context.companyId}`
+    : sql`LOWER(customer_name) = LOWER(${context.customer.name})`;
+
   const [totalOrdersRes, activeOrdersRes, completedOrdersRes, invoiceOutstandingRes, trackingRes] = await Promise.all([
     db.execute<{ cnt: string }>(sql`
       SELECT count(*)::text AS cnt FROM logistic_orders
-      WHERE email = (SELECT email FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+      WHERE ${logisticOwnership}
     `),
     db.execute<{ cnt: string }>(sql`
       SELECT count(*)::text AS cnt FROM logistic_orders
-      WHERE email = (SELECT email FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+      WHERE ${logisticOwnership}
         AND status IN ('In Progress','in_transit','In Transit','New Order','processing')
     `),
     db.execute<{ cnt: string }>(sql`
       SELECT count(*)::text AS cnt FROM logistic_orders
-      WHERE email = (SELECT email FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+      WHERE ${logisticOwnership}
         AND status IN ('Completed','delivered','Delivered')
     `),
     db.execute<{ total: string; cnt: string }>(sql`
@@ -143,11 +159,11 @@ async function getCustomerStats(customerId: number): Promise<CustomerDashboardSt
       FROM sales_documents
       WHERE status NOT IN ('cancelled','draft')
         AND invoice_status = 'to_invoice'
-        AND LOWER(customer_name) = LOWER((SELECT name FROM portal_customers WHERE id = ${customerId} LIMIT 1))
+        AND ${invoiceOwnership}
     `),
     db.execute<{ cnt: string }>(sql`
       SELECT count(*)::text AS cnt FROM logistic_orders
-      WHERE email = (SELECT email FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+      WHERE ${logisticOwnership}
         AND status IN ('In Progress','in_transit','In Transit')
         AND EXISTS (
           SELECT 1 FROM driver_locations dl WHERE dl.order_id = logistic_orders.id

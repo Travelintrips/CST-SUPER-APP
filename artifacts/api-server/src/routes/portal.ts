@@ -2630,14 +2630,10 @@ router.get("/me/dashboard-stats", requirePortalAuth, async (req, res) => {
     return res.json(await getPortalDashboardStats(customerId, role));
   } catch (err) {
     req.log?.error({ err }, "dashboard-stats error");
-    // Graceful fallback — don't break the dashboard if tables don't exist yet
-    if (role === "vendor") {
-      return res.json({ rfqReceived: 0, rfqSubmitted: 0, fulfillmentPending: 0, completedOrders: 0 });
-    }
-    return res.json({
-      totalOrders: 0, activeOrders: 0, completedOrders: 0,
-      invoiceOutstandingCount: 0, invoiceOutstandingAmount: 0, trackingActive: 0,
-    });
+    // Do not turn a database/schema error into valid-looking zero statistics.
+    // The portal can render the other feeds, while the UI marks these stats
+    // unavailable and the server log retains the actual failure.
+    return res.status(500).json({ message: "Gagal memuat statistik dashboard" });
   }
 });
 

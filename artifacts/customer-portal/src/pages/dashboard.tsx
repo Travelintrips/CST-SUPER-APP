@@ -135,7 +135,7 @@ export default function Dashboard() {
     staleTime: 60_000,
   });
 
-  const { data: dashStats } = useQuery<DashboardStats>({
+  const { data: dashStats, isError: isDashboardStatsError } = useQuery<DashboardStats>({
     queryKey: ["portal-dashboard-stats"],
     queryFn: async () => {
       const r = await fetch("/api/portal/me/dashboard-stats", { credentials: "include" });
@@ -235,22 +235,34 @@ export default function Dashboard() {
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const isLoadingOrders   = isLoadingCrm || isLoadingLogistic || isLoadingProduct || isLoadingService || isLoadingMarketplace;
-  const shipmentAktif     = dashStats?.activeOrders ?? logisticOrders.filter((o) => ACTIVE_STATUSES.has(o.status)).length;
-  const menungguPenawaran = logisticOrders.filter((o) => PENDING_QUOTE_STATUSES.has(o.status)).length;
+  const dashboardStatsUnavailable = isDashboardStatsError && !dashStats;
+  const shipmentAktif     = dashboardStatsUnavailable
+    ? null
+    : dashStats?.activeOrders ?? logisticOrders.filter((o) => ACTIVE_STATUSES.has(o.status)).length;
+  // Marketplace RFQs are shown in the recent list too. Count RFQs that are
+  // already submitted or being quoted as awaiting an offer; otherwise a
+  // dashboard with only MKT-RFQ data incorrectly shows zero.
+  const marketplaceAwaitingQuote = marketplaceRfqs.filter((o) =>
+    o.approvalStatus !== "pending" && ["submitted", "quoting"].includes(o.rfqStatus),
+  ).length;
+  const menungguPenawaran = logisticOrders.filter((o) => PENDING_QUOTE_STATUSES.has(o.status)).length
+    + marketplaceAwaitingQuote;
   const menungguApproval  = logisticOrders.filter((o) => PENDING_APPROVAL_STATUSES.has(o.status)).length
-    + marketplaceRfqs.filter((o) => o.approvalStatus === "pending").length;
-  const invoicePending    = dashStats?.invoiceOutstandingCount ?? 0;
-  const invoiceAmount     = dashStats?.invoiceOutstandingAmount ?? 0;
+    + marketplaceRfqs.filter((o) =>
+      o.approvalStatus === "pending" || o.rfqStatus === "customer_review",
+    ).length;
+  const invoicePending    = dashboardStatsUnavailable ? null : dashStats?.invoiceOutstandingCount ?? 0;
+  const invoiceAmount     = dashboardStatsUnavailable ? null : dashStats?.invoiceOutstandingAmount ?? 0;
   const recentOrders      = allOrders.slice(0, 8);
 
   const STAT_CARDS = [
     {
       label:  t("dashboard.statShipmentAktif"),
-      value:  isLoadingOrders ? "—" : shipmentAktif,
+      value:  isLoadingOrders || shipmentAktif === null ? "—" : shipmentAktif,
       icon:   Truck,
       bg:     "bg-sky-50",
       icon_c: "text-sky-600",
-      badge:  shipmentAktif > 0 ? { label: t("dashboard.badgeAktif"),   cls: "bg-sky-50 text-sky-700 border-sky-100" } : null,
+      badge:  shipmentAktif !== null && shipmentAktif > 0 ? { label: t("dashboard.badgeAktif"),   cls: "bg-sky-50 text-sky-700 border-sky-100" } : null,
     },
     {
       label:  t("dashboard.statMenungguPenawaran"),
@@ -270,13 +282,13 @@ export default function Dashboard() {
     },
     {
       label:    t("dashboard.statInvoiceBelumDibayar"),
-      value:    invoicePending,
-      sub:      invoicePending > 0 ? idr(invoiceAmount) : null,
+       value:    invoicePending === null ? "—" : invoicePending,
+       sub:      invoicePending !== null && invoicePending > 0 && invoiceAmount !== null ? idr(invoiceAmount) : null,
       icon:     FileText,
-      bg:       invoicePending > 0 ? "bg-orange-50" : "bg-slate-50",
-      icon_c:   invoicePending > 0 ? "text-orange-600" : "text-slate-400",
-      ring:     invoicePending > 0,
-      badge:    invoicePending > 0 ? { label: t("dashboard.badgeBayar"), cls: "bg-orange-50 text-orange-700 border-orange-100" } : null,
+       bg:       invoicePending !== null && invoicePending > 0 ? "bg-orange-50" : "bg-slate-50",
+       icon_c:   invoicePending !== null && invoicePending > 0 ? "text-orange-600" : "text-slate-400",
+       ring:     invoicePending !== null && invoicePending > 0,
+       badge:    invoicePending !== null && invoicePending > 0 ? { label: t("dashboard.badgeBayar"), cls: "bg-orange-50 text-orange-700 border-orange-100" } : null,
     },
   ];
 
