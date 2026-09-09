@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 const idr = (n: number | string | null | undefined) => {
@@ -40,7 +40,7 @@ interface VIInvoiceBreakdownComponent {
   withholding_tax_type?: string | null;
   withholding_tax_amount?: number | null;
 }
-interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ id?: number; invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>; }
+interface VI { id: number; invoiceNumber: string; status: string; supplierName: string; vendorInvoiceRef?: string; poId?: number; grId?: number; invoiceDate: string; dueDate?: string; paymentTermDays: number; totalAmount: string; taxAmount: string; grandTotal: string; amountPaid: string; journalStatus?: string | null; journalEntryNumber?: string | null; withholdingTaxAmount?: string; invoiceBreakdown?: { components?: VIInvoiceBreakdownComponent[] } | null; threeWayMatchStatus: string; matchNotes?: string; lines: VILine[]; lineTaxes?: Array<{ id?: number; invoiceLineId: number; taxType: string; taxObject: string; taxAmount: string; liabilityAccountId?: number | null; resolutionStatus?: string | null }>; withholdingRecords?: Array<{ lineTaxId?: number; invoiceLineId?: number; status?: string | null }>; }
 interface LiabilityAccount { id: number; code: string; name: string; }
 type VendorInvoiceListItem = Record<string, unknown>;
 
@@ -57,6 +57,7 @@ export function VendorInvoicesListPage() {
   const { activeCompanyId } = useCompany();
   const qcClient = useQueryClient();
   const [postingId, setPostingId] = useState<number | null>(null);
+  const [recoveringId, setRecoveringId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
@@ -94,6 +95,21 @@ export function VendorInvoicesListPage() {
       toast.error(e instanceof Error ? e.message : "Gagal posting invoice");
     } finally {
       setPostingId(null);
+    }
+  };
+
+  const handleRecover = async (id: number) => {
+    setRecoveringId(id);
+    try {
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}/post?company=${activeCompanyId}`, { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatPostingError(body, "Gagal memulihkan jurnal"));
+      toast.success("Journal invoice berhasil dipulihkan menjadi posted");
+      qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Gagal memulihkan jurnal");
+    } finally {
+      setRecoveringId(null);
     }
   };
 
@@ -205,6 +221,19 @@ export function VendorInvoicesListPage() {
                               >
                                 <Send className="h-3 w-3" />
                                 {postingId === Number(vi.id) ? "..." : "Post"}
+                              </Button>
+                            )}
+                            {vi.status !== "draft" && vi.journalStatus === "draft" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs gap-1 text-amber-700 border-amber-300 hover:bg-amber-50"
+                                disabled={recoveringId === Number(vi.id)}
+                                onClick={() => handleRecover(Number(vi.id))}
+                                title={String(vi.journalEntryNumber ?? "Journal draft")}
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                {recoveringId === Number(vi.id) ? "..." : "Pulihkan Jurnal"}
                               </Button>
                             )}
                             {(vi.status === "posted" || vi.status === "matched") && Number(vi.grandTotal) - Number(vi.amountPaid) > 0 && (
@@ -448,6 +477,21 @@ export function VendorInvoiceEditorPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal posting"),
   });
 
+  const recoverMut = useMutation({
+    mutationFn: async () => {
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/post?company=${activeCompanyId}`, { method: "POST" });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatPostingError(body, "Gagal memulihkan jurnal"));
+      return body;
+    },
+    onSuccess: async () => {
+      toast.success("Journal invoice berhasil dipulihkan menjadi posted");
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal memulihkan jurnal"),
+  });
+
   const isDraft = !vi || vi.status === "draft";
   if (!isNew && (activeCompanyId == null || isLoading)) {
     return <AppShell><div className="flex items-center justify-center h-64">Loading...</div></AppShell>;
@@ -503,6 +547,17 @@ export function VendorInvoiceEditorPage() {
                 <Send className="mr-1 h-4 w-4" />{postMut.isPending ? "Memproses..." : "Post Invoice"}
               </Button>
             )}
+            {!isNew && vi?.status !== "draft" && vi?.journalStatus === "draft" && (
+              <Button
+                variant="outline"
+                className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                onClick={() => recoverMut.mutate()}
+                disabled={recoverMut.isPending}
+              >
+                <RotateCcw className="mr-1 h-4 w-4" />
+                {recoverMut.isPending ? "Memulihkan..." : "Pulihkan Journal"}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -513,6 +568,18 @@ export function VendorInvoiceEditorPage() {
             <div>
               <p className="font-semibold">Invoice masih Draft</p>
               <p className="text-xs text-amber-700 mt-0.5">Klik <strong>"Post Invoice"</strong> untuk mengkonfirmasi & membuat jurnal. Setelah diposting, invoice bisa dibayar via Bank Disbursement.</p>
+            </div>
+          </div>
+        )}
+        {!isNew && vi?.status !== "draft" && vi?.journalStatus === "draft" && (
+          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+            <span className="text-lg">⚠️</span>
+            <div>
+              <p className="font-semibold">Invoice sudah posted, tetapi journal masih Draft</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                {vi.journalEntryNumber ? `Journal ${vi.journalEntryNumber} belum masuk Neraca Saldo.` : "Journal belum masuk Neraca Saldo."}
+                {" "}Klik <strong>"Pulihkan Journal"</strong> setelah Finance memastikan detailnya balance.
+              </p>
             </div>
           </div>
         )}

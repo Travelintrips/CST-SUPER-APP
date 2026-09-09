@@ -1186,7 +1186,22 @@ router.get("/vendor-invoices", async (req, res) => {
   const rows = await db.select().from(vendorInvoicesTable)
     .where(eq(vendorInvoicesTable.companyId, companyId))
     .orderBy(desc(vendorInvoicesTable.createdAt));
-  res.json(rows);
+  const journalIds = rows
+    .map((row) => row.journalEntryId)
+    .filter((journalId): journalId is number => journalId != null);
+  const journalRows = journalIds.length > 0
+    ? await db.select({
+        id: accountingEntriesTable.id,
+        status: accountingEntriesTable.status,
+        entryNumber: accountingEntriesTable.entryNumber,
+      }).from(accountingEntriesTable).where(inArray(accountingEntriesTable.id, journalIds))
+    : [];
+  const journalById = new Map(journalRows.map((journal) => [journal.id, journal]));
+  res.json(rows.map((row) => ({
+    ...row,
+    journalStatus: row.journalEntryId == null ? null : journalById.get(row.journalEntryId)?.status ?? null,
+    journalEntryNumber: row.journalEntryId == null ? null : journalById.get(row.journalEntryId)?.entryNumber ?? null,
+  })));
 });
 
 // Return approved vendor-specific COA mappings so invoice capture can show the
@@ -1265,7 +1280,24 @@ router.get("/vendor-invoices/:id", async (req, res, next) => {
   );
   const po = vi.poId ? (await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vi.poId)))[0] : null;
   const gr = vi.grId ? (await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, vi.grId)))[0] : null;
-  res.json({ ...vi, lines, lineTaxes, withholdingRecords, po, gr });
+  const [journal] = vi.journalEntryId == null
+    ? []
+    : await db.select({
+        status: accountingEntriesTable.status,
+        entryNumber: accountingEntriesTable.entryNumber,
+      }).from(accountingEntriesTable)
+        .where(eq(accountingEntriesTable.id, vi.journalEntryId))
+        .limit(1);
+  res.json({
+    ...vi,
+    journalStatus: journal?.status ?? null,
+    journalEntryNumber: journal?.entryNumber ?? null,
+    lines,
+    lineTaxes,
+    withholdingRecords,
+    po,
+    gr,
+  });
 });
 
 router.get("/vendor-invoices/check-duplicate", async (req, res) => {
@@ -2033,8 +2065,11 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
           return;
         }
         await db.update(accountingEntriesTable)
-          .set({ status: "posted" })
-          .where(eq(accountingEntriesTable.id, draftEntry.id));
+          .set({ status: "posted", postedAt: new Date() })
+          .where(and(
+            eq(accountingEntriesTable.id, draftEntry.id),
+            eq(accountingEntriesTable.status, "draft"),
+          ));
         const [recovered] = await db.select().from(vendorInvoicesTable)
           .where(eq(vendorInvoicesTable.id, id));
         res.json(recovered ?? vi);
