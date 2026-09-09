@@ -157,3 +157,4 @@
 - [P&L generated contract](pnl-generated-contract.md) — when P&L response fields change or are consumed, regenerate the OpenAPI client before trusting BizPortal typecheck.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
+- [Production accounting orphan audit](production-accounting-orphan-audit.md) — final status must prove a transaction entry and canonical source; master journals and legacy source tags are insufficient.
