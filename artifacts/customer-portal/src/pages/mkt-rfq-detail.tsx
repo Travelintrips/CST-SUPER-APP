@@ -55,9 +55,9 @@ interface Quotation {
     rfqLineId: number;
     itemName: string | null;
     requestedQty: string | null;
-    offeredUnitPrice: string;
+   dealUnitPrice: string;
     offeredQty: string;
-    subtotal: string;
+   dealSubtotal: string;
     currency: string | null;
     leadTimeDays: number | null;
     stockStatus: string | null;
@@ -426,7 +426,7 @@ export default function MktRfqDetailPage() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-blue-500" />
-                Detail Penawaran Vendor
+                 Detail Harga Penawaran
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -477,11 +477,11 @@ export default function MktRfqDetailPage() {
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-sm truncate">{line.itemName ?? `Item #${line.rfqLineId}`}</p>
                             <p className="text-xs text-muted-foreground">
-                              {line.offeredQty} × {idr(Number(line.offeredUnitPrice))}
+                              {line.offeredQty} × {idr(Number(line.dealUnitPrice))}
                               {line.leadTimeDays != null ? ` · ${line.leadTimeDays} hari` : ""}
                             </p>
                           </div>
-                          <p className="font-semibold text-sm shrink-0">{idr(Number(line.subtotal))}</p>
+                           <p className="font-semibold text-sm shrink-0">{idr(Number(line.dealSubtotal))}</p>
                         </div>
                       ))}
                       <div className="flex justify-between font-bold text-sm pt-1 border-t">
