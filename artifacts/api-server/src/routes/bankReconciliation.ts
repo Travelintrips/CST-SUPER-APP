@@ -7739,6 +7739,7 @@ router.post("/:mutationId/reopen", async (req, res) => {
       }
     }
 
+    let releasedMatchIds: number[] = [];
     await db.transaction(async (tx) => {
       const { rows: locked } = await tx.execute(sql.raw(
         `SELECT id, status, company_id FROM bank_mutations WHERE id = ${mutId} FOR UPDATE`
@@ -7767,12 +7768,20 @@ router.post("/:mutationId/reopen", async (req, res) => {
         WHERE mutation_id = ${mutId} AND status = 'approved'
         RETURNING id
       `));
+      releasedMatchIds = (releasedMatches.rows as Array<{ id: unknown }>)
+        .map(row => Number(row.id))
+        .filter(id => Number.isSafeInteger(id) && id > 0);
 
       // Reset mutation back to unmatched
       await tx.execute(sql.raw(`
         UPDATE bank_mutations
         SET status           = 'unmatched',
             journal_entry_id = NULL,
+            matched_payment_id = NULL,
+            matched_order_id = NULL,
+            linked_transaction_type = NULL,
+            linked_transaction_id = NULL,
+            reconciliation_status = 'unmatched',
             approved_by      = NULL,
             approved_at      = NULL,
             posted_by        = NULL,
@@ -7784,7 +7793,7 @@ router.post("/:mutationId/reopen", async (req, res) => {
       const meta = JSON.stringify({
         note: note ?? null,
         reopened_by: actor,
-        released_approved_match_ids: (releasedMatches.rows as Array<{ id: unknown }>).map(row => Number(row.id)),
+        released_approved_match_ids: releasedMatchIds,
       }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
         INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
@@ -7793,7 +7802,7 @@ router.post("/:mutationId/reopen", async (req, res) => {
     });
 
     audit(req, { action: "reopen", module: "accounting", resourceId: `bank-mutation-${mutId}` });
-    return res.json({ ok: true });
+    return res.json({ ok: true, released_match_ids: releasedMatchIds });
 
   } catch (e: any) {
     const code = e.code === "NOT_FOUND" ? 404 : e.code === "INVALID_STATUS" ? 409 : 500;

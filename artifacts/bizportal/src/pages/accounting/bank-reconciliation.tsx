@@ -8521,6 +8521,13 @@ export default function BankReconciliationPage() {
       });
       const voidBody = await voidResponse.json().catch(() => ({ error: "Unknown error" }));
       if (!voidResponse.ok) {
+        if (voidBody.reversal_created) {
+          const partialError = new Error(
+            `Reversal entry #${voidBody.void_entry_id ?? "?"} sudah dibuat, tetapi status mutasi belum aman: ${voidBody.error ?? voidResponse.statusText}`,
+          ) as Error & { partialReversal?: boolean };
+          partialError.partialReversal = true;
+          throw partialError;
+        }
         throw new Error(voidBody.error ?? voidResponse.statusText);
       }
 
@@ -8532,9 +8539,11 @@ export default function BankReconciliationPage() {
       });
       const reopenBody = await reopenResponse.json().catch(() => ({ error: "Unknown error" }));
       if (!reopenResponse.ok) {
-        throw new Error(
+        const partialError = new Error(
           `Jurnal sudah dibuat reversal #${voidBody.void_entry_id ?? "?"}, tetapi mutasi belum dibuka ulang: ${reopenBody.error ?? reopenResponse.statusText}`,
-        );
+        ) as Error & { partialReversal?: boolean };
+        partialError.partialReversal = true;
+        throw partialError;
       }
 
       return { ...reopenBody, void_entry_id: voidBody.void_entry_id };
@@ -8545,7 +8554,21 @@ export default function BankReconciliationPage() {
       setReverseReason("");
       invalidate();
     },
-    onError: (e: Error) => toast({ title: "Unmatch belum selesai", description: e.message, variant: "destructive" }),
+    onError: (e: Error & { partialReversal?: boolean }) => {
+      if (e.partialReversal) {
+        // The backend has already created the immutable reversal. Refresh so
+        // the UI reflects the actual void/partial state instead of retaining
+        // the stale posted row and inviting a duplicate retry.
+        invalidate();
+        toast({
+          title: "Reversal berhasil, tetapi reopen gagal",
+          description: e.message,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Unmatch belum selesai", description: e.message, variant: "destructive" });
+    },
   });
 
   const deleteAllMut = useMutation({
