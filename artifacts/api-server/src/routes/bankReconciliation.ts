@@ -452,7 +452,36 @@ let unifiedMatchingJobActive = false;
 // snapshot produced by a newer correction.
 const qrisCandidateRefreshQueues = new Map<number, Promise<void>>();
 
-function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
+async function findAutomaticQrisCandidateIds(
+  companyId: number,
+  matchedMutationIds: number[],
+): Promise<number[]> {
+  const mutationIds = [...new Set(matchedMutationIds)]
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (mutationIds.length === 0) return [];
+
+  const { rows } = await db.execute(sql.raw(`
+    SELECT id
+    FROM qris_mutation_batch_candidates
+    WHERE company_id = ${companyId}
+      AND mutation_id IN (${mutationIds.join(",")})
+      AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
+      AND LOWER(COALESCE(status, '')) NOT IN
+        ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+      AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
+    ORDER BY id
+  `));
+
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+function queueQrisCandidateRefresh(
+  req: any,
+  companyId: number,
+  paymentId: number,
+): void {
   const previous = qrisCandidateRefreshQueues.get(companyId) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
@@ -471,6 +500,15 @@ function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
           },
           "[bankRecon] QRIS candidate refresh after payment date update completed",
         );
+        const automaticCandidateIds = await findAutomaticQrisCandidateIds(
+          companyId,
+          refreshed.candidates
+            .filter((candidate) => candidate.status === "MATCHED")
+            .map((candidate) => Number(candidate.mutationId)),
+        );
+        if (automaticCandidateIds.length > 0) {
+          void triggerAutomaticQrisApproval(req, automaticCandidateIds, companyId);
+        }
       } catch (refreshError: any) {
         // The source and mirror transaction has already committed. Candidate
         // generation is provisional and can be retried from the UI without
@@ -1508,7 +1546,14 @@ async function triggerAutomaticQrisApproval(
   candidateIds: number[],
   companyId: number,
 ): Promise<void> {
-  const port = Number(process.env.REPLIT_API_PORT ?? process.env.PORT ?? process.env.API_PORT ?? 8080);
+  // Use the listener that accepted the current request first. In the Replit
+  // workspace the primary API and artifact forwarder can expose different
+  // ports at the same time; environment precedence alone can send the worker
+  // to a stale or non-serving listener.
+  const requestPort = Number(req?.socket?.localPort);
+  const port = Number.isInteger(requestPort) && requestPort > 0
+    ? requestPort
+    : Number(process.env.REPLIT_API_PORT ?? process.env.PORT ?? process.env.API_PORT ?? 8080);
   if (!Number.isInteger(port) || port <= 0) return;
   const cookie = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
   const authorization = typeof req.headers?.authorization === "string"
@@ -2185,21 +2230,8 @@ router.post("/qris-candidates/generate", async (req, res) => {
         .map((candidate) => Number(candidate.mutationId))
         .filter((id) => Number.isSafeInteger(id) && id > 0);
       if (matchedMutationIds.length > 0) {
-        const { rows } = await db.execute(sql.raw(`
-          SELECT id
-          FROM qris_mutation_batch_candidates
-          WHERE company_id = ${Number(companyId)}
-            AND mutation_id IN (${[...new Set(matchedMutationIds)].join(",")})
-            AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
-            AND LOWER(COALESCE(status, '')) NOT IN
-              ('approved', 'completed', 'superseded', 'stale', 'ineligible')
-            AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
-          ORDER BY id
-        `));
         automaticCandidateIds.push(
-          ...(rows as Array<Record<string, unknown>>)
-            .map((row) => Number(row.id))
-            .filter((id) => Number.isSafeInteger(id) && id > 0),
+          ...(await findAutomaticQrisCandidateIds(Number(companyId), matchedMutationIds)),
         );
       }
       if (automaticCandidateIds.length > 0) {
@@ -2330,7 +2362,7 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
     if (result.changed) {
       // The source transaction is committed before the potentially expensive
       // company-wide candidate scan. Never approve or post settlement here.
-      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+      setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
     }
 
     return res.json({
@@ -2342,8 +2374,8 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
       accountingPaymentId: result.accountingPaymentId,
       correctionEntryId: result.correctionEntryId,
       candidateRefreshPending: result.changed,
-      message: result.changed
-        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi sebagai review-only."
+         message: result.changed
+        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi dan diproses otomatis bila memenuhi seluruh guard canonical."
         : "Nominal payment sudah sesuai; tidak ada jurnal koreksi baru.",
     });
   } catch (error: any) {
@@ -2519,7 +2551,7 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
     // mutation for the company. Do not make the reviewer wait for that work:
     // the canonical source transaction above is already committed and the
     // candidate refresh can safely run after the response has been flushed.
-    setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+    setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
 
     return res.json({
       ok: true,
@@ -2738,7 +2770,7 @@ router.patch("/qris-candidates/payments/:paymentId/settlement-status", async (re
     });
 
     if (result.changed) {
-      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+      setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
     }
 
     return res.json({

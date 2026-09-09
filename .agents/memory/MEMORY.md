@@ -1,13 +1,7 @@
 - [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
-- [Vendor invoice OCR tax evidence](vendor-invoice-ocr-tax-evidence.md) — PPh/payable must stay null for rate-only evidence; preserve the printed breakdown and require review before payment.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
-- [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
-- [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — one-off portal proofs must use the Secret Manager loader and correct DB isolation; bootstrap failures stay fail-closed.
-- [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
 - [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
-- [Recon sheet COA display](recon-sheet-coa-display.md) — write contra-account COA and name to the result sheet, excluding the bank/cash COA.
-- [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
 - [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
 - [Authenticated runtime proof contract](authenticated-runtime-proof-contract.md) — bedakan row sumber Sheet vs row unik persisted; posting governance wajib company context + tanggal.
@@ -15,9 +9,6 @@
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
 - [Accounting draft idempotency](accounting-draft-idempotency.md) — retry auto-post must resume only balanced linked drafts; returning a draft as success can hide ledger entries from posted reports.
-- [Vendor withholding lifecycle](vendor-withholding-lifecycle.md) — invoice boleh posted saat bukti potong pending; settlement tetap gross AP dan status paid menunggu proof_received.
-- [Vendor invoice bank settlement](vendor-invoice-bank-settlement.md) — pembayaran invoice vendor harus clear AP, bukan memilih COA beban yang dapat menggandakan expense.
-- [Vendor line FK migration](vendor-line-fk-migration.md) — legacy line tables may lack live uniqueness despite source schema; restore the key invariant before adding child FKs.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
 - [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle; maintenance wajib memakai `SUPABASE_DATABASE_URL`, bukan migration URL atau DB pane.
@@ -41,10 +32,6 @@
 - [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.
 - [Production Sport settlement schema](production-sport-settlement-schema.md) — production source may lack payment_number/settlement_reference/settlement_date; use verified legacy aliases.
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
-- [Vendor invoice detail company context](vendor-invoice-detail-company-context.md) — detail requests need active company scope or admin sessions can render undefined/NaN instead of the invoice.
-- [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
-- [Marketplace Product Order ownership](marketplace-product-order-ownership.md) — compatibility Product Order wajib membawa `portal_customer_id` dari session verified agar customer individual dapat melihat RFQ/order-nya.
-- [Marketplace customer order feed](marketplace-customer-order-feed.md) — canonical RFQ harus tampil di riwayat pesanan customer sebelum approval; approval bukan visibility gate.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport payment posted amount correction](sport-payment-amount-correction.md) — posted amount fixes need a balanced additive correction, canonical/mirror update, manual review, then candidate regeneration.
@@ -93,7 +80,6 @@
 - [Legacy organization context](legacy-organization-context.md) — NULL customer_type stays unresolved even with stale memberships until canonical organization completion reconciles them.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
 - [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
-- [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
 - [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
 - [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
 - [Approved match read projection](approved-match-read-projection.md) — project mutation ownership separately from visible candidates so filtered history cannot offer duplicate approval.
@@ -143,7 +129,6 @@
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
 - [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
 - [OCR invoice COA supplier boundary](ocr-invoice-coa-supplier-boundary.md) — explicit line COA may save without an exact supplier match; only reusable supplier mappings require the master supplier.
-- [Customer Portal readiness gates](customer-portal-readiness-gates.md) — production approval requires owner-bound pricing, idempotency, payment evidence linkage, atomic transitions, and CSRF protection.
 - [Safe-mode notification dedupe](safe-mode-notification-dedupe.md) — simulated WA deliveries need the same logical dedupe identity as sent deliveries; orphan DEV logs can contaminate fixture proofs.
 - [DEV/PROD PPh master boundary](dev-prod-pph-master-boundary.md) — PROD has withholding tax templates, but DEV-only specific PPh COA rows can make invoice account choices appear missing.
 - [QRIS journal gross mismatch](qris-journal-gross-mismatch.md) — canonical approval can reject an exact-net candidate when live payment gross and payment-journal gross diverge; surface the source mismatch first.
@@ -154,6 +139,6 @@
 - [Payroll kasbon settlement boundary](payroll-kasbon-settlement-boundary.md) — post deductions atomically, but never infer the remaining salary payment without deterministic bank evidence.
 - [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
-- [P&L generated contract](pnl-generated-contract.md) — when P&L response fields change or are consumed, regenerate the OpenAPI client before trusting BizPortal typecheck.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
+- [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
