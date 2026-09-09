@@ -7758,6 +7758,16 @@ router.post("/:mutationId/reopen", async (req, res) => {
         `DELETE FROM bank_reconciliation_matches WHERE mutation_id = ${mutId} AND status IN ('candidate','rejected')`
       ));
 
+      // A posted mutation may still have an approved match. Reopening must
+      // release that approval; otherwise the mutation can appear unmatched
+      // while the posting guard still sees an approved reconciliation owner.
+      const releasedMatches = await tx.execute(sql.raw(`
+        UPDATE bank_reconciliation_matches
+        SET status = 'candidate'
+        WHERE mutation_id = ${mutId} AND status = 'approved'
+        RETURNING id
+      `));
+
       // Reset mutation back to unmatched
       await tx.execute(sql.raw(`
         UPDATE bank_mutations
@@ -7771,7 +7781,11 @@ router.post("/:mutationId/reopen", async (req, res) => {
         WHERE id = ${mutId}
       `));
 
-      const meta = JSON.stringify({ note: note ?? null, reopened_by: actor }).replace(/'/g, "''");
+      const meta = JSON.stringify({
+        note: note ?? null,
+        reopened_by: actor,
+        released_approved_match_ids: (releasedMatches.rows as Array<{ id: unknown }>).map(row => Number(row.id)),
+      }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
         INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
         VALUES (${mutId}, 'REOPENED', '${actor.replace(/'/g, "''")}', '${meta}')

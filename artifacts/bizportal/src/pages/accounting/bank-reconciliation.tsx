@@ -1097,6 +1097,10 @@ const canUnapprove = (m: BankMutation) =>
 const canReverse = (m: BankMutation) =>
   m.status === "posted";
 
+/** Unmatch posted mutation → reverse the journal, then return to matching queue. */
+const canUnmatch = (m: BankMutation) =>
+  m.status === "posted" && !isCanonicalSettlementMutation(m);
+
 /** Reopen → hanya setelah di-void, untuk matching ulang. */
 const canReopen = (m: BankMutation) =>
   m.status === "void";
@@ -4758,6 +4762,7 @@ function MutationCard({
   onPost,
   onReject,
   onUnapprove,
+  onUnmatch,
   onReverse,
   onReopen,
   onDelete,
@@ -4796,6 +4801,7 @@ function MutationCard({
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
   onUnapprove: (m: BankMutation) => void;
+  onUnmatch: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
@@ -5435,7 +5441,19 @@ function MutationCard({
                 Batalkan Draft
               </Button>
             )}
-            {/* Reverse/Void — only for posted */}
+            {/* Unmatch — reverses posted journal and returns mutation to matching queue */}
+            {!isClosedQrisSettlement && canUnmatch(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700 border-blue-200 hover:bg-blue-50"
+                onClick={() => onUnmatch(m)}
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                Unmatch
+              </Button>
+            )}
+            {/* Keep the original reverse-only action available separately. */}
             {!isClosedQrisSettlement && canReverse(m) && (
               <Button
                 size="sm"
@@ -5759,6 +5777,7 @@ function MutationDetailPanel({
   onPost,
   onReject,
   onUnapprove,
+  onUnmatch,
   onReverse,
   onReopen,
   onApproveQris,
@@ -5786,6 +5805,7 @@ function MutationDetailPanel({
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
   onUnapprove: (m: BankMutation) => void;
+  onUnmatch: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
@@ -6513,6 +6533,16 @@ function MutationDetailPanel({
               Batalkan Draft
             </Button>
           )}
+          {canUnmatch(m) && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 text-blue-600 hover:text-blue-800 border-blue-300 hover:bg-blue-50 min-w-[120px]"
+              onClick={() => { onClose(); onUnmatch(m); }}
+            >
+              <Undo2 className="w-4 h-4" />
+              Unmatch
+            </Button>
+          )}
           {canReject(m) && (
             <Button variant="outline" className="flex-1 gap-1.5 text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50 min-w-[100px]"
               onClick={() => { onClose(); onReject(m); }}>
@@ -6540,7 +6570,7 @@ function MutationDetailPanel({
               Jurnal reversal sudah dibuat. Klik <strong>Buka Ulang</strong> untuk cocokkan mutasi ini kembali.
             </p>
           )}
-          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canUnapprove(m) && !canReverse(m) && !canReopen(m) && (
+          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canUnapprove(m) && !canUnmatch(m) && !canReverse(m) && !canReopen(m) && (
             <p className="text-xs text-muted-foreground py-1 w-full text-center">Tidak ada aksi tersedia untuk status ini</p>
           )}
         </div>
@@ -7094,7 +7124,7 @@ function OnboardingModal() {
 //   Summary:          GET  /api/bank-reconciliation/summary
 //   Import:           POST /api/bank-reconciliation/import
 
-type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse";
+type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse" | "unmatch";
 
 export default function BankReconciliationPage() {
   const { toast }  = useToast();
@@ -8479,6 +8509,45 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal void journal", description: e.message, variant: "destructive" }),
   });
 
+  // Unmatch posted transaction → create reversal, then reopen the bank
+  // mutation so it returns to the unmatched queue in one user action.
+  const unmatchMut = useMutation({
+    mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
+      const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const voidBody = await voidResponse.json().catch(() => ({ error: "Unknown error" }));
+      if (!voidResponse.ok) {
+        throw new Error(voidBody.error ?? voidResponse.statusText);
+      }
+
+      const reopenResponse = await fetch(`/api/bank-reconciliation/${mutId}/reopen`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: `Unmatch setelah reversal: ${reason}` }),
+      });
+      const reopenBody = await reopenResponse.json().catch(() => ({ error: "Unknown error" }));
+      if (!reopenResponse.ok) {
+        throw new Error(
+          `Jurnal sudah dibuat reversal #${voidBody.void_entry_id ?? "?"}, tetapi mutasi belum dibuka ulang: ${reopenBody.error ?? reopenResponse.statusText}`,
+        );
+      }
+
+      return { ...reopenBody, void_entry_id: voidBody.void_entry_id };
+    },
+    onSuccess: (d) => {
+      toast({ title: "Transaksi berhasil di-unmatch", description: `Mutasi kembali ke antrean belum cocok. Reversal entry #${d.void_entry_id} dibuat.` });
+      setActionDialog(null);
+      setReverseReason("");
+      invalidate();
+    },
+    onError: (e: Error) => toast({ title: "Unmatch belum selesai", description: e.message, variant: "destructive" }),
+  });
+
   const deleteAllMut = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/delete-all", { method: "DELETE", credentials: "include" });
@@ -8511,6 +8580,7 @@ export default function BankReconciliationPage() {
   const handleOpenPost     = (m: BankMutation) => { setPostDialogJournalStatus(null); setActionDialog({ mutation: m, mode: "post" }); };
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
   const handleOpenUnapprove = (m: BankMutation) => setActionDialog({ mutation: m, mode: "unapprove" });
+  const handleOpenUnmatch = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "unmatch" }); };
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
   const handleApproveQris = (m: BankMutation) => {
@@ -9563,6 +9633,7 @@ export default function BankReconciliationPage() {
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
                   onUnapprove={handleOpenUnapprove}
+                  onUnmatch={handleOpenUnmatch}
                   onReverse={handleOpenReverse}
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
@@ -9968,6 +10039,7 @@ export default function BankReconciliationPage() {
         onPost={handleOpenPost}
         onReject={handleOpenReject}
         onUnapprove={handleOpenUnapprove}
+        onUnmatch={handleOpenUnmatch}
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
@@ -10330,15 +10402,18 @@ export default function BankReconciliationPage() {
       </Dialog>
 
       {/* ── Reverse / Void Dialog ─────────────────────────────── */}
-      <Dialog open={actionDialog?.mode === "reverse"} onOpenChange={o => { if (!o) { setActionDialog(null); setReverseReason(""); } }}>
+      <Dialog
+        open={actionDialog?.mode === "reverse" || actionDialog?.mode === "unmatch"}
+        onOpenChange={o => { if (!o) { setActionDialog(null); setReverseReason(""); } }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <RotateCcw className="w-5 h-5 text-gray-600" />
-              Reverse / Void Journal
+              {actionDialog?.mode === "unmatch" ? "Unmatch Transaksi Posted" : "Reverse / Void Journal"}
             </DialogTitle>
           </DialogHeader>
-          {actionDialog?.mode === "reverse" && (
+          {(actionDialog?.mode === "reverse" || actionDialog?.mode === "unmatch") && (
             <div className="space-y-4">
               <div className="bg-muted/40 rounded-lg p-3 text-sm space-y-1">
                 <p className="font-semibold">{actionDialog.mutation.description}</p>
@@ -10364,7 +10439,11 @@ export default function BankReconciliationPage() {
               <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
                 <p className="font-semibold">⚠ Perhatian</p>
                 <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
-                <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                {actionDialog.mode === "unmatch" ? (
+                  <p>Journal asli tidak dihapus. Setelah reversal, mutasi akan kembali ke status <strong>Belum Cocok</strong> agar bisa dicocokkan ulang.</p>
+                ) : (
+                  <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                )}
               </div>
             </div>
           )}
@@ -10373,11 +10452,20 @@ export default function BankReconciliationPage() {
             <Button
               variant="destructive"
               className="gap-1.5"
-              onClick={() => actionDialog && voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason })}
-              disabled={voidMut.isPending || !reverseReason.trim()}
+              onClick={() => {
+                if (!actionDialog) return;
+                if (actionDialog.mode === "unmatch") {
+                  unmatchMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
+                } else {
+                  voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
+                }
+              }}
+              disabled={voidMut.isPending || unmatchMut.isPending || !reverseReason.trim()}
             >
-              {voidMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-              {voidMut.isPending ? "Memproses..." : "Reverse Journal"}
+              {voidMut.isPending || unmatchMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              {voidMut.isPending || unmatchMut.isPending
+                ? "Memproses..."
+                : actionDialog?.mode === "unmatch" ? "Unmatch & Reverse" : "Reverse Journal"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -139,6 +139,7 @@
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
+- [Posted bank unmatch lifecycle](posted-bank-unmatch-lifecycle.md) — posted bank mutations need reversal first, then reopen while releasing approved matches back to candidates.
 - [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
 - [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
 - [Legacy portal ownership](legacy-portal-ownership.md) — all-null historical Ocean/Trucking ownership is orphaned; never auto-map by mutable contact fields.
