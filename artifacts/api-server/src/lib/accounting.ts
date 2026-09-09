@@ -401,19 +401,99 @@ async function _postEntryCore(
   ): Promise<typeof accountingEntriesTable.$inferSelect> => {
     if (initialStatus !== "posted" || existing.status !== "draft") return existing;
 
-    const existingLines = await client
-      .select({
-        debit: accountingEntryLinesTable.debit,
-        credit: accountingEntryLinesTable.credit,
-      })
-      .from(accountingEntryLinesTable)
-      .where(eq(accountingEntryLinesTable.entryId, existing.id));
+    const loadFinancialSignature = async (entryId: number) => {
+      const lines = await client
+        .select({
+          accountId: accountingEntryLinesTable.accountId,
+          debit: accountingEntryLinesTable.debit,
+          credit: accountingEntryLinesTable.credit,
+        })
+        .from(accountingEntryLinesTable)
+        .where(eq(accountingEntryLinesTable.entryId, entryId));
+      const signature = lines
+        .map((line) => [
+          Number(line.accountId),
+          round2(Number(line.debit ?? 0)).toFixed(2),
+          round2(Number(line.credit ?? 0)).toFixed(2),
+        ].join(":"))
+        .sort()
+        .join("|");
+      return { lines, signature };
+    };
+
+    const { lines: existingLines, signature: existingSignature } =
+      await loadFinancialSignature(existing.id);
     const debit = round2(existingLines.reduce((sum, line) => sum + Number(line.debit ?? 0), 0));
     const credit = round2(existingLines.reduce((sum, line) => sum + Number(line.credit ?? 0), 0));
     if (existingLines.length === 0 || Math.abs(debit - credit) > 0.01) {
       throw new Error(
         `Cannot promote incomplete draft journal ${existing.entryNumber}: debit=${debit} credit=${credit}`,
       );
+    }
+
+    // A source document may have been recreated after its original row was
+    // removed while the posted ledger entry remained. The active-ref unique
+    // index correctly blocks a second posting. Reuse the posted entry only
+    // when the persisted draft has the exact same financial line signature.
+    const activeSameRef = input.companyId != null && input.ref
+      ? await client
+          .select()
+          .from(accountingEntriesTable)
+          .where(sql`
+            ${accountingEntriesTable.companyId} = ${input.companyId}
+            AND ${accountingEntriesTable.source} = ${source}
+            AND ${accountingEntriesTable.ref} = ${input.ref}
+            AND ${accountingEntriesTable.id} <> ${existing.id}
+            AND ${accountingEntriesTable.status} = 'posted'
+          `)
+          .limit(2)
+      : [];
+    if (activeSameRef.length > 1) {
+      throw new Error(
+        `Cannot recover draft journal ${existing.entryNumber}: multiple posted journals use ref ${input.ref}`,
+      );
+    }
+    if (activeSameRef[0]) {
+      const active = activeSameRef[0];
+      const { lines: activeLines, signature: activeSignature } =
+        await loadFinancialSignature(active.id);
+      if (
+        activeLines.length === 0 ||
+        activeSignature !== existingSignature ||
+        round2(Number(active.totalDebit ?? 0)) !== debit ||
+        round2(Number(active.totalCredit ?? 0)) !== credit
+      ) {
+        throw new Error(
+          `Cannot recover draft journal ${existing.entryNumber}: posted journal ${active.entryNumber} with ref ${input.ref} has different financial lines`,
+        );
+      }
+
+      const [rejectedDraft] = await client
+        .update(accountingEntriesTable)
+        .set({
+          status: "rejected",
+          cancelReason: `Duplicate draft; reused posted journal ${active.entryNumber}`,
+          cancelledAt: new Date(),
+        })
+        .where(sql`
+          ${accountingEntriesTable.id} = ${existing.id}
+          AND ${accountingEntriesTable.status} = 'draft'
+        `)
+        .returning({ id: accountingEntriesTable.id });
+      if (!rejectedDraft) {
+        throw new Error(
+          `Cannot recover draft journal ${existing.entryNumber}: draft status changed concurrently`,
+        );
+      }
+      logger.warn({
+        rejectedDraftId: existing.id,
+        reusedPostedEntryId: active.id,
+        source,
+        sourceId,
+        ref: input.ref,
+        companyId: input.companyId,
+      }, "Recovered recreated source document by reusing identical posted journal");
+      return active;
     }
 
     const [promoted] = await client
