@@ -329,8 +329,7 @@ export async function voidApprovedJournal(
           UPDATE accounting_entries
           SET status        = 'voided',
               void_entry_id = ${existingRevId},
-              void_reason   = COALESCE(${reason ?? null}, void_reason),
-              updated_at    = NOW()
+              void_reason   = COALESCE(${reason ?? null}, void_reason)
           WHERE id = ${entryId}
             AND status = 'posted'
             AND void_entry_id IS NULL
@@ -431,8 +430,7 @@ export async function voidApprovedJournal(
       UPDATE accounting_entries
       SET status        = 'voided',
           void_entry_id = ${voidEntry.id},
-          void_reason   = ${reason ?? null},
-          updated_at    = NOW()
+          void_reason   = ${reason ?? null}
       WHERE id = ${entryId} AND status = 'posted'
       RETURNING status, void_entry_id
     `);

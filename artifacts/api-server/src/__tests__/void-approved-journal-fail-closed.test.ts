@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 const { mockExecute, mockPostEntry } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
@@ -79,6 +80,48 @@ describe("voidApprovedJournal metadata failure", () => {
       code: ORIGINAL_VOID_UPDATE_FAILED,
     });
     expect(result.error).toContain("LEDGER IMMUTABILITY VIOLATION");
+  });
+
+  it("updates void metadata without referencing an updated_at column", async () => {
+    mockExecute
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 10,
+          company_id: 1,
+          status: "posted",
+          void_entry_id: null,
+          ref: "BANK-10",
+          description: "Bank mutation",
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { account_id: 101, debit: "100", credit: "0", description: "Bank" },
+          { account_id: 201, debit: "0", credit: "100", description: "Revenue" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ status: "voided", void_entry_id: 20 }],
+      });
+    mockPostEntry.mockResolvedValueOnce({ id: 20 });
+
+    const result = await voidApprovedJournal({
+      entryId: 10,
+      companyId: 1,
+      journalId: 7,
+      journalCode: "BANK",
+      actor: "admin@example.com",
+      reason: "test schema compatibility",
+    });
+
+    const source = readFileSync(
+      new URL("../lib/accounting/approveAndCreateJournal.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("UPDATE accounting_entries");
+    expect(source).not.toContain("updated_at");
+    expect(result).toMatchObject({ ok: true, voidEntryId: 20 });
   });
 
   it("does not create a duplicate reversal when retrying the partial state", async () => {
