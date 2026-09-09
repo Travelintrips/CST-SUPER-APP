@@ -32,7 +32,10 @@ import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { saveAndBroadcast } from "../notificationStore.js";
 import { transitionLogisticOrderStatus } from "./logisticOrderStatusService.js";
 import { resolvePortalCustomerCompanyId } from "./portalCompanyScope.js";
-import { getPortalCustomerContext } from "./portalCustomerContextService.js";
+import {
+  getPortalCustomerContext,
+  getPortalCustomerContextForCustomer,
+} from "./portalCustomerContextService.js";
 
 // ─── Typed Error ───────────────────────────────────────────────────────────────
 
@@ -244,14 +247,40 @@ export async function submitVendorQuote(
 /**
  * GET /orders — portal sales orders for authenticated customer
  */
-export async function listSalesOrders(portalCustomerId: number) {
-  const [customer] = await db
+type AuthenticatedPortalCustomer = Pick<
+  typeof portalCustomersTable.$inferSelect,
+  "id" | "name" | "email" | "phone" | "customerType" | "company"
+> & {
+  role?: string | null;
+};
+
+function contextForAuthenticatedCustomer(
+  portalCustomerId: number,
+  customer?: AuthenticatedPortalCustomer,
+) {
+  return customer
+    ? getPortalCustomerContextForCustomer(portalCustomerId, {
+        id: customer.id,
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone,
+        customerType: customer.customerType,
+        legacyCompany: customer.company,
+      })
+    : getPortalCustomerContext(portalCustomerId);
+}
+
+export async function listSalesOrders(
+  portalCustomerId: number,
+  authenticatedCustomer?: AuthenticatedPortalCustomer,
+) {
+  const customer = authenticatedCustomer ?? (await db
     .select()
     .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, portalCustomerId));
+    .where(eq(portalCustomersTable.id, portalCustomerId)))[0];
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
-  const context = await getPortalCustomerContext(portalCustomerId);
+  const context = await contextForAuthenticatedCustomer(portalCustomerId, customer);
   if (!context.customerType) {
     throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
   }
@@ -288,11 +317,14 @@ export async function listSalesOrders(portalCustomerId: number) {
 /**
  * GET /logistic-orders — logistic orders for authenticated customer
  */
-export async function listLogisticOrders(portalCustomerId: number) {
-  const [customer] = await db
+export async function listLogisticOrders(
+  portalCustomerId: number,
+  authenticatedCustomer?: AuthenticatedPortalCustomer,
+) {
+  const customer = authenticatedCustomer ?? (await db
     .select()
     .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, portalCustomerId));
+    .where(eq(portalCustomersTable.id, portalCustomerId)))[0];
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
   const baseQuery = db.select().from(logisticOrdersTable);
@@ -300,7 +332,7 @@ export async function listLogisticOrders(portalCustomerId: number) {
   if (customer.role === "admin") {
     orders = await baseQuery.orderBy(sql`${logisticOrdersTable.createdAt} DESC`);
   } else {
-    const context = await getPortalCustomerContext(portalCustomerId);
+    const context = await contextForAuthenticatedCustomer(portalCustomerId, customer);
     if (!context.customerType) {
       throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
     }
@@ -334,14 +366,17 @@ export async function listLogisticOrders(portalCustomerId: number) {
 /**
  * GET /product-orders — portal product orders for authenticated customer
  */
-export async function listProductOrders(portalCustomerId: number) {
-  const [customer] = await db
+export async function listProductOrders(
+  portalCustomerId: number,
+  authenticatedCustomer?: AuthenticatedPortalCustomer,
+) {
+  const customer = authenticatedCustomer ?? (await db
     .select()
     .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.id, portalCustomerId));
+    .where(eq(portalCustomersTable.id, portalCustomerId)))[0];
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
-  const context = await getPortalCustomerContext(portalCustomerId);
+  const context = await contextForAuthenticatedCustomer(portalCustomerId, customer);
   if (!context.customerType) {
     throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
   }
@@ -376,8 +411,11 @@ export async function listProductOrders(portalCustomerId: number) {
  * customer-facing logistics services. Pabean and Custom Clearance are stored
  * as logistic orders and are identified by their persisted service type.
  */
-export async function listPortalServiceOrders(portalCustomerId: number) {
-  const context = await getPortalCustomerContext(portalCustomerId);
+export async function listPortalServiceOrders(
+  portalCustomerId: number,
+  authenticatedCustomer?: AuthenticatedPortalCustomer,
+) {
+  const context = await contextForAuthenticatedCustomer(portalCustomerId, authenticatedCustomer);
   if (!context.customerType) {
     throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
   }

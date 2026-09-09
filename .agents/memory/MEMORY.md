@@ -21,6 +21,7 @@
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
 - [Portal auth bootstrap recovery](portal-auth-bootstrap-recovery.md) — a valid HttpOnly session without the readable hint must recover through canonical bootstrap, not remain on `/login`.
+- [Portal authenticated query reuse](portal-authenticated-query-reuse.md) — portal list routes should reuse middleware-loaded customer identity; duplicate identity reads amplify pooler latency during parallel dashboard loads.
 - [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.

@@ -1506,9 +1506,10 @@ router.post("/order-upload-url", requireCustomerPortalAuth, (_req, res) => {
 
 // GET /api/portal/orders — returns sales orders for the authenticated portal customer
 router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listSalesOrders(portalCustId));
+    return res.json(await listSalesOrders(portalCustId, portalReq.portalCustomer));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1517,9 +1518,10 @@ router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
 
 // GET /api/portal/logistic-orders — returns logistic orders for the authenticated portal customer
 router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listLogisticOrders(portalCustId));
+    return res.json(await listLogisticOrders(portalCustId, portalReq.portalCustomer));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1528,9 +1530,10 @@ router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
 
 // GET /api/portal/product-orders — returns portal product orders for the customer
 router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listProductOrders(portalCustId));
+    return res.json(await listProductOrders(portalCustId, portalReq.portalCustomer));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1543,7 +1546,10 @@ router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
 router.get("/service-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
-    return res.json(await listPortalServiceOrders(portalCustId));
+    return res.json(await listPortalServiceOrders(
+      portalCustId,
+      (req as PortalAuthReq).portalCustomer,
+    ));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
