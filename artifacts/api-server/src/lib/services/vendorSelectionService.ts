@@ -50,6 +50,9 @@ export interface ComparisonLine {
   offeredUnitPrice: string;
   offeredQty:       string;
   subtotal:         string;
+  vendorUnitPrice:  string;
+  vendorSubtotal:   string;
+  isNegotiated:     boolean;
   currency:         string | null;
   minimumOrderQty:  string | null;
   leadTimeDays:     number | null;
@@ -68,6 +71,9 @@ export interface ComparisonQuote {
   status:           string;
   quotationNumber:  string | null;
   quotationDate:    string | null;
+  negotiatedBy:     string | null;
+  negotiatedAt:     Date | null;
+  negotiatedNotes:  string | null;
   paymentTerms:     string | null;
   incoterm:         string | null;
   deliveryLocation: string | null;

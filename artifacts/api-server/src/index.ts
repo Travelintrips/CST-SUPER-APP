@@ -1511,6 +1511,39 @@ async function runCriticalPreStartMigrations() {
     logger.warn({ err }, "mkt_vendor_quote_lines Phase 2D line columns migration failed (non-fatal)");
   }
 
+  // ── Marketplace — negotiated/deal price ───────────────────────────────────
+  // Harga vendor asli immutable secara logika; harga deal admin disimpan
+  // terpisah agar quotation customer, PO, dan invoice memakai nominal negosiasi
+  // tanpa menghilangkan bukti harga awal vendor.
+  try {
+    await db.execute(sql`
+      DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'mkt_vendor_quotes') THEN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'mkt_vendor_quotes' AND column_name = 'negotiated_by') THEN
+            ALTER TABLE mkt_vendor_quotes ADD COLUMN negotiated_by TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'mkt_vendor_quotes' AND column_name = 'negotiated_at') THEN
+            ALTER TABLE mkt_vendor_quotes ADD COLUMN negotiated_at TIMESTAMP;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'mkt_vendor_quotes' AND column_name = 'negotiated_notes') THEN
+            ALTER TABLE mkt_vendor_quotes ADD COLUMN negotiated_notes TEXT;
+          END IF;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'mkt_vendor_quote_lines') THEN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'mkt_vendor_quote_lines' AND column_name = 'negotiated_unit_price') THEN
+            ALTER TABLE mkt_vendor_quote_lines ADD COLUMN negotiated_unit_price NUMERIC(14,2);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'mkt_vendor_quote_lines' AND column_name = 'negotiated_subtotal') THEN
+            ALTER TABLE mkt_vendor_quote_lines ADD COLUMN negotiated_subtotal NUMERIC(14,2);
+          END IF;
+        END IF;
+      END $$;
+    `);
+    logger.info("Marketplace negotiated price columns ready");
+  } catch (err) {
+    logger.warn({ err }, "Marketplace negotiated price migration failed (non-fatal)");
+  }
+
   // ── P0.1 — Token hash columns (Security Hardening) ────────────────────────
   // Adds token_hash TEXT (nullable) to all token tables for HMAC-SHA256 storage.
   // Also enriches token_access_log with P2.1 audit fields.
