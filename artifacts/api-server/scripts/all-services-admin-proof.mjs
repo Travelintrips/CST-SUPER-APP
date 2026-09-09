@@ -331,6 +331,17 @@ async function createFixtures() {
   }, [201]);
   created.air.push(Number(air.body?.id));
   check("Air Freight customer submit", Number(air.body?.id) > 0, `order ${air.body?.id}`);
+  const airOrderNumber = String(air.body?.order_number ?? "");
+  check("Air Freight order number returned", /^AFO\/\d{4}\/\d{5}$/.test(airOrderNumber), airOrderNumber);
+  const airNumberRows = await db(
+    "SELECT COUNT(*)::int AS count FROM air_freight_orders WHERE order_number = $1",
+    [airOrderNumber],
+  );
+  check(
+    "Air Freight order number unique",
+    Number(airNumberRows[0]?.count) === 1,
+    `${airOrderNumber} count=${airNumberRows[0]?.count ?? 0}`,
+  );
 
   const trucking = await http("/api/trucking/bookings", {
     method: "POST",
