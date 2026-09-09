@@ -131,7 +131,7 @@ describe("Sport payment amount correction transaction guards", () => {
 
   it("commits the correction before asynchronously regenerating QRIS candidates", () => {
     expect(route).toContain("await db.transaction((tx)");
-    expect(route).toContain("setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId))");
+    expect(route).toContain("setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId))");
     expect(route).toContain("candidateRefreshPending: result.changed");
     expect(route).not.toContain("await generateQrisCandidates");
   });
