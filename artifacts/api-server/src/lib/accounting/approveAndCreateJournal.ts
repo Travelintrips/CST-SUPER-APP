@@ -269,11 +269,20 @@ export async function voidApprovedJournal(
   let existingReversal: { rows: unknown[] };
   try {
     existingReversal = await db.execute(sql`
-      SELECT id FROM accounting_entries
+      SELECT
+        id,
+        status::text AS status,
+        source::text AS source,
+        source_id,
+        company_id,
+        total_debit,
+        total_credit
+      FROM accounting_entries
       WHERE source::text = 'bank_reconciliation_void'
         AND source_id = ${entryId}
         AND company_id = ${companyId}
-      LIMIT 1
+      ORDER BY id
+      LIMIT 2
     `);
   } catch (lookupErr: unknown) {
     logger.error(
@@ -287,7 +296,76 @@ export async function voidApprovedJournal(
   }
 
   if ((existingReversal.rows as unknown[]).length > 0) {
-    const existingRevId = ((existingReversal.rows as any[])[0] as Record<string, unknown>)["id"];
+    if ((existingReversal.rows as unknown[]).length > 1) {
+      return {
+        ok: false,
+        error: `Entry #${entryId} memiliki lebih dari satu reversal; void dihentikan untuk mencegah ambiguity`,
+        code: "JOURNAL_ALREADY_VOIDED",
+      };
+    }
+
+    const existingRev = (existingReversal.rows as any[])[0] as Record<string, unknown>;
+    const existingRevId = Number(existingRev["id"]);
+    const originalDebit = Number(origEntry["total_debit"] ?? 0);
+    const originalCredit = Number(origEntry["total_credit"] ?? 0);
+    const reversalDebit = Number(existingRev["total_debit"] ?? 0);
+    const reversalCredit = Number(existingRev["total_credit"] ?? 0);
+    const isValidExistingReversal =
+      Number.isInteger(existingRevId)
+      && String(existingRev["status"]) === "posted"
+      && String(existingRev["source"]) === "bank_reconciliation_void"
+      && Number(existingRev["source_id"]) === entryId
+      && Number(existingRev["company_id"]) === companyId
+      && Math.abs(reversalDebit - originalCredit) <= 0.01
+      && Math.abs(reversalCredit - originalDebit) <= 0.01;
+
+    // A previous attempt may have committed the balanced reversal but failed
+    // before the original metadata update (for example, an older defense-in-
+    // depth trigger rejected posted → voided). Complete that exact state on
+    // retry instead of creating a second reversal.
+    if (isValidExistingReversal) {
+      try {
+        const metadataUpdate = await db.execute(sql`
+          UPDATE accounting_entries
+          SET status        = 'voided',
+              void_entry_id = ${existingRevId},
+              void_reason   = COALESCE(${reason ?? null}, void_reason),
+              updated_at    = NOW()
+          WHERE id = ${entryId}
+            AND status = 'posted'
+            AND void_entry_id IS NULL
+          RETURNING status, void_entry_id
+        `);
+        const updatedMetadata = metadataUpdate.rows[0] as
+          | { status?: unknown; void_entry_id?: unknown }
+          | undefined;
+        if (
+          metadataUpdate.rows.length === 1
+          && updatedMetadata?.status === "voided"
+          && Number(updatedMetadata.void_entry_id) === existingRevId
+        ) {
+          logger.info(
+            { entryId, voidEntryId: existingRevId },
+            "[voidApprovedJournal] Completed metadata for existing reversal",
+          );
+          return { ok: true, voidEntryId: existingRevId };
+        }
+        throw new Error(
+          `metadata update affected ${metadataUpdate.rows.length} row(s) or returned unexpected void metadata`,
+        );
+      } catch (e: unknown) {
+        logger.error(
+          { err: (e as Error).message, entryId, voidEntryId: existingRevId },
+          "[voidApprovedJournal] CRITICAL: existing reversal found but original status NOT updated",
+        );
+        return buildOriginalVoidUpdateFailureResult({
+          entryId,
+          voidEntryId: existingRevId,
+          cause: e,
+        });
+      }
+    }
+
     logger.warn({ entryId, existingRevId }, "[voidApprovedJournal] Reversal already exists — JOURNAL_ALREADY_VOIDED");
     return {
       ok: false,

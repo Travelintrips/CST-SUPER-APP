@@ -165,6 +165,19 @@ export async function runAccountingHubMigration(): Promise<void> {
           IF NEW.status = 'draft' AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
             RETURN NEW;
           END IF;
+          -- Izinkan posted → voided hanya setelah reversal entry dibuat.
+          -- Financial fields tetap immutable dan void_entry_id wajib terisi.
+          IF NEW.status = 'voided'
+            AND NEW.void_entry_id IS NOT NULL
+            AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
+            AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
+            AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
+            AND NEW.date         IS NOT DISTINCT FROM OLD.date
+            AND NEW.source       IS NOT DISTINCT FROM OLD.source
+            AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
+          THEN
+            RETURN NEW;
+          END IF;
           -- Izinkan metadata-only update (payment_method dll.) selama data finansial
           -- dan status tidak berubah.
           IF NEW.status IS NOT DISTINCT FROM OLD.status
