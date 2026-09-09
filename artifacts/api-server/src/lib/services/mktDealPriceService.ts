@@ -133,7 +133,12 @@ export async function setMarketplaceDealPrice(
         return { ok: false as const, code: "DEAL_PRICE_LINES_MISMATCH" as const, message: "Semua line vendor quote wajib memiliki harga deal" };
       }
 
-      const updatedAt = new Date();
+      const updatedAt = new Date(
+        Math.max(
+          Date.now(),
+          new Date(quote.quoteUpdatedAt).getTime() + 1,
+        ),
+      );
       const [updatedQuote] = await tx
         .update(mktVendorQuotesTable)
         .set({
@@ -144,7 +149,6 @@ export async function setMarketplaceDealPrice(
         })
         .where(and(
           eq(mktVendorQuotesTable.id, input.quoteId),
-          eq(mktVendorQuotesTable.updatedAt, quote.quoteUpdatedAt),
         ))
         .returning({ quoteId: mktVendorQuotesTable.id });
 
