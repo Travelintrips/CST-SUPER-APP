@@ -224,6 +224,7 @@ import {
   listSalesOrders,
   listLogisticOrders,
   listProductOrders,
+  listPortalOrderFeed,
   listPortalServiceOrders,
   createSalesOrder,
   cancelSalesOrder,
@@ -1534,6 +1535,20 @@ router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = portalReq.portalCustomerId;
   try {
     return res.json(await listProductOrders(portalCustId, portalReq.portalCustomer));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/order-feed — one read for the Customer Portal orders page.
+router.get("/order-feed", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  try {
+    return res.json(await listPortalOrderFeed(
+      portalReq.portalCustomerId,
+      portalReq.portalCustomer,
+    ));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;

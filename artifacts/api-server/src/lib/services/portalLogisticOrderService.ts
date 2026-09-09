@@ -22,6 +22,7 @@ import {
   customersTable,
   logisticOrdersTable,
   quoteRequestsTable,
+  mktRfqsTable,
 } from "@workspace/db";
 import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
 import { ObjectStorageService } from "../objectStorage.js";
@@ -404,6 +405,124 @@ export async function listProductOrders(
         : String(r.created_at),
     trackingToken: r.tracking_token ?? null,
   }));
+}
+
+/**
+ * GET /order-feed — one authenticated read for the customer order page.
+ *
+ * The legacy page loaded CRM, logistic, product, and marketplace orders through
+ * four separate requests. Each request repeated session validation and customer
+ * context resolution. Keep the four result shapes, but resolve the shared
+ * identity/context once and read only the columns rendered by the page.
+ */
+export async function listPortalOrderFeed(
+  portalCustomerId: number,
+  authenticatedCustomer?: AuthenticatedPortalCustomer,
+) {
+  const customer = authenticatedCustomer ?? (await db
+    .select()
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, portalCustomerId)))[0];
+  if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
+
+  const context = await contextForAuthenticatedCustomer(portalCustomerId, customer);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+
+  const salesOwnership = and(
+    eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
+    context.customerType === "individual"
+      ? isNull(salesDocumentsTable.companyId)
+      : eq(salesDocumentsTable.companyId, context.companyId!),
+  );
+  const customerOwnership = context.customerType === "individual"
+    ? eq(logisticOrdersTable.portalCustomerId, portalCustomerId)
+    : eq(logisticOrdersTable.companyId, context.companyId!);
+  const productOwnership = context.customerType === "individual"
+    ? sql`portal_customer_id = ${portalCustomerId} AND company_id IS NULL`
+    : sql`company_id = ${context.companyId}`;
+  const marketplaceOwnership = context.customerType === "individual"
+    ? eq(mktRfqsTable.portalCustomerId, portalCustomerId)
+    : eq(mktRfqsTable.companyId, context.companyId!);
+
+  const [salesOrders, logisticOrders, productRows, marketplaceRfqs] = await Promise.all([
+    db
+      .select({
+        id: salesDocumentsTable.id,
+        docNumber: salesDocumentsTable.docNumber,
+        status: salesDocumentsTable.status,
+        grandTotal: salesDocumentsTable.grandTotal,
+        createdAt: salesDocumentsTable.createdAt,
+      })
+      .from(salesDocumentsTable)
+      .where(salesOwnership)
+      .orderBy(desc(salesDocumentsTable.createdAt)),
+    db
+      .select({
+        id: logisticOrdersTable.id,
+        orderNumber: logisticOrdersTable.orderNumber,
+        status: logisticOrdersTable.status,
+        grandTotal: logisticOrdersTable.grandTotal,
+        createdAt: logisticOrdersTable.createdAt,
+        shipmentType: logisticOrdersTable.shipmentType,
+        origin: logisticOrdersTable.origin,
+        destination: logisticOrdersTable.destination,
+      })
+      .from(logisticOrdersTable)
+      .where(customerOwnership)
+      .orderBy(desc(logisticOrdersTable.createdAt)),
+    db.execute(sql`
+      SELECT id, order_number, status, grand_total, created_at, tracking_token
+      FROM portal_product_orders
+      WHERE ${productOwnership}
+      ORDER BY created_at DESC
+    `),
+    db
+      .select({
+        rfqId: mktRfqsTable.id,
+        rfqNumber: mktRfqsTable.rfqNumber,
+        rfqStatus: mktRfqsTable.status,
+        approvalStatus: mktRfqsTable.approvalStatus,
+        createdAt: mktRfqsTable.createdAt,
+      })
+      .from(mktRfqsTable)
+      .where(marketplaceOwnership)
+      .orderBy(desc(mktRfqsTable.createdAt))
+      .limit(200),
+  ]);
+
+  return {
+    crmOrders: salesOrders.map((o) => ({
+      id: o.id,
+      docNumber: o.docNumber,
+      status: o.status,
+      grandTotal: Number(o.grandTotal ?? 0),
+      createdAt: o.createdAt.toISOString(),
+    })),
+    logisticOrders: logisticOrders.map((o) => ({
+      id: o.id,
+      orderNumber: o.orderNumber,
+      status: o.status,
+      grandTotal: parseFloat(o.grandTotal),
+      createdAt: o.createdAt.toISOString(),
+      shipmentType: o.shipmentType,
+      origin: o.origin,
+      destination: o.destination,
+    })),
+    productOrders: (productRows.rows as Array<Record<string, unknown>>).map((r) => ({
+      id: r.id,
+      orderNumber: r.order_number,
+      status: r.status,
+      grandTotal: parseFloat(String(r.grand_total ?? "0")),
+      createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+      trackingToken: r.tracking_token ?? null,
+    })),
+    marketplaceRfqs,
+  };
 }
 
 /**

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { useListPortalOrders, useListPortalLogisticOrders, useCancelPortalOrder, useCancelPortalLogisticOrder } from "@workspace/api-client-react";
+import { useCancelPortalOrder, useCancelPortalLogisticOrder } from "@workspace/api-client-react";
 import { isAuthenticated } from "@/lib/auth";
 import { LOGISTIC_STATUS_COLOR as _LOGISTIC_STATUS_COLOR, LOGISTIC_STATUS_ID as _LOGISTIC_STATUS_ID } from "@/lib/logisticStatus";
 import { useLocation, useSearch } from "wouter";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Search, Calendar, FileText, ExternalLink, X, Package, CreditCard, ArrowLeft } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -99,6 +99,28 @@ interface MarketplaceRfq {
   createdAt: string;
 }
 
+interface PortalOrderFeed {
+  crmOrders: Array<{
+    id: number;
+    docNumber: string;
+    status: string;
+    grandTotal: number;
+    createdAt: string;
+  }>;
+  logisticOrders: Array<{
+    id: number;
+    orderNumber: string;
+    status: string;
+    grandTotal: number;
+    createdAt: string;
+    shipmentType: string | null;
+    origin: string | null;
+    destination: string | null;
+  }>;
+  productOrders: ProductOrder[];
+  marketplaceRfqs: MarketplaceRfq[];
+}
+
 export default function Orders() {
   const [, setLocation] = useLocation();
   const searchStr = useSearch();
@@ -111,28 +133,8 @@ export default function Orders() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
-  const [productOrders, setProductOrders] = useState<ProductOrder[]>([]);
-  const [loadingProduct, setLoadingProduct] = useState(false);
-  const [marketplaceRfqs, setMarketplaceRfqs] = useState<MarketplaceRfq[]>([]);
-  const [loadingMarketplace, setLoadingMarketplace] = useState(false);
-
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
-    setLoadingProduct(true);
-    fetch("/api/portal/product-orders", { credentials: "include" })
-      .then((r) => r.ok ? r.json() : [])
-      .then((data: ProductOrder[]) => setProductOrders(Array.isArray(data) ? data : []))
-      .catch(() => setProductOrders([]))
-      .finally(() => setLoadingProduct(false));
-
-    setLoadingMarketplace(true);
-    fetch("/api/mkt/portal/rfqs?limit=200", { credentials: "include" })
-      .then((r) => r.ok ? r.json() : { data: [] })
-      .then((payload: { data?: MarketplaceRfq[] }) => {
-        setMarketplaceRfqs(Array.isArray(payload?.data) ? payload.data : []);
-      })
-      .catch(() => setMarketplaceRfqs([]))
-      .finally(() => setLoadingMarketplace(false));
   }, [authed, setLocation]);
 
   // Real-time updates
@@ -140,15 +142,10 @@ export default function Orders() {
     if (!authed) return;
     const es = new EventSource("/api/ecommerce/events");
     es.addEventListener("logistic_order_status_changed", () => {
-      queryClient.invalidateQueries({ queryKey: ["listPortalLogisticOrders"] });
+      queryClient.invalidateQueries({ queryKey: ["portal-order-feed"] });
     });
     es.addEventListener("price_sync", () => {
-      setLoadingProduct(true);
-      fetch("/api/portal/product-orders", { credentials: "include" })
-        .then((r) => r.ok ? r.json() : [])
-        .then((data: ProductOrder[]) => setProductOrders(Array.isArray(data) ? data : []))
-        .catch(() => {})
-        .finally(() => setLoadingProduct(false));
+      queryClient.invalidateQueries({ queryKey: ["portal-order-feed"] });
     });
     return () => es.close();
   }, [authed, queryClient]);
@@ -169,14 +166,14 @@ export default function Orders() {
     setLocation(buildOrdersUrl(search, ""));
   }
 
-  const { data: crmResponse, isLoading: isLoadingCrm } = useListPortalOrders({
-    query: { queryKey: ["listPortalOrders"], enabled: authed },
-    request: { credentials: "include" },
-  });
-
-  const { data: logisticResponse, isLoading: isLoadingLogistic } = useListPortalLogisticOrders({
-    query: { queryKey: ["listPortalLogisticOrders"], enabled: authed },
-    request: { credentials: "include" },
+  const { data: orderFeed, isLoading: isLoadingOrderFeed } = useQuery<PortalOrderFeed>({
+    queryKey: ["portal-order-feed"],
+    enabled: authed,
+    queryFn: async () => {
+      const response = await fetch("/api/portal/order-feed", { credentials: "include" });
+      if (!response.ok) throw new Error("Gagal memuat pesanan");
+      return response.json() as Promise<PortalOrderFeed>;
+    },
   });
 
   const cancelCrmOrder = useCancelPortalOrder({ request: { credentials: "include" } });
@@ -188,7 +185,7 @@ export default function Orders() {
   const localeStatus = (status: string) =>
     t(`orderStatusLabels.${status}`, LOGISTIC_STATUS_ID[status] ?? status);
 
-  const crmOrders = (Array.isArray(crmResponse) ? crmResponse : []).map((o) => ({
+  const crmOrders = (orderFeed?.crmOrders ?? []).map((o) => ({
     _key: `crm-${o.id}`,
     _id: o.id,
     _type: "crm" as const,
@@ -203,7 +200,7 @@ export default function Orders() {
     trackUrl: null as string | null,
   }));
 
-  const logisticOrders = (Array.isArray(logisticResponse) ? logisticResponse : []).map((o) => ({
+  const logisticOrders = (orderFeed?.logisticOrders ?? []).map((o) => ({
     _key: `log-${o.id}`,
     _id: o.id,
     _type: "logistic" as const,
@@ -218,7 +215,7 @@ export default function Orders() {
     trackUrl: `/track?order=${encodeURIComponent(o.orderNumber)}`,
   }));
 
-  const productOrdersMapped = productOrders.map((o) => ({
+  const productOrdersMapped = (orderFeed?.productOrders ?? []).map((o) => ({
     _key: `prod-${o.id}`,
     _id: o.id,
     _type: "product" as const,
@@ -233,7 +230,7 @@ export default function Orders() {
     trackUrl: o.trackingToken ? `/track-produk/${o.trackingToken}` : null,
   }));
 
-  const marketplaceRfqsMapped = marketplaceRfqs.map((o) => ({
+  const marketplaceRfqsMapped = (orderFeed?.marketplaceRfqs ?? []).map((o) => ({
     _key: `mkt-rfq-${o.rfqId}`,
     _id: o.rfqId,
     _type: "marketplace" as const,
@@ -256,7 +253,7 @@ export default function Orders() {
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
-  const isLoading = isLoadingCrm || isLoadingLogistic || loadingProduct || loadingMarketplace;
+  const isLoading = isLoadingOrderFeed;
 
   const statusFiltered = statusFilter
     ? statusFilter === "active"
@@ -281,10 +278,10 @@ export default function Orders() {
     try {
       if (order._type === "crm") {
         await cancelCrmOrder.mutateAsync({ id: order._id });
-        queryClient.invalidateQueries({ queryKey: ["listPortalOrders"] });
+        queryClient.invalidateQueries({ queryKey: ["portal-order-feed"] });
       } else if (order._type === "logistic") {
         await cancelLogisticOrder.mutateAsync({ id: order._id });
-        queryClient.invalidateQueries({ queryKey: ["listPortalLogisticOrders"] });
+        queryClient.invalidateQueries({ queryKey: ["portal-order-feed"] });
       }
     } catch {
       alert(t("orders.cancelFailed"));
