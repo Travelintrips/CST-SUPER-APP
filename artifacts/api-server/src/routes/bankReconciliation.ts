@@ -4728,6 +4728,12 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       ${effectiveBankMutationStatusSql("bm")} AS status,
       bm.journal_entry_id, bm.company_id,
+      EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_matches approved_mutation_match
+        WHERE approved_mutation_match.mutation_id = bm.id
+          AND approved_mutation_match.status = 'approved'
+      ) AS has_approved_match,
       (
         SELECT COALESCE(jsonb_agg(
           jsonb_build_object(
@@ -5249,6 +5255,7 @@ router.get("/mutations", async (req, res) => {
       END AS status,
       bmi.journal_entry_id,
       NULL::integer AS company_id,
+      FALSE AS has_approved_match,
       NULL::jsonb AS posted_coa_accounts,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
