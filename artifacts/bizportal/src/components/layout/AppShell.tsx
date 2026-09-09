@@ -106,6 +106,7 @@ import { PinnedShortcuts } from "./PinnedShortcuts";
 import { QuickCreate } from "./QuickCreate";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
+import { preloadNavRoute } from "@/routes";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -775,7 +776,14 @@ export function AppShell({ children, noPadding }: AppShellProps) {
               tooltip={getNavTitle(item.titleKey)}
               className="flex-1"
             >
-              <Link href={item.href} className="flex items-center gap-3" data-testid={`nav-${item.titleKey.toLowerCase().replace(/\s+/g, "-")}`}>
+              <Link
+                href={item.href}
+                onMouseEnter={() => preloadNavRoute(item.href)}
+                onFocus={() => preloadNavRoute(item.href)}
+                onPointerDown={() => preloadNavRoute(item.href)}
+                className="flex items-center gap-3"
+                data-testid={`nav-${item.titleKey.toLowerCase().replace(/\s+/g, "-")}`}
+              >
                 <item.icon size={18} />
                 <span className="flex-1">{getNavTitle(item.titleKey)}</span>
                 {isNotif && dbUnreadTotal > 0 && (
@@ -824,7 +832,14 @@ export function AppShell({ children, noPadding }: AppShellProps) {
         <SidebarMenuSubItem key={c.href} className={cn(customizeMode && childHidden && "opacity-40")}>
           <div className="flex items-center">
             <SidebarMenuSubButton asChild isActive={isChildActive(c.href)} className="flex-1">
-              <Link href={c.href} className="flex items-center gap-2" data-testid={`nav-sub-${c.titleKey.toLowerCase().replace(/\s+/g, "-")}`}>
+                <Link
+                  href={c.href}
+                  onMouseEnter={() => preloadNavRoute(c.href)}
+                  onFocus={() => preloadNavRoute(c.href)}
+                  onPointerDown={() => preloadNavRoute(c.href)}
+                  className="flex items-center gap-2"
+                  data-testid={`nav-sub-${c.titleKey.toLowerCase().replace(/\s+/g, "-")}`}
+                >
                 <c.icon size={14} />
                 <span className="flex-1">{getNavTitle(c.titleKey)}</span>
                 {c.href === "/sales/ai-drafts" && aiDraftCount > 0 && (

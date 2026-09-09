@@ -1,3 +1,4 @@
+- [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
 - [Vendor invoice OCR tax evidence](vendor-invoice-ocr-tax-evidence.md) — PPh/payable must stay null for rate-only evidence; preserve the printed breakdown and require review before payment.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
