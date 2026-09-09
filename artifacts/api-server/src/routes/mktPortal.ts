@@ -42,10 +42,23 @@ import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 import { runMarketplaceDestinationMigration } from "../lib/marketplaceDestinationMigration.js";
 import { validateBody } from "../lib/middleware/validateBody.js";
 import { logActivity } from "../lib/activityLog.js";
+import { getPortalCustomerContext } from "../lib/services/portalCustomerContextService.js";
 
 const router = Router();
 
 deferStartupTask("marketplace-rfq-destination-metadata", runMarketplaceDestinationMigration);
+
+type PortalRfqOwnership =
+  | { scope: "individual"; portalCustomerId: number }
+  | { scope: "company"; companyId: number };
+
+async function resolvePortalRfqOwnership(portalCustomerId: number): Promise<PortalRfqOwnership | null> {
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (context.customerType === "individual") {
+    return { scope: "individual", portalCustomerId };
+  }
+  return context.companyId ? { scope: "company", companyId: context.companyId } : null;
+}
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 // Read operations — 60 req / 15 menit per buyer
@@ -673,6 +686,11 @@ router.get("/rfqs/:id", async (req: Request, res: Response) => {
   try {
     const { db, mktRfqApprovalsTable } = await import("@workspace/db");
     const { eq, desc, sql } = await import("drizzle-orm");
+    const ownership = await resolvePortalRfqOwnership(portalCustomerId);
+    if (!ownership) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+    const ownershipSql = ownership.scope === "individual"
+      ? sql`portal_customer_id = ${ownership.portalCustomerId}`
+      : sql`company_id = ${ownership.companyId}`;
 
     // Use raw SQL to include proposed_quote_id (not in Drizzle schema yet)
     const rfqRows = await db.execute(sql`
@@ -684,7 +702,7 @@ router.get("/rfqs/:id", async (req: Request, res: Response) => {
              created_at, updated_at, winner_selected_at,
              winning_quote_id, proposed_quote_id
       FROM mkt_rfqs
-      WHERE id = ${rfqId} AND portal_customer_id = ${portalCustomerId}
+       WHERE id = ${rfqId} AND ${ownershipSql}
       LIMIT 1
     `);
 
@@ -726,6 +744,8 @@ router.get("/rfqs/:id/lines", readLimiter, async (req: Request, res: Response) =
   try {
     const { db, mktRfqsTable, mktRfqLinesTable } = await import("@workspace/db");
     const { eq, and, asc } = await import("drizzle-orm");
+    const ownership = await resolvePortalRfqOwnership(portalCustomerId);
+    if (!ownership) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
 
     // 1. Verify ownership — portalCustomerId dari session (PortalAuthReq)
     const [rfq] = await db
@@ -733,7 +753,9 @@ router.get("/rfqs/:id/lines", readLimiter, async (req: Request, res: Response) =
       .from(mktRfqsTable)
       .where(and(
         eq(mktRfqsTable.id, rfqId),
-        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+        ownership.scope === "individual"
+          ? eq(mktRfqsTable.portalCustomerId, ownership.portalCustomerId)
+          : eq(mktRfqsTable.companyId, ownership.companyId),
       ))
       .limit(1);
 
@@ -779,12 +801,17 @@ router.get("/rfqs/:id/quotation", async (req: Request, res: Response) => {
       mktVendorQuotesTable, mktVendorQuoteLinesTable, mktRfqLinesTable, suppliersTable,
     } = await import("@workspace/db");
     const { eq, sql } = await import("drizzle-orm");
+    const ownership = await resolvePortalRfqOwnership(portalCustomerId);
+    if (!ownership) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+    const ownershipSql = ownership.scope === "individual"
+      ? sql`portal_customer_id = ${ownership.portalCustomerId}`
+      : sql`company_id = ${ownership.companyId}`;
 
     // Verify ownership and get proposed_quote_id
     const rfqRows = await db.execute(sql`
       SELECT id, status, proposed_quote_id
       FROM mkt_rfqs
-      WHERE id = ${rfqId} AND portal_customer_id = ${portalCustomerId}
+      WHERE id = ${rfqId} AND ${ownershipSql}
       LIMIT 1
     `);
     const rfq = ((rfqRows as any).rows ?? rfqRows)[0] as Record<string, unknown> | undefined;
@@ -1046,6 +1073,8 @@ router.get("/rfqs/:id/purchase-order", async (req: Request, res: Response) => {
   try {
     const { db, mktPurchaseOrdersTable, mktRfqsTable } = await import("@workspace/db");
     const { eq, and } = await import("drizzle-orm");
+    const ownership = await resolvePortalRfqOwnership(portalCustomerId);
+    if (!ownership) return res.status(404).json({ ok: false, error: "PO belum tersedia untuk RFQ ini" });
 
     const [po] = await db
       .select({
@@ -1056,7 +1085,9 @@ router.get("/rfqs/:id/purchase-order", async (req: Request, res: Response) => {
       .from(mktPurchaseOrdersTable)
       .innerJoin(mktRfqsTable, and(
         eq(mktPurchaseOrdersTable.rfqId, mktRfqsTable.id),
-        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+        ownership.scope === "individual"
+          ? eq(mktRfqsTable.portalCustomerId, ownership.portalCustomerId)
+          : eq(mktRfqsTable.companyId, ownership.companyId),
       ))
       .where(eq(mktPurchaseOrdersTable.rfqId, rfqId))
       .limit(1);
@@ -1086,6 +1117,8 @@ router.get("/rfqs/:id/quotes", readLimiter, async (req: Request, res: Response) 
       mktRfqLinesTable, suppliersTable,
     } = await import("@workspace/db");
     const { eq, and, ne } = await import("drizzle-orm");
+    const ownership = await resolvePortalRfqOwnership(portalCustomerId);
+    if (!ownership) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
 
     // 1. Verifikasi ownership — portalCustomerId dari session
     const [rfq] = await db
@@ -1093,7 +1126,9 @@ router.get("/rfqs/:id/quotes", readLimiter, async (req: Request, res: Response) 
       .from(mktRfqsTable)
       .where(and(
         eq(mktRfqsTable.id, rfqId),
-        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+        ownership.scope === "individual"
+          ? eq(mktRfqsTable.portalCustomerId, ownership.portalCustomerId)
+          : eq(mktRfqsTable.companyId, ownership.companyId),
       ))
       .limit(1);
 

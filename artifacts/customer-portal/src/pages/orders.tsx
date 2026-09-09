@@ -58,6 +58,30 @@ const PRODUCT_ORDER_STATUS_COLOR: Record<string, string> = {
   "Cancelled":         "bg-red-100 text-red-800",
 };
 
+const MARKETPLACE_STATUS_COLOR: Record<string, string> = {
+  draft:           "bg-slate-100 text-slate-700",
+  submitted:       "bg-blue-100 text-blue-800",
+  quoting:         "bg-amber-100 text-amber-800",
+  quoted:          "bg-cyan-100 text-cyan-800",
+  customer_review: "bg-orange-100 text-orange-800",
+  awarded:         "bg-green-100 text-green-800",
+  rejected:        "bg-red-100 text-red-800",
+  cancelled:       "bg-red-100 text-red-800",
+  expired:         "bg-gray-100 text-gray-600",
+};
+
+const MARKETPLACE_STATUS_LABEL: Record<string, string> = {
+  draft:           "Draft",
+  submitted:       "Menunggu proses",
+  quoting:         "Sedang dicari penawaran",
+  quoted:          "Penawaran tersedia",
+  customer_review: "Menunggu keputusan Anda",
+  awarded:         "Pesanan dibuat",
+  rejected:        "Ditolak",
+  cancelled:       "Dibatalkan",
+  expired:         "Kedaluwarsa",
+};
+
 interface ProductOrder {
   id: number;
   orderNumber: string;
@@ -65,6 +89,14 @@ interface ProductOrder {
   grandTotal: number;
   createdAt: string;
   trackingToken: string | null;
+}
+
+interface MarketplaceRfq {
+  rfqId: number;
+  rfqNumber: string;
+  rfqStatus: string;
+  approvalStatus: string;
+  createdAt: string;
 }
 
 export default function Orders() {
@@ -81,6 +113,8 @@ export default function Orders() {
 
   const [productOrders, setProductOrders] = useState<ProductOrder[]>([]);
   const [loadingProduct, setLoadingProduct] = useState(false);
+  const [marketplaceRfqs, setMarketplaceRfqs] = useState<MarketplaceRfq[]>([]);
+  const [loadingMarketplace, setLoadingMarketplace] = useState(false);
 
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
@@ -90,6 +124,15 @@ export default function Orders() {
       .then((data: ProductOrder[]) => setProductOrders(Array.isArray(data) ? data : []))
       .catch(() => setProductOrders([]))
       .finally(() => setLoadingProduct(false));
+
+    setLoadingMarketplace(true);
+    fetch("/api/mkt/portal/rfqs?limit=200", { credentials: "include" })
+      .then((r) => r.ok ? r.json() : { data: [] })
+      .then((payload: { data?: MarketplaceRfq[] }) => {
+        setMarketplaceRfqs(Array.isArray(payload?.data) ? payload.data : []);
+      })
+      .catch(() => setMarketplaceRfqs([]))
+      .finally(() => setLoadingMarketplace(false));
   }, [authed, setLocation]);
 
   // Real-time updates
@@ -190,11 +233,30 @@ export default function Orders() {
     trackUrl: o.trackingToken ? `/track-produk/${o.trackingToken}` : null,
   }));
 
-  const allOrders = [...logisticOrders, ...crmOrders, ...productOrdersMapped].sort(
+  const marketplaceRfqsMapped = marketplaceRfqs.map((o) => ({
+    _key: `mkt-rfq-${o.rfqId}`,
+    _id: o.rfqId,
+    _type: "marketplace" as const,
+    _cancellable: false,
+    displayNumber: o.rfqNumber,
+    subtitle: "Marketplace / RFQ",
+    status: o.approvalStatus === "pending" ? "approval_pending" : o.rfqStatus,
+    displayStatus: o.approvalStatus === "pending"
+      ? "Menunggu approval"
+      : MARKETPLACE_STATUS_LABEL[o.rfqStatus] ?? o.rfqStatus,
+    statusColor: o.approvalStatus === "pending"
+      ? "bg-yellow-100 text-yellow-800"
+      : MARKETPLACE_STATUS_COLOR[o.rfqStatus] ?? "bg-gray-100 text-gray-800",
+    grandTotal: 0,
+    createdAt: o.createdAt,
+    trackUrl: `/marketplace/my-rfqs/${o.rfqId}`,
+  }));
+
+  const allOrders = [...logisticOrders, ...crmOrders, ...productOrdersMapped, ...marketplaceRfqsMapped].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
-  const isLoading = isLoadingCrm || isLoadingLogistic || loadingProduct;
+  const isLoading = isLoadingCrm || isLoadingLogistic || loadingProduct || loadingMarketplace;
 
   const statusFiltered = statusFilter
     ? statusFilter === "active"
@@ -235,11 +297,13 @@ export default function Orders() {
     logistic: "bg-blue-50 text-blue-600",
     crm: "bg-slate-50 text-slate-600",
     product: "bg-emerald-50 text-emerald-700",
+    marketplace: "bg-orange-50 text-orange-700",
   };
   const TYPE_LABEL: Record<string, string> = {
     logistic: t("orders.typeLogistic"),
     crm: t("orders.typeCrm"),
     product: t("orders.typeProduct"),
+    marketplace: "Marketplace / RFQ",
   };
 
   return (
@@ -288,7 +352,7 @@ export default function Orders() {
 
         {/* Summary chips */}
         <div className="flex gap-2 flex-wrap mb-5">
-          {(["logistic", "product", "crm"] as const).map((type) => {
+          {(["logistic", "product", "crm", "marketplace"] as const).map((type) => {
             const count = allOrders.filter((o) => o._type === type).length;
             return (
               <span key={type} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${TYPE_BADGE[type]}`}>

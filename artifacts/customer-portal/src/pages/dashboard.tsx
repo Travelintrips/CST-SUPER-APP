@@ -106,6 +106,35 @@ export default function Dashboard() {
     staleTime: 60_000,
   });
 
+  const { data: marketplaceRfqsResponse, isLoading: isLoadingMarketplace } = useQuery<{
+    ok: boolean;
+    data: Array<{
+      rfqId: number;
+      rfqNumber: string;
+      rfqStatus: string;
+      approvalStatus: string;
+      createdAt: string;
+    }>;
+  }>({
+    queryKey: ["mkt-my-rfqs-dashboard"],
+    queryFn: async () => {
+      const r = await fetch("/api/mkt/portal/rfqs?limit=200", { credentials: "include" });
+      if (!r.ok) throw new Error("marketplace RFQ error");
+      return r.json() as Promise<{
+        ok: boolean;
+        data: Array<{
+          rfqId: number;
+          rfqNumber: string;
+          rfqStatus: string;
+          approvalStatus: string;
+          createdAt: string;
+        }>;
+      }>;
+    },
+    enabled: authed,
+    staleTime: 60_000,
+  });
+
   const { data: dashStats } = useQuery<DashboardStats>({
     queryKey: ["portal-dashboard-stats"],
     queryFn: async () => {
@@ -123,6 +152,7 @@ export default function Dashboard() {
   const crmOrders       = Array.isArray(ordersResponse)         ? ordersResponse        : [];
   const productOrders   = Array.isArray(productOrdersResponse)  ? productOrdersResponse : [];
   const serviceOrders   = Array.isArray(serviceOrdersResponse)  ? serviceOrdersResponse : [];
+  const marketplaceRfqs = Array.isArray(marketplaceRfqsResponse?.data) ? marketplaceRfqsResponse.data : [];
 
   const allOrders = [
     ...logisticOrders.map((o) => ({
@@ -169,12 +199,46 @@ export default function Dashboard() {
       createdAt:     o.createdAt,
       trackUrl:      `/track?order=${encodeURIComponent(o.orderNumber)}`,
     })),
+    ...marketplaceRfqs.map((o) => ({
+      _key:          `mkt-rfq-${o.rfqId}`,
+      displayNumber: o.rfqNumber,
+      subtitle:      "Marketplace / RFQ",
+      status:        o.approvalStatus === "pending" ? "approval_pending" : o.rfqStatus,
+      displayStatus: o.approvalStatus === "pending"
+        ? "Menunggu approval"
+        : ({
+            draft: "Draft",
+            submitted: "Menunggu proses",
+            quoting: "Sedang dicari penawaran",
+            quoted: "Penawaran tersedia",
+            customer_review: "Menunggu keputusan Anda",
+            awarded: "Pesanan dibuat",
+            cancelled: "Dibatalkan",
+            expired: "Kedaluwarsa",
+          } as Record<string, string>)[o.rfqStatus] ?? o.rfqStatus,
+      statusColor: o.approvalStatus === "pending"
+        ? "bg-yellow-100 text-yellow-800"
+        : ({
+            draft: "bg-slate-100 text-slate-700",
+            submitted: "bg-blue-100 text-blue-800",
+            quoting: "bg-amber-100 text-amber-800",
+            quoted: "bg-cyan-100 text-cyan-800",
+            customer_review: "bg-orange-100 text-orange-800",
+            awarded: "bg-green-100 text-green-800",
+            cancelled: "bg-red-100 text-red-800",
+            expired: "bg-gray-100 text-gray-600",
+          } as Record<string, string>)[o.rfqStatus] ?? "bg-gray-100 text-gray-800",
+      grandTotal:    0,
+      createdAt:     o.createdAt,
+      trackUrl:      `/marketplace/my-rfqs/${o.rfqId}`,
+    })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const isLoadingOrders   = isLoadingCrm || isLoadingLogistic || isLoadingProduct || isLoadingService;
+  const isLoadingOrders   = isLoadingCrm || isLoadingLogistic || isLoadingProduct || isLoadingService || isLoadingMarketplace;
   const shipmentAktif     = dashStats?.activeOrders ?? logisticOrders.filter((o) => ACTIVE_STATUSES.has(o.status)).length;
   const menungguPenawaran = logisticOrders.filter((o) => PENDING_QUOTE_STATUSES.has(o.status)).length;
-  const menungguApproval  = logisticOrders.filter((o) => PENDING_APPROVAL_STATUSES.has(o.status)).length;
+  const menungguApproval  = logisticOrders.filter((o) => PENDING_APPROVAL_STATUSES.has(o.status)).length
+    + marketplaceRfqs.filter((o) => o.approvalStatus === "pending").length;
   const invoicePending    = dashStats?.invoiceOutstandingCount ?? 0;
   const invoiceAmount     = dashStats?.invoiceOutstandingAmount ?? 0;
   const recentOrders      = allOrders.slice(0, 8);

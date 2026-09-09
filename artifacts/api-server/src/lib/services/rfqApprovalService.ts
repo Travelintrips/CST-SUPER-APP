@@ -32,6 +32,7 @@ import { eq, and, inArray, desc } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
+import { getPortalCustomerContext } from "./portalCustomerContextService.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -485,6 +486,18 @@ export async function getBuyerRfqs(
   limit = 50,
   offset = 0,
 ): Promise<ApprovalRfqSummary[]> {
+  const context = await getPortalCustomerContext(portalCustomerId);
+  const ownershipWhere = context.customerType === "individual"
+    ? eq(mktRfqsTable.portalCustomerId, portalCustomerId)
+    : context.companyId
+      ? eq(mktRfqsTable.companyId, context.companyId)
+      : null;
+
+  // A company without an active canonical membership must not fall back to
+  // portal_customer_id: that would hide company RFQs from colleagues and can
+  // expose a stale creator-owned view after membership changes.
+  if (!ownershipWhere) return [];
+
   const rows = await db.select({
     id:                  mktRfqsTable.id,
     rfqNumber:           mktRfqsTable.rfqNumber,
@@ -504,7 +517,7 @@ export async function getBuyerRfqs(
     createdAt:           mktRfqsTable.createdAt,
   })
   .from(mktRfqsTable)
-  .where(eq(mktRfqsTable.portalCustomerId, portalCustomerId))
+  .where(ownershipWhere)
   .orderBy(desc(mktRfqsTable.createdAt))
   .limit(Math.min(limit, 200))
   .offset(offset);
