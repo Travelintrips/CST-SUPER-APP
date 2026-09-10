@@ -9169,8 +9169,14 @@ export default function BankReconciliationPage() {
             <Button variant="ghost" size="icon" onClick={() => refetch()} title="Refresh" className="h-8 w-8">
               <RefreshCw className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 h-8 text-xs" onClick={() => setShowDeleteAll(true)}>
-              <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Semua
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-700 h-8 text-xs"
+              onClick={() => setShowDeleteAll(true)}
+              title="Reset hasil rekonsiliasi development tanpa menghapus mutasi sumber"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" /> Reset Rekonsiliasi DEV
             </Button>
           </div>
         </div>
