@@ -110,6 +110,7 @@
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [Accounting master-data period lock](accounting-master-data-period-lock.md) — period-lock hanya untuk mutasi ledger; CRUD jurnal/COA/settings adalah master data dan tidak memerlukan tanggal transaksi.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
+- [Canonical repair diagnosis refresh](canonical-repair-diagnosis-refresh.md) — after admin repair, derive diagnostic state from live canonical ownership/journal tables, not persisted error snapshots.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.

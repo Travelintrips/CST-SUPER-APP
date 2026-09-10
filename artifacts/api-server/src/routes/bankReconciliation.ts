@@ -147,6 +147,7 @@ import {
   type ReconciliationRepairResult,
   type StructuredReconciliationDiagnosis,
 } from "../lib/reconciliation/structuredDiagnosis.js";
+import { classifyCanonicalRepairState } from "../lib/reconciliation/repairDiagnosis.js";
 
 const router = Router();
 
@@ -451,6 +452,7 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
 type ReconciliationRepairDisposition =
   | "sql_correction"
   | "auto_repair"
+  | "resolved"
   | "developer_action_required";
 
 type ReconciliationRepairRecord = {
@@ -670,6 +672,113 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     && companyId != null
     && Number(journal.company_id) === companyId;
 
+  // A canonical QRIS match is not itself an error. Re-read the canonical
+  // batch, its owner links, and its settlement journal before classifying the
+  // state. In particular, do not use an old provisional candidate snapshot or
+  // auto_post_details as the source of truth for this diagnosis.
+  let canonicalState: ReturnType<typeof classifyCanonicalRepairState> | null = null;
+  let canonicalCandidate: Record<string, unknown> | null = null;
+  let canonicalJournal: Record<string, unknown> | null = null;
+  if (
+    selectedMatch?.candidate_type === "qris_settlement"
+    && selectedMatch.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+    && Number.isSafeInteger(Number(selectedMatch.candidate_id))
+  ) {
+    const candidateId = Number(selectedMatch.candidate_id);
+    const candidateResult = await db.execute(sql`
+      SELECT
+        id, company_id, status, bank_mutation_id, canonical_bank_mutation_id,
+        settlement_journal_id, settlement_date::text AS settlement_date,
+        net_amount
+      FROM sport_center.payment_settlement_batches
+      WHERE id = ${candidateId}
+      LIMIT 1
+    `);
+    canonicalCandidate =
+      (candidateResult.rows[0] as Record<string, unknown> | undefined) ?? null;
+
+    const canonicalJournalId = canonicalCandidate?.settlement_journal_id == null
+      ? null
+      : Number(canonicalCandidate.settlement_journal_id);
+    if (canonicalJournalId != null && Number.isSafeInteger(canonicalJournalId)) {
+      const journalResult = await db.execute(sql`
+        SELECT id, status, journal_type, is_reversal, settlement_batch_id
+        FROM sport_center.accounting_journals
+        WHERE id = ${canonicalJournalId}
+        LIMIT 1
+      `);
+      canonicalJournal =
+        (journalResult.rows[0] as Record<string, unknown> | undefined) ?? null;
+    }
+
+    const approvedOwnerResult = await db.execute(sql`
+      SELECT mutation_id
+      FROM bank_reconciliation_matches
+      WHERE candidate_type = 'qris_settlement'
+        AND candidate_source = ${CANONICAL_SETTLEMENT_SOURCE}
+        AND candidate_id::text = ${String(candidateId)}
+        AND status = 'approved'
+    `);
+    canonicalState = classifyCanonicalRepairState({
+      mutationId,
+      mutationStatus,
+      mutationCompanyId: companyId,
+      mutationJournalEntryId: journalEntryId,
+      mutationDate: mutation.transaction_date == null
+        ? null
+        : String(mutation.transaction_date),
+      mutationAmount: mutation.amount == null ? null : String(mutation.amount),
+      approvedMatchCount: approvedMatches.length,
+      matchCandidateType: selectedMatch.candidate_type == null
+        ? null
+        : String(selectedMatch.candidate_type),
+      matchCandidateSource: selectedMatch.candidate_source == null
+        ? null
+        : String(selectedMatch.candidate_source),
+      matchCandidateId: selectedMatch.candidate_id == null
+        ? null
+        : String(selectedMatch.candidate_id),
+      canonicalSource: CANONICAL_SETTLEMENT_SOURCE,
+      candidateExists: canonicalCandidate != null,
+      candidateCompanyId: canonicalCandidate?.company_id == null
+        ? null
+        : Number(canonicalCandidate.company_id),
+      candidateStatus: canonicalCandidate?.status == null
+        ? null
+        : String(canonicalCandidate.status),
+      candidateBankMutationId: canonicalCandidate?.bank_mutation_id == null
+        ? null
+        : Number(canonicalCandidate.bank_mutation_id),
+      candidateCanonicalBankMutationId: canonicalCandidate?.canonical_bank_mutation_id == null
+        ? null
+        : Number(canonicalCandidate.canonical_bank_mutation_id),
+      candidateSettlementJournalId: canonicalJournalId,
+      candidateSettlementDate: canonicalCandidate?.settlement_date == null
+        ? null
+        : String(canonicalCandidate.settlement_date),
+      candidateNetAmount: canonicalCandidate?.net_amount == null
+        ? null
+        : String(canonicalCandidate.net_amount),
+      candidateApprovedMutationIds: (approvedOwnerResult.rows as Array<Record<string, unknown>>)
+        .map((row) => Number(row.mutation_id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0),
+      canonicalJournalExists: canonicalJournal != null,
+      canonicalJournalStatus: canonicalJournal?.status == null
+        ? null
+        : String(canonicalJournal.status),
+      canonicalJournalType: canonicalJournal?.journal_type == null
+        ? null
+        : String(canonicalJournal.journal_type),
+      canonicalJournalIsReversal: canonicalJournal?.is_reversal == null
+        ? null
+        : Boolean(canonicalJournal.is_reversal),
+      canonicalJournalSettlementBatchId: canonicalJournal?.settlement_batch_id == null
+        ? null
+        : Number(canonicalJournal.settlement_batch_id),
+      candidateId,
+    });
+  }
+
   let disposition: ReconciliationRepairDisposition = "developer_action_required";
   let code = "NO_SAFE_CORRECTION";
   let title = "Developer Action Required";
@@ -677,7 +786,12 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
   let sqlCorrection: string | null = null;
   let autoRepair: { method: "POST"; path: string; label: string } | null = null;
 
-  if (
+  if (canonicalState?.valid) {
+    disposition = "resolved";
+    code = canonicalState.code;
+    title = "Canonical State Valid";
+    reason = canonicalState.reason;
+  } else if (
     mutationStatus === "unmatched"
     && journalEntryId == null
     && approvedMatches.length === 1
@@ -721,8 +835,9 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     || selectedMatch?.candidate_type === "qris_settlement"
     || approvedMatches.length > 1
   ) {
-    code = "FINANCIAL_STATE_REQUIRES_REVIEW";
-    reason = "Kondisi menyentuh journal/ledger posted, settlement canonical, atau lebih dari satu owner match. SQL langsung tidak aman; gunakan reversal atau perbaikan owner yang sesuai.";
+    code = canonicalState?.code ?? "FINANCIAL_STATE_REQUIRES_REVIEW";
+    reason = canonicalState?.reason
+      ?? "Kondisi menyentuh journal/ledger posted, settlement canonical, atau lebih dari satu owner match. SQL langsung tidak aman; gunakan reversal atau perbaikan owner yang sesuai.";
   } else if (mutation.review_code || mutation.review_reason) {
     code = String(mutation.review_code ?? "MANUAL_REVIEW");
     reason = String(mutation.review_reason ?? "Mutasi memiliki alasan review manual yang belum memenuhi kontrak auto-repair.");
@@ -7705,6 +7820,11 @@ router.get("/:mutationId/repair-diagnosis", async (req, res) => {
   }
 
   try {
+    // This endpoint is a canonical-table read, not a replay of a persisted
+    // diagnostic. Never let browser/proxy cache or auto_post_details decide
+    // whether the current ownership state is valid.
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.set("Pragma", "no-cache");
     const diagnosis = await getReconciliationRepairDiagnosis(mutationId);
     if (!diagnosis) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
     return res.json({ ok: true, diagnosis });

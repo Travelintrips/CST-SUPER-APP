@@ -151,7 +151,7 @@ interface ReconciliationRepairDiagnosis {
     totalCredit: number | string | null;
     date: string | null;
   } | null;
-  disposition: "sql_correction" | "auto_repair" | "developer_action_required";
+  disposition: "sql_correction" | "auto_repair" | "resolved" | "developer_action_required";
   code: string;
   title: string;
   reason: string;
@@ -3907,6 +3907,26 @@ function CoaReferenceDialog({
 // Mutation Card
 // ─────────────────────────────────────────────────────────────────────────────
 
+function useCanonicalRepairDiagnosis(mutationId: number, enabled: boolean) {
+  return useQuery<{ ok: boolean; diagnosis: ReconciliationRepairDiagnosis }>({
+    queryKey: ["bank-repair-diagnosis", mutationId],
+    enabled: enabled && Number.isInteger(mutationId) && mutationId > 0,
+    queryFn: async () => {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+}
+
 function QrisMutationCard({
   m,
   audit,
@@ -3964,6 +3984,12 @@ function QrisMutationCard({
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
+  const canonicalDiagnosisQuery = useCanonicalRepairDiagnosis(
+    m.id,
+    audit.auto_post_status === "failed",
+  );
+  const canonicalStateResolved =
+    canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const allItems = audit.payment_items ?? [];
   const auditStatus = String(audit.status ?? "").toLowerCase();
   const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
@@ -4134,8 +4160,10 @@ function QrisMutationCard({
     ? "Sudah Direkonsiliasi"
     : audit.auto_post_status === "running"
       ? "Auto-post sedang berjalan"
-    : audit.auto_post_status === "failed"
+     : audit.auto_post_status === "failed" && !canonicalStateResolved
       ? "Auto-post gagal — Perlu Revisi"
+     : canonicalStateResolved
+       ? "Canonical state valid"
     : audit.auto_post_status === "succeeded"
       ? "Auto-post selesai"
      : canonicalHistoricalRepairReady
@@ -4156,7 +4184,8 @@ function QrisMutationCard({
   const positiveStatus = isCanonicalReconciled
     || isApproved
     || isDepleted
-    || audit.auto_post_status === "succeeded"
+     || audit.auto_post_status === "succeeded"
+     || canonicalStateResolved
     || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate
       && !hasCanonicalSettlementCandidate);
 
@@ -4252,7 +4281,7 @@ function QrisMutationCard({
                 </p>
               </div>
             )}
-            {audit.auto_post_status === "failed" && (
+            {audit.auto_post_status === "failed" && !canonicalStateResolved && (
               <div
                 className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
                 onClick={e => e.stopPropagation()}
@@ -5811,7 +5840,12 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
       if (!response.ok) throw new Error(body.error ?? response.statusText);
       return body;
     },
-    staleTime: 5_000,
+    // Repair diagnosis is derived from canonical tables. A persisted
+    // auto_post_details failure is historical evidence, not current truth.
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
   const autoRepairMut = useMutation({
     mutationFn: async (path: string) => {
@@ -5860,12 +5894,13 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
   if (!diagnosis) return null;
   const isSql = diagnosis.disposition === "sql_correction";
   const isAuto = diagnosis.disposition === "auto_repair";
+  const isResolved = diagnosis.disposition === "resolved";
   const isDeveloper = diagnosis.disposition === "developer_action_required";
-  const tone = isSql
+  const tone = isResolved || isAuto
+    ? "border-green-300 bg-green-50 text-green-950 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+    : isSql
     ? "border-blue-300 bg-blue-50 text-blue-950 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
-    : isAuto
-      ? "border-green-300 bg-green-50 text-green-950 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
-      : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100";
+    : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100";
 
   async function copySql() {
     const sql = diagnosis?.sql;
@@ -5881,11 +5916,24 @@ function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: 
   return (
     <section aria-labelledby="repair-diagnosis-title" className={`rounded-lg border px-3 py-3 ${tone}`}>
       <div className="flex items-start gap-2">
-        {isSql ? <FileText className="mt-0.5 h-4 w-4 shrink-0" /> : isAuto ? <Zap className="mt-0.5 h-4 w-4 shrink-0" /> : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}
+        {isResolved ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : isSql ? <FileText className="mt-0.5 h-4 w-4 shrink-0" /> : isAuto ? <Zap className="mt-0.5 h-4 w-4 shrink-0" /> : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p id="repair-diagnosis-title" className="text-sm font-semibold">{diagnosis.title}</p>
-            <Badge variant="outline" className="font-mono text-[10px]">{diagnosis.code}</Badge>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-[10px]"
+                disabled={diagnosisQuery.isFetching}
+                onClick={() => void diagnosisQuery.refetch()}
+              >
+                {diagnosisQuery.isFetching && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                Refresh state
+              </Button>
+              <Badge variant="outline" className="font-mono text-[10px]">{diagnosis.code}</Badge>
+            </div>
           </div>
           <p className="mt-1 text-xs leading-relaxed">{diagnosis.reason}</p>
 
@@ -6042,10 +6090,19 @@ function MutationDetailPanel({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
 }) {
+  const canonicalDiagnosisQuery = useCanonicalRepairDiagnosis(
+    mutation?.id ?? 0,
+    Boolean(
+      mutation
+      && (mutation.qris_candidate_audit ?? qrisAuditsForMutation(mutation)[0])?.auto_post_status === "failed",
+    ),
+  );
   if (!mutation) return null;
   const m     = mutation;
   const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
+  const canonicalStateResolved =
+    canonicalDiagnosisQuery.data?.diagnosis.code === "CANONICAL_STATE_VALID";
   const qrisGrossAmount = numericValue(qrisAudit?.gross_amount) ?? 0;
   const qrisNetAmount = numericValue(qrisAudit?.net_amount) ?? 0;
   const qrisStoredDeduction = numericValue(qrisAudit?.observed_deduction) ?? 0;
@@ -6333,7 +6390,7 @@ function MutationDetailPanel({
                       )}
                     </div>
 
-                    {qrisAudit.auto_post_status === "failed" && (
+                    {qrisAudit.auto_post_status === "failed" && !canonicalStateResolved && (
                       <div
                         className="rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
                         onClick={(event) => event.stopPropagation()}
