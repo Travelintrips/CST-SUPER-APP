@@ -4793,7 +4793,8 @@ router.post("/vendor-invite/:token/reject", async (req, res) => {
 
 // POST /api/portal/admin/vendor-invitations/:id/approve — admin approves an
 // accepted invitation and atomically activates the vendor, publishes the
-// supplier, creates the vendor account mapping, and publishes submitted items.
+// supplier, creates the vendor account mapping, and queues submitted items for
+// separate product review.
 router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -4802,6 +4803,13 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
     ? String((req as PortalAuthReq).portalCustomerId)
     : "admin";
   const portalOrigin = process.env.PORTAL_ORIGIN ?? `${req.protocol}://${req.get("host")}`;
+  const queuedProductNotifications: Array<{
+    catalogItemId: number;
+    submissionId: number;
+    productName: string;
+    vendorName: string;
+    supplierId: number;
+  }> = [];
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -5011,8 +5019,8 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
         }
       }
 
-      // Persist the approval before publishing products. Re-running the
-      // transaction keeps the same supplier and uses the NOT EXISTS guard.
+      // Persist the approval before creating product submissions. Re-running
+      // the transaction keeps the same supplier and uses the NOT EXISTS guard.
       await tx.execute(sql`
         UPDATE portal_vendor_invitations
         SET supplier_id = ${supplierId},
@@ -5030,36 +5038,118 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
           const pCat = typeof p.category === "string" ? p.category.trim() : null;
           const pCatKey = pCat && hasInCodeTemplate(pCat) ? pCat : null;
           const pTpl = pCatKey ? resolveTemplate(pCatKey) : null;
-          await tx.execute(sql`
-            INSERT INTO vendor_catalog_items
-              (vendor_id, vendor_name, type, name, description, kategori,
-               category_key, template_id, template_version, template_snapshot,
-               status, is_published, is_active, published_at, media_assets)
-            SELECT
-              ${supplierId}, ${persistedSupplierName}, 'product', ${productName},
-              ${p.description ?? null}, ${pCat}, ${pCatKey},
-              ${pTpl?.category ?? null}, ${pTpl?.version ?? null},
-              ${pTpl ? JSON.stringify(pTpl) : null}::jsonb,
-              'published', TRUE, TRUE, NOW(),
-              ${JSON.stringify((p.mediaUrls ?? []).map((u: string) => ({ url: u })))}::jsonb
-            WHERE NOT EXISTS (
-              SELECT 1 FROM vendor_catalog_items
-              WHERE vendor_id = ${supplierId}
-                AND type = 'product'
-                AND name = ${productName}
-            )
+
+          const existing = await tx.execute(sql`
+            SELECT id
+            FROM vendor_catalog_items
+            WHERE vendor_id = ${supplierId}
+              AND type = 'product'
+              AND name = ${productName}
+            LIMIT 1
           `);
+          if ((existing as any).rows?.length) continue;
+
+          const mediaAssets = Array.isArray(p.mediaUrls)
+            ? p.mediaUrls
+                .filter((u: unknown): u is string => typeof u === "string" && u.trim() !== "")
+                .map((url: string) => ({ url: url.trim() }))
+            : [];
+
+          const [submission] = await tx
+            .insert(vendorCatalogSubmissionsTable)
+            .values({
+              linkId:          null,
+              token:           randomUUID(),
+              supplierId,
+              vendorName:      persistedSupplierName,
+              categoryKey:     pCatKey,
+              serviceType:     "product",
+              templateKind:    "product",
+              templateId:      pTpl?.category ?? null,
+              templateVersion: pTpl?.version ?? null,
+              templateSnapshot: pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              specValues:      null,
+              name:            productName,
+              description:     typeof p.description === "string" ? p.description.trim() || null : null,
+              unit:            typeof p.unit === "string" ? p.unit.trim() || null : null,
+              mediaAssets,
+              priceBase:       "0",
+              currency:        "IDR",
+              status:          "submitted",
+            })
+            .returning({ id: vendorCatalogSubmissionsTable.id });
+
+          if (!submission) throw new Error(`Gagal membuat submission produk "${productName}"`);
+
+          const [catalogItem] = await tx
+            .insert(vendorCatalogItemsTable)
+            .values({
+              vendorId:          supplierId,
+              vendorName:        persistedSupplierName,
+              type:              "product",
+              name:              productName,
+              description:       typeof p.description === "string" ? p.description.trim() || null : null,
+              kategori:          pCat,
+              categoryKey:       pCatKey,
+              templateId:        pTpl?.category ?? null,
+              templateVersion:   pTpl?.version ?? null,
+              templateSnapshot:  pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              mediaAssets,
+              status:             "pending_review",
+              isPublished:       false,
+              isActive:           true,
+              sourceSubmissionId: submission.id,
+            })
+            .returning({ id: vendorCatalogItemsTable.id });
+
+          if (!catalogItem) throw new Error(`Gagal membuat item katalog "${productName}"`);
+
+          await tx
+            .update(vendorCatalogSubmissionsTable)
+            .set({ catalogItemId: catalogItem.id, updatedAt: new Date() })
+            .where(eq(vendorCatalogSubmissionsTable.id, submission.id));
+
+          queuedProductNotifications.push({
+            catalogItemId: catalogItem.id,
+            submissionId: submission.id,
+            productName,
+            vendorName: persistedSupplierName,
+            supplierId,
+          });
         }
       }
 
       return {
         supplierId,
+        queuedProducts: queuedProductNotifications.length,
         portalCustomerId,
         credentialEmail,
         credentialNeedsSetup,
         loginIdentifier: vendorEmail ? "email/password" : "WhatsApp OTP",
       };
     });
+
+    for (const product of queuedProductNotifications) {
+      void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+        type:         "vendor_product_submitted",
+        orderId:      product.catalogItemId,
+        orderNumber:  String(product.catalogItemId),
+        customerName: product.vendorName,
+        title:        "Produk Vendor Menunggu Persetujuan",
+        body:         `"${product.productName}" dari ${product.vendorName} menunggu review admin.`,
+        targetRole:   "admin",
+        supplierId:   product.supplierId,
+        productName:  product.productName,
+        catalogItemId: product.catalogItemId,
+        submissionId: product.submissionId,
+      }).catch((notificationError: unknown) => {
+        console.error("[portal] vendor invitation product notification failed", notificationError);
+      });
+    }
 
     let credentialSetup = result.loginIdentifier === "WhatsApp OTP"
       ? "whatsapp_otp"
@@ -5082,6 +5172,7 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
       login_url: `${portalOrigin}/login`,
       login_identifier: result.loginIdentifier,
       dashboard_url: `${portalOrigin}/vendor-dashboard`,
+      products_pending_review: result.queuedProducts,
     });
   } catch (e: any) {
     console.error("[portal] POST vendor-invitations approve error", e);

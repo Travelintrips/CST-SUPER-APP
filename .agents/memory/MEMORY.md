@@ -1,4 +1,5 @@
 - [Marketplace deal price concurrency](marketplace-deal-price-concurrency.md) — optimistic deal-price updates need a locked quote, checked update result, and monotonic millisecond timestamp.
+- [Vendor product approval boundary](vendor-product-approval-boundary.md) — every vendor-originated product, including onboarding products, must enter pending review before marketplace publication.
 - [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
