@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { getAuthHeaders } from "@/lib/auth";
 import { MarketplaceDealPriceEditor } from "@/components/admin/MarketplaceDealPriceEditor";
+import { MarketplaceVendorAssignment } from "@/components/admin/MarketplaceVendorAssignment";
 
 type ServiceSummary = {
   service_key: string;
@@ -255,7 +256,7 @@ export function ServiceOperationsTab() {
             <h2 className="text-2xl font-bold mt-2">Semua layanan dalam satu antrean</h2>
             <p className="text-slate-400 text-sm mt-1 max-w-2xl">
               Satu tampilan untuk transaksi canonical dari Marketplace, freight, trucking,
-              kepabeanan, dan request layanan. Detail dan tindakan tetap dibuka di modul BizPortal.
+              kepabeanan, dan request layanan. Detail serta tindakan Marketplace dikelola langsung dari panel ini.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -442,10 +443,10 @@ export function ServiceOperationsTab() {
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
                 <span className="mr-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Action</span>
                 {selected.service === "marketplace" && (
-                  <MarketplaceDealPriceEditor
-                    rfqId={selected.id}
-                    rfqStatus={String(selected.record["status"] ?? "")}
-                  />
+                  <>
+                    <MarketplaceVendorAssignment rfqId={selected.id} />
+                    <MarketplaceDealPriceEditor rfqId={selected.id} rfqStatus={String(selected.record["status"] ?? "")} />
+                  </>
                 )}
                 {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("approve") && (
                   <button type="button" disabled={actionBusy} onClick={() => void runAction("approve")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
@@ -468,12 +469,14 @@ export function ServiceOperationsTab() {
                   </button>
                 )}
               </div>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t pt-4">
-                <p className="text-xs text-slate-500">Action lifecycle memakai state machine atau update conditional canonical.</p>
-                <a href={String((rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.management_path) ?? "/bizportal/dashboard")} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
-                  <ExternalLink className="h-4 w-4" /> Buka modul BizPortal
-                </a>
-              </div>
+               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t pt-4">
+                 <p className="text-xs text-slate-500">Action lifecycle memakai state machine atau update conditional canonical.</p>
+                 {selected.service !== "marketplace" && (
+                   <a href={String((rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.management_path) ?? "/bizportal/dashboard")} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+                     <ExternalLink className="h-4 w-4" /> Buka modul BizPortal
+                   </a>
+                 )}
+               </div>
             </div>
           </div>
         </div>

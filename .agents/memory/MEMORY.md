@@ -150,3 +150,4 @@
 - [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
 - [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.
 - [Canonical correlation root parity](canonical-correlation-root-parity.md) — TS, views, routines, and list projections must reject malformed repeated `:supp:` markers consistently.
+- [Customer Portal marketplace vendor routing](customer-portal-marketplace-vendor-routing.md) — vendor onboarding and RFQ quote invitation are distinct, but product-owner routing belongs in Customer Portal.
