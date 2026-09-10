@@ -142,4 +142,45 @@ describe("structured QRIS reconciliation diagnosis", () => {
       'diagnosis: failedDiagnosis',
     );
   });
+
+  it("keeps posted-ledger repair fail-closed and scopes SQL correction to exact IDs", () => {
+    const diagnosisStart = bankReconciliationRouteSource.indexOf(
+      'router.get("/:mutationId/repair-diagnosis"',
+    );
+    const postStart = bankReconciliationRouteSource.indexOf(
+      'router.post("/:mutationId/post"',
+      diagnosisStart,
+    );
+    expect(diagnosisStart).toBeGreaterThanOrEqual(0);
+    expect(postStart).toBeGreaterThan(diagnosisStart);
+
+    const diagnosisSource = bankReconciliationRouteSource.slice(diagnosisStart, postStart);
+    expect(diagnosisSource).toContain("getReconciliationRepairDiagnosis");
+    expect(bankReconciliationRouteSource).toContain('"sql_correction"');
+    expect(bankReconciliationRouteSource).toContain('"auto_repair"');
+    expect(bankReconciliationRouteSource).toContain('"developer_action_required"');
+
+    const helperStart = bankReconciliationRouteSource.indexOf(
+      "function buildStaleApprovedMatchRepairSql",
+    );
+    const helperEnd = bankReconciliationRouteSource.indexOf(
+      "async function getReconciliationRepairDiagnosis",
+      helperStart,
+    );
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const sqlSource = bankReconciliationRouteSource.slice(helperStart, helperEnd);
+
+    expect(sqlSource).toContain("BEGIN;");
+    expect(sqlSource).toContain("RAISE EXCEPTION");
+    expect(sqlSource).toContain("'BEFORE' AS phase");
+    expect(sqlSource).toContain("'AFTER' AS phase");
+    expect(sqlSource).toContain("bank_mutations");
+    expect(sqlSource).toContain("bank_reconciliation_matches");
+    expect(sqlSource).toContain("bank_reconciliation_audit");
+    expect(sqlSource).toContain("journal_entry_id IS NULL");
+    expect(sqlSource).not.toMatch(/UPDATE\s+bank_mutations/i);
+    expect(sqlSource).not.toMatch(/DELETE\s+FROM/i);
+    expect(sqlSource).not.toMatch(/DROP\s+CONSTRAINT/i);
+  });
 });

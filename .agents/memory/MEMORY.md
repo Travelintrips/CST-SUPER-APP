@@ -143,5 +143,6 @@
 - [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
 - [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
 - [Legacy portal ownership](legacy-portal-ownership.md) — all-null historical Ocean/Trucking ownership is orphaned; never auto-map by mutable contact fields.
+- [Reconciliation repair diagnosis](reconciliation-repair-diagnosis.md) — emit exact SQL only for a journal-less stale approved match; posted/canonical financial states require guarded workflow or developer action.
 - [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
 - [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.

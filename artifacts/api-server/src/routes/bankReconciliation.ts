@@ -447,6 +447,368 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     ELSE ${alias}.status::text
   END`;
 }
+
+type ReconciliationRepairDisposition =
+  | "sql_correction"
+  | "auto_repair"
+  | "developer_action_required";
+
+type ReconciliationRepairRecord = {
+  table: string;
+  id: number | string | null;
+  role: string;
+};
+
+function sqlTextLiteral(value: unknown): string {
+  if (value == null) return "NULL";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function candidateRepairTable(candidateType: string | null, candidateSource: string | null): string {
+  if (candidateSource === CANONICAL_SETTLEMENT_SOURCE || candidateType === "qris_settlement") {
+    return "sport_center.payment_settlement_batches";
+  }
+  const tables: Record<string, string> = {
+    accounting_payment: "accounting_payments",
+    expense: "expenses",
+    invoice: "sales_documents",
+    logistic_order: "logistic_orders",
+    tenant_invoice: "tenant_invoices",
+    vendor_invoice: "vendor_invoices",
+    sport_payment: "sport_center.sport_payments",
+    recon_rule: "recon_rules",
+  };
+  return tables[String(candidateType ?? "")] ?? `candidate_type:${candidateType ?? "unknown"}`;
+}
+
+function buildStaleApprovedMatchRepairSql(input: {
+  mutationId: number;
+  companyId: number | null;
+  mutationStatus: string;
+  journalEntryId: number | null;
+  matchId: number;
+  candidateId: string;
+  candidateType: string | null;
+  candidateSource: string | null;
+  matchStatus: string;
+}): string {
+  const companySql = input.companyId == null ? "NULL" : String(input.companyId);
+  const journalSql = input.journalEntryId == null ? "NULL" : String(input.journalEntryId);
+  const candidateSql = sqlTextLiteral(input.candidateId);
+  const typeSql = sqlTextLiteral(input.candidateType);
+  const sourceSql = sqlTextLiteral(input.candidateSource);
+  const mutationStatusSql = sqlTextLiteral(input.mutationStatus);
+  const matchStatusSql = sqlTextLiteral(input.matchStatus);
+
+  return `BEGIN;
+
+-- Exact scoped repair diagnosis
+-- mutation_id=${input.mutationId}
+-- match_id=${input.matchId}
+-- candidate_id=${input.candidateId}
+-- journal_entry_id=${input.journalEntryId == null ? "NULL" : input.journalEntryId}
+
+SELECT
+  'BEFORE' AS phase,
+  bm.id AS mutation_id,
+  bm.company_id,
+  bm.status AS mutation_status,
+  bm.journal_entry_id,
+  brm.id AS match_id,
+  brm.candidate_id,
+  brm.candidate_type,
+  brm.candidate_source,
+  brm.status AS match_status
+FROM bank_mutations bm
+LEFT JOIN bank_reconciliation_matches brm
+  ON brm.id = ${input.matchId}
+ AND brm.mutation_id = ${input.mutationId}
+WHERE bm.id = ${input.mutationId};
+
+DO $$
+DECLARE
+  v_mutation RECORD;
+  v_match RECORD;
+BEGIN
+  SELECT id, company_id, status, journal_entry_id
+    INTO v_mutation
+  FROM bank_mutations
+  WHERE id = ${input.mutationId}
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: bank_mutations.id=${input.mutationId} tidak ditemukan';
+  END IF;
+  IF v_mutation.company_id IS DISTINCT FROM ${companySql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: company_id mutasi berubah (diagnosis=${companySql}, aktual=%)', v_mutation.company_id;
+  END IF;
+  IF v_mutation.status IS DISTINCT FROM ${mutationStatusSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: status mutasi berubah (diagnosis=${mutationStatusSql}, aktual=%)', v_mutation.status;
+  END IF;
+  IF v_mutation.journal_entry_id IS DISTINCT FROM ${journalSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: journal_entry_id mutasi berubah (diagnosis=${journalSql}, aktual=%)', v_mutation.journal_entry_id;
+  END IF;
+
+  SELECT id, mutation_id, candidate_id, candidate_type, candidate_source, status
+    INTO v_match
+  FROM bank_reconciliation_matches
+  WHERE id = ${input.matchId}
+    AND mutation_id = ${input.mutationId}
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: bank_reconciliation_matches.id=${input.matchId} tidak ditemukan untuk mutation_id=${input.mutationId}';
+  END IF;
+  IF v_match.status IS DISTINCT FROM ${matchStatusSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: status match berubah (diagnosis=${matchStatusSql}, aktual=%)', v_match.status;
+  END IF;
+  IF v_match.candidate_id IS DISTINCT FROM ${candidateSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_id berubah (diagnosis=${candidateSql}, aktual=%)', v_match.candidate_id;
+  END IF;
+  IF v_match.candidate_type IS DISTINCT FROM ${typeSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_type berubah';
+  END IF;
+  IF v_match.candidate_source IS DISTINCT FROM ${sourceSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_source berubah';
+  END IF;
+
+  UPDATE bank_reconciliation_matches
+  SET status = 'candidate'
+  WHERE id = ${input.matchId}
+    AND mutation_id = ${input.mutationId}
+    AND status = 'approved';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'REPAIR_ABORTED: match ${input.matchId} tidak lagi approved';
+  END IF;
+
+  INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+  VALUES (
+    ${input.mutationId},
+    'SQL_REPAIR_STALE_APPROVED_MATCH',
+    'sql-repair',
+    jsonb_build_object(
+      'match_id', ${input.matchId},
+      'candidate_id', ${candidateSql},
+      'candidate_type', ${typeSql},
+      'candidate_source', ${sourceSql},
+      'journal_entry_id', ${journalSql},
+      'reason', 'approved match tertinggal pada mutation unmatched tanpa journal'
+    )
+  );
+END $$;
+
+SELECT
+  'AFTER' AS phase,
+  bm.id AS mutation_id,
+  bm.company_id,
+  bm.status AS mutation_status,
+  bm.journal_entry_id,
+  brm.id AS match_id,
+  brm.candidate_id,
+  brm.candidate_type,
+  brm.candidate_source,
+  brm.status AS match_status
+FROM bank_mutations bm
+JOIN bank_reconciliation_matches brm
+  ON brm.id = ${input.matchId}
+ AND brm.mutation_id = ${input.mutationId}
+WHERE bm.id = ${input.mutationId}
+  AND bm.status = 'unmatched'
+  AND bm.journal_entry_id IS NULL
+  AND brm.status = 'candidate'
+  AND brm.candidate_id = ${candidateSql};
+
+COMMIT;`;
+}
+
+async function getReconciliationRepairDiagnosis(mutationId: number) {
+  const mutationResult = await db.execute(sql`
+    SELECT
+      id, company_id, status, journal_entry_id, review_code, review_reason,
+      reconciliation_status, mutation_key, description
+    FROM bank_mutations
+    WHERE id = ${mutationId}
+    LIMIT 1
+  `);
+  const mutation = mutationResult.rows[0] as Record<string, unknown> | undefined;
+  if (!mutation) return null;
+
+  const matchesResult = await db.execute(sql`
+    SELECT
+      id, mutation_id, candidate_id, candidate_type, candidate_source,
+      status, match_score, match_reason
+    FROM bank_reconciliation_matches
+    WHERE mutation_id = ${mutationId}
+    ORDER BY
+      CASE status WHEN 'approved' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+      id DESC
+  `);
+  const matches = matchesResult.rows as Array<Record<string, unknown>>;
+  const approvedMatches = matches.filter(row => String(row.status) === "approved");
+  const selectedMatch = approvedMatches[0] ?? matches[0] ?? null;
+
+  const journalEntryId = mutation.journal_entry_id == null
+    ? null
+    : Number(mutation.journal_entry_id);
+  let journal: Record<string, unknown> | null = null;
+  if (journalEntryId != null && Number.isSafeInteger(journalEntryId) && journalEntryId > 0) {
+    const journalResult = await db.execute(sql`
+      SELECT id, company_id, status, source, source_id, total_debit, total_credit, date::text AS date
+      FROM accounting_entries
+      WHERE id = ${journalEntryId}
+      LIMIT 1
+    `);
+    journal = (journalResult.rows[0] as Record<string, unknown> | undefined) ?? null;
+  }
+
+  const companyId = mutation.company_id == null ? null : Number(mutation.company_id);
+  const mutationStatus = String(mutation.status ?? "");
+  const journalIsBalanced = journal != null
+    && Math.abs(Number(journal.total_debit ?? 0) - Number(journal.total_credit ?? 0)) <= 0.01;
+  const journalCompanyMatches = journal != null
+    && companyId != null
+    && Number(journal.company_id) === companyId;
+
+  let disposition: ReconciliationRepairDisposition = "developer_action_required";
+  let code = "NO_SAFE_CORRECTION";
+  let title = "Developer Action Required";
+  let reason = "Kondisi rekonsiliasi tidak memenuhi kontrak perbaikan aman.";
+  let sqlCorrection: string | null = null;
+  let autoRepair: { method: "POST"; path: string; label: string } | null = null;
+
+  if (
+    mutationStatus === "unmatched"
+    && journalEntryId == null
+    && approvedMatches.length === 1
+    && selectedMatch != null
+  ) {
+    disposition = "sql_correction";
+    code = "STALE_APPROVED_MATCH_WITHOUT_JOURNAL";
+    title = "Bisa dikoreksi via SQL";
+    reason = "Satu match masih approved, tetapi mutasi sudah unmatched dan tidak memiliki journal entry. Hanya status match dan audit trail yang dikoreksi.";
+    sqlCorrection = buildStaleApprovedMatchRepairSql({
+      mutationId,
+      companyId,
+      mutationStatus,
+      journalEntryId,
+      matchId: Number(selectedMatch.id),
+      candidateId: String(selectedMatch.candidate_id ?? ""),
+      candidateType: selectedMatch.candidate_type == null ? null : String(selectedMatch.candidate_type),
+      candidateSource: selectedMatch.candidate_source == null ? null : String(selectedMatch.candidate_source),
+      matchStatus: String(selectedMatch.status),
+    });
+  } else if (
+    (mutationStatus === "approved_pending_posting" || mutationStatus === "approved")
+    && journalEntryId != null
+    && journal?.status === "draft"
+    && journalIsBalanced
+    && journalCompanyMatches
+    && approvedMatches.length === 1
+  ) {
+    disposition = "auto_repair";
+    code = "BALANCED_DRAFT_READY_TO_POST";
+    title = "Bisa diperbaiki otomatis";
+    reason = "Mutasi memiliki tepat satu match approved dan journal draft yang balance serta berada pada company yang sama.";
+    autoRepair = {
+      method: "POST",
+      path: `/api/bank-reconciliation/${mutationId}/post`,
+      label: "Perbaiki Otomatis",
+    };
+  } else if (
+    journalEntryId != null
+    || journal?.status === "posted"
+    || selectedMatch?.candidate_type === "qris_settlement"
+    || approvedMatches.length > 1
+  ) {
+    code = "FINANCIAL_STATE_REQUIRES_REVIEW";
+    reason = "Kondisi menyentuh journal/ledger posted, settlement canonical, atau lebih dari satu owner match. SQL langsung tidak aman; gunakan reversal atau perbaikan owner yang sesuai.";
+  } else if (mutation.review_code || mutation.review_reason) {
+    code = String(mutation.review_code ?? "MANUAL_REVIEW");
+    reason = String(mutation.review_reason ?? "Mutasi memiliki alasan review manual yang belum memenuhi kontrak auto-repair.");
+  }
+
+  const records: ReconciliationRepairRecord[] = [
+    { table: "bank_mutations", id: mutationId, role: "mutation" },
+  ];
+  if (selectedMatch) {
+    records.push({ table: "bank_reconciliation_matches", id: Number(selectedMatch.id), role: "match" });
+    records.push({
+      table: candidateRepairTable(
+        selectedMatch.candidate_type == null ? null : String(selectedMatch.candidate_type),
+        selectedMatch.candidate_source == null ? null : String(selectedMatch.candidate_source),
+      ),
+      id: String(selectedMatch.candidate_id ?? ""),
+      role: "candidate",
+    });
+  }
+  records.push({ table: "accounting_entries", id: journalEntryId, role: "journal_entry" });
+
+  return {
+    mutation: {
+      id: mutationId,
+      companyId,
+      status: mutationStatus,
+      journalEntryId,
+      reviewCode: mutation.review_code ?? null,
+      reviewReason: mutation.review_reason ?? null,
+      mutationKey: mutation.mutation_key ?? null,
+      description: mutation.description ?? null,
+    },
+    match: selectedMatch
+      ? {
+          id: Number(selectedMatch.id),
+          mutationId,
+          candidateId: String(selectedMatch.candidate_id ?? ""),
+          candidateType: selectedMatch.candidate_type ?? null,
+          candidateSource: selectedMatch.candidate_source ?? null,
+          status: selectedMatch.status ?? null,
+          matchScore: selectedMatch.match_score ?? null,
+          matchReason: selectedMatch.match_reason ?? null,
+        }
+      : null,
+    journal: journal
+      ? {
+          id: Number(journal.id),
+          companyId: journal.company_id ?? null,
+          status: journal.status ?? null,
+          source: journal.source ?? null,
+          sourceId: journal.source_id ?? null,
+          totalDebit: journal.total_debit ?? null,
+          totalCredit: journal.total_credit ?? null,
+          date: journal.date ?? null,
+        }
+      : null,
+    disposition,
+    code,
+    title,
+    reason,
+    records,
+    sql: sqlCorrection,
+    autoRepair,
+    verification: {
+      before: {
+        mutationId,
+        mutationStatus,
+        companyId,
+        journalEntryId,
+        matchId: selectedMatch ? Number(selectedMatch.id) : null,
+        candidateId: selectedMatch?.candidate_id ?? null,
+        matchStatus: selectedMatch?.status ?? null,
+      },
+      after: disposition === "sql_correction"
+        ? {
+            mutationId,
+            mutationStatus: "unmatched",
+            journalEntryId: null,
+            matchId: selectedMatch ? Number(selectedMatch.id) : null,
+            candidateId: selectedMatch?.candidate_id ?? null,
+            matchStatus: "candidate",
+          }
+        : null,
+    },
+  };
+}
 // The full-bank matching run can legitimately outlive the browser request
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
@@ -7328,6 +7690,30 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   } catch (e: any) {
     const code = e.code === "NOT_FOUND" ? 404 : e.code === "INVALID_STATUS" ? 409 : 500;
     return res.status(code).json({ error: e.message });
+  }
+});
+
+// ─── GET /api/bank-reconciliation/:mutationId/repair-diagnosis ────────────────
+// Returns a runtime-scoped diagnosis. SQL is emitted only for the
+// non-ledger stale-match case; posted journals and canonical settlement
+// ownership are deliberately fail-closed.
+router.get("/:mutationId/repair-diagnosis", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutationId = Number(req.params.mutationId);
+  if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+    return res.status(400).json({ error: "ID mutasi tidak valid" });
+  }
+
+  try {
+    const diagnosis = await getReconciliationRepairDiagnosis(mutationId);
+    if (!diagnosis) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
+    return res.json({ ok: true, diagnosis });
+  } catch (error: any) {
+    logger.error({ err: error, mutationId }, "[bankRecon] repair diagnosis failed");
+    return res.status(500).json({
+      error: "Diagnosis repair gagal membaca state runtime",
+      detail: error?.message ?? String(error),
+    });
   }
 });
 

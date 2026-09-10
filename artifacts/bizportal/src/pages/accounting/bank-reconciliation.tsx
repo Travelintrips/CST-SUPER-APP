@@ -117,6 +117,50 @@ interface MappingRequiredError {
   manual_review_required: true;
 }
 
+interface ReconciliationRepairDiagnosis {
+  mutation: {
+    id: number;
+    companyId: number | null;
+    status: string;
+    journalEntryId: number | null;
+    reviewCode: string | null;
+    reviewReason: string | null;
+    mutationKey: string | null;
+    description: string | null;
+  };
+  match: {
+    id: number;
+    mutationId: number;
+    candidateId: string;
+    candidateType: string | null;
+    candidateSource: string | null;
+    status: string | null;
+    matchScore: number | null;
+    matchReason: string | null;
+  } | null;
+  journal: {
+    id: number;
+    companyId: number | null;
+    status: string | null;
+    source: string | null;
+    sourceId: number | string | null;
+    totalDebit: number | string | null;
+    totalCredit: number | string | null;
+    date: string | null;
+  } | null;
+  disposition: "sql_correction" | "auto_repair" | "developer_action_required";
+  code: string;
+  title: string;
+  reason: string;
+  records: Array<{ table: string; id: number | string | null; role: string }>;
+  sql: string | null;
+  autoRepair: { method: "POST"; path: string; label: string } | null;
+  verification: {
+    before: Record<string, unknown>;
+    after: Record<string, unknown> | null;
+  };
+}
+
 // Real statuses from bank_mutations.status (backend contract):
 //   unmatched             → mutation synced but no candidate found
 //   matched               → candidate(s) found by matching engine
@@ -5750,6 +5794,176 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
   );
 }
 
+function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: boolean }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const diagnosisQuery = useQuery<{ ok: boolean; diagnosis: ReconciliationRepairDiagnosis }>({
+    queryKey: ["bank-repair-diagnosis", mutationId],
+    enabled: open && Number.isInteger(mutationId) && mutationId > 0,
+    queryFn: async () => {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+        credentials: "include",
+      });
+      const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    staleTime: 5_000,
+  });
+  const autoRepairMut = useMutation({
+    mutationFn: async (path: string) => {
+      const response = await fetch(path, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(() => ({ error: "Perbaikan otomatis gagal" }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    onSuccess: () => {
+      toast({ title: "Perbaikan otomatis berhasil", description: "State rekonsiliasi sudah diperbarui dan diverifikasi oleh endpoint posting." });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-repair-diagnosis", mutationId] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Perbaikan otomatis diblokir", description: error.message, variant: "destructive" });
+      qc.invalidateQueries({ queryKey: ["bank-repair-diagnosis", mutationId] });
+    },
+  });
+
+  if (!open) return null;
+  if (diagnosisQuery.isLoading) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+        <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
+        Membaca state mutation, match, candidate, dan journal…
+      </div>
+    );
+  }
+  if (diagnosisQuery.isError) {
+    return (
+      <Alert className="border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          Diagnosis repair gagal dibaca: {diagnosisQuery.error instanceof Error ? diagnosisQuery.error.message : "unknown error"}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const diagnosis = diagnosisQuery.data?.diagnosis;
+  if (!diagnosis) return null;
+  const isSql = diagnosis.disposition === "sql_correction";
+  const isAuto = diagnosis.disposition === "auto_repair";
+  const isDeveloper = diagnosis.disposition === "developer_action_required";
+  const tone = isSql
+    ? "border-blue-300 bg-blue-50 text-blue-950 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
+    : isAuto
+      ? "border-green-300 bg-green-50 text-green-950 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+      : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100";
+
+  async function copySql() {
+    const sql = diagnosis?.sql;
+    if (!sql) return;
+    try {
+      await navigator.clipboard.writeText(sql);
+      toast({ title: "SQL berhasil disalin" });
+    } catch {
+      toast({ title: "SQL tidak dapat disalin", description: "Salin dari kotak SQL secara manual.", variant: "destructive" });
+    }
+  }
+
+  return (
+    <section aria-labelledby="repair-diagnosis-title" className={`rounded-lg border px-3 py-3 ${tone}`}>
+      <div className="flex items-start gap-2">
+        {isSql ? <FileText className="mt-0.5 h-4 w-4 shrink-0" /> : isAuto ? <Zap className="mt-0.5 h-4 w-4 shrink-0" /> : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p id="repair-diagnosis-title" className="text-sm font-semibold">{diagnosis.title}</p>
+            <Badge variant="outline" className="font-mono text-[10px]">{diagnosis.code}</Badge>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed">{diagnosis.reason}</p>
+
+          <div className="mt-3 rounded border border-current/20 bg-background/50 p-2 text-[11px]">
+            <p className="font-semibold">Referensi runtime</p>
+            <div className="mt-1 space-y-0.5">
+              {diagnosis.records.map((record) => (
+                <p key={`${record.table}-${record.id}-${record.role}`} className="break-all">
+                  <span className="font-medium">{record.role}:</span> {record.table} · id={record.id ?? "NULL"}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          {isSql && diagnosis.sql && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold">SQL koreksi exact</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={copySql}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Copy SQL
+                </Button>
+              </div>
+              <Textarea
+                readOnly
+                value={diagnosis.sql}
+                className="min-h-56 resize-y bg-slate-950 font-mono text-[10px] leading-relaxed text-slate-100"
+                aria-label="SQL koreksi exact"
+              />
+              <p className="text-[11px] leading-relaxed">
+                SQL memiliki pre-check ownership/status, <code>BEGIN/COMMIT</code>, <code>RAISE EXCEPTION</code>, dan query verifikasi BEFORE/AFTER. Jangan jalankan jika data runtime sudah berubah.
+              </p>
+            </div>
+          )}
+
+          {isAuto && diagnosis.autoRepair && (
+            <Button
+              type="button"
+              size="sm"
+              className="mt-3 gap-1.5 bg-green-700 text-white hover:bg-green-800"
+              disabled={autoRepairMut.isPending}
+              onClick={() => autoRepairMut.mutate(diagnosis.autoRepair!.path)}
+            >
+              {autoRepairMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {autoRepairMut.isPending ? "Memperbaiki…" : diagnosis.autoRepair.label}
+            </Button>
+          )}
+
+          {isDeveloper && (
+            <p className="mt-3 text-xs font-semibold">
+              Tidak aman via SQL. Gunakan alur reversal/void, perbaiki ownership canonical, atau minta Developer Action Required sesuai kode di atas.
+            </p>
+          )}
+
+          <div className="mt-3 border-t border-current/20 pt-2 text-[11px]">
+            <p className="font-semibold">Ekspektasi verifikasi</p>
+            <p className="mt-1 break-all">
+              Before: mutation #{String(diagnosis.verification.before.mutationId)} status={String(diagnosis.verification.before.mutationStatus)}
+              {" · "}match #{String(diagnosis.verification.before.matchId ?? "NULL")} status={String(diagnosis.verification.before.matchStatus ?? "NULL")}
+              {" · "}journal #{String(diagnosis.verification.before.journalEntryId ?? "NULL")}
+            </p>
+            {diagnosis.verification.after && (
+              <p className="mt-1 break-all">
+                After: mutation status={String(diagnosis.verification.after.mutationStatus)}
+                {" · "}match status={String(diagnosis.verification.after.matchStatus)}
+                {" · "}journal #{String(diagnosis.verification.after.journalEntryId ?? "NULL")}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Detail Side Panel
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5911,6 +6125,7 @@ function MutationDetailPanel({
                         </AlertDescription>
                       </Alert>
                     )}
+                    <RepairDiagnosisBlock mutationId={m.id} open={open} />
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
                       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
