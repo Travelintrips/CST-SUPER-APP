@@ -74,6 +74,16 @@ const PROFILE_BY_CODE: Record<string, DiagnosisProfile> = {
     tableName: "sport_center.sport_payments",
     fieldNames: ["origin", "source", "payment_provider"],
   },
+  PORTAL_CSR_ORIGIN_INVALID: {
+    title: "Origin payment QRIS tidak valid",
+    rootCause: "Canonical origin payment tidak cocok dengan konfigurasi portal/source yang terdaftar.",
+    expectedValue: "Origin canonical yang terdaftar dan konsisten dengan payment source.",
+    adminAction: "Perbaiki konfigurasi origin pada source canonical. Jangan mengubah payment, settlement, atau jurnal secara manual.",
+    adminLocation: "Sport Center → Payment → konfigurasi origin/source",
+    tableName: "sport_center.payment_settlement_configs",
+    fieldNames: ["origin", "source", "portal_origin"],
+    retryAllowed: true,
+  },
   PAYMENT_NOT_CONFIRMED: {
     title: "Payment Sport Center belum confirmed",
     rootCause: "Payment belum mencapai status confirmed sehingga belum boleh menjadi bukti settlement.",
@@ -175,6 +185,68 @@ const PROFILE_BY_CODE: Record<string, DiagnosisProfile> = {
     fieldNames: ["payment_id", "settlement_id", "item_status"],
     retryAllowed: true,
   },
+  PROVIDER_MISMATCH: {
+    title: "Provider payment dan mutasi bank tidak cocok",
+    rootCause: "Provider pada payment canonical berbeda dari provider yang dibuktikan oleh mutasi atau konfigurasi settlement.",
+    expectedValue: "Provider payment, mutasi bank, dan settlement config yang sama.",
+    adminAction: "Periksa provider pada payment dan konfigurasi settlement owner-approved. Jangan mengganti provider berdasarkan tebakan.",
+    adminLocation: "Accounting → Bank Reconciliation → konfigurasi settlement QRIS",
+    tableName: "sport_center.sport_payments",
+    fieldNames: ["payment_provider", "provider_name", "provider_code", "bank_account_id"],
+    retryAllowed: true,
+  },
+  SETTLEMENT_OWNERSHIP_CONFLICT: {
+    title: "Ownership settlement payment bertentangan",
+    rootCause: "Payment sudah dimiliki settlement aktif atau posted lain sehingga approval kedua akan menyebabkan double-settlement.",
+    expectedValue: "Satu ownership settlement canonical untuk setiap payment.",
+    adminAction: "Review settlement pemilik payment dan muat ulang kandidat. Jangan menghapus ownership atau approve ulang.",
+    adminLocation: "Bank Reconciliation → settlement QRIS",
+    tableName: "sport_center.payment_settlement_items",
+    fieldNames: ["payment_id", "settlement_id", "item_status"],
+    retryAllowed: true,
+  },
+  CANONICAL_SETTLEMENT_SELECTION_CONFLICT: {
+    title: "Sebagian payment sudah diproses",
+    rootCause: "Payment yang dipilih berubah ownership saat approval berlangsung.",
+    expectedValue: "Hanya payment yang masih belum dimiliki settlement canonical.",
+    adminAction: "Muat ulang kandidat dan pilih hanya payment yang masih eligible. Jangan menghapus settlement yang sudah posted.",
+    adminLocation: "Bank Reconciliation → settlement QRIS",
+    tableName: "sport_center.payment_settlement_items",
+    fieldNames: ["payment_id", "settlement_id", "item_status"],
+    retryAllowed: true,
+  },
+  QRIS_PAYMENT_ALREADY_SETTLED: {
+    title: "Payment QRIS sudah tersettle",
+    rootCause: "Payment sudah memiliki settlement canonical sehingga approval ulang ditolak untuk mencegah double-settlement.",
+    expectedValue: "Payment belum memiliki settlement aktif atau posted.",
+    adminAction: "Muat ulang kandidat dan review settlement yang sudah memiliki payment tersebut.",
+    adminLocation: "Bank Reconciliation → settlement QRIS",
+    tableName: "sport_center.payment_settlement_items",
+    fieldNames: ["sport_payment_id", "settlement_id", "item_status"],
+    retryAllowed: true,
+  },
+  SCHEMA_QUERY_ERROR: {
+    title: "Perlu perbaikan sistem",
+    rootCause: "Query atau schema reconciliation gagal sehingga safeguard tidak dapat membuktikan state canonical.",
+    expectedValue: "Schema dan query canonical tersedia serta kompatibel dengan runtime.",
+    adminAction: null,
+    adminLocation: "Developer action — log aplikasi dan migrasi reconciliation",
+    tableName: null,
+    fieldNames: [],
+    developerAction: true,
+    retryAllowed: false,
+  },
+  MATCHING_EVIDENCE_INVALID: {
+    title: "Bukti matching canonical tidak valid",
+    rootCause: "Bukti source-aware untuk mutasi dan settlement tidak dapat dibuktikan unik.",
+    expectedValue: "Tepat satu bukti matching canonical untuk transaksi ini.",
+    adminAction: "Jangan mengubah database untuk menutupi error. Eskalasi dengan correlation ID kepada developer.",
+    adminLocation: "Developer action — komponen reconciliation canonical",
+    tableName: "bank_reconciliation_matches",
+    fieldNames: ["mutation_id", "candidate_id", "candidate_source", "status"],
+    developerAction: true,
+    retryAllowed: false,
+  },
   QRIS_CANDIDATE_CONFLICT: {
     title: "Snapshot kandidat QRIS berubah saat diproses",
     rootCause: "Proses lain memperbarui kandidat pada waktu yang sama.",
@@ -214,9 +286,13 @@ const PROFILE_BY_CODE: Record<string, DiagnosisProfile> = {
 function normalizeCode(error: any): string {
   const message = String(error?.message ?? error?.cause?.message ?? "").slice(0, 1000);
   const embedded = message.match(
-    /\b(?:PORTAL_SCP_ORIGIN_INVALID|PAYMENT_NOT_CONFIRMED|INVALID_CANDIDATE|CANONICAL_[A-Z0-9_]+|QRIS_[A-Z0-9_]+|MATCHING_IN_PROGRESS)\b/,
+    /\b(?:PORTAL_SCP_ORIGIN_INVALID|PORTAL_CSR_ORIGIN_INVALID|PAYMENT_NOT_CONFIRMED|INVALID_CANDIDATE|PROVIDER_MISMATCH|SETTLEMENT_OWNERSHIP_CONFLICT|SCHEMA_QUERY_ERROR|CANONICAL_[A-Z0-9_]+|QRIS_[A-Z0-9_]+|MATCHING_[A-Z0-9_]+)\b/,
   )?.[0];
-  return embedded ?? String(error?.code ?? error?.cause?.code ?? "QRIS_AUTO_POST_FAILED");
+  if (embedded) return embedded;
+  const driverCode = String(error?.code ?? error?.cause?.code ?? "");
+  if (/^(?:42P|427|428|42[A-Z])/.test(driverCode)) return "SCHEMA_QUERY_ERROR";
+  if (driverCode === "23505") return "QRIS_CANDIDATE_CONFLICT";
+  return driverCode || "QRIS_AUTO_POST_FAILED";
 }
 
 function errorMessage(error: any): string {

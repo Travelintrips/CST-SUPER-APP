@@ -141,6 +141,12 @@ import {
   checkQrisCandidateFreshness,
 } from "../lib/reconciliation/qrisCandidateContract.js";
 import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
+import {
+  asRepairResult,
+  buildQrisAutoPostDiagnosis,
+  type ReconciliationRepairResult,
+  type StructuredReconciliationDiagnosis,
+} from "../lib/reconciliation/structuredDiagnosis.js";
 
 const router = Router();
 
@@ -1433,102 +1439,47 @@ function qrisEsc(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-type QrisAutoPostDiagnostic = {
-  code: string;
-  stage: string;
-  problem: string;
-  revision: string;
-  action: string;
-  technicalDetail?: string | null;
-};
-
-function qrisAutoPostDiagnostic(error: any): QrisAutoPostDiagnostic {
+function qrisAutoPostDiagnostic(
+  error: any,
+  context: {
+    candidateId?: number | null;
+    mutationId?: number | null;
+    companyId?: number | null;
+    correlationId?: string | null;
+  } = {},
+): StructuredReconciliationDiagnosis {
   const postgresError = findPostgresError(error);
-  const message = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
+  const nestedMessage = typeof error?.cause?.message === "string"
+    ? error.cause.message.trim()
+    : "";
+  const directMessage = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
     .replace(/^Failed query:\s*/i, "")
     .trim()
     .slice(0, 500);
-  // Database-owned Sport Center functions can surface a domain code inside
-  // the exception message rather than as the driver error code. Preserve that
-  // code for the reviewer instead of collapsing it into P0001/QRIS_AUTO_POST_FAILED.
-  const embeddedCode = message.match(/\bPORTAL_SCP_ORIGIN_INVALID\b/)?.[0];
-  const code = embeddedCode
-    ?? String(error?.code ?? postgresError?.code ?? "QRIS_AUTO_POST_FAILED");
-  const stage = String(error?.qrisStage ?? (
-    code.includes("ORIGIN") ? "source payment Sport Center" :
-      code.includes("CONFIG") ? "konfigurasi MDR" :
-      code.includes("COA") ? "COA bank canonical" :
-        code.includes("JOURNAL") ? "jurnal settlement" :
-          code.includes("PAYMENT") ? "validasi payment" :
-            code.includes("BANK") || code.includes("MUTATION") ? "mutasi bank" :
-              "settlement canonical"
-  ));
-  const mapping: Record<string, { revision: string; action: string }> = {
-    PORTAL_SCP_ORIGIN_INVALID: {
-      revision: "Identitas origin/source payment pada Sport Center",
-      action: "Periksa payment yang dipilih dan pulihkan origin canonical melalui workflow sumber Sport Center. Jangan membuat settlement atau jurnal manual; setelah source valid, generate kandidat QRIS baru lalu retry scoped.",
+  // Database-owned functions surface domain codes inside exception messages.
+  // Keep the domain code in the shared contract instead of exposing a raw
+  // driver error such as P0001.
+  const message = nestedMessage && /^[A-Z][A-Z0-9_]+(?::|$)/.test(nestedMessage)
+    ? nestedMessage
+    : directMessage;
+  return buildQrisAutoPostDiagnosis(
+    {
+      ...error,
+      code: error?.code === "P0001" && nestedMessage
+        ? nestedMessage.match(/^[A-Z][A-Z0-9_]+/)?.[0]
+        : error?.code ?? postgresError?.code,
+      message,
+      detail: postgresError?.detail ?? error?.detail,
+      qrisStage: error?.qrisStage,
     },
-    PAYMENT_NOT_CONFIRMED: {
-      revision: "Status payment di Sport Center",
-      action: "Konfirmasi payment, lalu buat kandidat QRIS ulang.",
-    },
-    INVALID_CANDIDATE: {
-      revision: "Nominal/tanggal/provider/rekening pada sumber payment atau mutasi",
-      action: "Perbaiki sumber yang disebutkan, lalu generate kandidat QRIS ulang.",
-    },
-    CANONICAL_SETTLEMENT_CONFIG_UNRESOLVED: {
-      revision: "Konfigurasi MDR owner-approved untuk company, provider, rekening, dan tanggal settlement",
-      action: "Lengkapi atau aktifkan satu konfigurasi MDR owner-approved, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_CONFIG_AMBIGUOUS: {
-      revision: "Konfigurasi MDR owner-approved yang tumpang tindih",
-      action: "Sisakan satu konfigurasi yang berlaku untuk rekening dan tanggal tersebut, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_BANK_COA_UNRESOLVED: {
-      revision: "COA bank canonical",
-      action: "Hubungkan rekening bank ke COA postable canonical, lalu retry.",
-    },
-    CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: {
-      revision: "Jurnal payment Sport Center",
-      action: "Pastikan jurnal payment sudah posted melalui workflow akuntansi, lalu retry.",
-    },
-    CANONICAL_PAYMENT_JOURNAL_BRIDGE_UNRESOLVED: {
-      revision: "Bridge jurnal payment canonical",
-      action: "Perbaiki relasi payment ke jurnal canonical, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_JOURNAL_NOT_POSTED: {
-      revision: "Jurnal settlement canonical",
-      action: "Periksa posting jurnal settlement; jangan membuat jurnal manual, gunakan retry scoped.",
-    },
-    CANONICAL_SETTLEMENT_JOURNAL_NOT_BALANCED: {
-      revision: "Keseimbangan jurnal settlement",
-      action: "Perbaiki konfigurasi/COA yang menghasilkan jurnal tidak seimbang, lalu retry scoped.",
-    },
-    CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT: {
-      revision: "Status settlement payment",
-      action: "Muat ulang kandidat. Jika payment sudah dimiliki batch lain, jangan approve ulang.",
-    },
-  };
-  const guidance = mapping[code] ?? {
-    revision: "Data dan safeguard pada tahap auto-post yang disebutkan",
-    action: "Periksa detail teknis, revisi sumber/configuration terkait, lalu retry scoped setelah data konsisten.",
-  };
-  return {
-    code,
-    stage,
-    problem: message || "Safeguard canonical menahan auto-post.",
-    revision: guidance.revision,
-    action: guidance.action,
-    technicalDetail: postgresError?.detail
-      ? String(postgresError.detail).slice(0, 500)
-      : null,
-  };
+    context,
+  );
 }
 
 async function persistQrisAutoPostStatus(
   candidateId: number,
   status: "running" | "succeeded" | "failed",
-  diagnostic?: QrisAutoPostDiagnostic,
+  diagnostic?: StructuredReconciliationDiagnosis,
 ): Promise<boolean> {
   const details = diagnostic ? `'${qrisEsc(JSON.stringify(diagnostic))}'::jsonb` : "NULL";
   const result = await db.execute(sql.raw(`
@@ -1543,6 +1494,7 @@ async function persistQrisAutoPostStatus(
         auto_post_completed_at = ${status === "succeeded" ? "NOW()" : "NULL"},
         updated_at = NOW()
     WHERE id = ${candidateId}
+      AND COALESCE(auto_post_status, 'pending') <> 'succeeded'
       AND (
         '${status}' <> 'running'
         OR COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
@@ -1595,10 +1547,12 @@ async function triggerAutomaticQrisApproval(
           const body = await response.json().catch(
             () => ({} as Record<string, unknown>),
           ) as Record<string, any>;
-          const diagnostic = qrisAutoPostDiagnostic({
-            code: body?.code,
-            message: body?.error,
-          });
+          const diagnostic = body?.diagnosis?.errorCode
+            ? body.diagnosis as StructuredReconciliationDiagnosis
+            : qrisAutoPostDiagnostic(
+              { code: body?.code, message: body?.error },
+              { candidateId, companyId },
+            );
           await persistQrisAutoPostStatus(candidateId, "failed", diagnostic);
           continue;
         }
@@ -2209,9 +2163,14 @@ router.post("/qris-candidates/generate", async (req, res) => {
   await runQrisSettlementMigration();
   try {
     if (unifiedMatchingJobActive) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "MATCHING_IN_PROGRESS", message: "Matching mutasi bank masih berjalan." },
+        { companyId: Number(req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req)) },
+      );
       return res.status(409).json({
         error: "Matching mutasi bank masih berjalan. Tunggu sampai matching selesai sebelum membuat kandidat QRIS.",
         code: "MATCHING_IN_PROGRESS",
+        diagnosis,
       });
     }
     const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
@@ -2223,6 +2182,10 @@ router.post("/qris-candidates/generate", async (req, res) => {
       return res.status(400).json({
         error: "mutationId kandidat QRIS tidak valid",
         code: "INVALID_QRIS_MUTATION_ID",
+        diagnosis: buildQrisAutoPostDiagnosis(
+          { code: "INVALID_CANDIDATE", message: "mutationId kandidat QRIS tidak valid." },
+          { companyId: Number(companyId) },
+        ),
       });
     }
     const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
@@ -2282,14 +2245,266 @@ router.post("/qris-candidates/generate", async (req, res) => {
       "[bankRecon] POST /qris-candidates/generate failed",
     );
     if (postgresError?.code === "23505") {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "QRIS_CANDIDATE_CONFLICT", message: "Data audit QRIS berubah saat diproses." },
+        { companyId: Number(req.body?.companyId ?? req.body?.company_id ?? null) },
+      );
       return res.status(409).json({
         error: "Data audit QRIS berubah saat diproses. Muat ulang halaman lalu coba buat pemeriksaan QRIS lagi.",
         code: "QRIS_CANDIDATE_CONFLICT",
+        diagnosis,
       });
     }
+    const diagnosis = qrisAutoPostDiagnostic(
+      e,
+      {
+        mutationId: req.body?.mutationId ?? req.body?.mutation_id ?? null,
+        companyId: req.body?.companyId ?? req.body?.company_id ?? null,
+      },
+    );
     return res.status(500).json({
       error: "Gagal menyimpan pemeriksaan QRIS. Coba lagi, atau hubungi admin bila masalah berulang.",
       code: "QRIS_CANDIDATE_GENERATION_FAILED",
+      diagnosis,
+    });
+  }
+});
+
+// ─── POST /api/bank-reconciliation/qris-candidates/:id/repair ────────────────
+// The repair button is deliberately narrow: it may regenerate a provisional
+// candidate from the canonical Sport Center source and retry the existing
+// approval endpoint. It never edits payment values, provider, ownership, COA,
+// settlement, or journal state directly.
+router.post("/qris-candidates/:candidateId/repair", async (req, res) => {
+  const candidateId = Number(req.params.candidateId);
+  const companyId = resolveCompanyId(req);
+
+  try {
+    await runQrisSettlementMigration();
+    if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "INVALID_CANDIDATE_ID", message: "candidateId tidak valid." },
+        { companyId: Number.isSafeInteger(companyId) ? companyId : null },
+      );
+      return res.status(400).json({
+        ok: false,
+        error: "candidateId tidak valid",
+        code: "INVALID_CANDIDATE_ID",
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+    if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "INVALID_COMPANY_ID", message: "companyId tidak valid." },
+        { candidateId, companyId: null },
+      );
+      return res.status(400).json({
+        ok: false,
+        error: "companyId tidak valid",
+        code: "INVALID_COMPANY_ID",
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+
+    const { rows } = await db.execute(sql`
+      SELECT id, mutation_id, company_id, status, reconciliation_status,
+             auto_post_status, auto_post_details
+      FROM qris_mutation_batch_candidates
+      WHERE id = ${candidateId}
+        AND company_id = ${companyId}
+      LIMIT 1
+    `);
+    const candidate = rows[0] as Record<string, unknown> | undefined;
+    if (!candidate) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "NOT_FOUND", message: "Kandidat QRIS tidak ditemukan." },
+        { candidateId, companyId },
+      );
+      return res.status(404).json({
+        ok: false,
+        result: "DEVELOPER_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+      });
+    }
+
+    const storedDetails = typeof candidate.auto_post_details === "string"
+      ? (() => {
+        try {
+          return JSON.parse(candidate.auto_post_details as string);
+        } catch {
+          return null;
+        }
+      })()
+      : candidate.auto_post_details;
+    let diagnosis = storedDetails?.errorCode
+      ? storedDetails as StructuredReconciliationDiagnosis
+      : buildQrisAutoPostDiagnosis(
+        {
+          code: String(candidate.status ?? "").toLowerCase() === "stale"
+            ? "INVALID_CANDIDATE"
+            : "QRIS_AUTO_POST_FAILED",
+          message: "Kandidat QRIS perlu diperiksa dari source canonical.",
+        },
+        {
+          candidateId,
+          mutationId: Number(candidate.mutation_id),
+          companyId,
+        },
+      );
+
+    if (!diagnosis.canAutoFix || !diagnosis.retryAllowed) {
+      return res.status(200).json({
+        ok: false,
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+
+    const mutationId = Number(candidate.mutation_id);
+    if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+      diagnosis = {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: diagnosis.adminAction ?? diagnosis.action,
+      };
+      return res.status(200).json({
+        ok: false,
+        result: "ADMIN_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+      });
+    }
+
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_started",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { candidateId, mutationId, companyId, action: diagnosis.autoFixAction },
+    });
+
+    const regenerated = await generateQrisCandidates({
+      companyId,
+      mutationId,
+      dryRun: false,
+    });
+    const matchedMutationIds = regenerated.candidates
+      .filter((item) => item.status === "MATCHED")
+      .map((item) => Number(item.mutationId))
+      .filter((id) => Number.isSafeInteger(id) && id > 0);
+    const automaticCandidateIds = await findAutomaticQrisCandidateIds(
+      companyId,
+      matchedMutationIds,
+    );
+
+    if (automaticCandidateIds.length === 0) {
+      diagnosis = {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: diagnosis.adminAction ?? "Perbaiki data/configuration canonical yang ditunjukkan, lalu tekan Retry.",
+      };
+      audit(req, {
+        action: "qris_diagnosis_auto_repair_completed",
+        module: "bank-reconciliation",
+        resourceId: `qris-candidate-${candidateId}`,
+        after: { result: "ADMIN_ACTION_REQUIRED", candidateId, mutationId },
+      });
+      return res.status(200).json({
+        ok: false,
+        result: "ADMIN_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+        regenerated: {
+          generated: regenerated.generated,
+          persisted: regenerated.persisted,
+        },
+      });
+    }
+
+    await triggerAutomaticQrisApproval(req, automaticCandidateIds, companyId);
+    const { rows: latestRows } = await db.execute(sql`
+      SELECT id, mutation_id, auto_post_status, auto_post_details,
+             auto_post_problem, auto_post_action
+      FROM qris_mutation_batch_candidates
+      WHERE company_id = ${companyId}
+        AND mutation_id = ${mutationId}
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `);
+    const latest = latestRows[0] as Record<string, unknown> | undefined;
+    const latestDetails = typeof latest?.auto_post_details === "string"
+      ? (() => {
+        try {
+          return JSON.parse(latest.auto_post_details as string);
+        } catch {
+          return null;
+        }
+      })()
+      : latest?.auto_post_details;
+
+    if (String(latest?.auto_post_status ?? "").toLowerCase() === "succeeded") {
+      audit(req, {
+        action: "qris_diagnosis_auto_repair_completed",
+        module: "bank-reconciliation",
+        resourceId: `qris-candidate-${candidateId}`,
+        after: {
+          result: "FIXED_AND_RETRIED",
+          candidateId,
+          mutationId,
+          replacementCandidateId: latest?.id ?? null,
+        },
+      });
+      return res.json({
+        ok: true,
+        result: "FIXED_AND_RETRIED" satisfies ReconciliationRepairResult,
+        diagnosis,
+        replacementCandidateId: latest?.id ?? null,
+      });
+    }
+
+    const failedDiagnosis = latestDetails?.errorCode
+      ? latestDetails as StructuredReconciliationDiagnosis
+      : {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: String(latest?.auto_post_action ?? diagnosis.adminAction ?? diagnosis.action),
+        actualValue: {
+          ...(typeof diagnosis.actualValue === "object" && diagnosis.actualValue != null
+            ? diagnosis.actualValue as Record<string, unknown>
+            : {}),
+          retryStatus: latest?.auto_post_status ?? "failed",
+          retryProblem: latest?.auto_post_problem ?? null,
+        },
+      };
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_completed",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { result: asRepairResult(failedDiagnosis), candidateId, mutationId },
+    });
+    return res.status(200).json({
+      ok: false,
+      result: asRepairResult(failedDiagnosis),
+      diagnosis: failedDiagnosis,
+      replacementCandidateId: latest?.id ?? null,
+    });
+  } catch (error: any) {
+    const diagnosis = qrisAutoPostDiagnostic(
+      error,
+      { candidateId, companyId },
+    );
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_completed",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { result: asRepairResult(diagnosis), diagnosis },
+    });
+    return res.status(200).json({
+      ok: false,
+      result: asRepairResult(diagnosis),
+      diagnosis,
     });
   }
 });
@@ -4191,12 +4406,23 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       : directMessage && !directMessage.startsWith("Failed query:")
         ? directMessage
         : "Approval canonical QRIS gagal";
+    const diagnosis = qrisAutoPostDiagnostic(
+      { ...error, code, message: publicErrorMessage },
+      { candidateId, companyId },
+    );
+    await persistQrisAutoPostStatus(candidateId, "failed", diagnosis).catch((persistError) => {
+      logger.error(
+        { err: persistError?.message, candidateId, code },
+        "[bankRecon] failed to persist QRIS approval diagnosis",
+      );
+    });
     if (error?.eligibilityError) {
       return res.status(422).json({
         error: publicErrorMessage,
         code: "CANDIDATE_NOT_ELIGIBLE",
         reason_code: code,
         reconciliation_status: error?.reconciliation_status,
+        diagnosis,
       });
     }
     if (error instanceof QrisApprovalPaymentGuardError) {
@@ -4205,6 +4431,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         code: error.code,
         already_settled_payment_ids: error.alreadySettledPaymentIds,
         eligible_payment_ids: error.eligiblePaymentIds,
+        diagnosis,
       });
     }
     const clientErrorCodes = new Set([
@@ -4233,6 +4460,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     return res.status(status).json({
       error: publicErrorMessage,
       code,
+      diagnosis,
     });
   }
 });

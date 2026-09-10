@@ -804,6 +804,27 @@ interface QrisCandidateAudit {
   auto_post_revision?: string | null;
   auto_post_action?: string | null;
   auto_post_details?: {
+    errorCode?: string | null;
+    title?: string | null;
+    rootCause?: string | null;
+    affectedRecord?: {
+      type?: string;
+      id?: number | string | null;
+      mutationId?: number | null;
+      companyId?: number | null;
+    } | null;
+    expectedValue?: unknown;
+    actualValue?: unknown;
+    canAutoFix?: boolean;
+    autoFixAction?: string | null;
+    adminAction?: string | null;
+    adminLocation?: string | null;
+    tableName?: string | null;
+    recordId?: number | string | null;
+    fieldNames?: string[];
+    retryAllowed?: boolean;
+    correlationId?: string | null;
+    component?: string | null;
     code?: string | null;
     stage?: string | null;
     problem?: string | null;
@@ -3856,6 +3877,7 @@ function QrisMutationCard({
   onToggleAllQrisPayments,
   onRunMatching,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   qrisGenerationPending,
   mappingError,
 }: {
@@ -3887,6 +3909,7 @@ function QrisMutationCard({
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
@@ -4186,23 +4209,56 @@ function QrisMutationCard({
                 <div className="flex items-start gap-2">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
                   <div className="min-w-0 flex-1 space-y-1.5">
-                    <p className="font-semibold">Auto-post QRIS tertahan oleh safeguard</p>
-                    <p><strong>Masalahnya:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
-                    <p><strong>Perlu direvisi di:</strong> {audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
-                    <p><strong>Cara memperbaiki:</strong> {audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
-                    {audit.auto_post_details?.code && (
-                      <p className="text-[10px] opacity-75">Kode: {audit.auto_post_details.code}</p>
+                    <p className="font-semibold">
+                      {audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                    </p>
+                    <p><strong>Apa yang salah:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    {audit.auto_post_details?.rootCause && (
+                      <p><strong>Kenapa diblokir:</strong> {audit.auto_post_details.rootCause}</p>
                     )}
-                    {onGenerateQrisCandidates && (
+                    {audit.auto_post_details?.actualValue != null && (
+                      <p>
+                        <strong>Data aktual:</strong>{" "}
+                        {typeof audit.auto_post_details.actualValue === "string"
+                          ? audit.auto_post_details.actualValue
+                          : JSON.stringify(audit.auto_post_details.actualValue)}
+                      </p>
+                    )}
+                    {audit.auto_post_details?.expectedValue != null && (
+                      <p>
+                        <strong>Data seharusnya:</strong>{" "}
+                        {typeof audit.auto_post_details.expectedValue === "string"
+                          ? audit.auto_post_details.expectedValue
+                          : JSON.stringify(audit.auto_post_details.expectedValue)}
+                      </p>
+                    )}
+                    <p><strong>Perlu diperbaiki di:</strong> {audit.auto_post_details?.adminLocation ?? audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
+                    {audit.auto_post_details?.tableName && (
+                      <p>
+                        <strong>Lokasi data:</strong> {audit.auto_post_details.tableName}
+                        {audit.auto_post_details.recordId != null ? `, id=${audit.auto_post_details.recordId}` : ""}
+                      </p>
+                    )}
+                    {(audit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
+                      <p><strong>Field:</strong> {audit.auto_post_details?.fieldNames?.join(", ")}</p>
+                    )}
+                    <p><strong>Langkah:</strong> {audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    {(audit.auto_post_details?.errorCode ?? audit.auto_post_details?.code) && (
+                      <p className="text-[10px] opacity-75">
+                        Kode: {audit.auto_post_details.errorCode ?? audit.auto_post_details.code}
+                        {audit.auto_post_details.correlationId ? ` · ID: ${audit.auto_post_details.correlationId}` : ""}
+                      </p>
+                    )}
+                    {onRepairQrisCandidate && audit.id != null && (
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
                         className="mt-1 h-7 border-red-300 bg-white text-[11px] text-red-900 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-100"
                         disabled={qrisGenerationPending}
-                        onClick={() => onGenerateQrisCandidates(m.id)}
+                        onClick={() => onRepairQrisCandidate(audit.id!)}
                       >
-                        {qrisGenerationPending ? "Mencoba ulang..." : "Periksa ulang & retry scoped"}
+                        {qrisGenerationPending ? "Memeriksa & memperbaiki..." : "Periksa & Perbaiki Otomatis"}
                       </Button>
                     )}
                   </div>
@@ -4726,6 +4782,7 @@ function MutationCard({
   onRunMatching,
   onRetryMatching,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   qrisGenerationPending,
   retryReferenceCoaPending,
   retryMatchingPending,
@@ -4771,6 +4828,7 @@ function MutationCard({
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onRetryMatching?: (m: BankMutation) => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   qrisGenerationPending?: boolean;
   retryReferenceCoaPending?: boolean;
   retryMatchingPending?: boolean;
@@ -4847,6 +4905,7 @@ function MutationCard({
             onToggleAllQrisPayments={onToggleAllQrisPayments}
             onRunMatching={onRunMatching}
             onGenerateQrisCandidates={onGenerateQrisCandidates}
+            onRepairQrisCandidate={onRepairQrisCandidate}
             qrisGenerationPending={qrisGenerationPending}
             mappingError={mappingError}
           />
@@ -5707,12 +5766,14 @@ function MutationDetailPanel({
   onManualOverrideCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   matchingPending,
   mappingError,
   onApproveQrisBatch,
   onRecoverQrisSettlement,
   recoverQrisPending,
   approveQrisPending,
+  repairQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -5732,12 +5793,14 @@ function MutationDetailPanel({
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   recoverQrisPending?: boolean;
   approveQrisPending?: boolean;
+  repairQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -6031,6 +6094,85 @@ function MutationDetailPanel({
                         </>
                       )}
                     </div>
+
+                    {qrisAudit.auto_post_status === "failed" && (
+                      <div
+                        className="rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <p className="font-semibold">
+                          {qrisAudit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                        </p>
+                        <p className="mt-1">
+                          <strong>Apa yang salah:</strong>{" "}
+                          {qrisAudit.auto_post_problem
+                            ?? qrisAudit.auto_post_details?.problem
+                            ?? "Safeguard canonical menahan proses."}
+                        </p>
+                        {qrisAudit.auto_post_details?.rootCause && (
+                          <p className="mt-1"><strong>Kenapa diblokir:</strong> {qrisAudit.auto_post_details.rootCause}</p>
+                        )}
+                        {qrisAudit.auto_post_details?.actualValue != null && (
+                          <p className="mt-1">
+                            <strong>Data aktual:</strong>{" "}
+                            {typeof qrisAudit.auto_post_details.actualValue === "string"
+                              ? qrisAudit.auto_post_details.actualValue
+                              : JSON.stringify(qrisAudit.auto_post_details.actualValue)}
+                          </p>
+                        )}
+                        {qrisAudit.auto_post_details?.expectedValue != null && (
+                          <p className="mt-1">
+                            <strong>Data seharusnya:</strong>{" "}
+                            {typeof qrisAudit.auto_post_details.expectedValue === "string"
+                              ? qrisAudit.auto_post_details.expectedValue
+                              : JSON.stringify(qrisAudit.auto_post_details.expectedValue)}
+                          </p>
+                        )}
+                        <p className="mt-1">
+                          <strong>Perlu diperbaiki di:</strong>{" "}
+                          {qrisAudit.auto_post_details?.adminLocation
+                            ?? qrisAudit.auto_post_revision
+                            ?? "Data/configuration canonical"}
+                        </p>
+                        {qrisAudit.auto_post_details?.tableName && (
+                          <p className="mt-1">
+                            <strong>Lokasi data:</strong> {qrisAudit.auto_post_details.tableName}
+                            {qrisAudit.auto_post_details.recordId != null
+                              ? `, id=${qrisAudit.auto_post_details.recordId}`
+                              : ""}
+                          </p>
+                        )}
+                        {(qrisAudit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
+                          <p className="mt-1"><strong>Field:</strong> {qrisAudit.auto_post_details?.fieldNames?.join(", ")}</p>
+                        )}
+                        <p className="mt-1">
+                          <strong>Langkah:</strong>{" "}
+                          {qrisAudit.auto_post_details?.adminAction
+                            ?? qrisAudit.auto_post_action
+                            ?? "Perbaiki data terkait lalu coba lagi."}
+                        </p>
+                        {(qrisAudit.auto_post_details?.errorCode ?? qrisAudit.auto_post_details?.code) && (
+                          <p className="mt-1 text-[10px] opacity-75">
+                            Kode: {qrisAudit.auto_post_details.errorCode ?? qrisAudit.auto_post_details.code}
+                            {qrisAudit.auto_post_details.correlationId
+                              ? ` · ID: ${qrisAudit.auto_post_details.correlationId}`
+                              : ""}
+                          </p>
+                        )}
+                        {onRepairQrisCandidate && qrisAudit.id != null && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-2 gap-1.5 border-red-400 text-red-900 hover:bg-red-100 dark:border-red-700 dark:text-red-100 dark:hover:bg-red-900/40"
+                            disabled={matchingPending || repairQrisPending}
+                            onClick={() => onRepairQrisCandidate(qrisAudit.id!)}
+                          >
+                            {(matchingPending || repairQrisPending) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                            {(matchingPending || repairQrisPending) ? "Memeriksa & memperbaiki..." : "Periksa & Perbaiki Otomatis"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
 
                     {/* Payment items list */}
                     {(qrisAudit.payment_items?.length ?? 0) > 0 && (
@@ -7172,6 +7314,56 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
+  });
+
+  const qrisRepairMut = useMutation({
+    mutationFn: async (candidateId: number) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/qris-candidates/${candidateId}/repair`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ companyId: qrisCompanyId }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Periksa & perbaiki otomatis gagal");
+      }
+      return body as {
+        ok: boolean;
+        result: "FIXED_AND_RETRIED" | "ADMIN_ACTION_REQUIRED" | "DEVELOPER_ACTION_REQUIRED";
+        diagnosis?: QrisCandidateAudit["auto_post_details"];
+      };
+    },
+    onSuccess: async (result) => {
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      if (result.result === "FIXED_AND_RETRIED") {
+        toast({
+          title: "Perbaikan otomatis berhasil",
+          description: "Kandidat dibuat ulang dari source canonical dan retry scoped berhasil.",
+        });
+      } else if (result.result === "ADMIN_ACTION_REQUIRED") {
+        toast({
+          title: "Perlu tindakan admin",
+          description: "Data aktual dan lokasi perbaikannya sudah ditampilkan pada kartu diagnosis.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Perlu Perbaikan Sistem",
+          description: "Safeguard tetap fail-closed. Gunakan correlation ID pada diagnosis saat eskalasi.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (e: Error) => toast({
+      title: "Gagal memeriksa & memperbaiki otomatis",
+      description: e.message,
+      variant: "destructive",
+    }),
   });
 
   const qrisPaymentDateMut = useMutation({
@@ -9413,10 +9605,15 @@ export default function BankReconciliationPage() {
                       }
                        matchMut.mutate(mode);
                     }}
+                  onRepairQrisCandidate={
+                    qrisCompanyId != null && workflowStage !== "matching"
+                      ? (candidateId) => qrisRepairMut.mutate(candidateId)
+                      : undefined
+                  }
           onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
                        ? (mutationId) => qrisDryRunMut.mutate(mutationId)
                       : undefined}
-                   qrisGenerationPending={qrisDryRunMut.isPending}
+                    qrisGenerationPending={qrisDryRunMut.isPending || qrisRepairMut.isPending}
                   retryReferenceCoaPending={retryReferenceCoaMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
@@ -9775,6 +9972,11 @@ export default function BankReconciliationPage() {
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
         onApproveCandidate={handleDirectApproveCandidate}
+        onRepairQrisCandidate={
+          qrisCompanyId != null && workflowStage !== "matching"
+            ? (candidateId) => qrisRepairMut.mutate(candidateId)
+            : undefined
+        }
         onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
           ? (mutationId) => qrisDryRunMut.mutate(mutationId)
           : undefined}
@@ -9792,6 +9994,7 @@ export default function BankReconciliationPage() {
          recoverQrisPending={recoverQrisSettlementMut.isPending}
         onManualOverrideCandidate={handleManualOverrideCandidate}
         approveQrisPending={approveQrisBatchMut.isPending}
+         repairQrisPending={qrisRepairMut.isPending}
         selectedQrisPaymentIds={
           detailMutation?.qris_candidate_audit?.id != null
             ? selectedPaymentIdsForCandidate(detailMutation.qris_candidate_audit)
