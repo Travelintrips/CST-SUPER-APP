@@ -18,6 +18,14 @@ When removing development accounting descendants, match fleet-ledger mirrors by 
 
 **How to apply:** Build the purge manifest with the exact source discriminator, lock writers first, and fail closed if the manifest differs from the audited counts.
 
+## User-triggered mutation purge
+
+A user-facing hard-delete action for development bank mutations must require an authenticated internal admin, remain unavailable outside development, and share a database advisory lock with every matching run. Keep foreign keys enabled and exclude journal-, posting-, and settlement-owned mutations.
+
+**Why:** A process-local “matching active” flag cannot coordinate multiple API instances, and a destructive route on a broadly mounted reconciliation router is otherwise vulnerable to unauthenticated deletion.
+
+**How to apply:** Authorize before migrations or database work, acquire the shared transaction advisory lock before source-table locks, return conflict on contention, and report preserved rows instead of forcing deletion.
+
 ## Cross-module settlement boundary
 
 The DEV reconciliation reset should remove reconciliation postings and candidates but retain source bank mutations that are referenced by customer-portal or Sport Center settlement records.

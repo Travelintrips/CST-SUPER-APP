@@ -7475,6 +7475,7 @@ export default function BankReconciliationPage() {
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
+  const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
     error: string;
@@ -8911,6 +8912,31 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal hapus semua", description: e.message, variant: "destructive" }),
   });
 
+  const purgeMutations = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      return body;
+    },
+    onSuccess: (d) => {
+      toast({
+        title: "Mutasi DEV dihapus",
+        description:
+          `${d.mutations_deleted ?? 0} mutasi dan ${d.imports_deleted ?? 0} hasil import dihapus permanen. ` +
+          `${d.mutations_preserved ?? 0} mutasi dipertahankan karena masih memiliki posting atau settlement.`,
+      });
+      setPage(0);
+      invalidate();
+    },
+    onError: (e: Error) => {
+      toast({ title: "Gagal menghapus mutasi", description: e.message, variant: "destructive" });
+    },
+  });
+
   const deleteMut = useMutation({
     mutationFn: async (mutId: number) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}`, { method: "DELETE", credentials: "include" });
@@ -9172,11 +9198,20 @@ export default function BankReconciliationPage() {
             <Button
               variant="ghost"
               size="sm"
-              className="text-red-600 hover:text-red-700 h-8 text-xs"
+              className="h-8 text-xs"
               onClick={() => setShowDeleteAll(true)}
               title="Reset hasil rekonsiliasi development tanpa menghapus mutasi sumber"
             >
-              <Trash2 className="w-3.5 h-3.5 mr-1" /> Reset Rekonsiliasi DEV
+              <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset Rekonsiliasi DEV
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-700 h-8 text-xs"
+              onClick={() => setShowPurgeMutations(true)}
+              title="Hapus permanen mutasi development yang tidak terhubung ke posting atau settlement"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi DEV
             </Button>
           </div>
         </div>
@@ -10964,6 +10999,31 @@ export default function BankReconciliationPage() {
               disabled={deleteAllMut.isPending}
             >
               {deleteAllMut.isPending ? "Mereset..." : "Reset Rekonsiliasi"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Purge Source Mutations Confirmation ──────────────────── */}
+      <AlertDialog open={showPurgeMutations} onOpenChange={setShowPurgeMutations}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Permanen Mutasi DEV?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Mutasi bank, hasil import, dan data rekonsiliasi turunannya yang belum memiliki posting atau settlement akan
+              dihapus permanen. Mutasi yang sudah terhubung ke jurnal atau settlement tetap dipertahankan. Riwayat batch
+              import mentah tetap disimpan untuk audit. Data yang masih ada di Google Sheet dapat masuk kembali saat
+              sinkronisasi berikutnya.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { setShowPurgeMutations(false); purgeMutations.mutate(); }}
+              disabled={purgeMutations.isPending}
+            >
+              {purgeMutations.isPending ? "Menghapus..." : "Ya, Hapus Permanen"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

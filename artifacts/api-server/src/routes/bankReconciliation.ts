@@ -9324,6 +9324,21 @@ router.post("/run-matching", async (req, res) => {
       "[bankRecon] background matching completed",
     );
   };
+  const runWorkersWithDatabaseCoordination = async () => {
+    await db.transaction(async (lockTx) => {
+      const lockResult = await lockTx.execute(sql`
+        SELECT pg_try_advisory_xact_lock(
+          hashtextextended('bank_reconciliation_mutation_write_v1', 0)
+        ) AS acquired
+      `);
+      if (!(lockResult.rows[0] as { acquired?: boolean } | undefined)?.acquired) {
+        const busyError = new Error("Proses rekonsiliasi lain sedang berjalan.") as Error & { code?: string };
+        busyError.code = "RECONCILIATION_JOB_BUSY";
+        throw busyError;
+      }
+      await runWorkers();
+    });
+  };
 
   if (!ids?.length) {
     if (unifiedMatchingJobActive) {
@@ -9337,7 +9352,7 @@ router.post("/run-matching", async (req, res) => {
 
     unifiedMatchingJobActive = true;
     setImmediate(() => {
-      runWorkers()
+      runWorkersWithDatabaseCoordination()
         .catch((e: any) => logger.error({ err: e }, "[bankRecon] background matching failed"))
         .finally(() => {
           unifiedMatchingJobActive = false;
@@ -9357,7 +9372,14 @@ router.post("/run-matching", async (req, res) => {
     });
   }
 
-  await runWorkers();
+  try {
+    await runWorkersWithDatabaseCoordination();
+  } catch (e: any) {
+    if (e?.code === "RECONCILIATION_JOB_BUSY") {
+      return res.status(409).json({ error: e.message });
+    }
+    throw e;
+  }
   return res.json({
     ok: true,
     processed,
@@ -9632,6 +9654,128 @@ router.delete("/delete-all", async (req, res) => {
     logger.error({ actor, err: e }, "[bankRecon] DEV reconciliation reset failed");
     return res.status(500).json({
       error: e?.message ?? "Reset rekonsiliasi DEV gagal.",
+    });
+  }
+});
+
+// ─── DELETE /api/bank-reconciliation/purge-mutations ─────────────────────────
+router.delete("/purge-mutations", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  await runBankReconciliationCoreMigration();
+  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "authenticated-admin";
+
+  if (process.env.APP_ENV !== "development") {
+    return res.status(403).json({
+      error: "Hapus permanen mutasi hanya tersedia di environment development.",
+    });
+  }
+  if (unifiedMatchingJobActive) {
+    return res.status(409).json({
+      error: "Matching masih berjalan. Tunggu hingga selesai sebelum menghapus mutasi.",
+    });
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
+      const lockResult = await tx.execute(sql`
+        SELECT pg_try_advisory_xact_lock(
+          hashtextextended('bank_reconciliation_mutation_write_v1', 0)
+        ) AS acquired
+      `);
+      if (!(lockResult.rows[0] as { acquired?: boolean } | undefined)?.acquired) {
+        const busyError = new Error("Matching atau proses rekonsiliasi lain sedang berjalan.") as Error & { code?: string };
+        busyError.code = "RECONCILIATION_JOB_BUSY";
+        throw busyError;
+      }
+      await tx.execute(sql`
+        LOCK TABLE bank_mutations, bank_mutation_imports
+        IN ACCESS EXCLUSIVE MODE
+      `);
+
+      // Only source rows without accounting or cross-module settlement
+      // ownership may be hard-deleted. Foreign keys remain enabled so any
+      // unclassified live dependency fails the whole transaction.
+      await tx.execute(sql`
+        CREATE TEMP TABLE _dev_purge_mutation_ids ON COMMIT DROP AS
+        SELECT bm.id
+        FROM bank_mutations bm
+        WHERE bm.journal_entry_id IS NULL
+          AND COALESCE(bm.accounting_posted, false) = false
+          AND LOWER(COALESCE(bm.status::text, 'unmatched')) NOT IN ('approved', 'posted')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM customer_portal_settlement_batches cpsb
+            WHERE cpsb.canonical_bank_mutation_id = bm.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sport_center.payment_settlement_batches spsb
+            WHERE spsb.bank_mutation_id = bm.id
+               OR spsb.canonical_bank_mutation_id = bm.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sport_center.expected_bank_settlements ses
+            WHERE ses.bank_mutation_id = bm.id
+          )
+      `);
+      await tx.execute(sql`
+        CREATE TEMP TABLE _dev_purge_import_ids ON COMMIT DROP AS
+        SELECT bmi.id
+        FROM bank_mutation_imports bmi
+        WHERE bmi.journal_entry_id IS NULL
+          AND UPPER(COALESCE(bmi.status::text, 'DRAFT')) NOT IN ('APPROVED', 'POSTED')
+      `);
+
+      const sourceCounts = await tx.execute(sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM bank_mutations) AS mutation_total,
+          (SELECT COUNT(*)::int FROM _dev_purge_mutation_ids) AS mutation_deletable,
+          (SELECT COUNT(*)::int FROM bank_mutation_imports) AS import_total,
+          (SELECT COUNT(*)::int FROM _dev_purge_import_ids) AS import_deletable
+      `);
+      const counts = sourceCounts.rows[0] as {
+        mutation_total?: number | string;
+        mutation_deletable?: number | string;
+        import_total?: number | string;
+        import_deletable?: number | string;
+      } | undefined;
+
+      const deletedMutations = await tx.execute(sql`
+        DELETE FROM bank_mutations
+        WHERE id IN (SELECT id FROM _dev_purge_mutation_ids)
+      `);
+      const deletedImports = await tx.execute(sql`
+        DELETE FROM bank_mutation_imports
+        WHERE id IN (SELECT id FROM _dev_purge_import_ids)
+      `);
+
+      const mutationTotal = Number(counts?.mutation_total ?? 0);
+      const mutationDeletable = Number(counts?.mutation_deletable ?? 0);
+      const importTotal = Number(counts?.import_total ?? 0);
+      const importDeletable = Number(counts?.import_deletable ?? 0);
+      return {
+        mutations_deleted: deletedMutations.rowCount ?? 0,
+        imports_deleted: deletedImports.rowCount ?? 0,
+        mutations_preserved: Math.max(0, mutationTotal - mutationDeletable),
+        imports_preserved: Math.max(0, importTotal - importDeletable),
+      };
+    });
+
+    logger.warn({ actor, ...result }, "[bankRecon] DEV source mutations purged");
+    return res.json({
+      ok: true,
+      ...result,
+      message: "Mutasi development yang tidak memiliki posting atau settlement telah dihapus permanen.",
+    });
+  } catch (e: any) {
+    logger.error({ actor, err: e }, "[bankRecon] DEV source mutation purge failed");
+    if (e?.code === "RECONCILIATION_JOB_BUSY") {
+      return res.status(409).json({ error: e.message });
+    }
+    return res.status(500).json({
+      error: e?.message ?? "Hapus permanen mutasi DEV gagal.",
     });
   }
 });
