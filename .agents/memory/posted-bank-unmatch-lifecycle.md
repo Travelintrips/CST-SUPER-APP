@@ -16,3 +16,9 @@ For non-final review states, unmatch may return the mutation directly to `unmatc
 **Why:** A review-state mutation has no posted ledger impact, while canonical settlement links can represent partial or link-only settlement ownership that a generic reset would corrupt.
 
 **How to apply:** Keep the UI action available for ordinary review/match cards and QRIS cards only when the canonical guard rejects false generic ownership; route posted rows through reversal first.
+
+Journal state is authoritative when a mutation status is stale: a linked draft journal may be deleted within the guarded unmatch transaction, while a linked posted journal must use reversal before reopening.
+
+**Why:** Mutation status can remain `matched` or `manual_review` after a journal is created, so using only that status sends draft or posted rows through the wrong lifecycle and produces misleading user actions.
+
+**How to apply:** Load the current journal status in both the API and UI; clear `journal_entry_id` only after draft deletion succeeds, and keep posted rows on the reversal path.
