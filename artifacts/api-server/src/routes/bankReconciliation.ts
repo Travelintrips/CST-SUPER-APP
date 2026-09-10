@@ -5660,7 +5660,7 @@ router.get("/mutations", async (req, res) => {
       ${effectiveBankMutationStatusSql("bm")} AS status,
       bm.journal_entry_id,
       (
-        SELECT ae.status
+        SELECT ae.status::text
         FROM accounting_entries ae
         WHERE ae.id = bm.journal_entry_id
         LIMIT 1

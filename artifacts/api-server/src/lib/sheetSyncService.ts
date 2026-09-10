@@ -840,71 +840,71 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
               (SELECT COALESCE(lo.customer_name, '')
-               FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_id)
+               FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
               (SELECT COALESCE(ap.partner_name, '')
                FROM accounting_payments ap
-               WHERE ap.id = brm_cand.candidate_id)
+               WHERE ap.id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
               (SELECT COALESCE(c.name, '')
                FROM sales_documents sd
                LEFT JOIN customers c ON c.id = sd.customer_id
-               WHERE sd.id = brm_cand.candidate_id)
+               WHERE sd.id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
               (SELECT COALESCE(e.description, '')
-               FROM expenses e WHERE e.id = brm_cand.candidate_id)
+               FROM expenses e WHERE e.id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
               (SELECT COALESCE(c.name, sb.customer_name, '')
                FROM sport_payments sp
                LEFT JOIN customers c ON c.id = sp.customer_id
                LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-               WHERE sp.id = brm_cand.candidate_id)
+               WHERE sp.id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN
               (SELECT COALESCE(t.business_name, '')
                FROM tenant_invoices ti
                LEFT JOIN tenants t ON t.id = ti.tenant_id
-               WHERE ti.id = brm_cand.candidate_id)
+               WHERE ti.id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_name,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT order_number FROM logistic_orders WHERE id = brm_cand.candidate_id)
+              (SELECT order_number FROM logistic_orders WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
-              (SELECT COALESCE(payment_number, ref, '') FROM accounting_payments WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(payment_number, ref, '') FROM accounting_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
-              (SELECT doc_number FROM sales_documents WHERE id = brm_cand.candidate_id)
+              (SELECT doc_number FROM sales_documents WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
-              (SELECT COALESCE(expense_number, '') FROM expenses WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(expense_number, '') FROM expenses WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
-              (SELECT 'SPORT-' || booking_id::text FROM sport_payments WHERE id = brm_cand.candidate_id)
+              (SELECT 'SPORT-' || booking_id::text FROM sport_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN
-              (SELECT invoice_number FROM tenant_invoices WHERE id = brm_cand.candidate_id)
+              (SELECT invoice_number FROM tenant_invoices WHERE id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_ref,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT COALESCE(lo.company_name, '') FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_id)
+              (SELECT COALESCE(lo.company_name, '') FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
-              (SELECT COALESCE(c.company_name, '') FROM sales_documents sd LEFT JOIN customers c ON c.id = sd.customer_id WHERE sd.id = brm_cand.candidate_id)
+              (SELECT COALESCE(c.company_name, '') FROM sales_documents sd LEFT JOIN customers c ON c.id = sd.customer_id WHERE sd.id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
-              (SELECT COALESCE(c.company_name, '') FROM sport_payments sp LEFT JOIN customers c ON c.id = sp.customer_id WHERE sp.id = brm_cand.candidate_id)
+              (SELECT COALESCE(c.company_name, '') FROM sport_payments sp LEFT JOIN customers c ON c.id = sp.customer_id WHERE sp.id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_company,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT TRIM(COALESCE(service_category,'') || ' ' || COALESCE(origin,'') || CASE WHEN destination IS NOT NULL THEN ' → ' || destination ELSE '' END) FROM logistic_orders WHERE id = brm_cand.candidate_id)
+              (SELECT TRIM(COALESCE(service_category,'') || ' ' || COALESCE(origin,'') || CASE WHEN destination IS NOT NULL THEN ' → ' || destination ELSE '' END) FROM logistic_orders WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
-              (SELECT COALESCE(payment_type::text, '') FROM accounting_payments WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(payment_type::text, '') FROM accounting_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
-              (SELECT COALESCE(description, '') FROM expenses WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(description, '') FROM expenses WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
               (SELECT COALESCE(sb.facility_name, 'Sport Center')
                FROM sport_payments sp
                LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-               WHERE sp.id = brm_cand.candidate_id)
+               WHERE sp.id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN 'Sewa Tenant'
             ELSE NULL
           END, '') AS detail_service
@@ -921,6 +921,11 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       LEFT JOIN LATERAL (
         -- Ambil kandidat terbaik: approved diprioritaskan, fallback ke candidate score tertinggi
         SELECT candidate_type, candidate_id, candidate_source,
+               CASE
+                 WHEN candidate_id::text ~ '^[0-9]+$'
+                   THEN candidate_id::text::bigint
+                 ELSE NULL
+               END AS candidate_numeric_id,
                (status = 'approved') AS is_approved
         FROM bank_reconciliation_matches
         WHERE mutation_id = bm.id

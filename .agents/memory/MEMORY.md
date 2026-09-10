@@ -89,6 +89,7 @@
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
 - [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
 - [Bank reconciliation polymorphic IDs](bank-reconciliation-polymorphic-candidate-id.md) — match candidate IDs are live text identities; normalize safely before comparing to integer/bigint source IDs.
+- [Bank reconciliation UNION types](bank-reconciliation-union-types.md) — normalize enum/text projections explicitly so PROD schema differences cannot break the full mutation list.
 - [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
 - [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
 - [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.

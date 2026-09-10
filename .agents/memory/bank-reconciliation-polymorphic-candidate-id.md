@@ -7,4 +7,4 @@ The live reconciliation schema stores `bank_reconciliation_matches.candidate_id`
 
 **Why:** Direct `integer = text` comparisons can make the entire bank-mutation list return HTTP 500, including rows unrelated to the malformed or legacy candidate.
 
-**How to apply:** Use a guarded numeric conversion for candidate IDs so non-numeric historical identities become non-matches rather than query errors. Keep source-specific candidate type/source predicates alongside the conversion.
+**How to apply:** Use a guarded numeric conversion for candidate IDs so non-numeric historical identities become non-matches rather than query errors. Apply it to UI list projections and Sheet write-back enrichment; keep source-specific type/source predicates alongside it.
