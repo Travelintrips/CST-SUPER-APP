@@ -90,6 +90,9 @@ interface Company {
 interface ReconciliationAccount {
   id: number;
   name: string;
+  coa_id?: number | null;
+  coa_code?: string | null;
+  coa_name?: string | null;
   account_type: string | null;
   bank_name: string | null;
   account_number: string | null;
@@ -7477,7 +7480,10 @@ export default function BankReconciliationPage() {
     staleTime: 60_000,
   });
   const reconciliationAccounts = (reconciliationAccountsData?.data ?? []).filter(
-    (account) => account.is_active !== false,
+    (account) =>
+      account.is_active !== false
+      && Number.isInteger(Number(account.coa_id))
+      && Boolean(account.coa_name?.trim()),
   );
 
   const { data: summary } = useQuery({
@@ -9762,9 +9768,10 @@ export default function BankReconciliationPage() {
                         {reconciliationAccounts.map(account => {
                           const accountNumber = account.account_number?.trim();
                           const suffix = accountNumber ? ` · ${accountNumber}` : "";
+                          const accountLabel = account.coa_name?.trim() || account.name;
                           return (
                             <SelectItem key={account.id} value={String(account.id)}>
-                              {account.name}{suffix}
+                              {accountLabel}{suffix}
                             </SelectItem>
                           );
                         })}
