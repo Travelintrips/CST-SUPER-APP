@@ -37,6 +37,7 @@ import {
   sendProductApprovedNotification,
   sendProductRejectedNotification,
 } from "../lib/services/vendorLifecycleService.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 
 // ── Public router ─────────────────────────────────────────────────────────────
 export const vendorCatalogEnginePublicRouter = Router();
@@ -305,6 +306,24 @@ vendorCatalogEnginePublicRouter.post("/submit/:token", async (req, res) => {
     .update(vendorCatalogSubmissionLinksTable)
     .set({ submissionCount: link.submissionCount + 1 })
     .where(eq(vendorCatalogSubmissionLinksTable.id, link.id));
+
+  // Keep the admin review queue observable for submissions made through the
+  // public invitation form, just like submissions made from the vendor
+  // dashboard. The notification is persisted before the response completes so
+  // the admin queue and its notification cannot race a smoke-test read.
+  await NotificationService.saveAndBroadcast("vendor_product_submitted", {
+    type:         "vendor_product_submitted",
+    orderId:      catalogItemId,
+    orderNumber:  String(catalogItemId),
+    customerName: supplier?.name ?? link.vendorName ?? "Vendor",
+    title:        "Produk Vendor Menunggu Persetujuan",
+    body:         `"${name.trim()}" dari ${supplier?.name ?? link.vendorName ?? "Vendor"} menunggu review admin.`,
+    targetRole:   "admin",
+    supplierId:   link.supplierId,
+    productName:  name.trim(),
+    catalogItemId,
+    submissionId: submission.id,
+  });
 
   return res.status(201).json({
     submissionId:  submission.id,

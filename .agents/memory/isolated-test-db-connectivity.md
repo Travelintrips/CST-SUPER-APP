@@ -8,3 +8,9 @@ The isolated Supabase test target may expose only a direct IPv6 database endpoin
 **Why:** substituting the development or production database would violate the regression suite's isolation boundary and could mutate business data. A reachable database is not evidence that the test schema is provisioned.
 
 **How to apply:** preserve the test-target guard, verify the pooler belongs to the same isolated project before using it ephemerally for a test command, and report DNS/transport or missing-schema failures as infrastructure blockers rather than bypassing the guard or changing a live database without explicit approval.
+
+The managed secret loader can inject `TEST_DATABASE_URL` into a workflow child process even when the variable is absent from the interactive shell. Run DB-backed tests through `load-secrets.mjs`; do not infer that the target is unavailable from shell-level env inspection alone.
+
+**Why:** the development workflow and interactive shell have different environment assembly paths, while direct isolated Supabase DNS may still be unavailable to Node.
+
+**How to apply:** use the official loader for the first attempt, keep the URL masked, and only try a same-project pooler when its tenant/region identity is verified without exposing credentials.
