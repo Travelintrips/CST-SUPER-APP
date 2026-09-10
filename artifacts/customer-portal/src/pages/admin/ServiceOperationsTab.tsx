@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { getAuthHeaders } from "@/lib/auth";
+import { MarketplaceDealPriceEditor } from "@/components/admin/MarketplaceDealPriceEditor";
 
 type ServiceSummary = {
   service_key: string;
@@ -440,6 +441,12 @@ export function ServiceOperationsTab() {
               {actionError && <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{actionError}</div>}
               <div className="flex flex-wrap items-center gap-2 border-t pt-4">
                 <span className="mr-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Action</span>
+                {selected.service === "marketplace" && (
+                  <MarketplaceDealPriceEditor
+                    rfqId={selected.id}
+                    rfqStatus={String(selected.record["status"] ?? "")}
+                  />
+                )}
                 {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("approve") && (
                   <button type="button" disabled={actionBusy} onClick={() => void runAction("approve")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
                     <Check className="h-3.5 w-3.5" /> Setujui
