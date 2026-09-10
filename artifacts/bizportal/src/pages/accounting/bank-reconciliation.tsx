@@ -712,6 +712,7 @@ interface BankMutation {
   linked_transaction_type?: string | null;
   linked_transaction_id?: number | null;
   journal_entry_id?: number | null;
+  journal_status?: string | null;
   posted_coa_accounts?: Array<{
     code?: string | null;
     name?: string | null;
@@ -8811,8 +8812,14 @@ export default function BankReconciliationPage() {
   // Unmatch a pre-final transaction directly. For posted transactions, create
   // an immutable reversal first, then reopen the bank mutation.
   const unmatchMut = useMutation({
-    mutationFn: async ({ mutId, reason, status }: { mutId: number; reason: string; status: MutationStatus }) => {
-      if (status !== "posted") {
+    mutationFn: async ({ mutId, reason, status, journalStatus }: {
+      mutId: number;
+      reason: string;
+      status: MutationStatus;
+      journalStatus?: string | null;
+    }) => {
+      const hasPostedJournal = status === "posted" || journalStatus === "posted";
+      if (!hasPostedJournal) {
         const response = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
           method: "POST",
           credentials: "include",
@@ -10776,7 +10783,9 @@ export default function BankReconciliationPage() {
                 </label>
                 <Textarea
                   placeholder={
-                    actionDialog.mode === "unmatch" && actionDialog.mutation.status !== "posted"
+                    actionDialog.mode === "unmatch"
+                      && actionDialog.mutation.status !== "posted"
+                      && actionDialog.mutation.journal_status !== "posted"
                       ? "Contoh: Kandidat bank tidak sesuai, perlu dicocokkan ulang."
                       : "Contoh: Kesalahan pencatatan, double entry, dll."
                   }
@@ -10788,16 +10797,24 @@ export default function BankReconciliationPage() {
               </div>
 
               <div className={`rounded-md border p-3 text-xs space-y-1 ${
-                actionDialog.mode === "unmatch" && actionDialog.mutation.status !== "posted"
+                actionDialog.mode === "unmatch"
+                  && actionDialog.mutation.status !== "posted"
+                  && actionDialog.mutation.journal_status !== "posted"
                   ? "bg-blue-50 border-blue-200 text-blue-800"
                   : "bg-red-50 border-red-200 text-red-800"
               }`}>
                 <p className="font-semibold">⚠ Perhatian</p>
                 {actionDialog.mode === "unmatch" ? (
-                  actionDialog.mutation.status === "posted" ? (
+                  actionDialog.mutation.status === "posted"
+                    || actionDialog.mutation.journal_status === "posted" ? (
                     <>
                       <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
                       <p>Journal asli tidak dihapus. Setelah reversal, mutasi akan kembali ke status <strong>Belum Cocok</strong> agar bisa dicocokkan ulang.</p>
+                    </>
+                  ) : actionDialog.mutation.journal_status === "draft" ? (
+                    <>
+                      <p>Draft journal #{actionDialog.mutation.journal_entry_id} akan dibatalkan karena belum berdampak ke buku besar.</p>
+                      <p>Match dan kandidat aktif akan dilepas, lalu mutasi kembali ke status <strong>Belum Cocok</strong>.</p>
                     </>
                   ) : (
                     <p>Match dan kandidat aktif akan dilepas, ownership lama dibersihkan, dan mutasi kembali ke status <strong>Belum Cocok</strong>. Tidak ada jurnal yang dihapus atau reversal yang dibuat.</p>
@@ -10823,6 +10840,7 @@ export default function BankReconciliationPage() {
                     mutId: actionDialog.mutation.id,
                     reason: reverseReason,
                     status: actionDialog.mutation.status,
+                    journalStatus: actionDialog.mutation.journal_status,
                   });
                 } else {
                   voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
@@ -10834,7 +10852,10 @@ export default function BankReconciliationPage() {
               {voidMut.isPending || unmatchMut.isPending
                 ? "Memproses..."
                 : actionDialog?.mode === "unmatch"
-                  ? actionDialog.mutation.status === "posted" ? "Unmatch & Reverse" : "Kembalikan ke Unmatched"
+                  ? actionDialog.mutation.status === "posted"
+                    || actionDialog.mutation.journal_status === "posted"
+                    ? "Unmatch & Reverse"
+                    : "Kembalikan ke Unmatched"
                   : "Reverse Journal"}
             </Button>
           </DialogFooter>

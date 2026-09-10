@@ -5648,7 +5648,14 @@ router.get("/mutations", async (req, res) => {
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
       ${effectiveBankMutationStatusSql("bm")} AS status,
-      bm.journal_entry_id, bm.company_id,
+      bm.journal_entry_id,
+      (
+        SELECT ae.status
+        FROM accounting_entries ae
+        WHERE ae.id = bm.journal_entry_id
+        LIMIT 1
+      ) AS journal_status,
+      bm.company_id,
       EXISTS (
         SELECT 1
         FROM bank_reconciliation_matches approved_mutation_match
@@ -6177,6 +6184,7 @@ router.get("/mutations", async (req, res) => {
         ELSE 'unmatched'
       END AS status,
       bmi.journal_entry_id,
+      NULL::text AS journal_status,
       NULL::integer AS company_id,
       FALSE AS has_approved_match,
       NULL::jsonb AS posted_coa_accounts,
@@ -8004,9 +8012,18 @@ router.post("/:mutationId/unmatch", async (req, res) => {
     let releasedMatchIds: number[] = [];
     await db.transaction(async (tx) => {
       const { rows: locked } = await tx.execute(sql.raw(`
-        SELECT id, status, journal_entry_id
-        FROM bank_mutations
-        WHERE id = ${mutId}
+        SELECT
+          bm.id,
+          bm.status,
+          bm.journal_entry_id,
+          (
+            SELECT ae.status
+            FROM accounting_entries ae
+            WHERE ae.id = bm.journal_entry_id
+            LIMIT 1
+          ) AS journal_status
+        FROM bank_mutations bm
+        WHERE bm.id = ${mutId}
         FOR UPDATE
       `));
       if (!locked.length) {
@@ -8028,11 +8045,39 @@ router.post("/:mutationId/unmatch", async (req, res) => {
             : `Mutasi berstatus '${mut.status}' tidak dapat di-unmatch melalui alur ini.`;
         throw Object.assign(new Error(message), { code: "INVALID_STATUS" });
       }
+      let removedDraftJournalId: number | null = null;
       if (mut.journal_entry_id) {
-        throw Object.assign(
-          new Error("Mutasi memiliki journal entry. Gunakan Batalkan Draft atau Unmatch & Reverse sesuai status jurnal."),
-          { code: "JOURNAL_LINKED" },
-        );
+        const journalStatus = String(mut.journal_status ?? "").toLowerCase();
+        if (journalStatus === "draft") {
+          const journalEntryId = Number(mut.journal_entry_id);
+          const deleted = await tx.execute(sql.raw(`
+            DELETE FROM accounting_entries
+            WHERE id = ${journalEntryId}
+              AND status = 'draft'
+          `)) as any;
+          if (Number(deleted?.rowCount ?? 0) !== 1) {
+            throw Object.assign(
+              new Error(`Draft journal #${journalEntryId} tidak dapat dibatalkan karena status berubah bersamaan.`),
+              { code: "JOURNAL_CONCURRENT_CHANGE" },
+            );
+          }
+          removedDraftJournalId = journalEntryId;
+        } else if (journalStatus === "posted") {
+          throw Object.assign(
+            new Error("Journal sudah posted. Gunakan Unmatch & Reverse agar ledger tetap immutable."),
+            { code: "JOURNAL_POSTED" },
+          );
+        } else if (!journalStatus) {
+          throw Object.assign(
+            new Error(`Journal entry #${mut.journal_entry_id} tidak ditemukan. Periksa data jurnal sebelum unmatch.`),
+            { code: "JOURNAL_MISSING" },
+          );
+        } else {
+          throw Object.assign(
+            new Error(`Journal entry #${mut.journal_entry_id} berstatus '${journalStatus}' dan tidak dapat di-unmatch melalui alur ini.`),
+            { code: "JOURNAL_LINKED" },
+          );
+        }
       }
 
       // Fresh matching will rebuild candidate rows. Approved rows are released
@@ -8057,6 +8102,7 @@ router.post("/:mutationId/unmatch", async (req, res) => {
       await tx.execute(sql.raw(`
         UPDATE bank_mutations
         SET status = 'unmatched',
+            journal_entry_id = NULL,
             matched_payment_id = NULL,
             matched_order_id = NULL,
             linked_transaction_type = NULL,
@@ -8071,6 +8117,7 @@ router.post("/:mutationId/unmatch", async (req, res) => {
       const meta = JSON.stringify({
         reason: note || null,
         previous_status: mut.status,
+        removed_draft_journal_id: removedDraftJournalId,
         released_approved_match_ids: releasedMatchIds,
       }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
@@ -8089,7 +8136,11 @@ router.post("/:mutationId/unmatch", async (req, res) => {
   } catch (e: any) {
     const code =
       e.code === "NOT_FOUND" ? 404 :
-      e.code === "INVALID_STATUS" || e.code === "JOURNAL_LINKED" ? 409 :
+      e.code === "INVALID_STATUS" ||
+      e.code === "JOURNAL_LINKED" ||
+      e.code === "JOURNAL_POSTED" ||
+      e.code === "JOURNAL_MISSING" ||
+      e.code === "JOURNAL_CONCURRENT_CHANGE" ? 409 :
       500;
     return res.status(code).json({ error: e.message });
   }
@@ -8366,12 +8417,6 @@ router.post("/:mutationId/void-journal", async (req, res) => {
     if (!preRows.length) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
     const preMut = preRows[0] as any;
 
-    if (preMut.status !== "posted") {
-      return res.status(409).json({
-        error: `Hanya mutasi berstatus 'posted' yang bisa di-void via void-journal. Status saat ini: '${preMut.status}'. Untuk membatalkan sebelum posting, gunakan unapprove.`,
-      });
-    }
-
     const journalEntryId = preMut.journal_entry_id ? Number(preMut.journal_entry_id) : null;
     if (!journalEntryId) {
       return res.status(400).json({ error: "Tidak ada journal entry untuk di-void" });
@@ -8396,13 +8441,35 @@ router.post("/:mutationId/void-journal", async (req, res) => {
       });
     }
 
+    // The journal is the source of truth for ledger finality. A legacy/racy
+    // row can still have status=matched/manual_review even though its linked
+    // journal is already posted; that state must use the same guarded
+    // reversal path instead of being sent to the draft/unmatch flow.
+    const voidableMutationStatuses = new Set([
+      "posted",
+      "unmatched",
+      "matched",
+      "manual_review",
+      "duplicate_need_review",
+      "approved_pending_posting",
+      "approved",
+    ]);
+    if (!voidableMutationStatuses.has(String(preMut.status))) {
+      return res.status(409).json({
+        error: `Mutasi berstatus '${preMut.status}' tidak dapat di-void melalui rekonsiliasi. Periksa lifecycle jurnal terlebih dahulu.`,
+      });
+    }
+
     // ── Step 2: CAS — atomically claim void slot (concurrent guard) ───────────
-    // UPDATE WHERE status='posted' is atomic in PostgreSQL; only one concurrent
+    // The mutation status may be stale, so CAS against the exact status that
+    // was read together with the journal identity. Only one concurrent
     // request will win. If rowCount=0 → another request already voided it.
     const { rowCount: claimedCount } = await db.execute(sql.raw(`
       UPDATE bank_mutations
       SET status = 'void', updated_at = NOW()
-      WHERE id = ${mutId} AND status = 'posted'
+      WHERE id = ${mutId}
+        AND status = '${String(preMut.status).replace(/'/g, "''")}'
+        AND journal_entry_id = ${journalEntryId}
     `)) as any;
 
     if ((claimedCount ?? 0) === 0) {
@@ -8430,8 +8497,10 @@ router.post("/:mutationId/void-journal", async (req, res) => {
       try {
         const rollback = await db.execute(sql.raw(`
           UPDATE bank_mutations
-          SET status = 'posted', updated_at = NOW()
-          WHERE id = ${mutId} AND status = 'void'
+          SET status = '${String(preMut.status).replace(/'/g, "''")}', updated_at = NOW()
+          WHERE id = ${mutId}
+            AND status = 'void'
+            AND journal_entry_id = ${journalEntryId}
         `)) as any;
         if (Number(rollback?.rowCount ?? 0) !== 1) {
           throw new Error(`status rollback affected ${Number(rollback?.rowCount ?? 0)} row(s)`);
