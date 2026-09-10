@@ -1157,6 +1157,139 @@ export async function runBankReconciliationCoreMigration() {
       ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE
   `)).catch(() => {});
 
+  /*
+   * Canonical settlement batches can have supplemental late-arrival rows.
+   * They share the base correlation root, so a mutation must never acquire
+   * two active canonical matches for that root. Keep this guard in the
+   * database because candidates are also created by auto-match, recovery,
+   * and direct SQL routines, not only by the approval route.
+   *
+   * The canonical table is resolved dynamically: the bank-reconciliation
+   * migration can run before the Sport Center schema migration on a fresh DB.
+   * Missing canonical schema or malformed correlation IDs fail closed.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION public.guard_canonical_settlement_match_root()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $function$
+    DECLARE
+      v_root text;
+      v_duplicate_id integer;
+      v_batch_regclass regclass;
+    BEGIN
+      IF NEW.candidate_source IS DISTINCT FROM
+           'sport_center.payment_settlement_batches'
+         OR NEW.status NOT IN ('candidate', 'approved')
+      THEN
+        RETURN NEW;
+      END IF;
+
+      v_batch_regclass := to_regclass('sport_center.payment_settlement_batches');
+      IF v_batch_regclass IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_MATCH_SCHEMA_UNAVAILABLE';
+      END IF;
+
+      EXECUTE format(
+        'SELECT CASE
+           WHEN correlation_id IS NULL OR btrim(correlation_id) = ''''
+             THEN NULL
+           WHEN correlation_id ~ ''^[^:]+(:[^:]+)*:supp:[0-9]+$''
+             AND correlation_id NOT LIKE ''%%:supp:%%:supp:%%''
+             THEN regexp_replace(correlation_id, '':supp:[0-9]+$'', '''')
+           WHEN correlation_id LIKE ''%%:supp:%%''
+             THEN NULL
+           ELSE btrim(correlation_id)
+         END
+           FROM %s
+          WHERE id = $1
+          FOR UPDATE',
+        v_batch_regclass
+      ) INTO v_root USING NEW.candidate_id;
+
+      IF v_root IS NULL OR btrim(v_root) = '' THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_MATCH_CORRELATION_ROOT_INVALID: settlement=%',
+          NEW.candidate_id;
+      END IF;
+
+      PERFORM pg_advisory_xact_lock(hashtext(
+        'canonical-settlement-match-root:' ||
+        NEW.mutation_id::text || ':' || v_root
+      ));
+
+      PERFORM 1
+        FROM public.bank_mutations
+       WHERE id = NEW.mutation_id
+       FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_MATCH_MUTATION_NOT_FOUND: mutation=%',
+          NEW.mutation_id;
+      END IF;
+
+      EXECUTE format(
+        'SELECT existing.id
+           FROM public.bank_reconciliation_matches existing
+           JOIN %s batch ON batch.id = existing.candidate_id
+          WHERE existing.mutation_id = $1
+            AND existing.id <> $2
+            AND existing.candidate_source =
+                ''sport_center.payment_settlement_batches''
+            AND existing.status IN (''candidate'', ''approved'')
+            AND CASE
+              WHEN batch.correlation_id IS NULL
+                OR btrim(batch.correlation_id) = ''''
+                THEN NULL
+              WHEN batch.correlation_id ~ ''^[^:]+(:[^:]+)*:supp:[0-9]+$''
+                AND batch.correlation_id NOT LIKE ''%%:supp:%%:supp:%%''
+                THEN regexp_replace(batch.correlation_id, '':supp:[0-9]+$'', '''')
+              WHEN batch.correlation_id LIKE ''%%:supp:%%''
+                THEN NULL
+              ELSE btrim(batch.correlation_id)
+            END = $3
+          ORDER BY existing.id
+          LIMIT 1
+          FOR UPDATE OF existing',
+        v_batch_regclass
+      ) INTO v_duplicate_id USING NEW.mutation_id, NEW.id, v_root;
+
+      IF v_duplicate_id IS NOT NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_MATCH_ROOT_CONFLICT: mutation=% root=% existing_match=%',
+          NEW.mutation_id, v_root, v_duplicate_id;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $function$
+  `)).catch((error: any) => {
+    logger.warn(
+      { err: error?.cause?.message ?? error?.message },
+      "[bankRecon] canonical settlement match root guard unavailable",
+    );
+  });
+
+  await db.execute(sql.raw(`
+    DROP TRIGGER IF EXISTS trg_guard_canonical_settlement_match_root
+      ON public.bank_reconciliation_matches
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    CREATE TRIGGER trg_guard_canonical_settlement_match_root
+      BEFORE INSERT OR UPDATE OF mutation_id, candidate_id, candidate_source, status
+      ON public.bank_reconciliation_matches
+      FOR EACH ROW
+      EXECUTE FUNCTION public.guard_canonical_settlement_match_root()
+  `)).catch((error: any) => {
+    logger.warn(
+      { err: error?.cause?.message ?? error?.message },
+      "[bankRecon] canonical settlement match root trigger unavailable",
+    );
+  });
+
   // Preserve the duplicate candidate evidence while making only one row
   // active per source-qualified identity. This is intentionally not a DELETE:
   // only rows classified as non-approved candidates are superseded, and
@@ -1466,6 +1599,15 @@ export async function runBankReconciliationCoreMigration() {
       b.posted_by,
       b.reconciled_at,
       b.reconciled_by,
+          b.correlation_id,
+          CASE
+            WHEN b.correlation_id IS NULL OR btrim(b.correlation_id) = '' THEN NULL
+            WHEN b.correlation_id ~ '^[^:]+(:[^:]+)*:supp:[0-9]+$'
+              AND b.correlation_id NOT LIKE '%:supp:%:supp:%'
+              THEN regexp_replace(b.correlation_id, ':supp:[0-9]+$', '')
+            WHEN b.correlation_id LIKE '%:supp:%' THEN NULL
+            ELSE btrim(b.correlation_id)
+          END                                       AS correlation_root,
       CASE
         WHEN b.bank_mutation_id IS NOT NULL THEN 'linked'
         WHEN b.status = 'reconciled'        THEN 'reconciled'
@@ -4976,6 +5118,37 @@ router.get("/mutations", async (req, res) => {
   const resolvedCanonicalDetailsSql = hasCanonicalSettlementView
     ? canonicalSettlementDetailsSql("m.candidate_id")
     : "NULL::jsonb";
+  const canonicalRootDedupeSql = hasCanonicalSettlementView
+    ? `
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_matches sibling_match
+              JOIN sport_center.expected_bank_settlements sibling_settlement
+                ON sibling_settlement.settlement_id =
+                   ${candidateIdAsBigIntSql("sibling_match")}
+              JOIN sport_center.expected_bank_settlements current_settlement
+                ON current_settlement.settlement_id =
+                   ${candidateIdAsBigIntSql("m")}
+              WHERE sibling_match.mutation_id = m.mutation_id
+                AND sibling_match.id <> m.id
+                AND sibling_match.candidate_source =
+                    '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+                AND sibling_match.status IN ('candidate', 'approved')
+                AND sibling_settlement.correlation_root IS NOT NULL
+                AND sibling_settlement.correlation_root =
+                    current_settlement.correlation_root
+                AND (
+                  (
+                    sibling_match.status = 'approved'
+                    AND m.status <> 'approved'
+                  )
+                  OR (
+                    sibling_match.status = m.status
+                    AND sibling_match.id < m.id
+                  )
+                )
+            )`
+    : "";
 
   // QRIS settlement evidence is only reviewable in the exact H-1 cohort:
   // the payment's expected settlement date must equal the bank mutation date.
@@ -5594,6 +5767,7 @@ router.get("/mutations", async (req, res) => {
               m.candidate_type <> 'qris_settlement'
               OR ${qrisCandidateHMinusOneSql}
            )
+           ${canonicalRootDedupeSql}
             -- Hanya tampilkan dokumen yang sudah benar-benar dibayar.
             -- Invoice/tenant invoice yang belum paid bukan bukti penerimaan bank.
             AND (

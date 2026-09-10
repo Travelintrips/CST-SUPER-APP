@@ -6,6 +6,10 @@ const migrationSource = readFileSync(
   resolve(process.cwd(), "src/modules/sport-center/migration.ts"),
   "utf8",
 );
+const bankReconciliationSource = readFileSync(
+  resolve(process.cwd(), "src/routes/bankReconciliation.ts"),
+  "utf8",
+);
 
 describe("canonical Sport Center owner routine restoration contract", () => {
   it("defines all six required owner signatures", () => {
@@ -120,6 +124,34 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     );
     expect(supplemental).toContain(
       "CANONICAL_SETTLEMENT_ITEM_ALREADY_ACTIVE",
+    );
+  });
+
+  it("deduplicates late-arrival batches by mutation and canonical root", () => {
+    const start = migrationSource.lastIndexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.find_settlement_bank_candidates(",
+    );
+    const end = migrationSource.indexOf(
+      "Public-only replacement for the historical recovery owner",
+      start,
+    );
+    const finder = migrationSource.slice(start, end);
+
+    expect(finder).toContain("correlation_root");
+    expect(finder).toContain("DISTINCT ON (mutation_id, correlation_root)");
+    expect(finder).toContain("regexp_replace(s.correlation_id, ':supp:[0-9]+$', '')");
+    expect(finder).toContain("WHEN s.correlation_id LIKE '%:supp:%' THEN NULL");
+  });
+
+  it("installs an atomic database guard for canonical match roots", () => {
+    expect(bankReconciliationSource).toContain(
+      "guard_canonical_settlement_match_root",
+    );
+    expect(bankReconciliationSource).toContain(
+      "CANONICAL_SETTLEMENT_MATCH_ROOT_CONFLICT",
+    );
+    expect(bankReconciliationSource).toContain(
+      "trg_guard_canonical_settlement_match_root",
     );
   });
 });

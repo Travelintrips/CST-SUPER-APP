@@ -5162,6 +5162,14 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
            AND sj.is_reversal = FALSE
          WHERE b.id = p_settlement_id AND b.status IN ('posted', 'reconciled')
            AND b.bank_mutation_id IS NULL AND b.canonical_bank_mutation_id IS NULL
+           AND CASE
+             WHEN b.correlation_id IS NULL OR btrim(b.correlation_id) = '' THEN NULL
+             WHEN b.correlation_id ~ '^[^:]+(:[^:]+)*:supp:[0-9]+$'
+               AND b.correlation_id NOT LIKE '%:supp:%:supp:%'
+               THEN regexp_replace(b.correlation_id, ':supp:[0-9]+$', '')
+             WHEN b.correlation_id LIKE '%:supp:%' THEN NULL
+             ELSE btrim(b.correlation_id)
+           END IS NOT NULL
       ), settlement AS (
         SELECT b.*, MIN(cba.id)::integer AS resolved_bank_account_id
           FROM base b
@@ -5175,6 +5183,13 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         HAVING COUNT(DISTINCT cba.id) = 1
       ), evidence AS (
         SELECT s.id settlement_id, bm.id mutation_id, s.settlement_reference,
+          CASE
+            WHEN s.correlation_id ~ '^[^:]+(:[^:]+)*:supp:[0-9]+$'
+              AND s.correlation_id NOT LIKE '%:supp:%:supp:%'
+              THEN regexp_replace(s.correlation_id, ':supp:[0-9]+$', '')
+            WHEN s.correlation_id LIKE '%:supp:%' THEN NULL
+            ELSE btrim(s.correlation_id)
+          END correlation_root,
           s.settlement_date, bm.transaction_date::date mutation_date,
           s.net_amount expected_amount, bm.amount mutation_amount,
           ABS(s.net_amount - bm.amount) amount_difference,
@@ -5195,13 +5210,19 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
              AND s.settlement_date + p_date_tolerance_days
          AND lower(COALESCE(bm.direction, '')) IN ('in', 'credit', 'incoming', 'cr')
       )
-      SELECT settlement_id, mutation_id, settlement_reference, settlement_date,
+      SELECT DISTINCT ON (mutation_id, correlation_root)
+        settlement_id, mutation_id, settlement_reference, settlement_date,
         mutation_date, expected_amount, mutation_amount, amount_difference,
         allowed_amount_difference, date_difference_days, amount_match, date_match,
         company_match, bank_account_match, provider_match,
         amount_match AND date_match AND company_match AND bank_account_match
           AND mutation_unlinked
-      FROM evidence ORDER BY mutation_date, mutation_id;
+      FROM evidence
+      WHERE correlation_root IS NOT NULL
+      ORDER BY mutation_id, correlation_root,
+        (amount_match AND date_match AND company_match AND bank_account_match
+          AND mutation_unlinked) DESC,
+        settlement_id;
     END;
     $function$;
   `));
@@ -6914,6 +6935,15 @@ export async function runSportCenterMigration(): Promise<void> {
           b.posted_by,
           b.reconciled_at,
           b.reconciled_by,
+          b.correlation_id,
+          CASE
+            WHEN b.correlation_id IS NULL OR btrim(b.correlation_id) = '' THEN NULL
+            WHEN b.correlation_id ~ '^[^:]+(:[^:]+)*:supp:[0-9]+$'
+              AND b.correlation_id NOT LIKE '%:supp:%:supp:%'
+              THEN regexp_replace(b.correlation_id, ':supp:[0-9]+$', '')
+            WHEN b.correlation_id LIKE '%:supp:%' THEN NULL
+            ELSE btrim(b.correlation_id)
+          END                                       AS correlation_root,
           CASE
             WHEN b.bank_mutation_id IS NOT NULL THEN 'linked'
             WHEN b.status = 'reconciled'        THEN 'reconciled'
@@ -6925,6 +6955,49 @@ export async function runSportCenterMigration(): Promise<void> {
     } catch (viewErr) {
       logger.warn({ err: viewErr }, "Sport Center migration: expected_bank_settlements view creation failed (non-fatal)");
     }
+
+    // Preserve old audit rows, but retire only duplicate active candidate
+    // rows that share the same mutation and canonical correlation root. An
+    // approved row remains authoritative; malformed roots stay visible only
+    // as historical evidence and cannot be approved by the trigger guard.
+    await db.execute(sql.raw(`
+      WITH active AS (
+        SELECT
+          m.id,
+          m.mutation_id,
+          CASE
+            WHEN b.correlation_id ~ '^[^:]+(:[^:]+)*:supp:[0-9]+$'
+              AND b.correlation_id NOT LIKE '%:supp:%:supp:%'
+              THEN regexp_replace(b.correlation_id, ':supp:[0-9]+$', '')
+            WHEN b.correlation_id LIKE '%:supp:%' THEN NULL
+            ELSE btrim(b.correlation_id)
+          END AS correlation_root
+        FROM public.bank_reconciliation_matches m
+        JOIN sport_center.payment_settlement_batches b
+          ON b.id = m.candidate_id
+        WHERE m.candidate_source = 'sport_center.payment_settlement_batches'
+          AND m.status IN ('candidate', 'approved')
+      ),
+      duplicate_candidates AS (
+        SELECT candidate.id
+        FROM active candidate
+        JOIN active keeper
+          ON keeper.mutation_id = candidate.mutation_id
+         AND keeper.correlation_root IS NOT NULL
+         AND keeper.correlation_root = candidate.correlation_root
+         AND keeper.id < candidate.id
+        WHERE candidate.id IS NOT NULL
+      )
+      UPDATE public.bank_reconciliation_matches m
+         SET status = 'superseded'
+       WHERE m.id IN (SELECT id FROM duplicate_candidates)
+         AND m.status = 'candidate'
+    `)).catch((cleanupErr: any) => {
+      logger.warn(
+        { err: cleanupErr?.cause?.message ?? cleanupErr?.message },
+        "Sport Center migration: canonical root duplicate cleanup skipped",
+      );
+    });
 
     await markStartupMigrationComplete(
       "sport_center_bootstrap",

@@ -1,5 +1,6 @@
 import { db, RECONCILIATION_CANDIDATE_SOURCES } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { normalizeCanonicalSettlementCorrelationRoot } from "./canonicalSettlementCorrelation.js";
 
 export const CANONICAL_SETTLEMENT_SOURCE =
   RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER;
@@ -28,6 +29,8 @@ export type CanonicalSettlementRow = {
   /** Compatibility link; must be null or equal to bank_mutation_id. */
   canonical_bank_mutation_id?: number | string | null;
   settlement_rule_version?: string | null;
+  correlation_id?: string | null;
+  correlation_root?: string | null;
   posted_at?: string | Date | null;
   posted_by?: string | null;
   reconciled_at?: string | Date | null;
@@ -65,6 +68,8 @@ export type CanonicalSettlementCandidate = {
   /** Compatibility link; always null or equal to bank_mutation_id. */
   canonical_bank_mutation_id: number | null;
   settlement_rule_version: string | null;
+  correlation_id: string | null;
+  correlation_root: string | null;
 };
 
 export type CanonicalSettlementQueueItem = CanonicalSettlementCandidate & {
@@ -224,6 +229,9 @@ function mapCanonicalSettlementDisplayRow(
     settlement_rule_version: row.settlement_rule_version == null
       ? null
       : String(row.settlement_rule_version),
+    correlation_id: row.correlation_id == null ? null : String(row.correlation_id),
+    correlation_root: row.correlation_root
+      ?? normalizeCanonicalSettlementCorrelationRoot(row.correlation_id),
   };
 }
 
@@ -251,7 +259,9 @@ const CANONICAL_SETTLEMENT_COLUMNS = sql.raw(`
   posted_by,
   reconciled_at,
   reconciled_by,
-  bank_link_status
+  bank_link_status,
+  correlation_id,
+  correlation_root
 `);
 
 function canonicalEligibilityFilters(
@@ -332,9 +342,19 @@ export async function findCanonicalSettlementCandidates(
   const result = await db.execute(sql`
     SELECT ebs.*, account_identity.bank_account_internal_id
     FROM (
-      SELECT ${CANONICAL_SETTLEMENT_COLUMNS}
-      FROM sport_center.expected_bank_settlements
-      WHERE ${canonicalEligibilityFilters(options)}
+      SELECT eligible.*,
+             ROW_NUMBER() OVER (
+               PARTITION BY eligible.correlation_root
+               ORDER BY
+                 CASE WHEN eligible.settlement_status = 'posted' THEN 0 ELSE 1 END,
+                 eligible.settlement_id
+             ) AS correlation_root_rank
+      FROM (
+        SELECT ${CANONICAL_SETTLEMENT_COLUMNS}
+        FROM sport_center.expected_bank_settlements
+        WHERE ${canonicalEligibilityFilters(options)}
+          AND correlation_root IS NOT NULL
+      ) eligible
     ) ebs
     JOIN LATERAL (
       SELECT
@@ -351,6 +371,7 @@ export async function findCanonicalSettlementCandidates(
     JOIN sport_center.accounting_journals aj
       ON aj.id = ebs.settlement_journal_id
      AND aj.status = 'posted'
+    WHERE ebs.correlation_root_rank = 1
     ORDER BY ebs.settlement_date, ebs.settlement_id
   `);
 
