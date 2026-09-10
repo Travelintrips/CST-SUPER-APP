@@ -7808,6 +7808,119 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   }
 });
 
+// ─── POST /api/bank-reconciliation/:mutationId/unmatch ───────────────────────
+// Release a non-final match and return the bank mutation to the unmatched queue.
+// This is intentionally separate from /unapprove and /reopen:
+//   - /unapprove removes a draft journal created by approval
+//   - /reopen is for a voided posted mutation
+//   - /unmatch clears a pre-final review/match state without touching the ledger
+router.post("/:mutationId/unmatch", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutId = parseInt(req.params.mutationId);
+  if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
+
+  const actor = (req as any).user?.email ?? "admin";
+  const note = typeof req.body?.reason === "string"
+    ? req.body.reason.trim()
+    : typeof req.body?.note === "string"
+      ? req.body.note.trim()
+      : "";
+
+  try {
+    let releasedMatchIds: number[] = [];
+    await db.transaction(async (tx) => {
+      const { rows: locked } = await tx.execute(sql.raw(`
+        SELECT id, status, journal_entry_id
+        FROM bank_mutations
+        WHERE id = ${mutId}
+        FOR UPDATE
+      `));
+      if (!locked.length) {
+        throw Object.assign(new Error("Mutasi tidak ditemukan"), { code: "NOT_FOUND" });
+      }
+
+      const mut = locked[0] as any;
+      const resettableStatuses = new Set([
+        "unmatched",
+        "matched",
+        "manual_review",
+        "duplicate_need_review",
+      ]);
+      if (!resettableStatuses.has(String(mut.status))) {
+        const message = mut.status === "posted"
+          ? "Mutasi sudah posted. Gunakan alur Unmatch & Reverse agar ledger tetap immutable."
+          : mut.status === "approved_pending_posting" || mut.status === "approved"
+            ? "Mutasi masih memiliki draft approval. Gunakan Batalkan Draft terlebih dahulu."
+            : `Mutasi berstatus '${mut.status}' tidak dapat di-unmatch melalui alur ini.`;
+        throw Object.assign(new Error(message), { code: "INVALID_STATUS" });
+      }
+      if (mut.journal_entry_id) {
+        throw Object.assign(
+          new Error("Mutasi memiliki journal entry. Gunakan Batalkan Draft atau Unmatch & Reverse sesuai status jurnal."),
+          { code: "JOURNAL_LINKED" },
+        );
+      }
+
+      // Fresh matching will rebuild candidate rows. Approved rows are released
+      // rather than deleted so the old ownership remains auditable.
+      await tx.execute(sql.raw(`
+        DELETE FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutId} AND status IN ('candidate', 'rejected')
+      `));
+      const releasedMatches = await tx.execute(sql.raw(`
+        UPDATE bank_reconciliation_matches
+        SET status = 'candidate'
+        WHERE mutation_id = ${mutId} AND status = 'approved'
+        RETURNING id
+      `));
+      releasedMatchIds = (releasedMatches.rows as Array<{ id: unknown }>)
+        .map(row => Number(row.id))
+        .filter(id => Number.isSafeInteger(id) && id > 0);
+
+      // Clear every legacy ownership field as well as the current lifecycle
+      // status, otherwise the row can look unmatched while still blocking
+      // future matching/posting.
+      await tx.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status = 'unmatched',
+            matched_payment_id = NULL,
+            matched_order_id = NULL,
+            linked_transaction_type = NULL,
+            linked_transaction_id = NULL,
+            reconciliation_status = 'unmatched',
+            approved_by = NULL,
+            approved_at = NULL,
+            updated_at = NOW()
+        WHERE id = ${mutId}
+      `));
+
+      const meta = JSON.stringify({
+        reason: note || null,
+        previous_status: mut.status,
+        released_approved_match_ids: releasedMatchIds,
+      }).replace(/'/g, "''");
+      await tx.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+        VALUES (${mutId}, 'UNMATCHED', '${actor.replace(/'/g, "''")}', '${meta}')
+      `));
+    });
+
+    audit(req, {
+      action: "unmatch",
+      module: "accounting",
+      resourceId: `bank-mutation-${mutId}`,
+    });
+    triggerWritebackForMutation(mutId).catch(() => {});
+    return res.json({ ok: true, released_match_ids: releasedMatchIds });
+  } catch (e: any) {
+    const code =
+      e.code === "NOT_FOUND" ? 404 :
+      e.code === "INVALID_STATUS" || e.code === "JOURNAL_LINKED" ? 409 :
+      500;
+    return res.status(code).json({ error: e.message });
+  }
+});
+
 // ─── GET /api/bank-reconciliation/:mutationId/repair-diagnosis ────────────────
 // Returns a runtime-scoped diagnosis. SQL is emitted only for the
 // non-ledger stale-match case; posted journals and canonical settlement

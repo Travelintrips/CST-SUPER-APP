@@ -1146,7 +1146,14 @@ const canReverse = (m: BankMutation) =>
 
 /** Unmatch posted mutation → reverse the journal, then return to matching queue. */
 const canUnmatch = (m: BankMutation) =>
-  m.status === "posted" && !isCanonicalSettlementMutation(m);
+  !isCanonicalSettlementMutation(m)
+  && (
+    m.status === "unmatched"
+    || m.status === "matched"
+    || m.status === "manual_review"
+    || m.status === "duplicate_need_review"
+    || m.status === "posted"
+  );
 
 /** Reopen → hanya setelah di-void, untuk matching ulang. */
 const canReopen = (m: BankMutation) =>
@@ -3932,6 +3939,7 @@ function QrisMutationCard({
   audit,
   onMapCoa,
   onReject,
+  onUnmatch,
   onDetail,
   onDelete,
   onEditPaymentDate,
@@ -3956,6 +3964,7 @@ function QrisMutationCard({
   audit: QrisCandidateAudit;
   onMapCoa: (m: BankMutation) => void;
   onReject: (m: BankMutation) => void;
+  onUnmatch?: (m: BankMutation) => void;
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
   onEditPaymentDate?: (target: {
@@ -4971,6 +4980,7 @@ function MutationCard({
             audit={audit}
             onMapCoa={onMapCoa}
             onReject={onReject}
+            onUnmatch={onUnmatch}
             onDetail={onDetail}
             onDelete={onDelete}
             onEditPaymentDate={onEditQrisPaymentDate}
@@ -6818,6 +6828,17 @@ function MutationDetailPanel({
               Unmatch
             </Button>
           )}
+              {onUnmatch && canUnmatch(m) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
+                  onClick={() => onUnmatch(m)}
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  Unmatch
+                </Button>
+              )}
           {canReject(m) && (
             <Button variant="outline" className="flex-1 gap-1.5 text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50 min-w-[100px]"
               onClick={() => { onClose(); onReject(m); }}>
@@ -8787,10 +8808,22 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal void journal", description: e.message, variant: "destructive" }),
   });
 
-  // Unmatch posted transaction → create reversal, then reopen the bank
-  // mutation so it returns to the unmatched queue in one user action.
+  // Unmatch a pre-final transaction directly. For posted transactions, create
+  // an immutable reversal first, then reopen the bank mutation.
   const unmatchMut = useMutation({
-    mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
+    mutationFn: async ({ mutId, reason, status }: { mutId: number; reason: string; status: MutationStatus }) => {
+      if (status !== "posted") {
+        const response = await fetch(`/api/bank-reconciliation/${mutId}/unmatch`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        });
+        const body = await response.json().catch(() => ({ error: "Unknown error" }));
+        if (!response.ok) throw new Error(body.error ?? response.statusText);
+        return body;
+      }
+
       const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
         method: "POST",
         credentials: "include",
@@ -8827,7 +8860,12 @@ export default function BankReconciliationPage() {
       return { ...reopenBody, void_entry_id: voidBody.void_entry_id };
     },
     onSuccess: (d) => {
-      toast({ title: "Transaksi berhasil di-unmatch", description: `Mutasi kembali ke antrean belum cocok. Reversal entry #${d.void_entry_id} dibuat.` });
+      toast({
+        title: "Transaksi berhasil di-unmatch",
+        description: d?.void_entry_id
+          ? `Mutasi kembali ke antrean belum cocok. Reversal entry #${d.void_entry_id} dibuat.`
+          : "Mutasi kembali ke antrean belum cocok.",
+      });
       setActionDialog(null);
       setReverseReason("");
       invalidate();
@@ -10710,9 +10748,13 @@ export default function BankReconciliationPage() {
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
+              <DialogTitle className="flex items-center gap-2">
               <RotateCcw className="w-5 h-5 text-gray-600" />
-              {actionDialog?.mode === "unmatch" ? "Unmatch Transaksi Posted" : "Reverse / Void Journal"}
+                {actionDialog?.mode === "unmatch"
+                  ? actionDialog.mutation.status === "posted"
+                    ? "Unmatch Transaksi Posted"
+                    : "Unmatch Transaksi"
+                  : "Reverse / Void Journal"}
             </DialogTitle>
           </DialogHeader>
           {(actionDialog?.mode === "reverse" || actionDialog?.mode === "unmatch") && (
@@ -10728,9 +10770,16 @@ export default function BankReconciliationPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Alasan Pembatalan <span className="text-red-500">*</span></label>
+                <label className="text-sm font-medium">
+                  {actionDialog.mode === "unmatch" ? "Alasan Unmatch" : "Alasan Pembatalan"}{" "}
+                  <span className="text-red-500">*</span>
+                </label>
                 <Textarea
-                  placeholder="Contoh: Kesalahan pencatatan, double entry, dll."
+                  placeholder={
+                    actionDialog.mode === "unmatch" && actionDialog.mutation.status !== "posted"
+                      ? "Contoh: Kandidat bank tidak sesuai, perlu dicocokkan ulang."
+                      : "Contoh: Kesalahan pencatatan, double entry, dll."
+                  }
                   value={reverseReason}
                   onChange={e => setReverseReason(e.target.value)}
                   rows={3}
@@ -10738,13 +10787,26 @@ export default function BankReconciliationPage() {
                 />
               </div>
 
-              <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
+              <div className={`rounded-md border p-3 text-xs space-y-1 ${
+                actionDialog.mode === "unmatch" && actionDialog.mutation.status !== "posted"
+                  ? "bg-blue-50 border-blue-200 text-blue-800"
+                  : "bg-red-50 border-red-200 text-red-800"
+              }`}>
                 <p className="font-semibold">⚠ Perhatian</p>
-                <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
                 {actionDialog.mode === "unmatch" ? (
-                  <p>Journal asli tidak dihapus. Setelah reversal, mutasi akan kembali ke status <strong>Belum Cocok</strong> agar bisa dicocokkan ulang.</p>
+                  actionDialog.mutation.status === "posted" ? (
+                    <>
+                      <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
+                      <p>Journal asli tidak dihapus. Setelah reversal, mutasi akan kembali ke status <strong>Belum Cocok</strong> agar bisa dicocokkan ulang.</p>
+                    </>
+                  ) : (
+                    <p>Match dan kandidat aktif akan dilepas, ownership lama dibersihkan, dan mutasi kembali ke status <strong>Belum Cocok</strong>. Tidak ada jurnal yang dihapus atau reversal yang dibuat.</p>
+                  )
                 ) : (
-                  <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                  <>
+                    <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
+                    <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                  </>
                 )}
               </div>
             </div>
@@ -10757,7 +10819,11 @@ export default function BankReconciliationPage() {
               onClick={() => {
                 if (!actionDialog) return;
                 if (actionDialog.mode === "unmatch") {
-                  unmatchMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
+                  unmatchMut.mutate({
+                    mutId: actionDialog.mutation.id,
+                    reason: reverseReason,
+                    status: actionDialog.mutation.status,
+                  });
                 } else {
                   voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
                 }
@@ -10767,7 +10833,9 @@ export default function BankReconciliationPage() {
               {voidMut.isPending || unmatchMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
               {voidMut.isPending || unmatchMut.isPending
                 ? "Memproses..."
-                : actionDialog?.mode === "unmatch" ? "Unmatch & Reverse" : "Reverse Journal"}
+                : actionDialog?.mode === "unmatch"
+                  ? actionDialog.mutation.status === "posted" ? "Unmatch & Reverse" : "Kembalikan ke Unmatched"
+                  : "Reverse Journal"}
             </Button>
           </DialogFooter>
         </DialogContent>
