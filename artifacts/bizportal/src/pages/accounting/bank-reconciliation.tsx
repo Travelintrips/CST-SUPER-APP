@@ -8897,10 +8897,17 @@ export default function BankReconciliationPage() {
   const deleteAllMut = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/delete-all", { method: "DELETE", credentials: "include" });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      return body;
     },
-    onSuccess: (d) => { toast({ title: `${d.deleted ?? 0} mutasi dihapus` }); invalidate(); },
+    onSuccess: (d) => {
+      toast({
+        title: "Rekonsiliasi DEV direset",
+        description: `${d.accounting_entries_deleted ?? 0} jurnal akuntansi dan ${d.matches_deleted ?? 0} kandidat dihapus. ${d.mutations_reset ?? 0} mutasi dikembalikan ke antrean unmatched.`,
+      });
+      invalidate();
+    },
     onError: (e: Error) => toast({ title: "Gagal hapus semua", description: e.message, variant: "destructive" }),
   });
 
@@ -10938,9 +10945,9 @@ export default function BankReconciliationPage() {
       <AlertDialog open={showDeleteAll} onOpenChange={setShowDeleteAll}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Semua Mutasi?</AlertDialogTitle>
+            <AlertDialogTitle>Reset Semua Rekonsiliasi DEV?</AlertDialogTitle>
             <AlertDialogDescription>
-              Semua data mutasi bank yang sudah di-sync akan dihapus permanen, termasuk hasil matching dan audit log-nya. Tindakan ini tidak bisa dibatalkan.
+              Jurnal akuntansi rekonsiliasi, hasil matching, dan audit rekonsiliasi akan dihapus. Mutasi bank sumber tetap disimpan dan dikembalikan ke antrean unmatched agar bisa diproses ulang. Mutasi yang sudah dipakai settlement modul lain tidak diubah.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -10950,7 +10957,7 @@ export default function BankReconciliationPage() {
               onClick={() => { setShowDeleteAll(false); deleteAllMut.mutate(); }}
               disabled={deleteAllMut.isPending}
             >
-              {deleteAllMut.isPending ? "Menghapus..." : "Hapus Semua"}
+              {deleteAllMut.isPending ? "Mereset..." : "Reset Rekonsiliasi"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -9361,14 +9361,221 @@ router.get("/audit/:mutationId", async (req, res) => {
 router.delete("/delete-all", async (req, res) => {
   await runBankReconciliationCoreMigration();
   const actor = (req as any).user?.email ?? "admin";
+  if (process.env.APP_ENV !== "development") {
+    return res.status(403).json({
+      error: "Reset semua rekonsiliasi hanya tersedia di environment development.",
+    });
+  }
+
   try {
-    // CASCADE via FK: bank_reconciliation_matches & bank_reconciliation_audit terhapus otomatis
-    const { rows } = await db.execute(sql.raw(`DELETE FROM bank_mutations RETURNING id`));
-    const count = (rows as any[]).length;
-    logger.info({ actor, count }, "[bankRecon] delete-all: semua bank_mutations dihapus");
-    return res.json({ ok: true, deleted: count });
+    const result = await db.transaction(async (tx) => {
+      // This is an explicit DEV reset. Keep it atomic and stop the normal
+      // posted-entry/fleet-ledger guards only for this transaction; source
+      // bank mutations remain available for a fresh matching run.
+      await tx.execute(sql`SET LOCAL lock_timeout = '5s'`);
+      await tx.execute(sql`
+        LOCK TABLE
+          accounting_entries,
+          accounting_entry_lines,
+          bank_mutations,
+          bank_reconciliation_matches,
+          bank_reconciliation_audit,
+          bank_recon_audit_logs,
+          qris_mutation_batch_candidates,
+          ledger_events,
+          fleet_ledger_entries,
+          ledger_consistency_alerts
+        IN ACCESS EXCLUSIVE MODE
+      `);
+      await tx.execute(sql`SET LOCAL session_replication_role = 'replica'`);
+
+      await tx.execute(sql`
+        CREATE TEMP TABLE _dev_recon_entry_ids ON COMMIT DROP AS
+        SELECT id
+        FROM accounting_entries
+        WHERE source::text = 'bank_reconciliation'
+      `);
+      await tx.execute(sql`
+        CREATE TEMP TABLE _dev_recon_mutation_ids ON COMMIT DROP AS
+        SELECT id
+        FROM bank_mutations
+        WHERE journal_entry_id IN (SELECT id FROM _dev_recon_entry_ids)
+        UNION
+        SELECT mutation_id
+        FROM bank_reconciliation_matches
+        UNION
+        SELECT mutation_id
+        FROM bank_reconciliation_audit
+      `);
+
+      // A bank mutation may also belong to a customer/sport settlement.
+      // Those canonical records are outside this reset boundary.
+      const linked = await tx.execute(sql`
+        SELECT COUNT(*)::int AS count
+        FROM _dev_recon_mutation_ids ids
+        WHERE EXISTS (
+          SELECT 1
+          FROM customer_portal_settlement_batches cpsb
+          WHERE cpsb.canonical_bank_mutation_id = ids.id
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches spsb
+          WHERE spsb.bank_mutation_id = ids.id
+             OR spsb.canonical_bank_mutation_id = ids.id
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM sport_center.expected_bank_settlements ses
+          WHERE ses.bank_mutation_id = ids.id
+        )
+      `);
+      const linkedCount = Number((linked.rows[0] as { count?: number | string } | undefined)?.count ?? 0);
+
+      const accountingLines = await tx.execute(sql`
+        DELETE FROM accounting_entry_lines
+        WHERE entry_id IN (SELECT id FROM _dev_recon_entry_ids)
+      `);
+      const accountingEntries = await tx.execute(sql`
+        DELETE FROM accounting_entries
+        WHERE id IN (SELECT id FROM _dev_recon_entry_ids)
+      `);
+      const ledgerEvents = await tx.execute(sql`
+        DELETE FROM ledger_events
+        WHERE entry_id IN (SELECT id FROM _dev_recon_entry_ids)
+      `);
+      const fleetMirrors = await tx.execute(sql`
+        DELETE FROM fleet_ledger_entries
+        WHERE source_type = 'bank_reconciliation'
+          AND source_id::text IN (SELECT id::text FROM _dev_recon_entry_ids)
+      `);
+      const consistencyAlerts = await tx.execute(sql`
+        DELETE FROM ledger_consistency_alerts
+        WHERE (entity_type = 'accounting_entry'
+               AND entity_id::text IN (SELECT id::text FROM _dev_recon_entry_ids))
+           OR (entity_type = 'bank_mutation'
+               AND entity_id::text IN (SELECT id::text FROM _dev_recon_mutation_ids))
+      `);
+
+      const matches = await tx.execute(sql`
+        DELETE FROM bank_reconciliation_matches m
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM customer_portal_settlement_batches cpsb
+          WHERE cpsb.canonical_bank_mutation_id = m.mutation_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches spsb
+          WHERE spsb.bank_mutation_id = m.mutation_id
+             OR spsb.canonical_bank_mutation_id = m.mutation_id
+        )
+      `);
+      const audit = await tx.execute(sql`
+        DELETE FROM bank_reconciliation_audit a
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM customer_portal_settlement_batches cpsb
+          WHERE cpsb.canonical_bank_mutation_id = a.mutation_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches spsb
+          WHERE spsb.bank_mutation_id = a.mutation_id
+             OR spsb.canonical_bank_mutation_id = a.mutation_id
+        )
+      `);
+      const auditLogs = await tx.execute(sql`
+        DELETE FROM bank_recon_audit_logs l
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM customer_portal_settlement_batches cpsb
+          WHERE cpsb.canonical_bank_mutation_id = l.mutation_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches spsb
+          WHERE spsb.bank_mutation_id = l.mutation_id
+             OR spsb.canonical_bank_mutation_id = l.mutation_id
+        )
+      `);
+      const qrisCandidates = await tx.execute(sql`
+        DELETE FROM qris_mutation_batch_candidates q
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM customer_portal_settlement_batches cpsb
+          WHERE cpsb.canonical_bank_mutation_id = q.mutation_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches spsb
+          WHERE spsb.bank_mutation_id = q.mutation_id
+             OR spsb.canonical_bank_mutation_id = q.mutation_id
+        )
+      `);
+
+      const resetMutations = await tx.execute(sql`
+        UPDATE bank_mutations bm
+        SET status = 'unmatched',
+            accounting_posted = false,
+            journal_entry_id = NULL,
+            approved_by = NULL,
+            approved_at = NULL,
+            posted_by = NULL,
+            posted_at = NULL,
+            matched_payment_id = NULL,
+            matched_order_id = NULL,
+            reconciliation_status = NULL,
+            matching_type = NULL,
+            matching_group_id = NULL,
+            review_reason = NULL,
+            review_code = NULL
+        WHERE bm.id IN (SELECT id FROM _dev_recon_mutation_ids)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM customer_portal_settlement_batches cpsb
+            WHERE cpsb.canonical_bank_mutation_id = bm.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sport_center.payment_settlement_batches spsb
+            WHERE spsb.bank_mutation_id = bm.id
+               OR spsb.canonical_bank_mutation_id = bm.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sport_center.expected_bank_settlements ses
+            WHERE ses.bank_mutation_id = bm.id
+          )
+      `);
+
+      return {
+        accounting_entries_deleted: accountingEntries.rowCount ?? 0,
+        accounting_lines_deleted: accountingLines.rowCount ?? 0,
+        ledger_events_deleted: ledgerEvents.rowCount ?? 0,
+        fleet_mirrors_deleted: fleetMirrors.rowCount ?? 0,
+        consistency_alerts_deleted: consistencyAlerts.rowCount ?? 0,
+        matches_deleted: matches.rowCount ?? 0,
+        audit_deleted: audit.rowCount ?? 0,
+        audit_logs_deleted: auditLogs.rowCount ?? 0,
+        qris_candidates_deleted: qrisCandidates.rowCount ?? 0,
+        mutations_reset: resetMutations.rowCount ?? 0,
+        mutations_preserved_for_settlement: linkedCount,
+      };
+    });
+
+    logger.info({ actor, ...result }, "[bankRecon] DEV reconciliation reset completed");
+    return res.json({
+      ok: true,
+      deleted: result.matches_deleted + result.audit_deleted + result.accounting_entries_deleted,
+      ...result,
+      message: "Rekonsiliasi DEV direset; mutasi bank sumber tetap tersedia untuk matching ulang.",
+    });
   } catch (e: any) {
-    return res.status(500).json({ error: e.message });
+    logger.error({ actor, err: e }, "[bankRecon] DEV reconciliation reset failed");
+    return res.status(500).json({
+      error: e?.message ?? "Reset rekonsiliasi DEV gagal.",
+    });
   }
 });
 

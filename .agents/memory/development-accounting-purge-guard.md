@@ -17,3 +17,11 @@ When removing development accounting descendants, match fleet-ledger mirrors by 
 **Why:** The DEV dataset contained the same source IDs under bank-reconciliation, sales-payment, and sport-center mirror types. An ID-only delete would remove unrelated financial mirrors.
 
 **How to apply:** Build the purge manifest with the exact source discriminator, lock writers first, and fail closed if the manifest differs from the audited counts.
+
+## Cross-module settlement boundary
+
+The DEV reconciliation reset should remove reconciliation postings and candidates but retain source bank mutations that are referenced by customer-portal or Sport Center settlement records.
+
+**Why:** A single bank mutation can be reused as canonical settlement evidence by another module; deleting or resetting it would orphan a valid settlement.
+
+**How to apply:** Exclude settlement-owned mutation IDs from reset/delete predicates and report them to the caller instead of silently mutating them.
