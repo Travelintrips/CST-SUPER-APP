@@ -56,6 +56,7 @@ import {
   type ReconRule,
   type ReconRuleMutationInput,
 } from "./reconRuleEngine.js";
+import { requiredCandidateApprovalError } from "./candidateRequirementStatus.js";
 import { invalidateRulesCache } from "./reconCache.js";
 export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
@@ -2320,7 +2321,7 @@ export async function approveAndCreateJournal(
        let selectedCandidateType = candidateType;
        let selectedCandidateId = candidateId;
        let selectedCandidateSource = candidateSource;
-       if (matchId) {
+        if (matchId) {
          const { rows: matchRows } = await tx.execute(sql.raw(`
            SELECT id, candidate_type, candidate_id, candidate_source
            FROM bank_reconciliation_matches
@@ -2339,6 +2340,45 @@ export async function approveAndCreateJournal(
        }
 
        const selectedType = canonicalCandidateType(selectedCandidateType);
+        // The requirement is persisted in the rule-match audit trail so this
+        // remains enforceable even when the browser sends no candidate payload
+        // or sends the Rule AI evidence row itself. Older audit rows without a
+        // snapshot fall back to the current rule configuration.
+        const { rows: requiredCandidateRules } = await tx.execute(sql.raw(`
+          SELECT bra.id
+          FROM bank_reconciliation_audit bra
+          LEFT JOIN recon_rules rr
+            ON rr.id = CASE
+              WHEN COALESCE(NULLIF(bra.meta->>'matched_rule_id', ''), NULLIF(bra.meta->>'rule_id', '')) ~ '^[0-9]+$'
+              THEN COALESCE(NULLIF(bra.meta->>'matched_rule_id', ''), NULLIF(bra.meta->>'rule_id', ''))::bigint
+              ELSE NULL
+            END
+          WHERE bra.mutation_id = ${mutationId}
+            AND bra.action IN ('RULE_ENGINE_MATCH', 'RULE_CANDIDATE_REQUIRED', 'AUTO_POST_BLOCKED')
+            AND (
+              bra.meta->>'candidate_requirement' = 'required'
+              OR (
+                rr.candidate_requirement = 'required'
+                AND rr.company_id = ${companyId}
+              )
+            )
+          ORDER BY bra.id DESC
+          LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        const candidateRequirement = requiredCandidateRules.length > 0 ? "required" : "not_required";
+
+        const requiredCandidateError = requiredCandidateApprovalError({
+          candidateRequirement,
+          candidateType: selectedType,
+          candidateId: selectedCandidateId == null ? null : Number(selectedCandidateId),
+        });
+        if (requiredCandidateError) {
+          throw Object.assign(
+            new Error(requiredCandidateError.message),
+            { code: requiredCandidateError.code },
+          );
+        }
+
        const allowedCandidateTypes = new Set([
          "accounting_payment",
          "logistic_order",

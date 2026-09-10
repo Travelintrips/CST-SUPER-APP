@@ -414,7 +414,49 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     'accounting_payment', 'invoice', 'expense',
     'logistic_order', 'tenant_invoice'
   )`;
+  const requiredCandidateRuleEvidence = `EXISTS (
+    SELECT 1
+    FROM bank_reconciliation_audit required_rule_audit
+    LEFT JOIN recon_rules required_rule
+      ON required_rule.id = CASE
+        WHEN COALESCE(
+          NULLIF(required_rule_audit.meta->>'matched_rule_id', ''),
+          NULLIF(required_rule_audit.meta->>'rule_id', '')
+        ) ~ '^[0-9]+$'
+        THEN COALESCE(
+          NULLIF(required_rule_audit.meta->>'matched_rule_id', ''),
+          NULLIF(required_rule_audit.meta->>'rule_id', '')
+        )::bigint
+        ELSE NULL
+      END
+    WHERE required_rule_audit.mutation_id = ${alias}.id
+      AND required_rule_audit.action IN (
+        'RULE_ENGINE_MATCH', 'RULE_CANDIDATE_REQUIRED', 'AUTO_POST_BLOCKED'
+      )
+      AND (
+        required_rule_audit.meta->>'candidate_requirement' = 'required'
+        OR (
+          required_rule.candidate_requirement = 'required'
+          AND required_rule.company_id = ${alias}.company_id
+        )
+      )
+  )`;
+  const realCandidateTypes = `(
+    'accounting_payment', 'invoice', 'expense',
+    'logistic_order', 'tenant_invoice', 'sport_payment',
+    'qris_settlement', 'internal_transfer'
+  )`;
   return `CASE
+    WHEN ${requiredCandidateRuleEvidence}
+      AND ${alias}.status IN ('matched', 'manual_review', 'duplicate_need_review')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_matches required_real_candidate
+        WHERE required_real_candidate.mutation_id = ${alias}.id
+          AND required_real_candidate.status IN ('candidate', 'approved')
+          AND required_real_candidate.candidate_type IN ${realCandidateTypes}
+      )
+    THEN 'unmatched'
     WHEN ${alias}.status = 'matched'
       AND ${bankMutationPaymentTypeSql(alias)} = 'qris'
       AND EXISTS (
@@ -7756,7 +7798,13 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         code: result.code,
       });
     }
-    return res.status(400).json({ error: result.error });
+    if (result.code === "RULE_CANDIDATE_REQUIRED") {
+      return res.status(409).json({
+        error: result.error,
+        code: result.code,
+      });
+    }
+    return res.status(400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
   }
 
   const responseBody = {
@@ -9068,6 +9116,15 @@ router.post("/run-matching", async (req, res) => {
             bank_account_id: m.bank_account_id ?? null,
             direction: m.direction,
           }, actor);
+          await auditLog(Number(m.id), "RULE_ENGINE_MATCH", actor, {
+            rule_id: decision.matchedRuleId,
+            matched_rule_id: decision.matchedRuleId,
+            candidate_requirement: candidateRequirement,
+            candidate_count: candidateResult.all.length,
+            best_candidate_type: candidateResult.best?.candidate.type ?? null,
+            best_candidate_id: candidateResult.best?.candidate.id ?? null,
+            status: candidateResult.status,
+          });
 
           if (!candidateResult.best) {
             const reason = "Rule AI ini mewajibkan kandidat transaksi sebelum auto-match.";

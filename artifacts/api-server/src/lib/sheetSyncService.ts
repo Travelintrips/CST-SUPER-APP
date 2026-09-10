@@ -658,7 +658,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         const decision = await runReconDecisionStack(decisionInput);
         if (decision.decisionSource === "MANUAL_RULE" && decision.matchedRuleId) {
           const ruleRows = await db.execute(sql`
-            SELECT target_coa_code, confidence_score
+            SELECT target_coa_code, confidence_score, candidate_requirement
             FROM recon_rules
             WHERE id = ${Number(decision.matchedRuleId)}
               AND company_id = ${Number(company_id)}
@@ -668,8 +668,50 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           const matchedRule = (ruleRows.rows as any[])[0] as {
             target_coa_code?: string | null;
             confidence_score?: number | string | null;
+            candidate_requirement?: string | null;
           } | undefined;
           const targetCoaCode = String(matchedRule?.target_coa_code ?? "").trim();
+          const candidateRequirement = matchedRule?.candidate_requirement === "required"
+            ? "required"
+            : "not_required";
+
+          // A Rule AI hit is classification evidence, not a transaction
+          // candidate. Required-candidate rules must use the same source
+          // matcher as the API route instead of inserting recon_rule as if it
+          // were an approvable business record.
+          if (candidateRequirement === "required") {
+            const candidateResult = await runUnifiedMatching({
+              id,
+              amount: p.amount,
+              transaction_date: p.transaction_date,
+              mutation_key: p.mutation_key,
+              normalized_description: p.normalized_description,
+              direction: p.direction,
+              company_id,
+              bank_account_id: p.bank_account_id ?? null,
+              provider_name: p.provider_name,
+            }, "sheet-sync");
+            await db.execute(sql`
+              INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+              VALUES (
+                ${id},
+                'RULE_ENGINE_MATCH',
+                'sheet-sync',
+                ${JSON.stringify({
+                  rule_id: Number(decision.matchedRuleId),
+                  matched_rule_id: Number(decision.matchedRuleId),
+                  candidate_requirement: candidateRequirement,
+                  candidate_count: candidateResult.all.length,
+                  best_candidate_type: candidateResult.best?.candidate.type ?? null,
+                  best_candidate_id: candidateResult.best?.candidate.id ?? null,
+                  status: candidateResult.status,
+                  source: "sheet-sync",
+                })}::jsonb
+              )
+            `).catch(() => {});
+            continue;
+          }
+
           const autoPostPlan = planReferenceCoaAutoPost({
             targetCoaCode,
             ruleConfidence: matchedRule?.confidence_score == null

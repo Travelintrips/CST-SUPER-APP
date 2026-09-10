@@ -152,3 +152,4 @@
 - [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.
 - [Canonical correlation root parity](canonical-correlation-root-parity.md) — TS, views, routines, and list projections must reject malformed repeated `:supp:` markers consistently.
 - [Customer Portal marketplace vendor routing](customer-portal-marketplace-vendor-routing.md) — vendor onboarding and RFQ quote invitation are distinct, but product-owner routing belongs in Customer Portal.
+- [Rule AI candidate approval boundary](rule-ai-candidate-approval-boundary.md) — candidate_required is an approval invariant: recon_rule evidence never substitutes for a real transaction candidate.
