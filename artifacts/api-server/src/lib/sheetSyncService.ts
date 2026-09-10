@@ -28,6 +28,11 @@ import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
 import {
+  normalizeAccountDigits,
+  resolveSheetBankAccountId,
+  type SheetAccountCandidate,
+} from "./sheetConfigAccountBinding.js";
+import {
   isDevelopmentEnvironment,
   isReconciliationWorkerEnabled,
   positiveIntEnv,
@@ -410,6 +415,8 @@ interface SheetConfig {
   sheet_id: string;
   tab_name: string;
   label: string;
+  bank_account_number?: string | null;
+  bank_name?: string | null;
 }
 
 export async function syncOneConfig(cfg: SheetConfig): Promise<{
@@ -418,7 +425,14 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   parsed: number;
   existing: number;
 }> {
-  const { id: configId, company_id, sheet_id: sheetId, tab_name: tabName, label } = cfg;
+  const {
+    id: configId,
+    company_id,
+    sheet_id: sheetId,
+    tab_name: tabName,
+    label,
+    bank_account_number: configuredAccountNumber,
+  } = cfg;
   const syncStartMs = Date.now();
 
   // Read sheet
@@ -484,32 +498,63 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   }
   // Resolve all possible destination accounts once. The previous per-row
   // probe held the single development pool in a 46-row serial loop.
-  const accountNumbers: Array<{ id: number; digits: string }> = [];
+  const accountNumbers: SheetAccountCandidate[] = [];
   try {
     const { rows: accountRows } = await db.execute(sql.raw(`
-      SELECT id, account_number
+      SELECT id, account_number, company_id
       FROM company_bank_accounts
       WHERE is_active = TRUE
         AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
         AND account_number IS NOT NULL
     `));
-    for (const row of accountRows as Array<{ id?: number; account_number?: string }>) {
-      const digits = String(row.account_number ?? "").replace(/\D/g, "");
-      if (row.id != null && digits) accountNumbers.push({ id: Number(row.id), digits });
+    for (const row of accountRows as Array<{
+      id?: number;
+      account_number?: string;
+      company_id?: number | null;
+    }>) {
+      const digits = normalizeAccountDigits(row.account_number);
+      if (row.id != null && digits) {
+        accountNumbers.push({
+          id: Number(row.id),
+          digits,
+          companyId: row.company_id == null ? null : Number(row.company_id),
+        });
+      }
     }
   } catch (err: any) {
     logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Gagal memuat daftar rekening");
   }
 
   const resolveBankAccountId = (p: ParsedRow): number | null => {
-    const statementDigits = `${p.bank ?? ""} ${p.description}`.replace(/\D/g, "");
-    return (
-      accountNumbers
-        .sort((a, b) => b.digits.length - a.digits.length)
-        .find((account) => statementDigits.includes(account.digits))
-        ?.id ?? null
-    );
+    return resolveSheetBankAccountId({
+      configuredAccountNumber,
+      rowBank: p.bank,
+      rowDescription: p.description,
+      companyId: company_id,
+      accounts: accountNumbers,
+    });
   };
+
+  const configuredAccountDigits = normalizeAccountDigits(configuredAccountNumber);
+  if (configuredAccountDigits) {
+    const configuredAccountExists = accountNumbers.some(
+      (account) => account.digits === configuredAccountDigits,
+    );
+    if (!configuredAccountExists) {
+      const errorMessage =
+        `Nomor rekening "${configuredAccountNumber}" pada config "${label}" ` +
+        "belum terdaftar sebagai company_bank_accounts aktif.";
+      await db.execute(sql.raw(`
+        UPDATE bank_sheet_configs
+        SET last_sync_status = 'error',
+            last_sync_error = '${errorMessage.replace(/'/g, "''")}',
+            last_synced_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${configId}
+      `)).catch(() => {});
+      throw new Error(errorMessage);
+    }
+  }
 
   // Build new rows in memory, then insert them in one statement.
   const newMutations: Array<{ id: number; parsed: ParsedRow }> = [];
@@ -1242,7 +1287,8 @@ export async function triggerWritebackForMutation(mutationId: number): Promise<v
   try {
     const { rows } = await db.execute(sql.raw(`
       SELECT bm.sheet_config_id,
-             bsc.sheet_id, bsc.tab_name, bsc.label, bsc.company_id, bsc.id AS cfg_id
+             bsc.sheet_id, bsc.tab_name, bsc.label, bsc.company_id,
+             bsc.bank_account_number, bsc.bank_name, bsc.id AS cfg_id
       FROM bank_mutations bm
       JOIN bank_sheet_configs bsc ON bsc.id = bm.sheet_config_id
       WHERE bm.id = ${mutationId}
@@ -1258,6 +1304,8 @@ export async function triggerWritebackForMutation(mutationId: number): Promise<v
       sheet_id:   String(row.sheet_id),
       tab_name:   String(row.tab_name),
       label:      String(row.label),
+      bank_account_number: row.bank_account_number == null ? null : String(row.bank_account_number),
+      bank_name:  row.bank_name == null ? null : String(row.bank_name),
     });
   } catch (err: any) {
     logger.warn(
@@ -1295,7 +1343,7 @@ export async function syncAllSheetConfigs(companyId?: number): Promise<void> {
   try {
     const companyFilter = companyId == null ? "" : ` AND company_id = ${companyId}`;
     const { rows } = await db.execute(sql.raw(
-      `SELECT id, company_id, sheet_id, tab_name, label
+      `SELECT id, company_id, sheet_id, tab_name, label, bank_account_number, bank_name
        FROM bank_sheet_configs
        WHERE is_active = TRUE${companyFilter}`,
     ));
