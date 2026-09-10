@@ -14,3 +14,9 @@ The managed secret loader can inject `TEST_DATABASE_URL` into a workflow child p
 **Why:** the development workflow and interactive shell have different environment assembly paths, while direct isolated Supabase DNS may still be unavailable to Node.
 
 **How to apply:** use the official loader for the first attempt, keep the URL masked, and only try a same-project pooler when its tenant/region identity is verified without exposing credentials.
+
+The current managed development bundle can still inject `TEST_DATABASE_URL` as a direct `db.<project>.supabase.co:5432` endpoint even when the approved checkpoint expects a regional pooler. The official loader does not rewrite that target, so repeated Node `ENOTFOUND` failures are an environment-provisioning blocker.
+
+**Why:** rerunning the same test or increasing its timeout cannot repair DNS transport, and deriving an unverified pooler URL risks crossing the TEST isolation boundary.
+
+**How to apply:** report the masked target shape and stop; require the TEST secret/bundle owner to provision the verified same-project pooler URL before resuming DB-backed E2E.
