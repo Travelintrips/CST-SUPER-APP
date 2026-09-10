@@ -89,4 +89,16 @@ describe("Phase 4C-1 candidate_source persistence", () => {
     );
     expect(migration).toContain("SET status = 'superseded'");
   });
+
+  it("uses correlation-root dedupe only when the live canonical view exposes that column", () => {
+    const route = readFileSync(
+      resolve(process.cwd(), "src/routes/bankReconciliation.ts"),
+      "utf8",
+    );
+
+    expect(route).toContain("attname = 'correlation_root'");
+    expect(route).toContain(
+      "hasCanonicalSettlementView && hasCanonicalCorrelationRoot",
+    );
+  });
 });

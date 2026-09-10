@@ -5103,22 +5103,32 @@ router.get("/mutations", async (req, res) => {
   // at runtime so the list query degrades gracefully instead of returning 500.
   let hasCanonicalSettlementView = false;
   let hasCanonicalSettlementSchema = false;
+  let hasCanonicalCorrelationRoot = false;
   try {
     const { rows: vcRows } = await db.execute(sql.raw(
       `SELECT
          to_regclass('sport_center.expected_bank_settlements')  AS v,
-         to_regclass('sport_center.payment_settlement_items')   AS s`,
+         to_regclass('sport_center.payment_settlement_items')   AS s,
+         EXISTS (
+           SELECT 1
+           FROM pg_attribute
+           WHERE attrelid = to_regclass('sport_center.expected_bank_settlements')
+             AND attname = 'correlation_root'
+             AND attnum > 0
+             AND NOT attisdropped
+         ) AS has_correlation_root`,
     ));
     const vcRow = vcRows[0] as Record<string, unknown> | undefined;
     hasCanonicalSettlementView   = vcRow?.v != null;
     hasCanonicalSettlementSchema = vcRow?.s != null;
+    hasCanonicalCorrelationRoot  = vcRow?.has_correlation_root === true;
   } catch {
-    // leave both false
+    // leave all capabilities false
   }
   const resolvedCanonicalDetailsSql = hasCanonicalSettlementView
     ? canonicalSettlementDetailsSql("m.candidate_id")
     : "NULL::jsonb";
-  const canonicalRootDedupeSql = hasCanonicalSettlementView
+  const canonicalRootDedupeSql = hasCanonicalSettlementView && hasCanonicalCorrelationRoot
     ? `
             AND NOT EXISTS (
               SELECT 1
