@@ -436,6 +436,7 @@ export async function selectVendorAndCreatePo(opts: {
         .where(
           and(
             eq(mktVendorQuotesTable.id, quoteId),
+            eq(mktVendorQuotesTable.rfqId, rfqId),
             eq(mktVendorQuotesTable.status, "submitted"),
           )
         )

@@ -28,6 +28,9 @@ import { logger } from "./logger.js";
  */
 
 const SUPPLIER_COLUMNS: Array<[string, string]> = [
+  // Canonical Drizzle supplier field. Kept nullable to preserve existing
+  // supplier rows and legacy imports that do not have a named contact.
+  ["contact_person", "TEXT"],
   // Fase 1 — granular status
   ["status", "TEXT NOT NULL DEFAULT 'active'"],
   ["vendor_code", "TEXT"],
