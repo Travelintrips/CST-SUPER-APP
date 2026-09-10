@@ -63,6 +63,7 @@ async function http(path, options = {}, expected = [200]) {
 
 const adminHeaders = () => ({ authorization: `Bearer ${adminToken}` });
 const customerHeaders = () => ({ authorization: `Bearer ${customerToken}` });
+const secondaryCustomerHeaders = () => ({ authorization: `Bearer ${secondaryCustomerToken}` });
 const internalHeaders = () => ({ cookie: internalCookie });
 
 function fixturePhone(label) {
@@ -436,6 +437,18 @@ async function proveAdminReadModel() {
   const logisticFeed = await http("/api/portal/logistic-orders", {
     headers: customerHeaders(),
   });
+  const serviceFeed = await http("/api/portal/service-orders", {
+    headers: customerHeaders(),
+  });
+  const rfqFeed = await http("/api/mkt/portal/rfqs?limit=200", {
+    headers: customerHeaders(),
+  });
+  const secondaryServiceFeed = await http("/api/portal/service-orders", {
+    headers: secondaryCustomerHeaders(),
+  });
+  const secondaryRfqFeed = await http("/api/mkt/portal/rfqs?limit=200", {
+    headers: secondaryCustomerHeaders(),
+  });
   const rfqReference = (await db("SELECT rfq_number FROM mkt_rfqs WHERE id = $1", [created.marketplace[0]]))[0]?.rfq_number;
   check("Customer /orders CRM source endpoint",
     crmFeed.status === 200 && Array.isArray(crmFeed.body),
@@ -446,6 +459,37 @@ async function proveAdminReadModel() {
   check("Customer Product Order feed visibility",
     productFeed.body?.some((row) => Number(row.id) === Number(created.productOrders[0])),
     `rows=${Array.isArray(productFeed.body) ? productFeed.body.length : 0}`);
+  const expectedServiceRows = [
+    [created.ocean[0], "Ocean Freight"],
+    [created.air[0], "Air Freight"],
+    [created.trucking[0], "Domestic / Trucking"],
+    [created.csr[0], "Customer Service Request"],
+    [created.csr[1], "Customer Service Request"],
+  ];
+  check("Customer canonical service feed visibility",
+    serviceFeed.status === 200
+      && Array.isArray(serviceFeed.body)
+      && expectedServiceRows.every(([id, serviceType]) =>
+        serviceFeed.body.some((row) =>
+          Number(row.id) === Number(id) && row.serviceType === serviceType)),
+    `rows=${Array.isArray(serviceFeed.body) ? serviceFeed.body.length : 0}`);
+  check("Customer Marketplace RFQ read-model visibility",
+    rfqFeed.status === 200
+      && rfqFeed.body?.data?.some((row) =>
+        Number(row.rfqId) === Number(created.marketplace[0])
+        && row.rfqStatus === "customer_review"),
+    `rows=${Array.isArray(rfqFeed.body?.data) ? rfqFeed.body.data.length : 0}`);
+  check("Customer service-feed isolation",
+    secondaryServiceFeed.status === 200
+      && Array.isArray(secondaryServiceFeed.body)
+      && !secondaryServiceFeed.body.some((row) =>
+        expectedServiceRows.some(([id]) => Number(row.id) === Number(id))),
+    `secondary rows=${Array.isArray(secondaryServiceFeed.body) ? secondaryServiceFeed.body.length : 0}`);
+  check("Customer Marketplace RFQ isolation",
+    secondaryRfqFeed.status === 200
+      && !secondaryRfqFeed.body?.data?.some((row) =>
+        Number(row.rfqId) === Number(created.marketplace[0])),
+    `secondary rows=${Array.isArray(secondaryRfqFeed.body?.data) ? secondaryRfqFeed.body.data.length : 0}`);
   check("Pending Marketplace RFQ excluded from Product Order feed",
     !productFeed.body?.some((row) => row.orderNumber === rfqReference),
     `rfq=${rfqReference}`);

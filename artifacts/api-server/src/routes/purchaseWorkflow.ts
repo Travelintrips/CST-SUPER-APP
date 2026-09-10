@@ -45,6 +45,7 @@ import {
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, or, isNull } from "drizzle-orm";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { audit } from "../lib/unifiedAudit.js";
 import { getInCodeTemplate, resolveTemplate, type ProductTemplateOverride } from "@workspace/product-templates";
 import {
   guardInvoiceUpdate,
@@ -1299,6 +1300,195 @@ router.get("/vendor-invoices/:id", async (req, res, next) => {
     po,
     gr,
   });
+});
+
+// Reset only an orphaned vendor-invoice settlement. This is intentionally
+// stricter than a normal edit: posted payment journals must be reversed through
+// bank reconciliation before an invoice can be marked unpaid again.
+router.post("/vendor-invoices/:id/reset-payment", async (req, res) => {
+  const id = Number(String(req.params.id));
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "vendor_invoice_id_invalid", message: "ID invoice tidak valid." });
+    return;
+  }
+  if (reason.length < 10 || reason.length > 2000) {
+    res.status(400).json({
+      error: "reset_payment_reason_required",
+      message: "Alasan koreksi wajib diisi antara 10 dan 2000 karakter.",
+    });
+    return;
+  }
+
+  const [owner] = await db
+    .select({
+      id: vendorInvoicesTable.id,
+      companyId: vendorInvoicesTable.companyId,
+    })
+    .from(vendorInvoicesTable)
+    .where(eq(vendorInvoicesTable.id, id))
+    .limit(1);
+  if (!owner) {
+    res.status(404).json({ error: "vendor_invoice_not_found", message: "Invoice tidak ditemukan." });
+    return;
+  }
+
+  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  if (!await assertCompanyAccess(owner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const invoiceResult = await tx.execute(sql`
+        SELECT id, company_id, invoice_number, status, amount_paid, grand_total
+        FROM vendor_invoices
+        WHERE id = ${id} AND company_id = ${owner.companyId ?? cid}
+        FOR UPDATE
+      `);
+      const invoice = invoiceResult.rows[0] as Record<string, unknown> | undefined;
+      if (!invoice) {
+        throw Object.assign(new Error("Invoice tidak ditemukan pada company aktif."), { httpStatus: 404 });
+      }
+
+      const amountPaid = num(invoice.amount_paid);
+      if (amountPaid <= 0.01) {
+        throw Object.assign(new Error("Invoice sudah berstatus belum terbayar."), { httpStatus: 409 });
+      }
+
+      const matchResult = await tx.execute(sql`
+        SELECT
+          brm.id AS match_id,
+          brm.mutation_id,
+          brm.status AS match_status,
+          brm.match_reason,
+          bm.status AS mutation_status,
+          bm.amount AS mutation_amount,
+          bm.journal_entry_id
+        FROM bank_reconciliation_matches brm
+        INNER JOIN bank_mutations bm ON bm.id = brm.mutation_id
+        WHERE brm.candidate_type = 'vendor_invoice'
+          AND brm.candidate_id = ${id}
+          AND brm.status = 'approved'
+        ORDER BY brm.id
+        FOR UPDATE OF brm, bm
+      `);
+      const matches = matchResult.rows as Array<Record<string, unknown>>;
+      if (matches.length === 0) {
+        throw Object.assign(
+          new Error("Sumber settlement invoice tidak ditemukan. Reset diblokir dan perlu review Finance."),
+          { httpStatus: 422 },
+        );
+      }
+
+      const unsafeMatch = matches.find((match) =>
+        match.journal_entry_id != null ||
+        ["approved", "approved_pending_posting", "posted", "void"].includes(
+          String(match.mutation_status ?? "").toLowerCase(),
+        ),
+      );
+      if (unsafeMatch) {
+        throw Object.assign(
+          new Error("Settlement memiliki jurnal atau status bank aktif. Gunakan workflow reversal bank reconciliation terlebih dahulu."),
+          { httpStatus: 409 },
+        );
+      }
+
+      const settlementTotal = matches.reduce((sum, match) => sum + num(match.mutation_amount), 0);
+      if (Math.abs(settlementTotal - amountPaid) > 0.01) {
+        throw Object.assign(
+          new Error(
+            `Nominal settlement (${idr(settlementTotal)}) tidak sama dengan amount_paid invoice (${idr(amountPaid)}). Reset diblokir untuk mencegah saldo tidak konsisten.`,
+          ),
+          { httpStatus: 409 },
+        );
+      }
+
+      for (const match of matches) {
+        const mutationId = Number(match.mutation_id);
+        await tx.execute(sql`
+          UPDATE bank_reconciliation_matches
+          SET
+            status = 'rejected',
+            match_reason = CONCAT(
+              COALESCE(match_reason, ''),
+              ${` | Reset pembayaran invoice oleh admin: ${reason}`}
+            )
+          WHERE id = ${Number(match.match_id)}
+            AND status = 'approved'
+        `);
+        await tx.execute(sql`
+          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+          VALUES (
+            ${mutationId},
+            'VENDOR_INVOICE_PAYMENT_RESET',
+            ${String((req as any).user?.email ?? "admin")},
+            ${JSON.stringify({
+              invoice_id: id,
+              invoice_number: invoice.invoice_number,
+              match_id: Number(match.match_id),
+              amount: num(match.mutation_amount),
+              reason,
+            })}
+          )
+        `);
+      }
+
+      const [updatedInvoice] = await tx
+        .update(vendorInvoicesTable)
+        .set({
+          amountPaid: "0",
+          status: "posted",
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(vendorInvoicesTable.id, id),
+          eq(vendorInvoicesTable.companyId, owner.companyId ?? cid),
+        ))
+        .returning({
+          id: vendorInvoicesTable.id,
+          invoiceNumber: vendorInvoicesTable.invoiceNumber,
+          status: vendorInvoicesTable.status,
+          amountPaid: vendorInvoicesTable.amountPaid,
+          grandTotal: vendorInvoicesTable.grandTotal,
+        });
+
+      if (!updatedInvoice) {
+        throw Object.assign(new Error("Invoice gagal diperbarui."), { httpStatus: 409 });
+      }
+      return {
+        invoice: updatedInvoice,
+        previousAmountPaid: amountPaid,
+        rejectedMatchIds: matches.map((match) => Number(match.match_id)),
+        rejectedMutationIds: matches.map((match) => Number(match.mutation_id)),
+        reason,
+      };
+    });
+
+    audit(req, {
+      action: "reversal",
+      module: "purchase",
+      resourceId: id,
+      companyId: owner.companyId,
+      before: {
+        invoice_number: result.invoice.invoiceNumber,
+        amount_paid: result.previousAmountPaid,
+        status: "paid/settled",
+      },
+      after: {
+        amount_paid: 0,
+        status: result.invoice.status,
+        rejected_match_ids: result.rejectedMatchIds,
+        rejected_mutation_ids: result.rejectedMutationIds,
+        reason,
+      },
+    });
+    res.json({ ok: true, ...result });
+  } catch (error: any) {
+    const status = Number(error?.httpStatus) || 500;
+    res.status(status).json({
+      error: error?.message ?? "Reset pembayaran invoice gagal.",
+      code: status === 500 ? "RESET_PAYMENT_FAILED" : undefined,
+    });
+  }
 });
 
 router.get("/vendor-invoices/check-duplicate", async (req, res) => {

@@ -495,6 +495,34 @@ export function VendorInvoiceEditorPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal memulihkan jurnal"),
   });
 
+  const resetPaymentMut = useMutation({
+    mutationFn: async (reason: string) => {
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/reset-payment?company=${activeCompanyId}`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatPostingError(body, "Gagal mereset status pembayaran"));
+      return body;
+    },
+    onSuccess: async () => {
+      toast.success("Status pembayaran dikoreksi menjadi belum terbayar");
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal mereset status pembayaran"),
+  });
+
+  const handleResetPayment = () => {
+    if (!vi || Number(vi.amountPaid) <= 0) return;
+    const reason = window.prompt(
+      "Alasan koreksi pembayaran (minimal 10 karakter):",
+      "Koreksi settlement orphan; invoice dikembalikan menjadi belum terbayar.",
+    );
+    if (!reason?.trim()) return;
+    resetPaymentMut.mutate(reason.trim());
+  };
+
   const isDraft = !vi || vi.status === "draft";
   if (!isNew && (activeCompanyId == null || isLoading)) {
     return <AppShell><div className="flex items-center justify-center h-64">Loading...</div></AppShell>;
@@ -559,6 +587,17 @@ export function VendorInvoiceEditorPage() {
               >
                 <RotateCcw className="mr-1 h-4 w-4" />
                 {recoverMut.isPending ? "Memulihkan..." : "Pulihkan Journal"}
+              </Button>
+            )}
+            {!isNew && vi && Number(vi.amountPaid) > 0 && (
+              <Button
+                variant="outline"
+                className="text-red-700 border-red-300 hover:bg-red-50"
+                onClick={handleResetPayment}
+                disabled={resetPaymentMut.isPending}
+              >
+                <RotateCcw className="mr-1 h-4 w-4" />
+                {resetPaymentMut.isPending ? "Mengoreksi..." : "Reset Pembayaran"}
               </Button>
             )}
           </div>
@@ -634,7 +673,12 @@ export function VendorInvoiceEditorPage() {
               <div className="flex justify-between text-amber-600"><span>PPh dipotong saat bayar</span><span className="font-mono">{idr(summaryWithholding)}</span></div>
               <div className="flex justify-between font-bold text-lg border-t pt-2"><span>Grand Total (bruto)</span><span className="font-mono">{idr(summaryGrandTotal)}</span></div>
               <div className="flex justify-between font-semibold text-blue-600 border-t pt-2"><span>Estimasi transfer (neto)</span><span className="font-mono">{idr(estimatedNetPayment)}</span></div>
-              {vi && <div className="flex justify-between text-green-600"><span>Terbayar</span><span className="font-mono">{idr(Number(vi.amountPaid))}</span></div>}
+              {vi && (
+                <div className={`flex justify-between ${Number(vi.amountPaid) > 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                  <span>{Number(vi.amountPaid) > 0 ? "Terbayar" : "Belum terbayar"}</span>
+                  <span className="font-mono">{idr(Number(vi.amountPaid))}</span>
+                </div>
+              )}
               {vi && <div className="flex justify-between font-semibold text-red-600"><span>Sisa</span><span className="font-mono">{idr(Math.max(0, Number(vi.grandTotal) - Number(vi.amountPaid)))}</span></div>}
             </CardContent>
           </Card>

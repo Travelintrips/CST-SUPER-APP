@@ -10,11 +10,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { RequoteDialog } from "@/components/marketplace/RequoteDialog";
+import { DealPriceDialog } from "@/components/marketplace/DealPriceDialog";
 import { QuoteStatusBadge } from "@/components/marketplace/MktStatusBadge";
 import { toast } from "sonner";
 import {
   ArrowLeft, Trophy, TrendingDown, Clock, CheckCircle2,
-  RotateCcw, AlertCircle, Scale, Star, Send,
+  RotateCcw, AlertCircle, Scale, Star, Send, BadgeDollarSign,
 } from "lucide-react";
 
 interface ComparisonQuote {
@@ -25,6 +26,7 @@ interface ComparisonQuote {
   submittedAt: string | null;
   validUntil: string | null;
   totalAmount: number | null;
+  dealTotalAmount: number | null;
   paymentTerms: string | null;
   incoterm: string | null;
   deliveryLocation: string | null;
@@ -33,12 +35,14 @@ interface ComparisonQuote {
   requoteRound: number;
   requoteNotes: string | null;
   requoteDeadline: string | null;
-  quoteLines: Array<{
+  lines: Array<{
     rfqLineId: number;
     itemName: string;
     offeredUnitPrice: string;
     offeredQty: string;
     subtotal: string;
+    dealUnitPrice: string | null;
+    dealSubtotal: string | null;
     leadTimeDays: number | null;
     stockStatus: string | null;
     isPartialQuote: boolean;
@@ -94,6 +98,7 @@ export default function MktRfqComparisonPage() {
   const [selectNotes, setSelectNotes] = useState("");
   const [sendToCustomerTarget, setSendToCustomerTarget] = useState<ComparisonQuote | null>(null);
   const [sendToCustomerNotes, setSendToCustomerNotes] = useState("");
+  const [dealTarget, setDealTarget] = useState<ComparisonQuote | null>(null);
 
   const { data, isLoading, isError } = useQuery<{ ok: boolean; data: ComparisonData }>({
     queryKey: ["mkt-comparison", rfqIdNum],
@@ -292,6 +297,10 @@ export default function MktRfqComparisonPage() {
                         <p className={`text-xl font-bold ${isBest ? "text-orange-600" : "text-gray-800"}`}>
                           {q.totalAmount != null ? idr(q.totalAmount) : "—"}
                         </p>
+                        <p className="text-xs text-orange-700 mt-2">Total Deal</p>
+                        <p className="text-lg font-bold text-orange-700">
+                          {q.dealTotalAmount != null ? idr(q.dealTotalAmount) : "Belum diisi"}
+                        </p>
                       </div>
 
                       {q.scores && (
@@ -336,10 +345,10 @@ export default function MktRfqComparisonPage() {
                         )}
                       </div>
 
-                      {q.quoteLines.length > 0 && (
+                      {q.lines.length > 0 && (
                         <div className="space-y-1.5 border-t pt-3">
                           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Item</p>
-                          {q.quoteLines.map((ql, i) => (
+                          {q.lines.map((ql, i) => (
                             <div key={i} className="flex justify-between text-xs">
                               <span className="text-gray-600 truncate max-w-[60%]">{ql.itemName}</span>
                               <span className="font-medium shrink-0">{idr(Number(ql.subtotal))}</span>
@@ -356,6 +365,15 @@ export default function MktRfqComparisonPage() {
 
                       {!isLocked && (
                         <div className="flex flex-col gap-2 pt-2 border-t">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full border-orange-300 text-orange-700 hover:bg-orange-50"
+                            onClick={() => setDealTarget(q)}
+                          >
+                            <BadgeDollarSign className="w-3.5 h-3.5 mr-1" />
+                            Atur Harga Deal
+                          </Button>
                           <Button
                             size="sm"
                             className="w-full bg-orange-500 hover:bg-orange-600 text-white"
@@ -423,6 +441,15 @@ export default function MktRfqComparisonPage() {
           currentRound={requoteTarget.requoteRound}
         />
       )}
+
+      <DealPriceDialog
+        open={!!dealTarget}
+        onClose={() => setDealTarget(null)}
+        rfqId={rfqIdNum}
+        quoteId={dealTarget?.id ?? null}
+        vendorName={dealTarget?.vendorName ?? "Vendor"}
+        locked={isLocked}
+      />
 
       {/* Dialog: Kirim ke Customer */}
       <Dialog open={!!sendToCustomerTarget} onOpenChange={(v) => { if (!v) setSendToCustomerTarget(null); }}>

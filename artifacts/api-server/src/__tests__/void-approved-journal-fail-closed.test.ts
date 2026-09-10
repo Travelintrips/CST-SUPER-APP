@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 const { mockExecute, mockPostEntry } = vi.hoisted(() => ({
   mockExecute: vi.fn(),
@@ -79,6 +80,82 @@ describe("voidApprovedJournal metadata failure", () => {
       code: ORIGINAL_VOID_UPDATE_FAILED,
     });
     expect(result.error).toContain("LEDGER IMMUTABILITY VIOLATION");
+  });
+
+  it("updates void metadata without referencing an updated_at column", async () => {
+    mockExecute
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 10,
+          company_id: 1,
+          status: "posted",
+          void_entry_id: null,
+          ref: "BANK-10",
+          description: "Bank mutation",
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { account_id: 101, debit: "100", credit: "0", description: "Bank" },
+          { account_id: 201, debit: "0", credit: "100", description: "Revenue" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ status: "voided", void_entry_id: 20 }],
+      });
+    mockPostEntry.mockResolvedValueOnce({ id: 20 });
+
+    const result = await voidApprovedJournal({
+      entryId: 10,
+      companyId: 1,
+      journalId: 7,
+      journalCode: "BANK",
+      actor: "admin@example.com",
+      reason: "test schema compatibility",
+    });
+
+    const source = readFileSync(
+      new URL("../lib/accounting/approveAndCreateJournal.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("UPDATE accounting_entries");
+    expect(source).not.toContain("updated_at");
+    expect(result).toMatchObject({ ok: true, voidEntryId: 20 });
+  });
+
+  it("keeps every startup trigger repair compatible with linked reversals", () => {
+    const source = readFileSync(
+      new URL("../lib/accountingHubMigration.ts", import.meta.url),
+      "utf8",
+    );
+    const repair = source.slice(
+      source.indexOf("export async function runSportCenterPaymentAccountingMetadataBackfill"),
+    );
+
+    expect(repair).toContain("NEW.status = 'voided'");
+    expect(repair).toContain("NEW.void_entry_id IS NOT NULL");
+    expect(repair).toContain("NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit");
+    expect(repair).toContain("NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit");
+  });
+
+  it("refreshes the linked-reversal guard before startup readiness", () => {
+    const source = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("posted_entry_void_transition_guard_v1");
+    expect(source).toContain("ensurePostedEntryVoidTransitionGuard");
+  });
+
+  it("pins canonical lifecycle checks to the public source-aware match table", () => {
+    const source = readFileSync(
+      new URL("../routes/bankReconciliation.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("FROM public.bank_reconciliation_matches");
+    expect(source).toContain("candidate_type::text = 'qris_settlement'");
+    expect(source).toContain("candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'");
+    expect(source).toContain("status::text IN ('approved', 'candidate')");
   });
 
   it("does not create a duplicate reversal when retrying the partial state", async () => {

@@ -129,7 +129,18 @@ const VendorRegisterPage        = lazy(() => import("@/pages/vendor-register"));
 // Translation Hub — real-time AI translation for customers, vendors & staff
 const TranslationHub            = lazy(() => import("@/pages/translation-hub"));
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Portal data is not a live stream. Reuse results during navigation
+      // instead of refetching every time a page remounts.
+      staleTime: 30_000,
+      gcTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 // Redirect bizportal subdomain to main domain /bizportal/
 if (typeof window !== "undefined" && window.location.hostname === "bizportal.cstlogistic.co.id") {

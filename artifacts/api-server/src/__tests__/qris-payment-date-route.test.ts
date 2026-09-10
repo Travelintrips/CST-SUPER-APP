@@ -97,7 +97,7 @@ describe("QRIS settlement status reset route", () => {
     expect(route).toContain('action: "status_change"');
     expect(route).toContain("settlement_status: result.previousStatus");
     expect(route).toContain("candidateRefreshPending: result.changed");
-    expect(route).toContain("setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId))");
+    expect(route).toContain("setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId))");
   });
 });
 

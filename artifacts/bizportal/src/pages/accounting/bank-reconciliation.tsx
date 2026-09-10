@@ -117,6 +117,50 @@ interface MappingRequiredError {
   manual_review_required: true;
 }
 
+interface ReconciliationRepairDiagnosis {
+  mutation: {
+    id: number;
+    companyId: number | null;
+    status: string;
+    journalEntryId: number | null;
+    reviewCode: string | null;
+    reviewReason: string | null;
+    mutationKey: string | null;
+    description: string | null;
+  };
+  match: {
+    id: number;
+    mutationId: number;
+    candidateId: string;
+    candidateType: string | null;
+    candidateSource: string | null;
+    status: string | null;
+    matchScore: number | null;
+    matchReason: string | null;
+  } | null;
+  journal: {
+    id: number;
+    companyId: number | null;
+    status: string | null;
+    source: string | null;
+    sourceId: number | string | null;
+    totalDebit: number | string | null;
+    totalCredit: number | string | null;
+    date: string | null;
+  } | null;
+  disposition: "sql_correction" | "auto_repair" | "developer_action_required";
+  code: string;
+  title: string;
+  reason: string;
+  records: Array<{ table: string; id: number | string | null; role: string }>;
+  sql: string | null;
+  autoRepair: { method: "POST"; path: string; label: string } | null;
+  verification: {
+    before: Record<string, unknown>;
+    after: Record<string, unknown> | null;
+  };
+}
+
 // Real statuses from bank_mutations.status (backend contract):
 //   unmatched             → mutation synced but no candidate found
 //   matched               → candidate(s) found by matching engine
@@ -804,6 +848,27 @@ interface QrisCandidateAudit {
   auto_post_revision?: string | null;
   auto_post_action?: string | null;
   auto_post_details?: {
+    errorCode?: string | null;
+    title?: string | null;
+    rootCause?: string | null;
+    affectedRecord?: {
+      type?: string;
+      id?: number | string | null;
+      mutationId?: number | null;
+      companyId?: number | null;
+    } | null;
+    expectedValue?: unknown;
+    actualValue?: unknown;
+    canAutoFix?: boolean;
+    autoFixAction?: string | null;
+    adminAction?: string | null;
+    adminLocation?: string | null;
+    tableName?: string | null;
+    recordId?: number | string | null;
+    fieldNames?: string[];
+    retryAllowed?: boolean;
+    correlationId?: string | null;
+    component?: string | null;
     code?: string | null;
     stage?: string | null;
     problem?: string | null;
@@ -1075,6 +1140,10 @@ const canUnapprove = (m: BankMutation) =>
 /** Reverse/Void → hanya setelah posted. */
 const canReverse = (m: BankMutation) =>
   m.status === "posted";
+
+/** Unmatch posted mutation → reverse the journal, then return to matching queue. */
+const canUnmatch = (m: BankMutation) =>
+  m.status === "posted" && !isCanonicalSettlementMutation(m);
 
 /** Reopen → hanya setelah di-void, untuk matching ulang. */
 const canReopen = (m: BankMutation) =>
@@ -3856,6 +3925,7 @@ function QrisMutationCard({
   onToggleAllQrisPayments,
   onRunMatching,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   qrisGenerationPending,
   mappingError,
 }: {
@@ -3887,6 +3957,7 @@ function QrisMutationCard({
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
@@ -4186,23 +4257,56 @@ function QrisMutationCard({
                 <div className="flex items-start gap-2">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
                   <div className="min-w-0 flex-1 space-y-1.5">
-                    <p className="font-semibold">Auto-post QRIS tertahan oleh safeguard</p>
-                    <p><strong>Masalahnya:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
-                    <p><strong>Perlu direvisi di:</strong> {audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
-                    <p><strong>Cara memperbaiki:</strong> {audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
-                    {audit.auto_post_details?.code && (
-                      <p className="text-[10px] opacity-75">Kode: {audit.auto_post_details.code}</p>
+                    <p className="font-semibold">
+                      {audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                    </p>
+                    <p><strong>Apa yang salah:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    {audit.auto_post_details?.rootCause && (
+                      <p><strong>Kenapa diblokir:</strong> {audit.auto_post_details.rootCause}</p>
                     )}
-                    {onGenerateQrisCandidates && (
+                    {audit.auto_post_details?.actualValue != null && (
+                      <p>
+                        <strong>Data aktual:</strong>{" "}
+                        {typeof audit.auto_post_details.actualValue === "string"
+                          ? audit.auto_post_details.actualValue
+                          : JSON.stringify(audit.auto_post_details.actualValue)}
+                      </p>
+                    )}
+                    {audit.auto_post_details?.expectedValue != null && (
+                      <p>
+                        <strong>Data seharusnya:</strong>{" "}
+                        {typeof audit.auto_post_details.expectedValue === "string"
+                          ? audit.auto_post_details.expectedValue
+                          : JSON.stringify(audit.auto_post_details.expectedValue)}
+                      </p>
+                    )}
+                    <p><strong>Perlu diperbaiki di:</strong> {audit.auto_post_details?.adminLocation ?? audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
+                    {audit.auto_post_details?.tableName && (
+                      <p>
+                        <strong>Lokasi data:</strong> {audit.auto_post_details.tableName}
+                        {audit.auto_post_details.recordId != null ? `, id=${audit.auto_post_details.recordId}` : ""}
+                      </p>
+                    )}
+                    {(audit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
+                      <p><strong>Field:</strong> {audit.auto_post_details?.fieldNames?.join(", ")}</p>
+                    )}
+                    <p><strong>Langkah:</strong> {audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    {(audit.auto_post_details?.errorCode ?? audit.auto_post_details?.code) && (
+                      <p className="text-[10px] opacity-75">
+                        Kode: {audit.auto_post_details.errorCode ?? audit.auto_post_details.code}
+                        {audit.auto_post_details.correlationId ? ` · ID: ${audit.auto_post_details.correlationId}` : ""}
+                      </p>
+                    )}
+                    {onRepairQrisCandidate && audit.id != null && (
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
                         className="mt-1 h-7 border-red-300 bg-white text-[11px] text-red-900 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-100"
                         disabled={qrisGenerationPending}
-                        onClick={() => onGenerateQrisCandidates(m.id)}
+                        onClick={() => onRepairQrisCandidate(audit.id!)}
                       >
-                        {qrisGenerationPending ? "Mencoba ulang..." : "Periksa ulang & retry scoped"}
+                        {qrisGenerationPending ? "Memeriksa & memperbaiki..." : "Periksa & Perbaiki Otomatis"}
                       </Button>
                     )}
                   </div>
@@ -4702,6 +4806,7 @@ function MutationCard({
   onPost,
   onReject,
   onUnapprove,
+  onUnmatch,
   onReverse,
   onReopen,
   onDelete,
@@ -4726,6 +4831,7 @@ function MutationCard({
   onRunMatching,
   onRetryMatching,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   qrisGenerationPending,
   retryReferenceCoaPending,
   retryMatchingPending,
@@ -4739,6 +4845,7 @@ function MutationCard({
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
   onUnapprove: (m: BankMutation) => void;
+  onUnmatch: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
@@ -4771,6 +4878,7 @@ function MutationCard({
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onRetryMatching?: (m: BankMutation) => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   qrisGenerationPending?: boolean;
   retryReferenceCoaPending?: boolean;
   retryMatchingPending?: boolean;
@@ -4847,6 +4955,7 @@ function MutationCard({
             onToggleAllQrisPayments={onToggleAllQrisPayments}
             onRunMatching={onRunMatching}
             onGenerateQrisCandidates={onGenerateQrisCandidates}
+            onRepairQrisCandidate={onRepairQrisCandidate}
             qrisGenerationPending={qrisGenerationPending}
             mappingError={mappingError}
           />
@@ -5376,7 +5485,19 @@ function MutationCard({
                 Batalkan Draft
               </Button>
             )}
-            {/* Reverse/Void — only for posted */}
+            {/* Unmatch — reverses posted journal and returns mutation to matching queue */}
+            {!isClosedQrisSettlement && canUnmatch(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700 border-blue-200 hover:bg-blue-50"
+                onClick={() => onUnmatch(m)}
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                Unmatch
+              </Button>
+            )}
+            {/* Keep the original reverse-only action available separately. */}
             {!isClosedQrisSettlement && canReverse(m) && (
               <Button
                 size="sm"
@@ -5673,6 +5794,176 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
   );
 }
 
+function RepairDiagnosisBlock({ mutationId, open }: { mutationId: number; open: boolean }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const diagnosisQuery = useQuery<{ ok: boolean; diagnosis: ReconciliationRepairDiagnosis }>({
+    queryKey: ["bank-repair-diagnosis", mutationId],
+    enabled: open && Number.isInteger(mutationId) && mutationId > 0,
+    queryFn: async () => {
+      const response = await fetch(`/api/bank-reconciliation/${mutationId}/repair-diagnosis`, {
+        credentials: "include",
+      });
+      const body = await response.json().catch(() => ({ error: "Diagnosis tidak tersedia" }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    staleTime: 5_000,
+  });
+  const autoRepairMut = useMutation({
+    mutationFn: async (path: string) => {
+      const response = await fetch(path, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await response.json().catch(() => ({ error: "Perbaikan otomatis gagal" }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    onSuccess: () => {
+      toast({ title: "Perbaikan otomatis berhasil", description: "State rekonsiliasi sudah diperbarui dan diverifikasi oleh endpoint posting." });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-repair-diagnosis", mutationId] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Perbaikan otomatis diblokir", description: error.message, variant: "destructive" });
+      qc.invalidateQueries({ queryKey: ["bank-repair-diagnosis", mutationId] });
+    },
+  });
+
+  if (!open) return null;
+  if (diagnosisQuery.isLoading) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+        <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />
+        Membaca state mutation, match, candidate, dan journal…
+      </div>
+    );
+  }
+  if (diagnosisQuery.isError) {
+    return (
+      <Alert className="border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          Diagnosis repair gagal dibaca: {diagnosisQuery.error instanceof Error ? diagnosisQuery.error.message : "unknown error"}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  const diagnosis = diagnosisQuery.data?.diagnosis;
+  if (!diagnosis) return null;
+  const isSql = diagnosis.disposition === "sql_correction";
+  const isAuto = diagnosis.disposition === "auto_repair";
+  const isDeveloper = diagnosis.disposition === "developer_action_required";
+  const tone = isSql
+    ? "border-blue-300 bg-blue-50 text-blue-950 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100"
+    : isAuto
+      ? "border-green-300 bg-green-50 text-green-950 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+      : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100";
+
+  async function copySql() {
+    const sql = diagnosis?.sql;
+    if (!sql) return;
+    try {
+      await navigator.clipboard.writeText(sql);
+      toast({ title: "SQL berhasil disalin" });
+    } catch {
+      toast({ title: "SQL tidak dapat disalin", description: "Salin dari kotak SQL secara manual.", variant: "destructive" });
+    }
+  }
+
+  return (
+    <section aria-labelledby="repair-diagnosis-title" className={`rounded-lg border px-3 py-3 ${tone}`}>
+      <div className="flex items-start gap-2">
+        {isSql ? <FileText className="mt-0.5 h-4 w-4 shrink-0" /> : isAuto ? <Zap className="mt-0.5 h-4 w-4 shrink-0" /> : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p id="repair-diagnosis-title" className="text-sm font-semibold">{diagnosis.title}</p>
+            <Badge variant="outline" className="font-mono text-[10px]">{diagnosis.code}</Badge>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed">{diagnosis.reason}</p>
+
+          <div className="mt-3 rounded border border-current/20 bg-background/50 p-2 text-[11px]">
+            <p className="font-semibold">Referensi runtime</p>
+            <div className="mt-1 space-y-0.5">
+              {diagnosis.records.map((record) => (
+                <p key={`${record.table}-${record.id}-${record.role}`} className="break-all">
+                  <span className="font-medium">{record.role}:</span> {record.table} · id={record.id ?? "NULL"}
+                </p>
+              ))}
+            </div>
+          </div>
+
+          {isSql && diagnosis.sql && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold">SQL koreksi exact</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={copySql}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Copy SQL
+                </Button>
+              </div>
+              <Textarea
+                readOnly
+                value={diagnosis.sql}
+                className="min-h-56 resize-y bg-slate-950 font-mono text-[10px] leading-relaxed text-slate-100"
+                aria-label="SQL koreksi exact"
+              />
+              <p className="text-[11px] leading-relaxed">
+                SQL memiliki pre-check ownership/status, <code>BEGIN/COMMIT</code>, <code>RAISE EXCEPTION</code>, dan query verifikasi BEFORE/AFTER. Jangan jalankan jika data runtime sudah berubah.
+              </p>
+            </div>
+          )}
+
+          {isAuto && diagnosis.autoRepair && (
+            <Button
+              type="button"
+              size="sm"
+              className="mt-3 gap-1.5 bg-green-700 text-white hover:bg-green-800"
+              disabled={autoRepairMut.isPending}
+              onClick={() => autoRepairMut.mutate(diagnosis.autoRepair!.path)}
+            >
+              {autoRepairMut.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {autoRepairMut.isPending ? "Memperbaiki…" : diagnosis.autoRepair.label}
+            </Button>
+          )}
+
+          {isDeveloper && (
+            <p className="mt-3 text-xs font-semibold">
+              Tidak aman via SQL. Gunakan alur reversal/void, perbaiki ownership canonical, atau minta Developer Action Required sesuai kode di atas.
+            </p>
+          )}
+
+          <div className="mt-3 border-t border-current/20 pt-2 text-[11px]">
+            <p className="font-semibold">Ekspektasi verifikasi</p>
+            <p className="mt-1 break-all">
+              Before: mutation #{String(diagnosis.verification.before.mutationId)} status={String(diagnosis.verification.before.mutationStatus)}
+              {" · "}match #{String(diagnosis.verification.before.matchId ?? "NULL")} status={String(diagnosis.verification.before.matchStatus ?? "NULL")}
+              {" · "}journal #{String(diagnosis.verification.before.journalEntryId ?? "NULL")}
+            </p>
+            {diagnosis.verification.after && (
+              <p className="mt-1 break-all">
+                After: mutation status={String(diagnosis.verification.after.mutationStatus)}
+                {" · "}match status={String(diagnosis.verification.after.matchStatus)}
+                {" · "}journal #{String(diagnosis.verification.after.journalEntryId ?? "NULL")}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Detail Side Panel
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5700,6 +5991,7 @@ function MutationDetailPanel({
   onPost,
   onReject,
   onUnapprove,
+  onUnmatch,
   onReverse,
   onReopen,
   onApproveQris,
@@ -5707,12 +5999,14 @@ function MutationDetailPanel({
   onManualOverrideCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
+  onRepairQrisCandidate,
   matchingPending,
   mappingError,
   onApproveQrisBatch,
   onRecoverQrisSettlement,
   recoverQrisPending,
   approveQrisPending,
+  repairQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -5725,6 +6019,7 @@ function MutationDetailPanel({
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
   onUnapprove: (m: BankMutation) => void;
+  onUnmatch: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
@@ -5732,12 +6027,14 @@ function MutationDetailPanel({
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
+  onRepairQrisCandidate?: (candidateId: number) => void;
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   recoverQrisPending?: boolean;
   approveQrisPending?: boolean;
+  repairQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -5828,6 +6125,7 @@ function MutationDetailPanel({
                         </AlertDescription>
                       </Alert>
                     )}
+                    <RepairDiagnosisBlock mutationId={m.id} open={open} />
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
                       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
@@ -6031,6 +6329,85 @@ function MutationDetailPanel({
                         </>
                       )}
                     </div>
+
+                    {qrisAudit.auto_post_status === "failed" && (
+                      <div
+                        className="rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <p className="font-semibold">
+                          {qrisAudit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                        </p>
+                        <p className="mt-1">
+                          <strong>Apa yang salah:</strong>{" "}
+                          {qrisAudit.auto_post_problem
+                            ?? qrisAudit.auto_post_details?.problem
+                            ?? "Safeguard canonical menahan proses."}
+                        </p>
+                        {qrisAudit.auto_post_details?.rootCause && (
+                          <p className="mt-1"><strong>Kenapa diblokir:</strong> {qrisAudit.auto_post_details.rootCause}</p>
+                        )}
+                        {qrisAudit.auto_post_details?.actualValue != null && (
+                          <p className="mt-1">
+                            <strong>Data aktual:</strong>{" "}
+                            {typeof qrisAudit.auto_post_details.actualValue === "string"
+                              ? qrisAudit.auto_post_details.actualValue
+                              : JSON.stringify(qrisAudit.auto_post_details.actualValue)}
+                          </p>
+                        )}
+                        {qrisAudit.auto_post_details?.expectedValue != null && (
+                          <p className="mt-1">
+                            <strong>Data seharusnya:</strong>{" "}
+                            {typeof qrisAudit.auto_post_details.expectedValue === "string"
+                              ? qrisAudit.auto_post_details.expectedValue
+                              : JSON.stringify(qrisAudit.auto_post_details.expectedValue)}
+                          </p>
+                        )}
+                        <p className="mt-1">
+                          <strong>Perlu diperbaiki di:</strong>{" "}
+                          {qrisAudit.auto_post_details?.adminLocation
+                            ?? qrisAudit.auto_post_revision
+                            ?? "Data/configuration canonical"}
+                        </p>
+                        {qrisAudit.auto_post_details?.tableName && (
+                          <p className="mt-1">
+                            <strong>Lokasi data:</strong> {qrisAudit.auto_post_details.tableName}
+                            {qrisAudit.auto_post_details.recordId != null
+                              ? `, id=${qrisAudit.auto_post_details.recordId}`
+                              : ""}
+                          </p>
+                        )}
+                        {(qrisAudit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
+                          <p className="mt-1"><strong>Field:</strong> {qrisAudit.auto_post_details?.fieldNames?.join(", ")}</p>
+                        )}
+                        <p className="mt-1">
+                          <strong>Langkah:</strong>{" "}
+                          {qrisAudit.auto_post_details?.adminAction
+                            ?? qrisAudit.auto_post_action
+                            ?? "Perbaiki data terkait lalu coba lagi."}
+                        </p>
+                        {(qrisAudit.auto_post_details?.errorCode ?? qrisAudit.auto_post_details?.code) && (
+                          <p className="mt-1 text-[10px] opacity-75">
+                            Kode: {qrisAudit.auto_post_details.errorCode ?? qrisAudit.auto_post_details.code}
+                            {qrisAudit.auto_post_details.correlationId
+                              ? ` · ID: ${qrisAudit.auto_post_details.correlationId}`
+                              : ""}
+                          </p>
+                        )}
+                        {onRepairQrisCandidate && qrisAudit.id != null && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-2 gap-1.5 border-red-400 text-red-900 hover:bg-red-100 dark:border-red-700 dark:text-red-100 dark:hover:bg-red-900/40"
+                            disabled={matchingPending || repairQrisPending}
+                            onClick={() => onRepairQrisCandidate(qrisAudit.id!)}
+                          >
+                            {(matchingPending || repairQrisPending) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                            {(matchingPending || repairQrisPending) ? "Memeriksa & memperbaiki..." : "Periksa & Perbaiki Otomatis"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
 
                     {/* Payment items list */}
                     {(qrisAudit.payment_items?.length ?? 0) > 0 && (
@@ -6371,6 +6748,16 @@ function MutationDetailPanel({
               Batalkan Draft
             </Button>
           )}
+          {canUnmatch(m) && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 text-blue-600 hover:text-blue-800 border-blue-300 hover:bg-blue-50 min-w-[120px]"
+              onClick={() => { onClose(); onUnmatch(m); }}
+            >
+              <Undo2 className="w-4 h-4" />
+              Unmatch
+            </Button>
+          )}
           {canReject(m) && (
             <Button variant="outline" className="flex-1 gap-1.5 text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50 min-w-[100px]"
               onClick={() => { onClose(); onReject(m); }}>
@@ -6398,7 +6785,7 @@ function MutationDetailPanel({
               Jurnal reversal sudah dibuat. Klik <strong>Buka Ulang</strong> untuk cocokkan mutasi ini kembali.
             </p>
           )}
-          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canUnapprove(m) && !canReverse(m) && !canReopen(m) && (
+          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canUnapprove(m) && !canUnmatch(m) && !canReverse(m) && !canReopen(m) && (
             <p className="text-xs text-muted-foreground py-1 w-full text-center">Tidak ada aksi tersedia untuk status ini</p>
           )}
         </div>
@@ -6952,7 +7339,7 @@ function OnboardingModal() {
 //   Summary:          GET  /api/bank-reconciliation/summary
 //   Import:           POST /api/bank-reconciliation/import
 
-type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse";
+type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse" | "unmatch";
 
 export default function BankReconciliationPage() {
   const { toast }  = useToast();
@@ -7172,6 +7559,56 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
+  });
+
+  const qrisRepairMut = useMutation({
+    mutationFn: async (candidateId: number) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/qris-candidates/${candidateId}/repair`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ companyId: qrisCompanyId }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Periksa & perbaiki otomatis gagal");
+      }
+      return body as {
+        ok: boolean;
+        result: "FIXED_AND_RETRIED" | "ADMIN_ACTION_REQUIRED" | "DEVELOPER_ACTION_REQUIRED";
+        diagnosis?: QrisCandidateAudit["auto_post_details"];
+      };
+    },
+    onSuccess: async (result) => {
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      if (result.result === "FIXED_AND_RETRIED") {
+        toast({
+          title: "Perbaikan otomatis berhasil",
+          description: "Kandidat dibuat ulang dari source canonical dan retry scoped berhasil.",
+        });
+      } else if (result.result === "ADMIN_ACTION_REQUIRED") {
+        toast({
+          title: "Perlu tindakan admin",
+          description: "Data aktual dan lokasi perbaikannya sudah ditampilkan pada kartu diagnosis.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Perlu Perbaikan Sistem",
+          description: "Safeguard tetap fail-closed. Gunakan correlation ID pada diagnosis saat eskalasi.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (e: Error) => toast({
+      title: "Gagal memeriksa & memperbaiki otomatis",
+      description: e.message,
+      variant: "destructive",
+    }),
   });
 
   const qrisPaymentDateMut = useMutation({
@@ -8287,6 +8724,68 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal void journal", description: e.message, variant: "destructive" }),
   });
 
+  // Unmatch posted transaction → create reversal, then reopen the bank
+  // mutation so it returns to the unmatched queue in one user action.
+  const unmatchMut = useMutation({
+    mutationFn: async ({ mutId, reason }: { mutId: number; reason: string }) => {
+      const voidResponse = await fetch(`/api/bank-reconciliation/${mutId}/void-journal`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const voidBody = await voidResponse.json().catch(() => ({ error: "Unknown error" }));
+      if (!voidResponse.ok) {
+        if (voidBody.reversal_created) {
+          const partialError = new Error(
+            `Reversal entry #${voidBody.void_entry_id ?? "?"} sudah dibuat, tetapi status mutasi belum aman: ${voidBody.error ?? voidResponse.statusText}`,
+          ) as Error & { partialReversal?: boolean };
+          partialError.partialReversal = true;
+          throw partialError;
+        }
+        throw new Error(voidBody.error ?? voidResponse.statusText);
+      }
+
+      const reopenResponse = await fetch(`/api/bank-reconciliation/${mutId}/reopen`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: `Unmatch setelah reversal: ${reason}` }),
+      });
+      const reopenBody = await reopenResponse.json().catch(() => ({ error: "Unknown error" }));
+      if (!reopenResponse.ok) {
+        const partialError = new Error(
+          `Jurnal sudah dibuat reversal #${voidBody.void_entry_id ?? "?"}, tetapi mutasi belum dibuka ulang: ${reopenBody.error ?? reopenResponse.statusText}`,
+        ) as Error & { partialReversal?: boolean };
+        partialError.partialReversal = true;
+        throw partialError;
+      }
+
+      return { ...reopenBody, void_entry_id: voidBody.void_entry_id };
+    },
+    onSuccess: (d) => {
+      toast({ title: "Transaksi berhasil di-unmatch", description: `Mutasi kembali ke antrean belum cocok. Reversal entry #${d.void_entry_id} dibuat.` });
+      setActionDialog(null);
+      setReverseReason("");
+      invalidate();
+    },
+    onError: (e: Error & { partialReversal?: boolean }) => {
+      if (e.partialReversal) {
+        // The backend has already created the immutable reversal. Refresh so
+        // the UI reflects the actual void/partial state instead of retaining
+        // the stale posted row and inviting a duplicate retry.
+        invalidate();
+        toast({
+          title: "Reversal berhasil, tetapi reopen gagal",
+          description: e.message,
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({ title: "Unmatch belum selesai", description: e.message, variant: "destructive" });
+    },
+  });
+
   const deleteAllMut = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/delete-all", { method: "DELETE", credentials: "include" });
@@ -8319,6 +8818,7 @@ export default function BankReconciliationPage() {
   const handleOpenPost     = (m: BankMutation) => { setPostDialogJournalStatus(null); setActionDialog({ mutation: m, mode: "post" }); };
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
   const handleOpenUnapprove = (m: BankMutation) => setActionDialog({ mutation: m, mode: "unapprove" });
+  const handleOpenUnmatch = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "unmatch" }); };
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
   const handleApproveQris = (m: BankMutation) => {
@@ -9371,6 +9871,7 @@ export default function BankReconciliationPage() {
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
                   onUnapprove={handleOpenUnapprove}
+                  onUnmatch={handleOpenUnmatch}
                   onReverse={handleOpenReverse}
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
@@ -9413,10 +9914,15 @@ export default function BankReconciliationPage() {
                       }
                        matchMut.mutate(mode);
                     }}
+                  onRepairQrisCandidate={
+                    qrisCompanyId != null && workflowStage !== "matching"
+                      ? (candidateId) => qrisRepairMut.mutate(candidateId)
+                      : undefined
+                  }
           onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
                        ? (mutationId) => qrisDryRunMut.mutate(mutationId)
                       : undefined}
-                   qrisGenerationPending={qrisDryRunMut.isPending}
+                    qrisGenerationPending={qrisDryRunMut.isPending || qrisRepairMut.isPending}
                   retryReferenceCoaPending={retryReferenceCoaMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
@@ -9771,10 +10277,16 @@ export default function BankReconciliationPage() {
         onPost={handleOpenPost}
         onReject={handleOpenReject}
         onUnapprove={handleOpenUnapprove}
+        onUnmatch={handleOpenUnmatch}
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
         onApproveCandidate={handleDirectApproveCandidate}
+        onRepairQrisCandidate={
+          qrisCompanyId != null && workflowStage !== "matching"
+            ? (candidateId) => qrisRepairMut.mutate(candidateId)
+            : undefined
+        }
         onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
           ? (mutationId) => qrisDryRunMut.mutate(mutationId)
           : undefined}
@@ -9792,6 +10304,7 @@ export default function BankReconciliationPage() {
          recoverQrisPending={recoverQrisSettlementMut.isPending}
         onManualOverrideCandidate={handleManualOverrideCandidate}
         approveQrisPending={approveQrisBatchMut.isPending}
+         repairQrisPending={qrisRepairMut.isPending}
         selectedQrisPaymentIds={
           detailMutation?.qris_candidate_audit?.id != null
             ? selectedPaymentIdsForCandidate(detailMutation.qris_candidate_audit)
@@ -10127,15 +10640,18 @@ export default function BankReconciliationPage() {
       </Dialog>
 
       {/* ── Reverse / Void Dialog ─────────────────────────────── */}
-      <Dialog open={actionDialog?.mode === "reverse"} onOpenChange={o => { if (!o) { setActionDialog(null); setReverseReason(""); } }}>
+      <Dialog
+        open={actionDialog?.mode === "reverse" || actionDialog?.mode === "unmatch"}
+        onOpenChange={o => { if (!o) { setActionDialog(null); setReverseReason(""); } }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <RotateCcw className="w-5 h-5 text-gray-600" />
-              Reverse / Void Journal
+              {actionDialog?.mode === "unmatch" ? "Unmatch Transaksi Posted" : "Reverse / Void Journal"}
             </DialogTitle>
           </DialogHeader>
-          {actionDialog?.mode === "reverse" && (
+          {(actionDialog?.mode === "reverse" || actionDialog?.mode === "unmatch") && (
             <div className="space-y-4">
               <div className="bg-muted/40 rounded-lg p-3 text-sm space-y-1">
                 <p className="font-semibold">{actionDialog.mutation.description}</p>
@@ -10161,7 +10677,11 @@ export default function BankReconciliationPage() {
               <div className="rounded-md bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
                 <p className="font-semibold">⚠ Perhatian</p>
                 <p>Tindakan ini akan membuat <strong>journal entry reversal</strong> baru yang membalik semua entry jurnal asli.</p>
-                <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                {actionDialog.mode === "unmatch" ? (
+                  <p>Journal asli tidak dihapus. Setelah reversal, mutasi akan kembali ke status <strong>Belum Cocok</strong> agar bisa dicocokkan ulang.</p>
+                ) : (
+                  <p>Journal asli tidak dihapus. Mutasi akan berstatus <strong>Dibatalkan</strong>.</p>
+                )}
               </div>
             </div>
           )}
@@ -10170,11 +10690,20 @@ export default function BankReconciliationPage() {
             <Button
               variant="destructive"
               className="gap-1.5"
-              onClick={() => actionDialog && voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason })}
-              disabled={voidMut.isPending || !reverseReason.trim()}
+              onClick={() => {
+                if (!actionDialog) return;
+                if (actionDialog.mode === "unmatch") {
+                  unmatchMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
+                } else {
+                  voidMut.mutate({ mutId: actionDialog.mutation.id, reason: reverseReason });
+                }
+              }}
+              disabled={voidMut.isPending || unmatchMut.isPending || !reverseReason.trim()}
             >
-              {voidMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-              {voidMut.isPending ? "Memproses..." : "Reverse Journal"}
+              {voidMut.isPending || unmatchMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              {voidMut.isPending || unmatchMut.isPending
+                ? "Memproses..."
+                : actionDialog?.mode === "unmatch" ? "Unmatch & Reverse" : "Reverse Journal"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -229,9 +229,19 @@ function storePortalAuthBootstrap(data: PortalAuthBootstrap): PortalAuthBootstra
  */
 export async function fetchPortalAuthBootstrap(
   requestedReturnTo?: string | null,
+  options?: { force?: boolean },
 ): Promise<PortalAuthBootstrap | null> {
-  if (portalAuthBootstrapCache && !requestedReturnTo) return portalAuthBootstrapCache;
-  if (portalAuthBootstrapInFlight) return portalAuthBootstrapInFlight;
+  const force = options?.force === true;
+  if (force) {
+    // A bootstrap request started while /login was rendering can still be
+    // in-flight when the user finishes logging in. Do not let that old 401
+    // win over the newly-created session cookie.
+    portalAuthBootstrapCache = null;
+    portalAuthBootstrapInFlight = null;
+  } else {
+    if (portalAuthBootstrapCache && !requestedReturnTo) return portalAuthBootstrapCache;
+    if (portalAuthBootstrapInFlight) return portalAuthBootstrapInFlight;
+  }
 
   const token = hasCookieSession() ? null : await getSupabaseToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -349,6 +359,7 @@ export async function fetchAndStoreProfile(): Promise<PortalProfile | null> {
  */
 export async function logout(): Promise<void> {
   removeAuthToken();
+  clearPortalAuthBootstrap();
   try {
     await fetch("/api/portal/auth/logout", { method: "POST", credentials: "include" });
   } catch {

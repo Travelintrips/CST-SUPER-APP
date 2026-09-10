@@ -362,6 +362,88 @@ const PpjkPage = React.lazy(() => import("@/pages/logistics/ppjk"));
 const PpjkDetailPage = React.lazy(() => import("@/pages/logistics/ppjk-detail"));
 const UnifiedShipmentsPage = React.lazy(() => import("@/pages/logistics/shipments"));
 
+/**
+ * Start loading a page chunk before the user clicks its menu item.
+ *
+ * The route components stay lazy so the initial BizPortal bundle remains
+ * small. These importers are intentionally limited to the destinations that
+ * are exposed in the primary navigation; detail pages still load on demand.
+ */
+const NAV_ROUTE_PRELOADERS: Record<string, () => Promise<unknown>> = {
+  "/dashboard": () => import("@/pages/dashboard"),
+  "/executive": () => import("@/pages/executive/hub"),
+  "/master-data": () => import("@/pages/master-data/index"),
+  "/sales": () => import("@/pages/sales/hub"),
+  "/portal/quick-quotes": () => import("@/pages/portal-quick-quotes"),
+  "/admin/portal": () => import("@/pages/admin/portal"),
+  "/purchase": () => import("@/pages/purchase/hub"),
+  "/marketplace/rfqs": () => import("@/pages/marketplace/rfq-list"),
+  "/marketplace/purchase-orders": () => import("@/pages/marketplace/po-list"),
+  "/marketplace/produk-unggulan": () => import("@/pages/marketplace/produk-unggulan"),
+  "/purchase/vendor-completion": () => import("@/pages/purchase/vendor-completion"),
+  "/marketplace/master-price": () => import("@/pages/marketplace/master-price"),
+  "/marketplace/qa-fixture-manager": () => import("@/pages/marketplace/qa-fixture-manager"),
+  "/logistics": () => import("@/pages/logistics/hub"),
+  "/logistics/ppjk": () => import("@/pages/logistics/ppjk"),
+  "/logistics/doc-verify": () => import("@/pages/logistics/freight-doc-verify"),
+  "/logistics/import-assistant": () => import("@/pages/logistics-import-assistant"),
+  "/tenant": () => import("@/pages/tenant/hub"),
+  "/finance": () => import("@/pages/finance/index"),
+  "/finance/allocation": () => import("@/pages/finance/allocation-center"),
+  "/finance/bank-allocation": () => import("@/pages/finance/bank-allocation"),
+  "/finance/advances": () => import("@/pages/finance/advance-management"),
+  "/accounting/kas-bank": () => import("@/pages/accounting/kas-bank"),
+  "/accounting/bank-disbursements": () => import("@/pages/accounting/bank-disbursements"),
+  "/accounting/bank-receipts": () => import("@/pages/accounting/bank-receipts"),
+  "/tax/dashboard": () => import("@/pages/tax/dashboard"),
+  "/tax/audit": () => import("@/pages/tax/audit"),
+  "/accounting/taxes": () => import("@/pages/accounting/taxes"),
+  "/tax/export-djp": () => import("@/pages/tax/export-djp"),
+  "/finance/recon-config": () => import("@/pages/finance/recon-config/index"),
+  "/finance/settlement-pattern": () => import("@/pages/finance/settlement-pattern/index"),
+  "/accounting/settings": () => import("@/pages/accounting/settings"),
+  "/expense": () => import("@/pages/expense/index"),
+  "/expense/dana-karyawan": () => import("@/pages/expense/dana-karyawan"),
+  "/expense/kasbon": () => import("@/pages/expense/kasbon"),
+  "/expense/talangan": () => import("@/pages/expense/talangan"),
+  "/expense/fixed-assets": () => import("@/pages/expense/fixed-assets"),
+  "/expense/budget": () => import("@/pages/expense/budget"),
+  "/expense/reports": () => import("@/pages/expense/reports"),
+  "/expense/audit-disbursement": () => import("@/pages/expense/audit-disbursement"),
+  "/expense/audit-dana-talangan": () => import("@/pages/expense/audit-dana-talangan"),
+  "/cash-bank/dashboard": () => import("@/pages/cash-bank/dashboard"),
+  "/cash-bank/accounts": () => import("@/pages/cash-bank/accounts"),
+  "/cash-bank/mutations": () => import("@/pages/cash-bank/mutations"),
+  "/cash-bank/imports": () => import("@/pages/cash-bank/imports"),
+  "/cash-bank/transfers": () => import("@/pages/cash-bank/transfers"),
+  "/accounting/bank-reconciliation": () => import("@/pages/accounting/bank-reconciliation"),
+  "/cash-bank/forecast": () => import("@/pages/cash-bank/forecast"),
+  "/cash-bank/petty-cash": () => import("@/pages/cash-bank/petty-cash"),
+  "/cash-bank/settings": () => import("@/pages/cash-bank/settings"),
+  "/accounting/hub": () => import("@/pages/accounting/hub/index"),
+  "/accounting/wa-report-settings": () => import("@/pages/accounting/wa-report-settings"),
+  "/ai-center": () => import("@/pages/ai-center/index"),
+  "/ai/review": () => import("@/pages/ai-review/index"),
+  "/reports": () => import("@/pages/reports/index"),
+  "/settings/company-profile": () => import("@/pages/settings/company-profile"),
+  "/settings": () => import("@/pages/administration/index"),
+};
+
+const preloadedNavRoutes = new Set<string>();
+
+export function preloadNavRoute(href: string): void {
+  const path = href.split("?", 1)[0];
+  const importer = NAV_ROUTE_PRELOADERS[path];
+  if (!importer || preloadedNavRoutes.has(path)) return;
+
+  preloadedNavRoutes.add(path);
+  void importer().catch(() => {
+    // The route's lazy import will retry normally if a transient preload
+    // request fails. Do not surface a background hover failure to the user.
+    preloadedNavRoutes.delete(path);
+  });
+}
+
 // Loading fallback shown while a page chunk is fetching
 function PageLoadingFallback() {
   return (

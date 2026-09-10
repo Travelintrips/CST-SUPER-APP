@@ -7,4 +7,4 @@ The presence of `scripts/post-merge.sh` is not enough for automatic task-merge s
 
 **Why:** A merged task can fail before any setup command runs when the hook path is absent, even though a valid setup script already exists in the repository.
 
-**How to apply:** When a post-merge hook is missing, register the existing script rather than creating a duplicate, run the setup once, then verify workflow reconciliation and API readiness. Keep production schema changes outside the automatic DEV setup path.
+**How to apply:** When a post-merge hook is missing, register the existing script rather than creating a duplicate, run the setup once, then verify workflow reconciliation and API readiness. Keep production schema changes outside the automatic DEV setup path. If the managed bootstrap secret is absent, install dependencies but skip DB migrations and seed; API startup owns those operations once secrets are available.

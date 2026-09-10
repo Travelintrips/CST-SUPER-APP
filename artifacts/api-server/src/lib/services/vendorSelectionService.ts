@@ -50,6 +50,11 @@ export interface ComparisonLine {
   offeredUnitPrice: string;
   offeredQty:       string;
   subtotal:         string;
+  vendorUnitPrice:  string;
+  vendorSubtotal:   string;
+  dealUnitPrice:    string | null;
+  dealSubtotal:     string | null;
+  isNegotiated:     boolean;
   currency:         string | null;
   minimumOrderQty:  string | null;
   leadTimeDays:     number | null;
@@ -68,6 +73,9 @@ export interface ComparisonQuote {
   status:           string;
   quotationNumber:  string | null;
   quotationDate:    string | null;
+  negotiatedBy:     string | null;
+  negotiatedAt:     Date | null;
+  negotiatedNotes:  string | null;
   paymentTerms:     string | null;
   incoterm:         string | null;
   deliveryLocation: string | null;
@@ -83,6 +91,7 @@ export interface ComparisonQuote {
   lines: ComparisonLine[];
   // Computed totals
   totalAmount: number;
+  dealTotalAmount: number | null;
   effectiveLeadTimeDays: number | null; // MAX(lead_time_days) across lines
   effectiveMoq:          number;        // SUM(min_order_qty) across lines; 0 if all null
   // Badges & score (only meaningful for submitted quotes)
@@ -117,7 +126,7 @@ export interface ComparisonData {
 
 export type SelectVendorResult =
   | { ok: true; poId: number; poNumber: string; vendorName: string; totalAmount: string; selectedAt: Date; selectedBy: string; rejectedCount: number }
-  | { ok: false; code: "RFQ_ALREADY_AWARDED" | "QUOTE_NO_LONGER_SUBMITTED" | "RFQ_NOT_FOUND" | "QUOTE_NOT_FOUND" | "DB_ERROR"; message: string };
+  | { ok: false; code: "RFQ_ALREADY_AWARDED" | "QUOTE_NO_LONGER_SUBMITTED" | "RFQ_NOT_FOUND" | "QUOTE_NOT_FOUND" | "DEAL_PRICE_REQUIRED" | "DB_ERROR"; message: string };
 
 // ── Scoring helpers ───────────────────────────────────────────────────────────
 
@@ -185,6 +194,9 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
       vendorName:  suppliersTable.name,
       vendorPhone: suppliersTable.phone,
       vendorEmail: suppliersTable.contactEmail,
+      negotiatedBy: mktVendorQuotesTable.negotiatedBy,
+      negotiatedAt: mktVendorQuotesTable.negotiatedAt,
+      negotiatedNotes: mktVendorQuotesTable.negotiatedNotes,
     })
     .from(mktVendorQuotesTable)
     .innerJoin(suppliersTable, eq(mktVendorQuotesTable.vendorId, suppliersTable.id))
@@ -223,8 +235,10 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
           rfqLineId:      mktVendorQuoteLinesTable.rfqLineId,
           offeredUnitPrice: mktVendorQuoteLinesTable.offeredUnitPrice,
           offeredQty:     mktVendorQuoteLinesTable.offeredQty,
-          subtotal:       mktVendorQuoteLinesTable.subtotal,
-          currency:       mktVendorQuoteLinesTable.currency,
+           subtotal:       mktVendorQuoteLinesTable.subtotal,
+           negotiatedUnitPrice: mktVendorQuoteLinesTable.negotiatedUnitPrice,
+           negotiatedSubtotal: mktVendorQuoteLinesTable.negotiatedSubtotal,
+           currency:       mktVendorQuoteLinesTable.currency,
           minimumOrderQty: mktVendorQuoteLinesTable.minimumOrderQty,
           leadTimeDays:   mktVendorQuoteLinesTable.leadTimeDays,
           stockStatus:    mktVendorQuoteLinesTable.stockStatus,
@@ -256,6 +270,11 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
         offeredUnitPrice:   l.offeredUnitPrice,
         offeredQty:         l.offeredQty,
         subtotal:           l.subtotal,
+          vendorUnitPrice:    l.offeredUnitPrice,
+          vendorSubtotal:     l.subtotal,
+          dealUnitPrice:      l.negotiatedUnitPrice,
+          dealSubtotal:       l.negotiatedSubtotal,
+          isNegotiated:       l.negotiatedUnitPrice != null,
         currency:           l.currency,
         minimumOrderQty:    l.minimumOrderQty,
         leadTimeDays:       l.leadTimeDays,
@@ -266,6 +285,9 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
     });
 
     const totalAmount = rawLines.reduce((s: number, l: any) => s + Number(l.subtotal), 0);
+    const dealTotalAmount = rawLines.length > 0 && rawLines.every((l: any) => l.negotiatedSubtotal != null)
+      ? rawLines.reduce((s: number, l: any) => s + Number(l.negotiatedSubtotal), 0)
+      : null;
     const leadTimes   = rawLines.map((l: any) => l.leadTimeDays as number | null).filter((v: number | null): v is number => v != null);
     const moqValues   = rawLines.map((l: any) => Number(l.minimumOrderQty ?? 0));
 
@@ -283,6 +305,9 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
       incoterm:         q.incoterm,
       deliveryLocation: q.deliveryLocation,
       notes:            q.notes,
+      negotiatedBy:     q.negotiatedBy,
+      negotiatedAt:     q.negotiatedAt,
+      negotiatedNotes:  q.negotiatedNotes,
       submittedAt:      q.submittedAt,
       openedAt:         q.openedAt,
       createdAt:        q.createdAt,
@@ -291,6 +316,7 @@ export async function getQuoteComparisonData(rfqId: number): Promise<ComparisonD
       downloadEndpoint:    q.attachmentUrl ? `/api/mkt/admin/rfqs/${rfqId}/quotes/${q.id}/attachment` : null,
       lines,
       totalAmount,
+      dealTotalAmount,
       effectiveLeadTimeDays: leadTimes.length > 0 ? Math.max(...leadTimes) : null,
       effectiveMoq:          moqValues.reduce((s: number, v: number) => s + v, 0),
       badges: { bestPrice: false, fastestDelivery: false, lowestMoq: false, stockReady: false, bestOverall: false },
@@ -456,6 +482,7 @@ export async function selectVendorAndCreatePo(opts: {
       const quoteLines = await tx
         .select({
           subtotal:       mktVendorQuoteLinesTable.subtotal,
+          negotiatedSubtotal: mktVendorQuoteLinesTable.negotiatedSubtotal,
           currency:       mktVendorQuoteLinesTable.currency,
           leadTimeDays:   mktVendorQuoteLinesTable.leadTimeDays,
           minimumOrderQty: mktVendorQuoteLinesTable.minimumOrderQty,
@@ -463,7 +490,10 @@ export async function selectVendorAndCreatePo(opts: {
         .from(mktVendorQuoteLinesTable)
         .where(eq(mktVendorQuoteLinesTable.quoteId, quoteId));
 
-      const grandTotal   = quoteLines.reduce((s: number, l: any) => s + Number(l.subtotal), 0);
+      if (quoteLines.length === 0 || quoteLines.some((l: any) => l.negotiatedSubtotal == null || Number(l.negotiatedSubtotal) <= 0)) {
+        throw Object.assign(new Error("DEAL_PRICE_REQUIRED"), { _code: "DEAL_PRICE_REQUIRED" });
+      }
+      const grandTotal   = quoteLines.reduce((s: number, l: any) => s + Number(l.negotiatedSubtotal), 0);
       const firstCurrency = quoteLines.find((l: any) => l.currency)?.currency ?? null;
       const leadTimeDays  = quoteLines.length > 0
         ? Math.max(...quoteLines.map((l: any) => (l.leadTimeDays as number | null) ?? 0))
@@ -517,6 +547,8 @@ export async function selectVendorAndCreatePo(opts: {
           offeredQty:     mktVendorQuoteLinesTable.offeredQty,
           offeredUnitPrice: mktVendorQuoteLinesTable.offeredUnitPrice,
           subtotal:       mktVendorQuoteLinesTable.subtotal,
+          negotiatedUnitPrice: mktVendorQuoteLinesTable.negotiatedUnitPrice,
+          negotiatedSubtotal: mktVendorQuoteLinesTable.negotiatedSubtotal,
           notes:          mktVendorQuoteLinesTable.notes,
           rfqLineId:      mktVendorQuoteLinesTable.rfqLineId,
           itemName:       mktRfqLinesTable.itemName,
@@ -533,8 +565,8 @@ export async function selectVendorAndCreatePo(opts: {
             itemName:  l.itemName,
             qty:       l.offeredQty,
             unit:      l.itemUnit ?? null,
-            unitPrice: l.offeredUnitPrice,
-            subtotal:  l.subtotal,
+            unitPrice: l.negotiatedUnitPrice,
+            subtotal:  l.negotiatedSubtotal,
             notes:     l.notes ?? null,
           })),
         );
@@ -678,6 +710,9 @@ export async function selectVendorAndCreatePo(opts: {
     }
     if (code === "QUOTE_NOT_FOUND") {
       return { ok: false, code: "QUOTE_NOT_FOUND", message: "Quote tidak ditemukan" };
+    }
+    if (code === "DEAL_PRICE_REQUIRED") {
+      return { ok: false, code: "DEAL_PRICE_REQUIRED", message: "DEAL_PRICE_REQUIRED: semua line harus memiliki harga deal sebelum PO dibuat" };
     }
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err, rfqId, quoteId }, "[vendorSelection] selectVendorAndCreatePo error");

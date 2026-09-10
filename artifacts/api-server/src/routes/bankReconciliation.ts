@@ -141,6 +141,12 @@ import {
   checkQrisCandidateFreshness,
 } from "../lib/reconciliation/qrisCandidateContract.js";
 import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
+import {
+  asRepairResult,
+  buildQrisAutoPostDiagnosis,
+  type ReconciliationRepairResult,
+  type StructuredReconciliationDiagnosis,
+} from "../lib/reconciliation/structuredDiagnosis.js";
 
 const router = Router();
 
@@ -441,6 +447,368 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     ELSE ${alias}.status::text
   END`;
 }
+
+type ReconciliationRepairDisposition =
+  | "sql_correction"
+  | "auto_repair"
+  | "developer_action_required";
+
+type ReconciliationRepairRecord = {
+  table: string;
+  id: number | string | null;
+  role: string;
+};
+
+function sqlTextLiteral(value: unknown): string {
+  if (value == null) return "NULL";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function candidateRepairTable(candidateType: string | null, candidateSource: string | null): string {
+  if (candidateSource === CANONICAL_SETTLEMENT_SOURCE || candidateType === "qris_settlement") {
+    return "sport_center.payment_settlement_batches";
+  }
+  const tables: Record<string, string> = {
+    accounting_payment: "accounting_payments",
+    expense: "expenses",
+    invoice: "sales_documents",
+    logistic_order: "logistic_orders",
+    tenant_invoice: "tenant_invoices",
+    vendor_invoice: "vendor_invoices",
+    sport_payment: "sport_center.sport_payments",
+    recon_rule: "recon_rules",
+  };
+  return tables[String(candidateType ?? "")] ?? `candidate_type:${candidateType ?? "unknown"}`;
+}
+
+function buildStaleApprovedMatchRepairSql(input: {
+  mutationId: number;
+  companyId: number | null;
+  mutationStatus: string;
+  journalEntryId: number | null;
+  matchId: number;
+  candidateId: string;
+  candidateType: string | null;
+  candidateSource: string | null;
+  matchStatus: string;
+}): string {
+  const companySql = input.companyId == null ? "NULL" : String(input.companyId);
+  const journalSql = input.journalEntryId == null ? "NULL" : String(input.journalEntryId);
+  const candidateSql = sqlTextLiteral(input.candidateId);
+  const typeSql = sqlTextLiteral(input.candidateType);
+  const sourceSql = sqlTextLiteral(input.candidateSource);
+  const mutationStatusSql = sqlTextLiteral(input.mutationStatus);
+  const matchStatusSql = sqlTextLiteral(input.matchStatus);
+
+  return `BEGIN;
+
+-- Exact scoped repair diagnosis
+-- mutation_id=${input.mutationId}
+-- match_id=${input.matchId}
+-- candidate_id=${input.candidateId}
+-- journal_entry_id=${input.journalEntryId == null ? "NULL" : input.journalEntryId}
+
+SELECT
+  'BEFORE' AS phase,
+  bm.id AS mutation_id,
+  bm.company_id,
+  bm.status AS mutation_status,
+  bm.journal_entry_id,
+  brm.id AS match_id,
+  brm.candidate_id,
+  brm.candidate_type,
+  brm.candidate_source,
+  brm.status AS match_status
+FROM bank_mutations bm
+LEFT JOIN bank_reconciliation_matches brm
+  ON brm.id = ${input.matchId}
+ AND brm.mutation_id = ${input.mutationId}
+WHERE bm.id = ${input.mutationId};
+
+DO $$
+DECLARE
+  v_mutation RECORD;
+  v_match RECORD;
+BEGIN
+  SELECT id, company_id, status, journal_entry_id
+    INTO v_mutation
+  FROM bank_mutations
+  WHERE id = ${input.mutationId}
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: bank_mutations.id=${input.mutationId} tidak ditemukan';
+  END IF;
+  IF v_mutation.company_id IS DISTINCT FROM ${companySql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: company_id mutasi berubah (diagnosis=${companySql}, aktual=%)', v_mutation.company_id;
+  END IF;
+  IF v_mutation.status IS DISTINCT FROM ${mutationStatusSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: status mutasi berubah (diagnosis=${mutationStatusSql}, aktual=%)', v_mutation.status;
+  END IF;
+  IF v_mutation.journal_entry_id IS DISTINCT FROM ${journalSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: journal_entry_id mutasi berubah (diagnosis=${journalSql}, aktual=%)', v_mutation.journal_entry_id;
+  END IF;
+
+  SELECT id, mutation_id, candidate_id, candidate_type, candidate_source, status
+    INTO v_match
+  FROM bank_reconciliation_matches
+  WHERE id = ${input.matchId}
+    AND mutation_id = ${input.mutationId}
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: bank_reconciliation_matches.id=${input.matchId} tidak ditemukan untuk mutation_id=${input.mutationId}';
+  END IF;
+  IF v_match.status IS DISTINCT FROM ${matchStatusSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: status match berubah (diagnosis=${matchStatusSql}, aktual=%)', v_match.status;
+  END IF;
+  IF v_match.candidate_id IS DISTINCT FROM ${candidateSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_id berubah (diagnosis=${candidateSql}, aktual=%)', v_match.candidate_id;
+  END IF;
+  IF v_match.candidate_type IS DISTINCT FROM ${typeSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_type berubah';
+  END IF;
+  IF v_match.candidate_source IS DISTINCT FROM ${sourceSql} THEN
+    RAISE EXCEPTION 'PRECHECK_FAILED: candidate_source berubah';
+  END IF;
+
+  UPDATE bank_reconciliation_matches
+  SET status = 'candidate'
+  WHERE id = ${input.matchId}
+    AND mutation_id = ${input.mutationId}
+    AND status = 'approved';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'REPAIR_ABORTED: match ${input.matchId} tidak lagi approved';
+  END IF;
+
+  INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+  VALUES (
+    ${input.mutationId},
+    'SQL_REPAIR_STALE_APPROVED_MATCH',
+    'sql-repair',
+    jsonb_build_object(
+      'match_id', ${input.matchId},
+      'candidate_id', ${candidateSql},
+      'candidate_type', ${typeSql},
+      'candidate_source', ${sourceSql},
+      'journal_entry_id', ${journalSql},
+      'reason', 'approved match tertinggal pada mutation unmatched tanpa journal'
+    )
+  );
+END $$;
+
+SELECT
+  'AFTER' AS phase,
+  bm.id AS mutation_id,
+  bm.company_id,
+  bm.status AS mutation_status,
+  bm.journal_entry_id,
+  brm.id AS match_id,
+  brm.candidate_id,
+  brm.candidate_type,
+  brm.candidate_source,
+  brm.status AS match_status
+FROM bank_mutations bm
+JOIN bank_reconciliation_matches brm
+  ON brm.id = ${input.matchId}
+ AND brm.mutation_id = ${input.mutationId}
+WHERE bm.id = ${input.mutationId}
+  AND bm.status = 'unmatched'
+  AND bm.journal_entry_id IS NULL
+  AND brm.status = 'candidate'
+  AND brm.candidate_id = ${candidateSql};
+
+COMMIT;`;
+}
+
+async function getReconciliationRepairDiagnosis(mutationId: number) {
+  const mutationResult = await db.execute(sql`
+    SELECT
+      id, company_id, status, journal_entry_id, review_code, review_reason,
+      reconciliation_status, mutation_key, description
+    FROM bank_mutations
+    WHERE id = ${mutationId}
+    LIMIT 1
+  `);
+  const mutation = mutationResult.rows[0] as Record<string, unknown> | undefined;
+  if (!mutation) return null;
+
+  const matchesResult = await db.execute(sql`
+    SELECT
+      id, mutation_id, candidate_id, candidate_type, candidate_source,
+      status, match_score, match_reason
+    FROM bank_reconciliation_matches
+    WHERE mutation_id = ${mutationId}
+    ORDER BY
+      CASE status WHEN 'approved' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
+      id DESC
+  `);
+  const matches = matchesResult.rows as Array<Record<string, unknown>>;
+  const approvedMatches = matches.filter(row => String(row.status) === "approved");
+  const selectedMatch = approvedMatches[0] ?? matches[0] ?? null;
+
+  const journalEntryId = mutation.journal_entry_id == null
+    ? null
+    : Number(mutation.journal_entry_id);
+  let journal: Record<string, unknown> | null = null;
+  if (journalEntryId != null && Number.isSafeInteger(journalEntryId) && journalEntryId > 0) {
+    const journalResult = await db.execute(sql`
+      SELECT id, company_id, status, source, source_id, total_debit, total_credit, date::text AS date
+      FROM accounting_entries
+      WHERE id = ${journalEntryId}
+      LIMIT 1
+    `);
+    journal = (journalResult.rows[0] as Record<string, unknown> | undefined) ?? null;
+  }
+
+  const companyId = mutation.company_id == null ? null : Number(mutation.company_id);
+  const mutationStatus = String(mutation.status ?? "");
+  const journalIsBalanced = journal != null
+    && Math.abs(Number(journal.total_debit ?? 0) - Number(journal.total_credit ?? 0)) <= 0.01;
+  const journalCompanyMatches = journal != null
+    && companyId != null
+    && Number(journal.company_id) === companyId;
+
+  let disposition: ReconciliationRepairDisposition = "developer_action_required";
+  let code = "NO_SAFE_CORRECTION";
+  let title = "Developer Action Required";
+  let reason = "Kondisi rekonsiliasi tidak memenuhi kontrak perbaikan aman.";
+  let sqlCorrection: string | null = null;
+  let autoRepair: { method: "POST"; path: string; label: string } | null = null;
+
+  if (
+    mutationStatus === "unmatched"
+    && journalEntryId == null
+    && approvedMatches.length === 1
+    && selectedMatch != null
+  ) {
+    disposition = "sql_correction";
+    code = "STALE_APPROVED_MATCH_WITHOUT_JOURNAL";
+    title = "Bisa dikoreksi via SQL";
+    reason = "Satu match masih approved, tetapi mutasi sudah unmatched dan tidak memiliki journal entry. Hanya status match dan audit trail yang dikoreksi.";
+    sqlCorrection = buildStaleApprovedMatchRepairSql({
+      mutationId,
+      companyId,
+      mutationStatus,
+      journalEntryId,
+      matchId: Number(selectedMatch.id),
+      candidateId: String(selectedMatch.candidate_id ?? ""),
+      candidateType: selectedMatch.candidate_type == null ? null : String(selectedMatch.candidate_type),
+      candidateSource: selectedMatch.candidate_source == null ? null : String(selectedMatch.candidate_source),
+      matchStatus: String(selectedMatch.status),
+    });
+  } else if (
+    (mutationStatus === "approved_pending_posting" || mutationStatus === "approved")
+    && journalEntryId != null
+    && journal?.status === "draft"
+    && journalIsBalanced
+    && journalCompanyMatches
+    && approvedMatches.length === 1
+  ) {
+    disposition = "auto_repair";
+    code = "BALANCED_DRAFT_READY_TO_POST";
+    title = "Bisa diperbaiki otomatis";
+    reason = "Mutasi memiliki tepat satu match approved dan journal draft yang balance serta berada pada company yang sama.";
+    autoRepair = {
+      method: "POST",
+      path: `/api/bank-reconciliation/${mutationId}/post`,
+      label: "Perbaiki Otomatis",
+    };
+  } else if (
+    journalEntryId != null
+    || journal?.status === "posted"
+    || selectedMatch?.candidate_type === "qris_settlement"
+    || approvedMatches.length > 1
+  ) {
+    code = "FINANCIAL_STATE_REQUIRES_REVIEW";
+    reason = "Kondisi menyentuh journal/ledger posted, settlement canonical, atau lebih dari satu owner match. SQL langsung tidak aman; gunakan reversal atau perbaikan owner yang sesuai.";
+  } else if (mutation.review_code || mutation.review_reason) {
+    code = String(mutation.review_code ?? "MANUAL_REVIEW");
+    reason = String(mutation.review_reason ?? "Mutasi memiliki alasan review manual yang belum memenuhi kontrak auto-repair.");
+  }
+
+  const records: ReconciliationRepairRecord[] = [
+    { table: "bank_mutations", id: mutationId, role: "mutation" },
+  ];
+  if (selectedMatch) {
+    records.push({ table: "bank_reconciliation_matches", id: Number(selectedMatch.id), role: "match" });
+    records.push({
+      table: candidateRepairTable(
+        selectedMatch.candidate_type == null ? null : String(selectedMatch.candidate_type),
+        selectedMatch.candidate_source == null ? null : String(selectedMatch.candidate_source),
+      ),
+      id: String(selectedMatch.candidate_id ?? ""),
+      role: "candidate",
+    });
+  }
+  records.push({ table: "accounting_entries", id: journalEntryId, role: "journal_entry" });
+
+  return {
+    mutation: {
+      id: mutationId,
+      companyId,
+      status: mutationStatus,
+      journalEntryId,
+      reviewCode: mutation.review_code ?? null,
+      reviewReason: mutation.review_reason ?? null,
+      mutationKey: mutation.mutation_key ?? null,
+      description: mutation.description ?? null,
+    },
+    match: selectedMatch
+      ? {
+          id: Number(selectedMatch.id),
+          mutationId,
+          candidateId: String(selectedMatch.candidate_id ?? ""),
+          candidateType: selectedMatch.candidate_type ?? null,
+          candidateSource: selectedMatch.candidate_source ?? null,
+          status: selectedMatch.status ?? null,
+          matchScore: selectedMatch.match_score ?? null,
+          matchReason: selectedMatch.match_reason ?? null,
+        }
+      : null,
+    journal: journal
+      ? {
+          id: Number(journal.id),
+          companyId: journal.company_id ?? null,
+          status: journal.status ?? null,
+          source: journal.source ?? null,
+          sourceId: journal.source_id ?? null,
+          totalDebit: journal.total_debit ?? null,
+          totalCredit: journal.total_credit ?? null,
+          date: journal.date ?? null,
+        }
+      : null,
+    disposition,
+    code,
+    title,
+    reason,
+    records,
+    sql: sqlCorrection,
+    autoRepair,
+    verification: {
+      before: {
+        mutationId,
+        mutationStatus,
+        companyId,
+        journalEntryId,
+        matchId: selectedMatch ? Number(selectedMatch.id) : null,
+        candidateId: selectedMatch?.candidate_id ?? null,
+        matchStatus: selectedMatch?.status ?? null,
+      },
+      after: disposition === "sql_correction"
+        ? {
+            mutationId,
+            mutationStatus: "unmatched",
+            journalEntryId: null,
+            matchId: selectedMatch ? Number(selectedMatch.id) : null,
+            candidateId: selectedMatch?.candidate_id ?? null,
+            matchStatus: "candidate",
+          }
+        : null,
+    },
+  };
+}
 // The full-bank matching run can legitimately outlive the browser request
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
@@ -452,7 +820,36 @@ let unifiedMatchingJobActive = false;
 // snapshot produced by a newer correction.
 const qrisCandidateRefreshQueues = new Map<number, Promise<void>>();
 
-function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
+async function findAutomaticQrisCandidateIds(
+  companyId: number,
+  matchedMutationIds: number[],
+): Promise<number[]> {
+  const mutationIds = [...new Set(matchedMutationIds)]
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (mutationIds.length === 0) return [];
+
+  const { rows } = await db.execute(sql.raw(`
+    SELECT id
+    FROM qris_mutation_batch_candidates
+    WHERE company_id = ${companyId}
+      AND mutation_id IN (${mutationIds.join(",")})
+      AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
+      AND LOWER(COALESCE(status, '')) NOT IN
+        ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+      AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
+    ORDER BY id
+  `));
+
+  return (rows as Array<Record<string, unknown>>)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+function queueQrisCandidateRefresh(
+  req: any,
+  companyId: number,
+  paymentId: number,
+): void {
   const previous = qrisCandidateRefreshQueues.get(companyId) ?? Promise.resolve();
   const next = previous
     .catch(() => undefined)
@@ -471,6 +868,15 @@ function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
           },
           "[bankRecon] QRIS candidate refresh after payment date update completed",
         );
+        const automaticCandidateIds = await findAutomaticQrisCandidateIds(
+          companyId,
+          refreshed.candidates
+            .filter((candidate) => candidate.status === "MATCHED")
+            .map((candidate) => Number(candidate.mutationId)),
+        );
+        if (automaticCandidateIds.length > 0) {
+          void triggerAutomaticQrisApproval(req, automaticCandidateIds, companyId);
+        }
       } catch (refreshError: any) {
         // The source and mirror transaction has already committed. Candidate
         // generation is provisional and can be retried from the UI without
@@ -1395,92 +1801,47 @@ function qrisEsc(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-type QrisAutoPostDiagnostic = {
-  code: string;
-  stage: string;
-  problem: string;
-  revision: string;
-  action: string;
-  technicalDetail?: string | null;
-};
-
-function qrisAutoPostDiagnostic(error: any): QrisAutoPostDiagnostic {
+function qrisAutoPostDiagnostic(
+  error: any,
+  context: {
+    candidateId?: number | null;
+    mutationId?: number | null;
+    companyId?: number | null;
+    correlationId?: string | null;
+  } = {},
+): StructuredReconciliationDiagnosis {
   const postgresError = findPostgresError(error);
-  const code = String(error?.code ?? postgresError?.code ?? "QRIS_AUTO_POST_FAILED");
-  const message = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
+  const nestedMessage = typeof error?.cause?.message === "string"
+    ? error.cause.message.trim()
+    : "";
+  const directMessage = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
     .replace(/^Failed query:\s*/i, "")
     .trim()
     .slice(0, 500);
-  const stage = String(error?.qrisStage ?? (
-    code.includes("CONFIG") ? "konfigurasi MDR" :
-      code.includes("COA") ? "COA bank canonical" :
-        code.includes("JOURNAL") ? "jurnal settlement" :
-          code.includes("PAYMENT") ? "validasi payment" :
-            code.includes("BANK") || code.includes("MUTATION") ? "mutasi bank" :
-              "settlement canonical"
-  ));
-  const mapping: Record<string, { revision: string; action: string }> = {
-    PAYMENT_NOT_CONFIRMED: {
-      revision: "Status payment di Sport Center",
-      action: "Konfirmasi payment, lalu buat kandidat QRIS ulang.",
+  // Database-owned functions surface domain codes inside exception messages.
+  // Keep the domain code in the shared contract instead of exposing a raw
+  // driver error such as P0001.
+  const message = nestedMessage && /^[A-Z][A-Z0-9_]+(?::|$)/.test(nestedMessage)
+    ? nestedMessage
+    : directMessage;
+  return buildQrisAutoPostDiagnosis(
+    {
+      ...error,
+      code: error?.code === "P0001" && nestedMessage
+        ? nestedMessage.match(/^[A-Z][A-Z0-9_]+/)?.[0]
+        : error?.code ?? postgresError?.code,
+      message,
+      detail: postgresError?.detail ?? error?.detail,
+      qrisStage: error?.qrisStage,
     },
-    INVALID_CANDIDATE: {
-      revision: "Nominal/tanggal/provider/rekening pada sumber payment atau mutasi",
-      action: "Perbaiki sumber yang disebutkan, lalu generate kandidat QRIS ulang.",
-    },
-    CANONICAL_SETTLEMENT_CONFIG_UNRESOLVED: {
-      revision: "Konfigurasi MDR owner-approved untuk company, provider, rekening, dan tanggal settlement",
-      action: "Lengkapi atau aktifkan satu konfigurasi MDR owner-approved, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_CONFIG_AMBIGUOUS: {
-      revision: "Konfigurasi MDR owner-approved yang tumpang tindih",
-      action: "Sisakan satu konfigurasi yang berlaku untuk rekening dan tanggal tersebut, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_BANK_COA_UNRESOLVED: {
-      revision: "COA bank canonical",
-      action: "Hubungkan rekening bank ke COA postable canonical, lalu retry.",
-    },
-    CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: {
-      revision: "Jurnal payment Sport Center",
-      action: "Pastikan jurnal payment sudah posted melalui workflow akuntansi, lalu retry.",
-    },
-    CANONICAL_PAYMENT_JOURNAL_BRIDGE_UNRESOLVED: {
-      revision: "Bridge jurnal payment canonical",
-      action: "Perbaiki relasi payment ke jurnal canonical, lalu retry.",
-    },
-    CANONICAL_SETTLEMENT_JOURNAL_NOT_POSTED: {
-      revision: "Jurnal settlement canonical",
-      action: "Periksa posting jurnal settlement; jangan membuat jurnal manual, gunakan retry scoped.",
-    },
-    CANONICAL_SETTLEMENT_JOURNAL_NOT_BALANCED: {
-      revision: "Keseimbangan jurnal settlement",
-      action: "Perbaiki konfigurasi/COA yang menghasilkan jurnal tidak seimbang, lalu retry scoped.",
-    },
-    CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT: {
-      revision: "Status settlement payment",
-      action: "Muat ulang kandidat. Jika payment sudah dimiliki batch lain, jangan approve ulang.",
-    },
-  };
-  const guidance = mapping[code] ?? {
-    revision: "Data dan safeguard pada tahap auto-post yang disebutkan",
-    action: "Periksa detail teknis, revisi sumber/configuration terkait, lalu retry scoped setelah data konsisten.",
-  };
-  return {
-    code,
-    stage,
-    problem: message || "Safeguard canonical menahan auto-post.",
-    revision: guidance.revision,
-    action: guidance.action,
-    technicalDetail: postgresError?.detail
-      ? String(postgresError.detail).slice(0, 500)
-      : null,
-  };
+    context,
+  );
 }
 
 async function persistQrisAutoPostStatus(
   candidateId: number,
   status: "running" | "succeeded" | "failed",
-  diagnostic?: QrisAutoPostDiagnostic,
+  diagnostic?: StructuredReconciliationDiagnosis,
 ): Promise<boolean> {
   const details = diagnostic ? `'${qrisEsc(JSON.stringify(diagnostic))}'::jsonb` : "NULL";
   const result = await db.execute(sql.raw(`
@@ -1495,6 +1856,7 @@ async function persistQrisAutoPostStatus(
         auto_post_completed_at = ${status === "succeeded" ? "NOW()" : "NULL"},
         updated_at = NOW()
     WHERE id = ${candidateId}
+      AND COALESCE(auto_post_status, 'pending') <> 'succeeded'
       AND (
         '${status}' <> 'running'
         OR COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
@@ -1508,7 +1870,14 @@ async function triggerAutomaticQrisApproval(
   candidateIds: number[],
   companyId: number,
 ): Promise<void> {
-  const port = Number(process.env.REPLIT_API_PORT ?? process.env.PORT ?? process.env.API_PORT ?? 8080);
+  // Use the listener that accepted the current request first. In the Replit
+  // workspace the primary API and artifact forwarder can expose different
+  // ports at the same time; environment precedence alone can send the worker
+  // to a stale or non-serving listener.
+  const requestPort = Number(req?.socket?.localPort);
+  const port = Number.isInteger(requestPort) && requestPort > 0
+    ? requestPort
+    : Number(process.env.REPLIT_API_PORT ?? process.env.PORT ?? process.env.API_PORT ?? 8080);
   if (!Number.isInteger(port) || port <= 0) return;
   const cookie = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
   const authorization = typeof req.headers?.authorization === "string"
@@ -1540,10 +1909,12 @@ async function triggerAutomaticQrisApproval(
           const body = await response.json().catch(
             () => ({} as Record<string, unknown>),
           ) as Record<string, any>;
-          const diagnostic = qrisAutoPostDiagnostic({
-            code: body?.code,
-            message: body?.error,
-          });
+          const diagnostic = body?.diagnosis?.errorCode
+            ? body.diagnosis as StructuredReconciliationDiagnosis
+            : qrisAutoPostDiagnostic(
+              { code: body?.code, message: body?.error },
+              { candidateId, companyId },
+            );
           await persistQrisAutoPostStatus(candidateId, "failed", diagnostic);
           continue;
         }
@@ -2154,9 +2525,14 @@ router.post("/qris-candidates/generate", async (req, res) => {
   await runQrisSettlementMigration();
   try {
     if (unifiedMatchingJobActive) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "MATCHING_IN_PROGRESS", message: "Matching mutasi bank masih berjalan." },
+        { companyId: Number(req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req)) },
+      );
       return res.status(409).json({
         error: "Matching mutasi bank masih berjalan. Tunggu sampai matching selesai sebelum membuat kandidat QRIS.",
         code: "MATCHING_IN_PROGRESS",
+        diagnosis,
       });
     }
     const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
@@ -2168,6 +2544,10 @@ router.post("/qris-candidates/generate", async (req, res) => {
       return res.status(400).json({
         error: "mutationId kandidat QRIS tidak valid",
         code: "INVALID_QRIS_MUTATION_ID",
+        diagnosis: buildQrisAutoPostDiagnosis(
+          { code: "INVALID_CANDIDATE", message: "mutationId kandidat QRIS tidak valid." },
+          { companyId: Number(companyId) },
+        ),
       });
     }
     const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
@@ -2185,21 +2565,8 @@ router.post("/qris-candidates/generate", async (req, res) => {
         .map((candidate) => Number(candidate.mutationId))
         .filter((id) => Number.isSafeInteger(id) && id > 0);
       if (matchedMutationIds.length > 0) {
-        const { rows } = await db.execute(sql.raw(`
-          SELECT id
-          FROM qris_mutation_batch_candidates
-          WHERE company_id = ${Number(companyId)}
-            AND mutation_id IN (${[...new Set(matchedMutationIds)].join(",")})
-            AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
-            AND LOWER(COALESCE(status, '')) NOT IN
-              ('approved', 'completed', 'superseded', 'stale', 'ineligible')
-            AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
-          ORDER BY id
-        `));
         automaticCandidateIds.push(
-          ...(rows as Array<Record<string, unknown>>)
-            .map((row) => Number(row.id))
-            .filter((id) => Number.isSafeInteger(id) && id > 0),
+          ...(await findAutomaticQrisCandidateIds(Number(companyId), matchedMutationIds)),
         );
       }
       if (automaticCandidateIds.length > 0) {
@@ -2240,14 +2607,266 @@ router.post("/qris-candidates/generate", async (req, res) => {
       "[bankRecon] POST /qris-candidates/generate failed",
     );
     if (postgresError?.code === "23505") {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "QRIS_CANDIDATE_CONFLICT", message: "Data audit QRIS berubah saat diproses." },
+        { companyId: Number(req.body?.companyId ?? req.body?.company_id ?? null) },
+      );
       return res.status(409).json({
         error: "Data audit QRIS berubah saat diproses. Muat ulang halaman lalu coba buat pemeriksaan QRIS lagi.",
         code: "QRIS_CANDIDATE_CONFLICT",
+        diagnosis,
       });
     }
+    const diagnosis = qrisAutoPostDiagnostic(
+      e,
+      {
+        mutationId: req.body?.mutationId ?? req.body?.mutation_id ?? null,
+        companyId: req.body?.companyId ?? req.body?.company_id ?? null,
+      },
+    );
     return res.status(500).json({
       error: "Gagal menyimpan pemeriksaan QRIS. Coba lagi, atau hubungi admin bila masalah berulang.",
       code: "QRIS_CANDIDATE_GENERATION_FAILED",
+      diagnosis,
+    });
+  }
+});
+
+// ─── POST /api/bank-reconciliation/qris-candidates/:id/repair ────────────────
+// The repair button is deliberately narrow: it may regenerate a provisional
+// candidate from the canonical Sport Center source and retry the existing
+// approval endpoint. It never edits payment values, provider, ownership, COA,
+// settlement, or journal state directly.
+router.post("/qris-candidates/:candidateId/repair", async (req, res) => {
+  const candidateId = Number(req.params.candidateId);
+  const companyId = resolveCompanyId(req);
+
+  try {
+    await runQrisSettlementMigration();
+    if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "INVALID_CANDIDATE_ID", message: "candidateId tidak valid." },
+        { companyId: Number.isSafeInteger(companyId) ? companyId : null },
+      );
+      return res.status(400).json({
+        ok: false,
+        error: "candidateId tidak valid",
+        code: "INVALID_CANDIDATE_ID",
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+    if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "INVALID_COMPANY_ID", message: "companyId tidak valid." },
+        { candidateId, companyId: null },
+      );
+      return res.status(400).json({
+        ok: false,
+        error: "companyId tidak valid",
+        code: "INVALID_COMPANY_ID",
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+
+    const { rows } = await db.execute(sql`
+      SELECT id, mutation_id, company_id, status, reconciliation_status,
+             auto_post_status, auto_post_details
+      FROM qris_mutation_batch_candidates
+      WHERE id = ${candidateId}
+        AND company_id = ${companyId}
+      LIMIT 1
+    `);
+    const candidate = rows[0] as Record<string, unknown> | undefined;
+    if (!candidate) {
+      const diagnosis = buildQrisAutoPostDiagnosis(
+        { code: "NOT_FOUND", message: "Kandidat QRIS tidak ditemukan." },
+        { candidateId, companyId },
+      );
+      return res.status(404).json({
+        ok: false,
+        result: "DEVELOPER_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+      });
+    }
+
+    const storedDetails = typeof candidate.auto_post_details === "string"
+      ? (() => {
+        try {
+          return JSON.parse(candidate.auto_post_details as string);
+        } catch {
+          return null;
+        }
+      })()
+      : candidate.auto_post_details;
+    let diagnosis = storedDetails?.errorCode
+      ? storedDetails as StructuredReconciliationDiagnosis
+      : buildQrisAutoPostDiagnosis(
+        {
+          code: String(candidate.status ?? "").toLowerCase() === "stale"
+            ? "INVALID_CANDIDATE"
+            : "QRIS_AUTO_POST_FAILED",
+          message: "Kandidat QRIS perlu diperiksa dari source canonical.",
+        },
+        {
+          candidateId,
+          mutationId: Number(candidate.mutation_id),
+          companyId,
+        },
+      );
+
+    if (!diagnosis.canAutoFix || !diagnosis.retryAllowed) {
+      return res.status(200).json({
+        ok: false,
+        result: asRepairResult(diagnosis),
+        diagnosis,
+      });
+    }
+
+    const mutationId = Number(candidate.mutation_id);
+    if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+      diagnosis = {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: diagnosis.adminAction ?? diagnosis.action,
+      };
+      return res.status(200).json({
+        ok: false,
+        result: "ADMIN_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+      });
+    }
+
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_started",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { candidateId, mutationId, companyId, action: diagnosis.autoFixAction },
+    });
+
+    const regenerated = await generateQrisCandidates({
+      companyId,
+      mutationId,
+      dryRun: false,
+    });
+    const matchedMutationIds = regenerated.candidates
+      .filter((item) => item.status === "MATCHED")
+      .map((item) => Number(item.mutationId))
+      .filter((id) => Number.isSafeInteger(id) && id > 0);
+    const automaticCandidateIds = await findAutomaticQrisCandidateIds(
+      companyId,
+      matchedMutationIds,
+    );
+
+    if (automaticCandidateIds.length === 0) {
+      diagnosis = {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: diagnosis.adminAction ?? "Perbaiki data/configuration canonical yang ditunjukkan, lalu tekan Retry.",
+      };
+      audit(req, {
+        action: "qris_diagnosis_auto_repair_completed",
+        module: "bank-reconciliation",
+        resourceId: `qris-candidate-${candidateId}`,
+        after: { result: "ADMIN_ACTION_REQUIRED", candidateId, mutationId },
+      });
+      return res.status(200).json({
+        ok: false,
+        result: "ADMIN_ACTION_REQUIRED" satisfies ReconciliationRepairResult,
+        diagnosis,
+        regenerated: {
+          generated: regenerated.generated,
+          persisted: regenerated.persisted,
+        },
+      });
+    }
+
+    await triggerAutomaticQrisApproval(req, automaticCandidateIds, companyId);
+    const { rows: latestRows } = await db.execute(sql`
+      SELECT id, mutation_id, auto_post_status, auto_post_details,
+             auto_post_problem, auto_post_action
+      FROM qris_mutation_batch_candidates
+      WHERE company_id = ${companyId}
+        AND mutation_id = ${mutationId}
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `);
+    const latest = latestRows[0] as Record<string, unknown> | undefined;
+    const latestDetails = typeof latest?.auto_post_details === "string"
+      ? (() => {
+        try {
+          return JSON.parse(latest.auto_post_details as string);
+        } catch {
+          return null;
+        }
+      })()
+      : latest?.auto_post_details;
+
+    if (String(latest?.auto_post_status ?? "").toLowerCase() === "succeeded") {
+      audit(req, {
+        action: "qris_diagnosis_auto_repair_completed",
+        module: "bank-reconciliation",
+        resourceId: `qris-candidate-${candidateId}`,
+        after: {
+          result: "FIXED_AND_RETRIED",
+          candidateId,
+          mutationId,
+          replacementCandidateId: latest?.id ?? null,
+        },
+      });
+      return res.json({
+        ok: true,
+        result: "FIXED_AND_RETRIED" satisfies ReconciliationRepairResult,
+        diagnosis,
+        replacementCandidateId: latest?.id ?? null,
+      });
+    }
+
+    const failedDiagnosis = latestDetails?.errorCode
+      ? latestDetails as StructuredReconciliationDiagnosis
+      : {
+        ...diagnosis,
+        canAutoFix: false,
+        autoFixAction: null,
+        action: String(latest?.auto_post_action ?? diagnosis.adminAction ?? diagnosis.action),
+        actualValue: {
+          ...(typeof diagnosis.actualValue === "object" && diagnosis.actualValue != null
+            ? diagnosis.actualValue as Record<string, unknown>
+            : {}),
+          retryStatus: latest?.auto_post_status ?? "failed",
+          retryProblem: latest?.auto_post_problem ?? null,
+        },
+      };
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_completed",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { result: asRepairResult(failedDiagnosis), candidateId, mutationId },
+    });
+    return res.status(200).json({
+      ok: false,
+      result: asRepairResult(failedDiagnosis),
+      diagnosis: failedDiagnosis,
+      replacementCandidateId: latest?.id ?? null,
+    });
+  } catch (error: any) {
+    const diagnosis = qrisAutoPostDiagnostic(
+      error,
+      { candidateId, companyId },
+    );
+    audit(req, {
+      action: "qris_diagnosis_auto_repair_completed",
+      module: "bank-reconciliation",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: { result: asRepairResult(diagnosis), diagnosis },
+    });
+    return res.status(200).json({
+      ok: false,
+      result: asRepairResult(diagnosis),
+      diagnosis,
     });
   }
 });
@@ -2330,7 +2949,7 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
     if (result.changed) {
       // The source transaction is committed before the potentially expensive
       // company-wide candidate scan. Never approve or post settlement here.
-      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+      setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
     }
 
     return res.json({
@@ -2342,8 +2961,8 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
       accountingPaymentId: result.accountingPaymentId,
       correctionEntryId: result.correctionEntryId,
       candidateRefreshPending: result.changed,
-      message: result.changed
-        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi sebagai review-only."
+         message: result.changed
+        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi dan diproses otomatis bila memenuhi seluruh guard canonical."
         : "Nominal payment sudah sesuai; tidak ada jurnal koreksi baru.",
     });
   } catch (error: any) {
@@ -2519,7 +3138,7 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
     // mutation for the company. Do not make the reviewer wait for that work:
     // the canonical source transaction above is already committed and the
     // candidate refresh can safely run after the response has been flushed.
-    setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+    setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
 
     return res.json({
       ok: true,
@@ -2738,7 +3357,7 @@ router.patch("/qris-candidates/payments/:paymentId/settlement-status", async (re
     });
 
     if (result.changed) {
-      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+      setImmediate(() => queueQrisCandidateRefresh(req, companyId, paymentId));
     }
 
     return res.json({
@@ -4149,12 +4768,23 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       : directMessage && !directMessage.startsWith("Failed query:")
         ? directMessage
         : "Approval canonical QRIS gagal";
+    const diagnosis = qrisAutoPostDiagnostic(
+      { ...error, code, message: publicErrorMessage },
+      { candidateId, companyId },
+    );
+    await persistQrisAutoPostStatus(candidateId, "failed", diagnosis).catch((persistError) => {
+      logger.error(
+        { err: persistError?.message, candidateId, code },
+        "[bankRecon] failed to persist QRIS approval diagnosis",
+      );
+    });
     if (error?.eligibilityError) {
       return res.status(422).json({
         error: publicErrorMessage,
         code: "CANDIDATE_NOT_ELIGIBLE",
         reason_code: code,
         reconciliation_status: error?.reconciliation_status,
+        diagnosis,
       });
     }
     if (error instanceof QrisApprovalPaymentGuardError) {
@@ -4163,6 +4793,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         code: error.code,
         already_settled_payment_ids: error.alreadySettledPaymentIds,
         eligible_payment_ids: error.eligiblePaymentIds,
+        diagnosis,
       });
     }
     const clientErrorCodes = new Set([
@@ -4191,6 +4822,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     return res.status(status).json({
       error: publicErrorMessage,
       code,
+      diagnosis,
     });
   }
 });
@@ -4734,6 +5366,7 @@ router.get("/mutations", async (req, res) => {
         FROM bank_reconciliation_matches approved_mutation_match
         WHERE approved_mutation_match.mutation_id = bm.id
           AND approved_mutation_match.status = 'approved'
+          AND ${currentReconciliationMatchResultSql("approved_mutation_match")}
       ) AS has_approved_match,
       (
         SELECT COALESCE(jsonb_agg(
@@ -6984,11 +7617,11 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   try {
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       LIMIT 2
     `));
     if (canonicalMatches.length > 0) {
@@ -7057,6 +7690,30 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   } catch (e: any) {
     const code = e.code === "NOT_FOUND" ? 404 : e.code === "INVALID_STATUS" ? 409 : 500;
     return res.status(code).json({ error: e.message });
+  }
+});
+
+// ─── GET /api/bank-reconciliation/:mutationId/repair-diagnosis ────────────────
+// Returns a runtime-scoped diagnosis. SQL is emitted only for the
+// non-ledger stale-match case; posted journals and canonical settlement
+// ownership are deliberately fail-closed.
+router.get("/:mutationId/repair-diagnosis", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutationId = Number(req.params.mutationId);
+  if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+    return res.status(400).json({ error: "ID mutasi tidak valid" });
+  }
+
+  try {
+    const diagnosis = await getReconciliationRepairDiagnosis(mutationId);
+    if (!diagnosis) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
+    return res.json({ ok: true, diagnosis });
+  } catch (error: any) {
+    logger.error({ err: error, mutationId }, "[bankRecon] repair diagnosis failed");
+    return res.status(500).json({
+      error: "Diagnosis repair gagal membaca state runtime",
+      detail: error?.message ?? String(error),
+    });
   }
 });
 
@@ -7279,11 +7936,11 @@ router.post("/:mutationId/void-journal", async (req, res) => {
   try {
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       LIMIT 2
     `));
     if (canonicalMatches.length > 0) {
@@ -7430,11 +8087,11 @@ router.post("/:mutationId/reopen", async (req, res) => {
     // returns both mutations to unmatched. It must never create a reversal.
     const { rows: canonicalMatches } = await db.execute(sql.raw(`
       SELECT id
-      FROM bank_reconciliation_matches
+      FROM public.bank_reconciliation_matches
       WHERE mutation_id = ${mutId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('approved', 'candidate')
+        AND candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status::text IN ('approved', 'candidate')
       ORDER BY id
       LIMIT 2
     `));
@@ -7468,6 +8125,7 @@ router.post("/:mutationId/reopen", async (req, res) => {
       }
     }
 
+    let releasedMatchIds: number[] = [];
     await db.transaction(async (tx) => {
       const { rows: locked } = await tx.execute(sql.raw(
         `SELECT id, status, company_id FROM bank_mutations WHERE id = ${mutId} FOR UPDATE`
@@ -7487,11 +8145,29 @@ router.post("/:mutationId/reopen", async (req, res) => {
         `DELETE FROM bank_reconciliation_matches WHERE mutation_id = ${mutId} AND status IN ('candidate','rejected')`
       ));
 
+      // A posted mutation may still have an approved match. Reopening must
+      // release that approval; otherwise the mutation can appear unmatched
+      // while the posting guard still sees an approved reconciliation owner.
+      const releasedMatches = await tx.execute(sql.raw(`
+        UPDATE bank_reconciliation_matches
+        SET status = 'candidate'
+        WHERE mutation_id = ${mutId} AND status = 'approved'
+        RETURNING id
+      `));
+      releasedMatchIds = (releasedMatches.rows as Array<{ id: unknown }>)
+        .map(row => Number(row.id))
+        .filter(id => Number.isSafeInteger(id) && id > 0);
+
       // Reset mutation back to unmatched
       await tx.execute(sql.raw(`
         UPDATE bank_mutations
         SET status           = 'unmatched',
             journal_entry_id = NULL,
+            matched_payment_id = NULL,
+            matched_order_id = NULL,
+            linked_transaction_type = NULL,
+            linked_transaction_id = NULL,
+            reconciliation_status = 'unmatched',
             approved_by      = NULL,
             approved_at      = NULL,
             posted_by        = NULL,
@@ -7500,7 +8176,11 @@ router.post("/:mutationId/reopen", async (req, res) => {
         WHERE id = ${mutId}
       `));
 
-      const meta = JSON.stringify({ note: note ?? null, reopened_by: actor }).replace(/'/g, "''");
+      const meta = JSON.stringify({
+        note: note ?? null,
+        reopened_by: actor,
+        released_approved_match_ids: releasedMatchIds,
+      }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
         INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
         VALUES (${mutId}, 'REOPENED', '${actor.replace(/'/g, "''")}', '${meta}')
@@ -7508,7 +8188,7 @@ router.post("/:mutationId/reopen", async (req, res) => {
     });
 
     audit(req, { action: "reopen", module: "accounting", resourceId: `bank-mutation-${mutId}` });
-    return res.json({ ok: true });
+    return res.json({ ok: true, released_match_ids: releasedMatchIds });
 
   } catch (e: any) {
     const code = e.code === "NOT_FOUND" ? 404 : e.code === "INVALID_STATUS" ? 409 : 500;
@@ -7527,11 +8207,11 @@ router.post("/:mutationId/reject", async (req, res) => {
 
   const { rows: canonicalMatches } = await db.execute(sql.raw(`
     SELECT id
-    FROM bank_reconciliation_matches
+    FROM public.bank_reconciliation_matches
     WHERE mutation_id = ${mutId}
-      AND candidate_type = 'qris_settlement'
-      AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-      AND status IN ('approved', 'candidate')
+      AND candidate_type::text = 'qris_settlement'
+      AND candidate_source::text = '${CANONICAL_SETTLEMENT_SOURCE}'
+      AND status::text IN ('approved', 'candidate')
     LIMIT 2
   `));
   if (canonicalMatches.length > 0) {
