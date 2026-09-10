@@ -244,7 +244,7 @@ router.post("/pr/:id/action", async (req, res) => {
     let templateVersion: string | null = null;
     if (categoryKey) {
       const dbOverrides = await db.select().from(productTemplatesTable).where(eq(productTemplatesTable.categoryKey, categoryKey)).limit(1);
-      const override = dbOverrides[0] ? {
+      const override: ProductTemplateOverride | null = dbOverrides[0] ? {
         categoryKey: dbOverrides[0].categoryKey,
         label: dbOverrides[0].label,
         version: dbOverrides[0].version,
@@ -256,7 +256,7 @@ router.post("/pr/:id/action", async (req, res) => {
         conditionalRules: dbOverrides[0].conditionalRules as ProductTemplateOverride["conditionalRules"],
         validationRules: dbOverrides[0].validationRules as ProductTemplateOverride["validationRules"],
       } satisfies ProductTemplateOverride : null;
-      const resolved = resolveTemplate(categoryKey, override ? [override] : []);
+      const resolved = resolveTemplate(categoryKey, override);
       if (resolved) {
         templateSnapshot = resolved as unknown as Record<string, unknown>;
         templateId = resolved.category;

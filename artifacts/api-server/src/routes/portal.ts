@@ -2638,6 +2638,12 @@ router.get("/me/dashboard-stats", requirePortalAuth, async (req, res) => {
 });
 
 // GET /api/portal/me/invoices — Customer invoice list (from sales_documents)
+//
+// Ownership is deliberately resolved from immutable/canonical relations:
+//   - the originating logistic order owns individual customer invoices; or
+//   - an active portal company membership owns company-scoped invoices.
+//
+// Never use customer_name, email, phone, or a mutable display field here.
 router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   try {
@@ -2645,30 +2651,47 @@ router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
       id: number;
       invoiceNumber: string;
       amount: string;
+       amountPaid: string | null;
       status: string;
       dueDate: string | null;
       createdAt: string;
       orderNumber: string | null;
     }>(sql`
       SELECT
-        id,
-        doc_number      AS "invoiceNumber",
-        grand_total     AS amount,
-        invoice_status  AS status,
-        due_date        AS "dueDate",
-        created_at      AS "createdAt",
-        doc_number      AS "orderNumber"
-      FROM sales_documents
-      WHERE status NOT IN ('cancelled', 'draft')
-        AND LOWER(customer_name) = LOWER(
-          (SELECT name FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.due_date AS "dueDate",
+        sd.created_at AS "createdAt",
+        COALESCE(lo.order_number, sd.doc_number) AS "orderNumber"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      WHERE sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
         )
-      ORDER BY created_at DESC
+      ORDER BY sd.created_at DESC
       LIMIT 100
     `);
     return res.json(result.rows.map(r => ({
       ...r,
       amount: Number(r.amount ?? 0),
+      amountPaid: Number(r.amountPaid ?? 0),
     })));
   } catch (err) {
     req.log?.error({ err }, "portal me/invoices error");
