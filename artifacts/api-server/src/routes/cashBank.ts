@@ -290,7 +290,19 @@ router.get("/mutations", async (req: any, res: any) => {
     const companyId = getCompanyId(req);
     if (!companyId) return res.status(400).json({ error: "companyId required" });
 
-    const { account_id, from, to, page = "1", limit = "50" } = req.query as any;
+    const {
+      account_id: requestedAccountId,
+      accountId,
+      from: requestedFrom,
+      startDate,
+      to: requestedTo,
+      endDate,
+      page = "1",
+      limit = "50",
+    } = req.query as any;
+    const account_id = requestedAccountId ?? accountId;
+    const from = requestedFrom ?? startDate;
+    const to = requestedTo ?? endDate;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let filter = `ae.company_id = ${companyId} AND ae.status = 'posted'`;
@@ -305,11 +317,23 @@ router.get("/mutations", async (req: any, res: any) => {
         ael.id AS line_id, ael.debit, ael.credit, ael.description AS line_desc,
         ael.account_id, coa.code AS coa_code, coa.name AS coa_name,
         cba.id AS bank_account_id, cba.name AS bank_account_name,
-        cba.bank_name, cba.account_number, cba.account_type
+         cba.bank_name, cba.account_number, cba.account_type,
+         bm.id AS source_mutation_id,
+         bm.source AS mutation_source,
+         bm.source_account AS mutation_source_account,
+         bsc.id AS source_sheet_config_id,
+         bsc.label AS source_connection_label,
+         bsc.bank_name AS source_bank_name,
+         bsc.bank_account_number AS source_account_number,
+         bsc.tab_name AS source_sheet_tab
       FROM accounting_entry_lines ael
       JOIN accounting_entries ae ON ae.id = ael.entry_id
       JOIN chart_of_accounts coa ON coa.id = ael.account_id
       JOIN company_bank_accounts cba ON cba.coa_id = ael.account_id AND cba.company_id = ${companyId}
+       LEFT JOIN bank_mutations bm
+         ON bm.journal_entry_id = ae.id
+        AND bm.company_id = ${companyId}
+       LEFT JOIN bank_sheet_configs bsc ON bsc.id = bm.sheet_config_id
       WHERE ${filter}
       ORDER BY ae.date DESC, ae.id DESC
       LIMIT ${parseInt(limit)} OFFSET ${offset}
