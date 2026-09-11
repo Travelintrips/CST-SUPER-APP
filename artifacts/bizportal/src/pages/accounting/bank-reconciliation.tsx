@@ -811,6 +811,7 @@ interface OutstandingVendorInvoice {
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
+export const CANONICAL_SETTLEMENT_APPROVE_LABEL = "Tautkan & Approve Settlement";
 
 interface QrisCandidateAudit {
   id?: number;
@@ -1241,7 +1242,7 @@ function hasLiveQrisPaymentsForCanonicalApproval(m: BankMutation): boolean {
   return getAvailableQrisPaymentIdsFromCandidate(audit).length > 0;
 }
 
-function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
+export function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
   const candidate = canonicalSettlementCandidateForMutation(m);
   if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
   return candidate.amount_match
@@ -1666,6 +1667,30 @@ function isQrisMutation(m: BankMutation): boolean {
     description: m.description,
     normalizedDescription: m.normalized_description,
   }) === "qris";
+}
+
+export function isGenericCoaSelectionEligible(m: BankMutation): boolean {
+  return canApprove(m) && visibleCandidates(m).length === 0 && !isQrisMutation(m);
+}
+
+export function buildBankApprovalRequestBody(input: {
+  match_id?: number;
+  candidate_type?: string;
+  candidate_id?: number;
+  candidate_source?: string | null;
+  manual_coa_code?: string;
+  manual_override?: boolean;
+  override_reason?: string;
+}): Record<string, unknown> {
+  return {
+    match_id: input.match_id,
+    candidate_type: input.candidate_type,
+    candidate_id: input.candidate_id,
+    candidate_source: input.candidate_source ?? null,
+    manual_coa_code: input.manual_coa_code,
+    manual_override: input.manual_override === true,
+    override_reason: input.override_reason,
+  };
 }
 
 function sportPaymentTypeFromDetails(details?: CandidateDetails | null): SportPaymentType | null {
@@ -6930,7 +6955,7 @@ function MutationDetailPanel({
               }}
             >
               <CheckCircle2 className="w-4 h-4" />
-              Tautkan &amp; Approve Settlement
+              {CANONICAL_SETTLEMENT_APPROVE_LABEL}
             </Button>
           )}
           {canonicalOverrideReady
@@ -6951,13 +6976,13 @@ function MutationDetailPanel({
             && !canonicalOverrideReady
             && !isUiApprovalEligible(m)
             && m.status !== "manual_review"
-            && !(canApprove(m) && cands.length === 0 && !isQrisMutation(m))
+            && !isGenericCoaSelectionEligible(m)
             && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
             <Button
               variant="outline"
               className="flex-1 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300 min-w-[150px]"
               onClick={() => {
-                if (canApprove(m) && cands.length === 0 && !isQrisMutation(m)) {
+                if (isGenericCoaSelectionEligible(m)) {
                   onClose();
                   onMapCoa(m);
                   return;
@@ -6965,10 +6990,10 @@ function MutationDetailPanel({
                 onClose();
               }}
             >
-              {canApprove(m) && cands.length === 0 && !isQrisMutation(m)
+              {isGenericCoaSelectionEligible(m)
                 ? <CheckCircle2 className="w-4 h-4" />
                 : <Search className="w-4 h-4" />}
-              {canApprove(m) && cands.length === 0 && !isQrisMutation(m)
+              {isGenericCoaSelectionEligible(m)
                 ? "Pilih COA"
                 : "Periksa Transaksi"}
             </Button>
@@ -8847,7 +8872,7 @@ export default function BankReconciliationPage() {
     }) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}/approve`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(buildBankApprovalRequestBody({
           match_id: matchId,
           candidate_type: candidateType,
           candidate_id: candidateId,
@@ -8855,7 +8880,7 @@ export default function BankReconciliationPage() {
           manual_coa_code: manualCoaCode,
           manual_override: manualOverride === true,
           override_reason: overrideReason,
-        }),
+        })),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
       if (!r.ok) {

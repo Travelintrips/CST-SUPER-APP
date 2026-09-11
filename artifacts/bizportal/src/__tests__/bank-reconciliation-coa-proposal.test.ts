@@ -27,6 +27,12 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect } from "vitest";
+import {
+  buildBankApprovalRequestBody,
+  CANONICAL_SETTLEMENT_APPROVE_LABEL,
+  isCanonicalSettlementApprovalEligible,
+  isGenericCoaSelectionEligible,
+} from "../pages/accounting/bank-reconciliation";
 
 // ─── Helpers extracted from component logic ───────────────────────────────────
 
@@ -423,5 +429,109 @@ describe("manual_review_required warning preserved", () => {
     expect(showCoaAction({ code: "SPECIFIC_COA_REQUIRED" })).toBe(true);
     expect(showCoaAction({ code: "JOURNAL_MAPPING_REQUIRED" })).toBe(true);
     expect(showCoaAction({ code: "UNKNOWN" })).toBe(false);
+  });
+});
+
+describe("QRIS canonical approval guard", () => {
+  type Mutation = Parameters<typeof isCanonicalSettlementApprovalEligible>[0];
+
+  const canonicalMutation = (overrides: Record<string, unknown> = {}): Mutation => ({
+    id: 501,
+    company_id: 1,
+    transaction_date: "2026-09-10",
+    description: "QRIS settlement",
+    credit_amount: "970000",
+    debit_amount: "0",
+    amount: "970000",
+    direction: "IN",
+    mutation_key: "MUT-QRIS-501",
+    normalized_description: "qris settlement",
+    provider_name: "Paylabs",
+    provider_order_id: "ORDER-501",
+    status: "matched",
+    matched_payment_id: null,
+    matched_order_id: null,
+    candidates: [{
+      id: 9001,
+      mutation_id: 501,
+      candidate_type: "qris_settlement",
+      candidate_id: 7001,
+      candidate_source: "sport_center.payment_settlement_batches",
+      match_score: 100,
+      match_reason: "Exact canonical settlement",
+      amount_match: true,
+      date_match: true,
+      name_match: true,
+      order_id_match: true,
+      proof_match: true,
+      status: "candidate",
+      details: {
+        settlementDate: "2026-09-10",
+        settlementStatus: "posted",
+      },
+    }],
+    qris_candidate_audit: {
+      id: 8001,
+      mutation_id: 501,
+      company_id: 1,
+      provider_code: "PAYLABS",
+      mutation_source_classification: "QRIS",
+      source_date: "2026-09-09",
+      estimated_settlement_date: "2026-09-10",
+      gross_amount: 1000000,
+      net_amount: 970000,
+      observed_deduction: 30000,
+      effective_deduction_rate: 3,
+      reconciliation_status: "MATCHED",
+      confidence: 100,
+      current_payment_ids: [7101],
+      payment_items: [{ paymentId: 7101, grossAmount: 1000000 }],
+      status: "candidate",
+    },
+    ...overrides,
+  });
+
+  it("canonical QRIS approval serializes without manual_coa_code", () => {
+    const requestBody = buildBankApprovalRequestBody({
+      match_id: 9001,
+      candidate_type: "qris_settlement",
+      candidate_id: 7001,
+      candidate_source: "sport_center.payment_settlement_batches",
+      manual_coa_code: undefined,
+    });
+
+    // The endpoint receives JSON, so undefined fields are omitted at the
+    // actual fetch boundary. This locks the canonical path away from the
+    // generic manual COA payload.
+    const serialized = JSON.stringify(requestBody);
+    expect(serialized).not.toContain("manual_coa_code");
+    expect(JSON.parse(serialized)).toMatchObject({
+      candidate_type: "qris_settlement",
+      candidate_source: "sport_center.payment_settlement_batches",
+    });
+  });
+
+  it("eligible canonical QRIS exposes the settlement action, not generic COA", () => {
+    const mutation = canonicalMutation();
+
+    expect(isCanonicalSettlementApprovalEligible(mutation)).toBe(true);
+    expect(isGenericCoaSelectionEligible(mutation)).toBe(false);
+    expect(CANONICAL_SETTLEMENT_APPROVE_LABEL).toBe("Tautkan & Approve Settlement");
+  });
+
+  it("ineligible QRIS exposes neither COA selection nor an approval bypass", () => {
+    const mutation = canonicalMutation({
+      status: "unmatched",
+      candidates: [],
+      qris_candidate_audit: {
+        ...canonicalMutation().qris_candidate_audit,
+        reconciliation_status: "UNMATCHED",
+        current_payment_ids: [],
+        payment_items: [],
+      },
+    });
+
+    expect(isCanonicalSettlementApprovalEligible(mutation)).toBe(false);
+    expect(isGenericCoaSelectionEligible(mutation)).toBe(false);
   });
 });
