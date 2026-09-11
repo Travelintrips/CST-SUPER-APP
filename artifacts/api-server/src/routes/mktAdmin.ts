@@ -188,6 +188,11 @@ const ShipmentEventBodySchema = z.object({
   longitude: z.coerce.number().finite().min(-180).max(180).optional().nullable(),
 }).strict();
 
+function getIdempotencyKey(req: { get(name: string): string | undefined }): string | null {
+  const value = req.get("Idempotency-Key")?.trim() ?? "";
+  return value || null;
+}
+
 async function requireAdminMiddleware(req: any, res: any, next: () => void): Promise<void> {
   if (await requireAdmin(req, res)) next();
 }
@@ -1879,9 +1884,13 @@ router.post(
 
   try {
     const body = req.body as z.infer<typeof CreateShipmentBodySchema>;
-    const result = await createShipment({ ...body, poId }, getActorFromReq(req));
+    const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey && idempotencyKey.length > 200) {
+      return res.status(400).json({ ok: false, error: "INVALID_IDEMPOTENCY_KEY" });
+    }
+    const result = await createShipment({ ...body, poId, idempotencyKey }, getActorFromReq(req));
     if (!result.ok) {
-      const status = result.code === "PO_NOT_FOUND" ? 404 : result.code === "DUPLICATE_REQUEST" ? 409 : 422;
+      const status = result.code === "PO_NOT_FOUND" ? 404 : ["DUPLICATE_REQUEST", "IDEMPOTENCY_KEY_REUSE"].includes(result.code) ? 409 : 422;
       return res.status(status).json({ ok: false, error: result.code, message: result.message });
     }
     return res.status(result.alreadyExists ? 200 : 201).json({
@@ -1950,7 +1959,11 @@ router.post(
   }
 
   try {
-    const result = await appendShipmentEvent({ shipmentId, ...parsed.data }, getActorFromReq(req));
+    const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey && idempotencyKey.length > 200) {
+      return res.status(400).json({ ok: false, error: "INVALID_IDEMPOTENCY_KEY" });
+    }
+    const result = await appendShipmentEvent({ shipmentId, ...parsed.data, idempotencyKey }, getActorFromReq(req));
     if (!result.ok) {
       return res.status(result.code === "SHIPMENT_NOT_FOUND" ? 404 : 409).json({ ok: false, error: result.code, currentStatus: result.currentStatus });
     }
@@ -2003,9 +2016,13 @@ router.post(
 
   try {
     const body = req.body as z.infer<typeof GoodsReceiptBodySchema>;
-    const result = await createGoodsReceipt({ shipmentId, ...body }, getActorFromReq(req));
+    const idempotencyKey = getIdempotencyKey(req);
+    if (idempotencyKey && idempotencyKey.length > 200) {
+      return res.status(400).json({ ok: false, error: "INVALID_IDEMPOTENCY_KEY" });
+    }
+    const result = await createGoodsReceipt({ shipmentId, ...body, idempotencyKey }, getActorFromReq(req));
     if (!result.ok) {
-      const status = result.code === "SHIPMENT_NOT_FOUND" || result.code === "PO_NOT_FOUND" ? 404 : 422;
+      const status = result.code === "SHIPMENT_NOT_FOUND" || result.code === "PO_NOT_FOUND" ? 404 : result.code === "IDEMPOTENCY_KEY_REUSE" ? 409 : 422;
       return res.status(status).json({ ok: false, error: result.code, message: result.message, details: result.details });
     }
     return res.status(result.alreadyExists ? 200 : 201).json({

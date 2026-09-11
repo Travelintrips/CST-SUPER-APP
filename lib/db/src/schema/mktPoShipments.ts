@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
@@ -45,6 +45,7 @@ export const mktPoShipmentsTable = pgTable("mkt_po_shipments", {
   actualArrival:     timestamp("actual_arrival"),
 
   notes:     text("notes"),
+  idempotencyKey: text("idempotency_key"),
   createdBy: text("created_by"),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -52,6 +53,7 @@ export const mktPoShipmentsTable = pgTable("mkt_po_shipments", {
 }, (t) => [
   index("mkt_po_shipments_po_idx").on(t.poId),
   index("mkt_po_shipments_po_status_idx").on(t.poId, t.shipmentStatus),
+  uniqueIndex("mkt_po_shipments_po_idempotency_unique").on(t.poId, t.idempotencyKey),
 ]);
 
 export const insertMktPoShipmentSchema = createInsertSchema(mktPoShipmentsTable).omit({

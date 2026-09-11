@@ -46,8 +46,7 @@ const RequestRevisionSchema = z.object({
 }).strict();
 
 const VendorShipmentItemSchema = z.object({
-  poLineId: z.coerce.number().int().positive(),
-  lineNumber: z.coerce.number().int().positive().optional(),
+  lineNumber: z.coerce.number().int().positive(),
   qty: z.coerce.number().finite().positive(),
   uom: z.string().trim().max(50).optional().nullable(),
   weight: z.coerce.number().finite().positive().optional().nullable(),
@@ -148,6 +147,7 @@ function mapTokenFailureStatus(code: string): number {
     case "INVALID_TRANSITION":
       return 409;
     case "CONCURRENT_UPDATE":
+    case "IDEMPOTENCY_KEY_REUSE":
       return 409;
     default:
       return 400;
@@ -241,9 +241,14 @@ router.post("/:token/shipments", tokenPostRateLimiter, validateBody(CreateVendor
   try {
     const token = typeof req.params.token === "string" ? req.params.token : "";
     const body = req.body as z.infer<typeof CreateVendorShipmentSchema>;
+    const idempotencyKey = req.get("Idempotency-Key")?.trim() || null;
+    if (idempotencyKey && idempotencyKey.length > 200) {
+      return res.status(400).json({ message: "Idempotency-Key terlalu panjang", code: "INVALID_IDEMPOTENCY_KEY" });
+    }
     const result = await createShipmentForVendor(token, {
       ...body,
-      items: body.items.map((item, index) => ({ ...item, lineNumber: item.lineNumber ?? index + 1 })),
+      idempotencyKey,
+      items: body.items,
     });
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({
@@ -341,8 +346,13 @@ router.post("/:token/shipments/:shipmentId/events", tokenPostRateLimiter, valida
     }
 
     const body = req.body as z.infer<typeof VendorShipmentEventSchema>;
+    const idempotencyKey = req.get("Idempotency-Key")?.trim() || null;
+    if (idempotencyKey && idempotencyKey.length > 200) {
+      return res.status(400).json({ message: "Idempotency-Key terlalu panjang", code: "INVALID_IDEMPOTENCY_KEY" });
+    }
     const result = await appendShipmentEventForVendor(token, {
       shipmentId,
+      idempotencyKey,
       eventType: normalizeVendorEventType(body.eventType),
       note: body.note,
       location: body.location,

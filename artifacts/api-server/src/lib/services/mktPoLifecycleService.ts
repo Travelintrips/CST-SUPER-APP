@@ -379,6 +379,7 @@ async function notifyAdminVendorPoAction(
 // or internal FKs (rfqId/quoteId/companyId/createdBy).
 
 export interface VendorPoLineView {
+  lineNumber: number;
   itemName: string;
   qty: string;
   unit: string | null;
@@ -414,7 +415,7 @@ export async function getVendorPoView(token: string): Promise<{ ok: true; view: 
   if (!lookup.ok) return lookup;
   const po = lookup.po;
 
-  const lines = await db
+  const lineRows = await db
     .select({
       itemName: mktPurchaseOrderLinesTable.itemName,
       qty: mktPurchaseOrderLinesTable.qty,
@@ -426,6 +427,7 @@ export async function getVendorPoView(token: string): Promise<{ ok: true; view: 
     .from(mktPurchaseOrderLinesTable)
     .where(eq(mktPurchaseOrderLinesTable.poId, po.id))
     .orderBy(asc(mktPurchaseOrderLinesTable.id));
+  const lines = lineRows.map((line, index) => ({ lineNumber: index + 1, ...line }));
 
   void logActivity({
     mktPurchaseOrderId: po.id,

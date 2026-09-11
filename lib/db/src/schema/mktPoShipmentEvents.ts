@@ -26,6 +26,7 @@ export const mktPoShipmentEventsTable = pgTable("mkt_po_shipment_events", {
   latitude:      numeric("latitude", { precision: 10, scale: 7 }),
   longitude:     numeric("longitude", { precision: 10, scale: 7 }),
   attachmentObjectPath: text("attachment_object_path"),
+  idempotencyKey: text("idempotency_key"),
 
   actorType: text("actor_type").notNull().default("vendor"), // vendor | admin | system
   actorId:   text("actor_id"),
@@ -35,6 +36,7 @@ export const mktPoShipmentEventsTable = pgTable("mkt_po_shipment_events", {
   index("mkt_po_shipment_events_shipment_idx").on(t.shipmentId),
   index("mkt_po_shipment_events_shipment_created_idx").on(t.shipmentId, t.createdAt),
   uniqueIndex("mkt_po_shipment_events_shipment_seq_unique").on(t.shipmentId, t.eventSequence),
+  uniqueIndex("mkt_po_shipment_events_shipment_idempotency_unique").on(t.shipmentId, t.idempotencyKey),
 ]);
 
 export const insertMktPoShipmentEventSchema = createInsertSchema(mktPoShipmentEventsTable).omit({

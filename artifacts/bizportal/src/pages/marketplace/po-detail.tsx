@@ -96,7 +96,6 @@ interface ShipmentEvent {
   actorType: string;
   actorId: string | null;
   createdAt: string;
-  createdAt: string;
 }
 
 interface ShipmentItem {
@@ -314,25 +313,34 @@ function CreateShipmentPanel({ poId, lines }: { poId: number; lines: PoLine[] })
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [notes, setNotes] = useState("");
+  const [quantities, setQuantities] = useState<Record<number, string>>({});
+  const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const create = useMutation({
     mutationFn: async () => {
       if (lines.length === 0) throw new Error("PO belum memiliki item");
+      const items = lines.map((line) => {
+        const qty = Number(quantities[line.id] ?? line.qty);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          throw new Error(`Qty shipment line ${line.lineNumber} harus lebih besar dari nol`);
+        }
+        return {
+          poLineId: line.id,
+          lineNumber: line.lineNumber,
+          qty,
+          uom: line.unit,
+        };
+      });
       const res = await fetch(`/api/mkt/admin/purchase-orders/${poId}/shipments`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey },
         body: JSON.stringify({
           carrierName: carrierName || undefined,
           trackingNumber: trackingNumber || undefined,
           origin: origin || undefined,
           destination: destination || undefined,
           notes: notes || undefined,
-          items: lines.map((line) => ({
-            poLineId: line.id,
-            lineNumber: line.lineNumber,
-            qty: Number(line.qty),
-            uom: line.unit,
-          })),
+          items,
         }),
       });
       const result = await res.json() as { ok?: boolean; error?: string; message?: string };
@@ -342,6 +350,8 @@ function CreateShipmentPanel({ poId, lines }: { poId: number; lines: PoLine[] })
     onSuccess: () => {
       toast({ title: "Shipment dibuat" });
       setCarrierName(""); setTrackingNumber(""); setOrigin(""); setDestination(""); setNotes("");
+      setQuantities({});
+      setRequestKey(crypto.randomUUID());
       void queryClient.invalidateQueries({ queryKey: ["mkt-po-shipments", poId] });
     },
     onError: (error: Error) => toast({ title: "Shipment gagal dibuat", description: error.message, variant: "destructive" }),
@@ -355,6 +365,23 @@ function CreateShipmentPanel({ poId, lines }: { poId: number; lines: PoLine[] })
         <Input placeholder="Origin" value={origin} onChange={(e) => setOrigin(e.target.value)} />
         <Input placeholder="Destination" value={destination} onChange={(e) => setDestination(e.target.value)} />
         <Textarea placeholder="Catatan shipment" value={notes} onChange={(e) => setNotes(e.target.value)} className="md:col-span-2" />
+        <div className="md:col-span-2 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">Qty shipment per line (boleh partial)</p>
+          {lines.map((line) => (
+            <div key={line.id} className="grid grid-cols-[1fr_140px_auto] gap-2 items-center text-sm">
+              <span>Line {line.lineNumber} · {line.itemName} · maksimal {line.qty} {line.unit ?? ""}</span>
+              <Input
+                type="number"
+                min="0"
+                max={line.qty}
+                step="any"
+                value={quantities[line.id] ?? line.qty}
+                onChange={(e) => setQuantities((prev) => ({ ...prev, [line.id]: e.target.value }))}
+              />
+              <span className="text-xs text-muted-foreground">{line.unit ?? ""}</span>
+            </div>
+          ))}
+        </div>
         <Button className="md:col-span-2" disabled={create.isPending || lines.length === 0} onClick={() => create.mutate()}>
           {create.isPending ? "Menyimpan..." : "Create Shipment"}
         </Button>
@@ -460,6 +487,8 @@ function ShipmentActionPanel({ shipment }: { shipment: Shipment }) {
   const [eventType, setEventType] = useState("packing");
   const [eventNote, setEventNote] = useState("");
   const [podFile, setPodFile] = useState<File | null>(null);
+  const [eventRequestKey, setEventRequestKey] = useState(() => crypto.randomUUID());
+  const [receiptRequestKey, setReceiptRequestKey] = useState(() => crypto.randomUUID());
   const [receiptType, setReceiptType] = useState<"full" | "partial" | "rejected">("full");
   const [inspectionStatus, setInspectionStatus] = useState<"pending" | "passed" | "failed">("passed");
   const [receiptNotes, setReceiptNotes] = useState("");
@@ -485,13 +514,16 @@ function ShipmentActionPanel({ shipment }: { shipment: Shipment }) {
   const post = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
       const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}/events`, {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": eventRequestKey },
+        body: JSON.stringify(body),
       });
       const result = await res.json() as { ok?: boolean; error?: string; message?: string };
       if (!res.ok || !result.ok) throw new Error(result.message ?? result.error ?? `HTTP ${res.status}`);
       return result;
     },
-    onSuccess: () => { toast({ title: "Event tersimpan" }); setEventNote(""); refresh(); },
+    onSuccess: () => { toast({ title: "Event tersimpan" }); setEventNote(""); setEventRequestKey(crypto.randomUUID()); refresh(); },
     onError: (error: Error) => toast({ title: "Event gagal", description: error.message, variant: "destructive" }),
   });
   const uploadPod = useMutation({
@@ -525,13 +557,16 @@ function ShipmentActionPanel({ shipment }: { shipment: Shipment }) {
         }),
       };
       const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}/goods-receipts`, {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": receiptRequestKey },
+        body: JSON.stringify(body),
       });
       const result = await res.json() as { ok?: boolean; error?: string; message?: string };
       if (!res.ok || !result.ok) throw new Error(result.message ?? result.error ?? `HTTP ${res.status}`);
       return result;
     },
-    onSuccess: () => { toast({ title: "Goods receipt tersimpan" }); setReceiptNotes(""); refresh(); },
+    onSuccess: () => { toast({ title: "Goods receipt tersimpan" }); setReceiptNotes(""); setReceiptRequestKey(crypto.randomUUID()); refresh(); },
     onError: (error: Error) => toast({ title: "Goods receipt gagal", description: error.message, variant: "destructive" }),
   });
 

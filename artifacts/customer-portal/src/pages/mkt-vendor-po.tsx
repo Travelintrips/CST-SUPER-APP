@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -51,6 +52,7 @@ import {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface VendorPoLine {
+  lineNumber: number;
   itemName: string;
   qty: string;
   unit: string | null;
@@ -79,6 +81,30 @@ interface VendorPoView {
   createdAt: string;
   vendorTokenExpiresAt: string | null;
   lines: VendorPoLine[];
+}
+
+interface VendorShipment {
+  id: number;
+  shipmentNumber: string;
+  shipmentStatus: string;
+  carrierName: string | null;
+  trackingNumber: string | null;
+  origin: string | null;
+  destination: string | null;
+  estimatedArrival: string | null;
+  actualArrival: string | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+interface VendorShipmentDetail extends VendorShipment {
+  timeline: Array<{
+    id: number;
+    eventType: string;
+    note: string | null;
+    location: string | null;
+    createdAt: string;
+  }>;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -239,6 +265,173 @@ function TokenErrorState({ code, message }: { code?: string; message: string }) 
         </div>
       </div>
     </div>
+  );
+}
+
+function VendorFulfillment({ token, po }: { token: string; po: VendorPoView }) {
+  const { toast } = useToast();
+  const { t } = useLanguage();
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [quantities, setQuantities] = useState<Record<number, string>>({});
+  const [carrierName, setCarrierName] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
+  const [notes, setNotes] = useState("");
+  const [eventType, setEventType] = useState("packing");
+  const [eventNote, setEventNote] = useState("");
+  const [shipmentRequestKey, setShipmentRequestKey] = useState(() => crypto.randomUUID());
+  const [eventRequestKey, setEventRequestKey] = useState(() => crypto.randomUUID());
+
+  const { data: shipmentData, isLoading } = useQuery<{ ok: boolean; data: VendorShipment[] }>({
+    queryKey: ["vendor-po-shipments", token],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/${token}/shipments`);
+      if (!res.ok) throw new Error("Gagal memuat shipment");
+      return res.json();
+    },
+    enabled: !!token,
+    staleTime: 15_000,
+  });
+  const shipments = shipmentData?.data ?? [];
+  const selectedShipmentId = selectedId ?? shipments[0]?.id ?? null;
+  const { data: detailData } = useQuery<{ ok: boolean; shipment: VendorShipmentDetail }>({
+    queryKey: ["vendor-po-shipment", token, selectedShipmentId],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/${token}/shipments/${selectedShipmentId}`);
+      if (!res.ok) throw new Error("Gagal memuat detail shipment");
+      return res.json();
+    },
+    enabled: selectedShipmentId != null,
+  });
+  const detail = detailData?.shipment;
+  const canCreate = ["vendor_accepted", "production", "ready_to_ship", "in_transit"].includes(po.status);
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["vendor-po-shipments", token] });
+    void queryClient.invalidateQueries({ queryKey: ["vendor-po-shipment", token, selectedShipmentId] });
+    void queryClient.invalidateQueries({ queryKey: ["vendor-po", token] });
+  };
+
+  const createShipment = useMutation({
+    mutationFn: async () => {
+      const items = po.lines.map((line) => {
+        const qty = Number(quantities[line.lineNumber] ?? line.qty);
+        if (!Number.isFinite(qty) || qty <= 0) throw new Error(`Qty line ${line.lineNumber} harus lebih besar dari nol`);
+        return { lineNumber: line.lineNumber, qty, uom: line.unit };
+      });
+      const res = await fetch(`${API_BASE}/${token}/shipments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": shipmentRequestKey },
+        body: JSON.stringify({ carrierName: carrierName || undefined, trackingNumber: trackingNumber || undefined, origin: origin || undefined, destination: destination || undefined, notes: notes || undefined, items }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.message ?? result.code ?? "Shipment gagal dibuat");
+      return result;
+    },
+    onSuccess: (result: { shipment?: VendorShipment; alreadyExists?: boolean }) => {
+      toast({ title: result.alreadyExists ? "Shipment sudah tercatat" : "Shipment dibuat" });
+      setSelectedId(result.shipment?.id ?? null);
+      setShipmentRequestKey(crypto.randomUUID());
+      setCarrierName(""); setTrackingNumber(""); setOrigin(""); setDestination(""); setNotes(""); setQuantities({});
+      refresh();
+    },
+    onError: (err: Error) => toast({ title: "Shipment gagal", description: err.message, variant: "destructive" }),
+  });
+
+  const eventOptions: Record<string, string[]> = {
+    planned: ["packing"],
+    packing: ["pickup"],
+    loading: ["in_transit"],
+    in_transit: ["delivered"],
+  };
+  const allowedEvents = eventOptions[detail?.shipmentStatus ?? ""] ?? [];
+  const appendEvent = useMutation({
+    mutationFn: async () => {
+      if (!selectedShipmentId || !eventType) throw new Error("Pilih shipment dan event");
+      const res = await fetch(`${API_BASE}/${token}/shipments/${selectedShipmentId}/events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": eventRequestKey },
+        body: JSON.stringify({ eventType, note: eventNote || undefined }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) throw new Error(result.message ?? result.code ?? "Event gagal disimpan");
+      return result;
+    },
+    onSuccess: (result: { alreadyAppended?: boolean }) => {
+      toast({ title: result.alreadyAppended ? "Event sudah tercatat" : "Tracking diperbarui" });
+      setEventRequestKey(crypto.randomUUID());
+      setEventNote("");
+      refresh();
+    },
+    onError: (err: Error) => toast({ title: "Tracking gagal", description: err.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card className="border-blue-200">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2"><Truck className="w-4 h-4 text-blue-600" />{t("mktVendorPo.fulfillmentTitle", "Fulfillment & Tracking")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {isLoading ? <Skeleton className="h-16 w-full" /> : shipments.length === 0 ? (
+          <p className="text-sm text-gray-500">Belum ada shipment.</p>
+        ) : (
+          <div className="space-y-2">
+            {shipments.map((shipment) => (
+              <button key={shipment.id} type="button" onClick={() => setSelectedId(shipment.id)} className={`w-full text-left rounded-lg border p-3 ${selectedShipmentId === shipment.id ? "border-blue-400 bg-blue-50" : "border-gray-200"}`}>
+                <div className="flex justify-between gap-2">
+                  <span className="font-mono text-sm font-semibold">{shipment.shipmentNumber}</span>
+                  <Badge variant="secondary">{shipment.shipmentStatus}</Badge>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">{shipment.carrierName ?? "Carrier belum diisi"}{shipment.trackingNumber ? ` · ${shipment.trackingNumber}` : ""}</p>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {canCreate && (
+          <div className="rounded-lg border border-dashed p-3 space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Buat shipment (mendukung partial)</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Input placeholder="Carrier" value={carrierName} onChange={(e) => setCarrierName(e.target.value)} />
+              <Input placeholder="Tracking number" value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} />
+              <Input placeholder="Origin" value={origin} onChange={(e) => setOrigin(e.target.value)} />
+              <Input placeholder="Destination" value={destination} onChange={(e) => setDestination(e.target.value)} />
+            </div>
+            {po.lines.map((line) => (
+              <div key={line.lineNumber} className="grid grid-cols-[1fr_110px] gap-2 items-center text-xs">
+                <span>Line {line.lineNumber} · {line.itemName} · max {line.qty} {line.unit ?? ""}</span>
+                <Input type="number" min="0" max={line.qty} step="any" value={quantities[line.lineNumber] ?? line.qty} onChange={(e) => setQuantities((prev) => ({ ...prev, [line.lineNumber]: e.target.value }))} />
+              </div>
+            ))}
+            <Input placeholder="Catatan shipment" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <Button size="sm" onClick={() => createShipment.mutate()} disabled={createShipment.isPending}>{createShipment.isPending ? "Menyimpan…" : "Buat Shipment"}</Button>
+          </div>
+        )}
+
+        {detail && (
+          <div className="space-y-3 border-t pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Tracking timeline</p>
+            {detail.timeline.length === 0 ? <p className="text-xs text-gray-500">Belum ada event.</p> : detail.timeline.map((event) => (
+              <div key={event.id} className="flex gap-2 text-xs">
+                <Clock className="w-3.5 h-3.5 text-blue-500 shrink-0 mt-0.5" />
+                <div><span className="font-medium">{event.eventType}</span>{event.note ? ` — ${event.note}` : ""}<p className="text-gray-400">{fmtDateTime(event.createdAt)}{event.location ? ` · ${event.location}` : ""}</p></div>
+              </div>
+            ))}
+            {allowedEvents.length > 0 && (
+              <div className="flex gap-2 items-center">
+                <select className="h-9 rounded-md border bg-white px-2 text-sm" value={eventType} onChange={(e) => setEventType(e.target.value)}>
+                  {allowedEvents.map((event) => <option key={event} value={event}>{event}</option>)}
+                </select>
+                <Input placeholder="Catatan / lokasi" value={eventNote} onChange={(e) => setEventNote(e.target.value)} />
+                <Button size="sm" onClick={() => appendEvent.mutate()} disabled={appendEvent.isPending}>Simpan</Button>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -483,17 +676,9 @@ export default function MktVendorPoPage() {
           </CardContent>
         </Card>
 
-        {/* Shipment info notice (backend gap) */}
-        {["production", "ready_to_ship", "in_transit", "partially_delivered", "delivered", "completed", "closed"].includes(po.status) && (
-          <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-800">
-            <Truck className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
-            <div>
-              <p className="font-medium">{t("mktVendorPo.shipmentInfo", "Informasi Pengiriman")}</p>
-              <p className="mt-1">
-                {t("mktVendorPo.shipmentInfoDesc", "Detail pengiriman dan timeline dikelola oleh tim pengadaan. Hubungi buyer Anda untuk informasi status pengiriman terbaru.")}
-              </p>
-            </div>
-          </div>
+        {/* Canonical vendor shipment and tracking surface */}
+        {["vendor_accepted", "production", "ready_to_ship", "in_transit", "partially_delivered", "delivered", "completed", "closed"].includes(po.status) && (
+          <VendorFulfillment token={token!} po={po} />
         )}
 
         {/* Terminal status notice */}

@@ -88,6 +88,10 @@ export interface CreateShipmentItemInput {
   remarks?: string | null;
 }
 
+export interface CreateVendorShipmentItemInput extends Omit<CreateShipmentItemInput, "poLineId"> {
+  lineNumber: number;
+}
+
 export interface CreateShipmentInput {
   poId: number;
   shipmentType?: string | null;
@@ -104,6 +108,7 @@ export interface CreateShipmentInput {
   plannedDeparture?: Date | null;
   estimatedArrival?: Date | null;
   notes?: string | null;
+  idempotencyKey?: string | null;
   items: CreateShipmentItemInput[];
 }
 
@@ -124,7 +129,8 @@ export type CreateShipmentResult =
         | "DUPLICATE_PO_LINE"
         | "QTY_INVALID"
         | "QTY_EXCEEDS_PO_LINE"
-        | "DUPLICATE_REQUEST";
+        | "DUPLICATE_REQUEST"
+        | "IDEMPOTENCY_KEY_REUSE";
       message?: string;
     };
 
@@ -174,6 +180,67 @@ async function createShipmentInternal(
       if (options.vendorId !== undefined && po.vendorId !== options.vendorId) {
         // Do not reveal whether a PO belonging to another vendor exists.
         return { kind: "failure" as const, result: { ok: false as const, code: "PO_NOT_FOUND" as const } };
+      }
+
+      const idempotencyKey = input.idempotencyKey?.trim() || null;
+      if (idempotencyKey) {
+        const [existing] = await tx
+          .select()
+          .from(mktPoShipmentsTable)
+          .where(and(
+            eq(mktPoShipmentsTable.poId, input.poId),
+            eq(mktPoShipmentsTable.idempotencyKey, idempotencyKey),
+          ))
+          .limit(1);
+        if (existing) {
+          const existingItems = await tx
+            .select()
+            .from(mktPoShipmentItemsTable)
+            .where(eq(mktPoShipmentItemsTable.shipmentId, existing.id))
+            .orderBy(asc(mktPoShipmentItemsTable.lineNumber));
+          const sameRequest =
+            existing.shipmentType === (input.shipmentType ?? null)
+            && existing.carrierName === (input.carrierName ?? null)
+            && existing.trackingNumber === (input.trackingNumber ?? null)
+            && existing.vehicleType === (input.vehicleType ?? null)
+            && existing.vehicleNumber === (input.vehicleNumber ?? null)
+            && existing.driverName === (input.driverName ?? null)
+            && existing.driverPhone === (input.driverPhone ?? null)
+            && existing.containerNumber === (input.containerNumber ?? null)
+            && existing.sealNumber === (input.sealNumber ?? null)
+            && existing.origin === (input.origin ?? null)
+            && existing.destination === (input.destination ?? null)
+            && existing.notes === (input.notes ?? null)
+            && existingItems.length === input.items.length
+            && input.items.every((item) => {
+              const found = existingItems.find((row) => row.poLineId === item.poLineId);
+              return found
+                && found.lineNumber === item.lineNumber
+                && Number(found.qty) === Number(item.qty)
+                && found.uom === (item.uom ?? null)
+                && (found.weight == null ? item.weight == null : Number(found.weight) === Number(item.weight))
+                && (found.volume == null ? item.volume == null : Number(found.volume) === Number(item.volume))
+                && found.packageCount === (item.packageCount ?? null)
+                && found.remarks === (item.remarks ?? null);
+            });
+          if (!sameRequest) {
+            return {
+              kind: "failure" as const,
+              result: {
+                ok: false as const,
+                code: "IDEMPOTENCY_KEY_REUSE" as const,
+                message: "Idempotency-Key sudah digunakan untuk payload shipment yang berbeda",
+              },
+            };
+          }
+          return {
+            kind: "success" as const,
+            po,
+            shipment: existing,
+            items: existingItems,
+            alreadyExists: true,
+          };
+        }
       }
 
       if (options.reuseExisting) {
@@ -323,6 +390,7 @@ async function createShipmentInternal(
           plannedDeparture: input.plannedDeparture ?? null,
           estimatedArrival: input.estimatedArrival ?? null,
           notes: input.notes ?? null,
+          idempotencyKey,
           createdBy: actor.actorId ?? null,
         })
         .returning({ id: mktPoShipmentsTable.id });
@@ -406,12 +474,26 @@ export type VendorCreateShipmentResult =
   | Extract<CreateShipmentResult, { ok: false }>;
 
 /** Vendor-token shipment initiation. The token, not request-body vendorId, is the authority. */
-export async function createShipmentForVendor(token: string, input: Omit<CreateShipmentInput, "poId">): Promise<VendorCreateShipmentResult> {
+export async function createShipmentForVendor(
+  token: string,
+  input: Omit<CreateShipmentInput, "poId" | "items"> & { items: CreateVendorShipmentItemInput[] },
+): Promise<VendorCreateShipmentResult> {
   const lookup = await findPoByVendorToken(token);
   if (!lookup.ok) return lookup;
 
+  const poLines = await db
+    .select({ id: mktPurchaseOrderLinesTable.id })
+    .from(mktPurchaseOrderLinesTable)
+    .where(eq(mktPurchaseOrderLinesTable.poId, lookup.po.id))
+    .orderBy(asc(mktPurchaseOrderLinesTable.id));
+  const lineIdByNumber = new Map(poLines.map((line, index) => [index + 1, line.id]));
+  const resolvedItems = input.items.map((item) => ({
+    ...item,
+    poLineId: lineIdByNumber.get(item.lineNumber) ?? -1,
+  }));
+
   return createShipmentInternal(
-    { ...input, poId: lookup.po.id },
+    { ...input, poId: lookup.po.id, items: resolvedItems },
     {
       actorType: "vendor",
       actorId: `vendor:${lookup.po.vendorId}`,
@@ -420,7 +502,6 @@ export async function createShipmentForVendor(token: string, input: Omit<CreateS
     {
       eligiblePoStatuses: VENDOR_SHIPMENT_ELIGIBLE_PO_STATUSES,
       vendorId: lookup.po.vendorId,
-      reuseExisting: true,
     },
   );
 }
@@ -432,6 +513,7 @@ export interface AppendShipmentEventInput {
   latitude?: string | number | null;
   longitude?: string | number | null;
   attachmentObjectPath?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface UploadProofOfDeliveryInput {
@@ -447,7 +529,7 @@ export type UploadProofOfDeliveryResult =
 
 export type AppendShipmentEventResult =
   | { ok: true; event: ShipmentEventRow; alreadyAppended?: boolean }
-  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "INVALID_TRANSITION" | "INVALID_EVENT"; currentStatus?: string };
+  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "INVALID_TRANSITION" | "INVALID_EVENT" | "IDEMPOTENCY_KEY_REUSE"; currentStatus?: string };
 
 /**
  * appendShipmentEvent — APPEND-ONLY insert. event_sequence computed as
@@ -474,6 +556,37 @@ export async function appendShipmentEvent(input: AppendShipmentEventInput, actor
       .for("update")
       .limit(1);
     if (!lockedShipment) return { kind: "failure" as const, result: { ok: false as const, code: "SHIPMENT_NOT_FOUND" as const } };
+
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    if (idempotencyKey) {
+      const [existingByKey] = await tx
+        .select()
+        .from(mktPoShipmentEventsTable)
+        .where(and(
+          eq(mktPoShipmentEventsTable.shipmentId, input.shipmentId),
+          eq(mktPoShipmentEventsTable.idempotencyKey, idempotencyKey),
+        ))
+        .limit(1);
+      if (existingByKey) {
+        const sameRequest =
+          existingByKey.eventType === input.eventType
+          && existingByKey.note === (input.note ?? null)
+          && existingByKey.location === (input.location ?? null)
+          && (existingByKey.latitude == null ? input.latitude == null : Number(existingByKey.latitude) === Number(input.latitude))
+          && (existingByKey.longitude == null ? input.longitude == null : Number(existingByKey.longitude) === Number(input.longitude))
+          && existingByKey.attachmentObjectPath === (input.attachmentObjectPath ?? null);
+        if (!sameRequest) {
+          return {
+            kind: "failure" as const,
+            result: {
+              ok: false as const,
+              code: "IDEMPOTENCY_KEY_REUSE" as const,
+            },
+          };
+        }
+        return { kind: "success" as const, event: existingByKey, alreadyAppended: true };
+      }
+    }
 
     const [latest] = await tx
       .select()
@@ -509,6 +622,7 @@ export async function appendShipmentEvent(input: AppendShipmentEventInput, actor
         latitude: input.latitude != null ? String(input.latitude) : null,
         longitude: input.longitude != null ? String(input.longitude) : null,
         attachmentObjectPath: input.attachmentObjectPath ?? null,
+        idempotencyKey,
         actorType: actor.actorType,
         actorId: actor.actorId ?? null,
       })

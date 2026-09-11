@@ -41,6 +41,7 @@ export interface CreateGoodsReceiptInput {
   receivedBy?: string | null;
   receivedAt?: Date | null;
   notes?: string | null;
+  idempotencyKey?: string | null;
   items: CreateGoodsReceiptItemInput[];
 }
 
@@ -60,7 +61,8 @@ export type CreateGoodsReceiptResult =
         | "DUPLICATE_SHIPMENT_ITEM"
         | "QTY_MISMATCH"
         | "QTY_INVALID"
-        | "QTY_EXCEEDS_SHIPMENT";
+        | "QTY_EXCEEDS_SHIPMENT"
+        | "IDEMPOTENCY_KEY_REUSE";
       message?: string;
       details?: unknown;
     };
@@ -132,6 +134,55 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       .limit(1);
     if (!po) {
       return { kind: "failure" as const, result: { ok: false as const, code: "PO_NOT_FOUND" as const } };
+    }
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    if (idempotencyKey) {
+      const [existingReceipt] = await tx
+        .select()
+        .from(mktPoGoodsReceiptsTable)
+        .where(and(
+          eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId),
+          eq(mktPoGoodsReceiptsTable.idempotencyKey, idempotencyKey),
+        ))
+        .limit(1);
+      if (existingReceipt) {
+        const existingItems = await tx
+          .select()
+          .from(mktPoGoodsReceiptItemsTable)
+          .where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, existingReceipt.id));
+        const sameRequest =
+          existingReceipt.receiptType === input.receiptType
+          && existingReceipt.inspectionStatus === (input.inspectionStatus ?? "pending")
+          && existingReceipt.notes === (input.notes ?? null)
+          && existingItems.length === input.items.length
+          && input.items.every((item) => {
+            const found = existingItems.find((row) => row.shipmentItemId === item.shipmentItemId);
+            return found
+              && Number(found.receivedQty) === toNum(item.receivedQty)
+              && Number(found.acceptedQty) === toNum(item.acceptedQty)
+              && Number(found.rejectedQty) === toNum(item.rejectedQty)
+              && found.condition === (item.condition ?? "GOOD")
+              && found.notes === (item.notes ?? null);
+          });
+        if (!sameRequest) {
+          return {
+            kind: "failure" as const,
+            result: {
+              ok: false as const,
+              code: "IDEMPOTENCY_KEY_REUSE" as const,
+              message: "Idempotency-Key sudah digunakan untuk payload goods receipt yang berbeda",
+            },
+          };
+        }
+        return {
+          kind: "success" as const,
+          receipt: existingReceipt,
+          items: existingItems,
+          alreadyExists: true,
+          shipment,
+          poStatusUpdatedTo: null,
+        };
+      }
     }
     if (po.status === "cancelled") {
       return {
@@ -278,6 +329,7 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
         receivedBy: actor.actorId ?? null,
         receivedAt: input.receivedAt ?? now,
         notes: input.notes ?? null,
+         idempotencyKey,
       })
       .returning({ id: mktPoGoodsReceiptsTable.id });
 

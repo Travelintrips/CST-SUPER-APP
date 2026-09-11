@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { mktPoShipmentsTable } from "./mktPoShipments";
@@ -25,10 +25,12 @@ export const mktPoGoodsReceiptsTable = pgTable("mkt_po_goods_receipts", {
   receivedBy: text("received_by"),
   receivedAt: timestamp("received_at"), // physical receive time, separate from createdAt (system input time)
   notes:      text("notes"),
+  idempotencyKey: text("idempotency_key"),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
   index("mkt_po_goods_receipts_shipment_idx").on(t.shipmentId),
+  uniqueIndex("mkt_po_goods_receipts_shipment_idempotency_unique").on(t.shipmentId, t.idempotencyKey),
 ]);
 
 export const insertMktPoGoodsReceiptSchema = createInsertSchema(mktPoGoodsReceiptsTable).omit({
