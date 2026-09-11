@@ -16,7 +16,7 @@
  */
 
 import { randomBytes } from "crypto";
-import { db, mktVendorQuotesTable, mktRfqsTable, suppliersTable } from "@workspace/db";
+import { db, mktVendorQuotesTable, mktRfqsTable, suppliersTable, vendorProfilesTable, vendorNotificationsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
@@ -33,7 +33,7 @@ function buildVendorDeepLink(token: string): string | null {
       ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
       : null);
   if (!base) return null;
-  return `${base}/vendor/quote/${token}`;
+  return `${base}/mkt-vendor-quote/${token}`;
 }
 
 // ── Token generator ───────────────────────────────────────────────────────────
@@ -347,6 +347,35 @@ export async function inviteVendorToRfq(
     vendorQuoteId:  quoteId!,
     payloadJson:    notificationPayload as unknown as Record<string, unknown>,
   }).catch(() => {}); // enqueue sendiri non-fatal
+
+  // Also surface the invitation in the authenticated vendor dashboard. The
+  // notification store uses portal customer IDs, so resolve the bridge rather
+  // than assuming supplier_id and portal customer_id are interchangeable.
+  void (async () => {
+    try {
+      const [profile] = await db
+        .select({ customerId: vendorProfilesTable.customerId })
+        .from(vendorProfilesTable)
+        .where(eq(vendorProfilesTable.supplierId, vendorId))
+        .limit(1);
+      if (!profile?.customerId) return;
+      await db.insert(vendorNotificationsTable).values({
+        vendorId: profile.customerId,
+        type: "marketplace_rfq_invitation",
+        title: "RFQ Marketplace baru",
+        message: `Anda menerima undangan penawaran ${rfq.rfqNumber}. Isi harga per item sebelum batas waktu.`,
+        payload: {
+          rfqId,
+          quoteId: quoteId!,
+          rfqNumber: rfq.rfqNumber,
+          quoteUrl: `/mkt-vendor-quote/${token}`,
+          validUntil: validUntil.toISOString(),
+        },
+      });
+    } catch (err) {
+      logger.warn({ err, vendorId }, "[vendorInvitation] gagal membuat notifikasi in-app (non-fatal)");
+    }
+  })();
 
   return {
     ok: true,

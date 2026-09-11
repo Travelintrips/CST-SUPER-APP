@@ -7,8 +7,11 @@ import {
   logisticOrderQuotesTable,
   vendorProfilesTable,
   vendorCatalogSubmissionLinksTable,
+  mktRfqsTable,
+  mktVendorQuotesTable,
+  mktPurchaseOrdersTable,
 } from "@workspace/db";
-import { eq, desc, inArray, and } from "drizzle-orm";
+import { eq, desc, inArray, and, ne, isNotNull } from "drizzle-orm";
 import { toVendorProfileViewModel } from "./vendorProfileViewModel.js";
 
 // ── resolveVendorSupplierId ─────────────────────────────────────────────────
@@ -54,6 +57,32 @@ export async function getVendorDashboard(customerId: number) {
     rfqNumber: string; vendorPrice: number; sellingPrice: number | null;
     estimatedPickup: string | null; estimatedDelivery: string | null;
     vendorNotes: string | null; quoteStatus: string; replySource: string | null;
+    createdAt: string;
+  }[] = [];
+  let marketplaceRfqs: {
+    id: number;
+    rfqNumber: string;
+    rfqStatus: string;
+    quoteId: number;
+    quoteStatus: string;
+    quoteUrl: string;
+    validUntil: string | null;
+    submittedAt: string | null;
+    buyerName: string;
+    buyerCompany: string | null;
+    requiredDeliveryDate: string | null;
+    deliveryAddress: string | null;
+    notes: string | null;
+    lineCount: number;
+    createdAt: string;
+  }[] = [];
+  let marketplaceOrders: {
+    id: number;
+    poNumber: string;
+    status: string;
+    grandTotal: number;
+    currency: string;
+    poUrl: string;
     createdAt: string;
   }[] = [];
 
@@ -117,6 +146,87 @@ export async function getVendorDashboard(customerId: number) {
         };
       });
     }
+
+    // Marketplace RFQ invitations use the canonical supplier FK. Do not fall
+    // back to email/phone matching: a contact can have more than one portal
+    // identity and must never see another supplier's commercial RFQ.
+    const marketplaceRows = await db
+      .select({
+        id: mktRfqsTable.id,
+        rfqNumber: mktRfqsTable.rfqNumber,
+        rfqStatus: mktRfqsTable.status,
+        quoteId: mktVendorQuotesTable.id,
+        quoteStatus: mktVendorQuotesTable.status,
+        token: mktVendorQuotesTable.token,
+        validUntil: mktVendorQuotesTable.validUntil,
+        submittedAt: mktVendorQuotesTable.submittedAt,
+        buyerName: mktRfqsTable.buyerName,
+        buyerCompany: mktRfqsTable.buyerCompany,
+        requiredDeliveryDate: mktRfqsTable.requiredDeliveryDate,
+        deliveryAddress: mktRfqsTable.deliveryAddress,
+        notes: mktRfqsTable.notes,
+        lineCount: mktRfqsTable.lineCount,
+        createdAt: mktRfqsTable.createdAt,
+      })
+      .from(mktVendorQuotesTable)
+      .innerJoin(mktRfqsTable, eq(mktVendorQuotesTable.rfqId, mktRfqsTable.id))
+      .where(and(
+        eq(mktVendorQuotesTable.vendorId, linkedSupplier.id),
+        ne(mktRfqsTable.status, "draft"),
+        ne(mktRfqsTable.status, "cancelled"),
+      ))
+      .orderBy(desc(mktVendorQuotesTable.createdAt))
+      .limit(50);
+
+    marketplaceRfqs = marketplaceRows.map((row) => ({
+      id: row.id,
+      rfqNumber: row.rfqNumber,
+      rfqStatus: row.rfqStatus,
+      quoteId: row.quoteId,
+      quoteStatus: row.quoteStatus,
+      // The existing Marketplace quote form is the source of truth for
+      // per-line pricing, terms, and submission validation.
+      quoteUrl: `/mkt-vendor-quote/${encodeURIComponent(row.token)}`,
+      validUntil: row.validUntil?.toISOString() ?? null,
+      submittedAt: row.submittedAt?.toISOString() ?? null,
+      buyerName: row.buyerName,
+      buyerCompany: row.buyerCompany,
+      requiredDeliveryDate: row.requiredDeliveryDate,
+      deliveryAddress: row.deliveryAddress,
+      notes: row.notes,
+      lineCount: row.lineCount,
+      createdAt: row.createdAt.toISOString(),
+    }));
+
+    const marketplaceOrderRows = await db
+      .select({
+        id: mktPurchaseOrdersTable.id,
+        poNumber: mktPurchaseOrdersTable.poNumber,
+        status: mktPurchaseOrdersTable.status,
+        grandTotal: mktPurchaseOrdersTable.grandTotal,
+        currency: mktPurchaseOrdersTable.currencySnapshot,
+        vendorToken: mktPurchaseOrdersTable.vendorToken,
+        createdAt: mktPurchaseOrdersTable.createdAt,
+      })
+      .from(mktPurchaseOrdersTable)
+      .where(and(
+        eq(mktPurchaseOrdersTable.vendorId, linkedSupplier.id),
+        isNotNull(mktPurchaseOrdersTable.vendorToken),
+      ))
+      .orderBy(desc(mktPurchaseOrdersTable.createdAt))
+      .limit(20);
+
+    marketplaceOrders = marketplaceOrderRows
+      .filter((row): row is typeof row & { vendorToken: string } => Boolean(row.vendorToken))
+      .map((row) => ({
+        id: row.id,
+        poNumber: row.poNumber,
+        status: row.status,
+        grandTotal: Number(row.grandTotal),
+        currency: row.currency ?? "IDR",
+        poUrl: `/mkt-vendor-po/${encodeURIComponent(row.vendorToken)}`,
+        createdAt: row.createdAt.toISOString(),
+      }));
   }
 
   return {
@@ -140,6 +250,8 @@ export async function getVendorDashboard(customerId: number) {
       : null,
     rfqs,
     quotes,
+    marketplaceRfqs,
+    marketplaceOrders,
   };
 }
 

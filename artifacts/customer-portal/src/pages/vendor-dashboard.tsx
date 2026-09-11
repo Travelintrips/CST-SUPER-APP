@@ -38,6 +38,8 @@ interface VendorProfile {
     vendorNotes: string | null; quoteStatus: string; replySource: string | null;
     createdAt: string;
   }[];
+  marketplaceRfqs: MarketplaceRfq[];
+  marketplaceOrders: MarketplaceOrder[];
 }
 
 interface QuoteFormState {
@@ -99,6 +101,34 @@ interface CatalogSubmission {
 interface VendorNotif {
   id: number; vendorId: number; type: string; title: string; message: string;
   payload: Record<string, unknown>; isRead: boolean; createdAt: string; readAt: string | null;
+}
+
+interface MarketplaceRfq {
+  id: number;
+  rfqNumber: string;
+  rfqStatus: string;
+  quoteId: number;
+  quoteStatus: string;
+  quoteUrl: string;
+  validUntil: string | null;
+  submittedAt: string | null;
+  buyerName: string;
+  buyerCompany: string | null;
+  requiredDeliveryDate: string | null;
+  deliveryAddress: string | null;
+  notes: string | null;
+  lineCount: number;
+  createdAt: string;
+}
+
+interface MarketplaceOrder {
+  id: number;
+  poNumber: string;
+  status: string;
+  grandTotal: number;
+  currency: string;
+  poUrl: string;
+  createdAt: string;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -1641,12 +1671,31 @@ export default function VendorDashboard() {
 
   if (!profile) return null;
 
-  const { portalCustomer, supplier, rfqs, quotes } = profile;
+  const { portalCustomer, supplier, rfqs, quotes, marketplaceRfqs = [], marketplaceOrders = [] } = profile;
   const openRfqs = rfqs.filter((r) => r.status === "open");
   const submittedQuotes = quotes.length;
   const approvedQuotes = quotes.filter((q) => q.quoteStatus === "approved").length;
   const quotedRfqIds = new Set(quotes.map((q) => q.rfqId));
   const pendingRfqs = openRfqs.filter((r) => !quotedRfqIds.has(r.id));
+  const marketplacePendingRfqs = marketplaceRfqs.filter((rfq) =>
+    ["invited", "opened", "requote_requested"].includes(rfq.quoteStatus)
+    && !["cancelled", "expired"].includes(rfq.rfqStatus),
+  );
+  const totalPendingRfqs = pendingRfqs.length + marketplacePendingRfqs.length;
+
+  async function declineMarketplaceRfq(rfq: MarketplaceRfq) {
+    if (!window.confirm(`Tolak undangan ${rfq.rfqNumber}?`)) return;
+    const response = await fetch(`/api/portal/vendor/marketplace-quotes/${rfq.quoteId}/decline`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { message?: string };
+      window.alert(body.message ?? "RFQ tidak dapat ditolak");
+      return;
+    }
+    await loadProfile();
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -1719,11 +1768,11 @@ export default function VendorDashboard() {
             </h1>
             <p className="text-muted-foreground mt-1">{t("vendorDashboard.dashboardSubtitle")}</p>
           </div>
-          {pendingRfqs.length > 0 && (
+          {totalPendingRfqs > 0 && (
             <div className="flex items-center gap-2 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-2.5">
               <AlertCircle className="h-4 w-4 text-yellow-600 flex-shrink-0" />
               <p className="text-sm font-medium text-yellow-800">
-                {t("vendorDashboard.pendingRfqAlert").replace("{count}", String(pendingRfqs.length))}
+                {t("vendorDashboard.pendingRfqAlert").replace("{count}", String(totalPendingRfqs))}
               </p>
             </div>
           )}
@@ -1733,8 +1782,8 @@ export default function VendorDashboard() {
         {(() => {
           const s = vendorStats;
           // fallback to local data derived from profile
-          const rfqReceived  = s?.rfqReceived   ?? rfqs.length;
-          const rfqSubmitted = s?.rfqSubmitted  ?? quotes.length;
+          const rfqReceived  = s?.rfqReceived   ?? (rfqs.length + marketplaceRfqs.length);
+          const rfqSubmitted = s?.rfqSubmitted  ?? (quotes.length + marketplaceRfqs.filter((rfq) => ["submitted", "selected"].includes(rfq.quoteStatus)).length);
           const fulfillPend  = s?.fulfillmentPending ?? approvedQuotes;
           const completed    = s?.completedOrders ?? 0;
 
@@ -1830,7 +1879,7 @@ export default function VendorDashboard() {
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <div className="bg-primary text-primary-foreground rounded-xl p-5">
             <p className="text-xs text-primary-foreground/60 mb-1">{t("vendorDashboard.miniStatRfqOpen")}</p>
-            <p className="text-4xl font-bold">{openRfqs.length}</p>
+              <p className="text-4xl font-bold">{openRfqs.length + marketplacePendingRfqs.length}</p>
           </div>
           <div className="bg-accent text-accent-foreground rounded-xl p-5">
             <p className="text-xs text-accent-foreground/70 mb-1">{t("vendorDashboard.miniStatQuotesSent")}</p>
@@ -2059,6 +2108,161 @@ export default function VendorDashboard() {
                   </Card>
                 );
               })
+            )}
+
+            {/* Marketplace RFQs — separate from the legacy logistics RFQ flow */}
+            {marketplaceRfqs.length > 0 && (
+              <div className="pt-5 space-y-3">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <ShoppingBag className="h-4 w-4" /> RFQ Marketplace
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Undangan dari Customer Portal. Masukkan harga per item melalui formulir penawaran.
+                  </p>
+                </div>
+
+                {marketplaceRfqs.map((rfq) => {
+                  const isActionable = ["invited", "opened", "requote_requested"].includes(rfq.quoteStatus)
+                    && !["cancelled", "expired"].includes(rfq.rfqStatus);
+                  const quoteStatusLabels: Record<string, string> = {
+                    invited: "Menunggu respons",
+                    opened: "Sedang diisi",
+                    requote_requested: "Diminta revisi",
+                    submitted: "Penawaran terkirim",
+                    selected: "Terpilih",
+                    rejected: "Ditolak",
+                    expired: "Kedaluwarsa",
+                    withdrawn: "Dibatalkan",
+                  };
+                  const statusLabel = quoteStatusLabels[rfq.quoteStatus] ?? rfq.quoteStatus;
+                  const statusClass = isActionable
+                    ? "bg-orange-100 text-orange-800"
+                    : rfq.quoteStatus === "selected"
+                      ? "bg-green-100 text-green-800"
+                      : rfq.quoteStatus === "submitted"
+                        ? "bg-blue-100 text-blue-800"
+                        : "bg-gray-100 text-gray-700";
+
+                  return (
+                    <Card key={`marketplace-${rfq.quoteId}`} className="border shadow-sm">
+                      <CardContent className="pt-4 pb-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-xs font-semibold text-primary">{rfq.rfqNumber}</span>
+                              <Badge className={statusClass} variant="secondary">{statusLabel}</Badge>
+                            </div>
+                            <p className="font-semibold text-sm mt-1">
+                              {rfq.buyerCompany || rfq.buyerName}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {rfq.lineCount} item · diterima {new Date(rfq.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
+                            </p>
+                          </div>
+                          <ShoppingBag className="h-5 w-5 text-primary/70 flex-shrink-0" />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground">
+                          {rfq.requiredDeliveryDate && <span>Target kirim: {new Date(rfq.requiredDeliveryDate).toLocaleDateString("id-ID")}</span>}
+                          {rfq.deliveryAddress && <span className="truncate" title={rfq.deliveryAddress}>Lokasi: {rfq.deliveryAddress}</span>}
+                        </div>
+                        {rfq.notes && <p className="text-xs text-muted-foreground italic border-l-2 pl-2">{rfq.notes}</p>}
+
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          {isActionable && (
+                            <>
+                              <Button asChild size="sm" className="gap-2">
+                                <a href={rfq.quoteUrl}>
+                                  <Send className="h-4 w-4" /> Isi harga & kirim penawaran
+                                </a>
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-red-600 hover:text-red-700"
+                                onClick={() => void declineMarketplaceRfq(rfq)}
+                              >
+                                Tolak RFQ
+                              </Button>
+                            </>
+                          )}
+                          {!isActionable && rfq.quoteStatus === "submitted" && (
+                            <Button asChild variant="outline" size="sm" className="gap-2">
+                              <a href={rfq.quoteUrl}>Lihat penawaran</a>
+                            </Button>
+                          )}
+                        </div>
+                        {rfq.validUntil && (
+                          <p className="text-[11px] text-muted-foreground">
+                            Batas respons: {new Date(rfq.validUntil).toLocaleString("id-ID")}
+                          </p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            {marketplaceOrders.length > 0 && (
+              <div className="pt-5 space-y-3">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Package className="h-4 w-4" /> Purchase Order Marketplace
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    PO yang sudah diterbitkan customer. Buka detail untuk menerima, menolak, atau meminta revisi.
+                  </p>
+                </div>
+                {marketplaceOrders.map((order) => {
+                  const poStatusLabels: Record<string, string> = {
+                    pending: "Menunggu penerbitan",
+                    issued: "Menunggu respons vendor",
+                    vendor_accepted: "Diterima vendor",
+                    revision_requested: "Revisi diminta",
+                    vendor_rejected: "Ditolak vendor",
+                    production: "Dalam produksi",
+                    ready_to_ship: "Siap dikirim",
+                    in_transit: "Dalam pengiriman",
+                    closed: "Selesai",
+                    cancelled: "Dibatalkan",
+                  };
+                  const canRespond = order.status === "issued" || order.status === "revision_requested";
+                  return (
+                    <Card key={`marketplace-po-${order.id}`} className="border shadow-sm">
+                      <CardContent className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-semibold text-primary">{order.poNumber}</span>
+                            <Badge
+                              variant="secondary"
+                              className={canRespond ? "bg-orange-100 text-orange-800" : "bg-gray-100 text-gray-700"}
+                            >
+                              {poStatusLabels[order.status] ?? order.status}
+                            </Badge>
+                          </div>
+                          <p className="font-semibold text-sm mt-1">
+                            {new Intl.NumberFormat("id-ID", {
+                              style: "currency",
+                              currency: order.currency,
+                              maximumFractionDigits: 0,
+                            }).format(order.grandTotal)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Diterbitkan {new Date(order.createdAt).toLocaleDateString("id-ID")}
+                          </p>
+                        </div>
+                        <Button asChild size="sm" variant={canRespond ? "default" : "outline"} className="gap-2">
+                          <a href={order.poUrl}>
+                            {canRespond ? "Tindak lanjuti PO" : "Lihat PO"}
+                          </a>
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </div>
 

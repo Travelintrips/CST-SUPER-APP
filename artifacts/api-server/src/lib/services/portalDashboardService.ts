@@ -54,12 +54,21 @@ async function getVendorStats(customerId: number): Promise<VendorDashboardStats>
   const vendorId = supplier.id;
   const [rfqReceived, rfqSubmitted, fulfillmentPending, completedOrders] = await Promise.all([
     db.execute<{ cnt: string }>(sql`
-      SELECT count(*)::text AS cnt FROM logistic_order_rfqs
-      WHERE ${vendorId} = ANY(vendor_ids) AND status IN ('pending','open','sent','blasted')
+      SELECT (
+        (SELECT count(*) FROM logistic_order_rfqs
+         WHERE ${vendorId} = ANY(vendor_ids) AND status IN ('pending','open','sent','blasted'))
+        + (SELECT count(*) FROM mkt_vendor_quotes
+           WHERE vendor_id = ${vendorId}
+             AND status NOT IN ('expired', 'withdrawn'))
+      )::text AS cnt
     `),
     db.execute<{ cnt: string }>(sql`
-      SELECT count(*)::text AS cnt FROM logistic_order_quotes
-      WHERE vendor_id = ${vendorId}
+      SELECT (
+        (SELECT count(*) FROM logistic_order_quotes WHERE vendor_id = ${vendorId})
+        + (SELECT count(*) FROM mkt_vendor_quotes
+           WHERE vendor_id = ${vendorId}
+             AND status IN ('submitted', 'selected'))
+      )::text AS cnt
     `),
     db.execute<{ cnt: string }>(sql`
       SELECT count(*)::text AS cnt FROM logistic_order_quotes q

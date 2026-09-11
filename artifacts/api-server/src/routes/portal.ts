@@ -3,7 +3,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { LOGISTICS_SUBCATEGORIES as LOGISTICS_SUBCATEGORIES_FALLBACK } from "@workspace/logistics-constants";
 import { rateLimit, ipKeyGenerator, type ValueDeterminingMiddleware } from "express-rate-limit";
 const keyGen: ValueDeterminingMiddleware<string> = (req) => ipKeyGenerator(req.ip ?? "127.0.0.1");
-import { db, productsTable, productCategoryMapTable, productCategoriesTable, portalCustomersTable, portalCustomerServicesTable, portalContentTable, accountingSettingsTable, vendorMiniFormLinksTable, vendorMiniFormSubmissionsTable, vendorCatalogItemsTable, productTemplatesTable, serviceTemplatesTable, vendorPerformanceTable, vendorNotificationsTable, vendorCatalogSubmissionsTable, notificationLogsTable, portalCustomerProfilesTable, supplierReviewsTable, mktPurchaseOrdersTable, mktRfqsTable, portalProductOrdersTable, suppliersTable, vendorProfilesTable, userProfilesTable } from "@workspace/db";
+import { db, productsTable, productCategoryMapTable, productCategoriesTable, portalCustomersTable, portalCustomerServicesTable, portalContentTable, accountingSettingsTable, vendorMiniFormLinksTable, vendorMiniFormSubmissionsTable, vendorCatalogItemsTable, productTemplatesTable, serviceTemplatesTable, vendorPerformanceTable, vendorNotificationsTable, vendorCatalogSubmissionsTable, notificationLogsTable, portalCustomerProfilesTable, supplierReviewsTable, mktPurchaseOrdersTable, mktRfqsTable, mktVendorQuotesTable, portalProductOrdersTable, suppliersTable, vendorProfilesTable, userProfilesTable } from "@workspace/db";
 import { evaluateReviewEligibility } from "../lib/services/vendorReviewGuard.js";
 import { deleteFromSupabase, uploadToSupabase } from "../lib/supabaseStorage.js";
 import { invalidateTokenCache, SERVICE_SCHEMAS } from "./vendorMiniForm";
@@ -1225,6 +1225,50 @@ router.post("/vendor/quotes", requirePortalAuth, requireActiveVendor, async (req
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
   }
+});
+
+// POST /api/portal/vendor/marketplace-quotes/:quoteId/decline
+// Declining is authenticated and supplier-scoped. The token-based quote form
+// remains responsible for saving/submitting an actual quotation.
+router.post("/vendor/marketplace-quotes/:quoteId/decline", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(quoteId) || quoteId <= 0) {
+    return res.status(400).json({ message: "quoteId tidak valid" });
+  }
+
+  const supplierId = await resolveVendorSupplierId(customerId);
+  if (!supplierId) return res.status(403).json({ message: "Akun vendor belum terhubung ke supplier" });
+
+  const [quote] = await db
+    .select({
+      id: mktVendorQuotesTable.id,
+      status: mktVendorQuotesTable.status,
+    })
+    .from(mktVendorQuotesTable)
+    .where(and(
+      eq(mktVendorQuotesTable.id, quoteId),
+      eq(mktVendorQuotesTable.vendorId, supplierId),
+    ))
+    .limit(1);
+
+  if (!quote) return res.status(404).json({ message: "Undangan RFQ tidak ditemukan" });
+  if (!["invited", "opened", "requote_requested"].includes(quote.status)) {
+    return res.status(409).json({ message: `RFQ tidak dapat ditolak pada status ${quote.status}` });
+  }
+
+  const [updated] = await db
+    .update(mktVendorQuotesTable)
+    .set({ status: "rejected", updatedAt: new Date() })
+    .where(and(
+      eq(mktVendorQuotesTable.id, quoteId),
+      eq(mktVendorQuotesTable.vendorId, supplierId),
+      eq(mktVendorQuotesTable.status, quote.status),
+    ))
+    .returning({ id: mktVendorQuotesTable.id });
+
+  if (!updated) return res.status(409).json({ message: "Status RFQ berubah, silakan muat ulang dashboard" });
+  return res.json({ ok: true, quoteId: updated.id, status: "rejected" });
 });
 
 // ── PORTAL CONTENT (Public) ───────────────────────────────────────────────
