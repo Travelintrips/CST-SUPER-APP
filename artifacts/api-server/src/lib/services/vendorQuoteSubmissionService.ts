@@ -903,6 +903,7 @@ async function notifyAdminQuoteSubmitted(input: {
       companyName: context?.buyerCompany ?? null,
       title: isRequote ? "Requote Marketplace diterima" : "Penawaran Marketplace diterima",
       body: `${vendorName} mengirim ${isRequote ? "penawaran revisi" : "penawaran"} untuk ${rfqNumber} (${input.lineCount} item).`,
+      targetRole: "admin",
       dedupeKey: `mkt_vendor_quote_submitted:${input.quoteId}:${input.requoteRound}`,
       rfqId: input.rfqId,
       vendorQuoteId: input.quoteId,

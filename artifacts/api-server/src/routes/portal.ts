@@ -1281,6 +1281,7 @@ router.post("/vendor/marketplace-quotes/:quoteId/decline", requirePortalAuth, re
     customerName: quote.vendorName ?? `Vendor #${quote.vendorId}`,
     title: "Undangan RFQ Marketplace ditolak",
     body: `${quote.vendorName ?? `Vendor #${quote.vendorId}`} menolak undangan ${quote.rfqNumber ?? `RFQ-${quote.rfqId}`}.`,
+    targetRole: "admin",
     dedupeKey: `mkt_vendor_quote_rejected:${quote.id}`,
     rfqId: quote.rfqId,
     vendorQuoteId: quote.id,
