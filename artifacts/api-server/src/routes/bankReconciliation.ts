@@ -447,6 +447,25 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     'qris_settlement', 'internal_transfer'
   )`;
   return `CASE
+    WHEN ${alias}.journal_entry_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM accounting_entries posted_journal
+        WHERE posted_journal.id = ${alias}.journal_entry_id
+          AND posted_journal.status = 'posted'
+      )
+    THEN 'posted'
+    WHEN ${alias}.journal_entry_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM accounting_entries voided_journal
+        WHERE voided_journal.id = ${alias}.journal_entry_id
+          AND (
+            voided_journal.status IN ('voided', 'reversed')
+            OR voided_journal.is_voided = TRUE
+          )
+      )
+    THEN 'void'
     WHEN ${requiredCandidateRuleEvidence}
       AND ${alias}.status IN ('matched', 'manual_review', 'duplicate_need_review')
       AND NOT EXISTS (

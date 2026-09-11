@@ -1130,6 +1130,7 @@ const canApprove = (m: BankMutation) =>
 /** Post ke Accounting → promotes draft journal to posted. */
 const canPost = (m: BankMutation) =>
   m.status === "approved_pending_posting" &&
+  m.journal_status !== "posted" &&
   !m.candidates?.some(c => c.candidate_source === CANONICAL_SETTLEMENT_SOURCE);
 
 /** Reject → hanya sebelum approval dan sebelum journal dibuat. */
@@ -1139,11 +1140,14 @@ const canReject = (m: BankMutation) =>
 
 /** Batalkan draft journal → mengembalikan approval ke kandidat matched. */
 const canUnapprove = (m: BankMutation) =>
-  m.status === "approved_pending_posting" || m.status === "approved";
+  (m.status === "approved_pending_posting" || m.status === "approved") &&
+  m.journal_status !== "posted" &&
+  m.journal_status !== "voided" &&
+  m.journal_status !== "reversed";
 
 /** Reverse/Void → hanya setelah posted. */
 const canReverse = (m: BankMutation) =>
-  m.status === "posted";
+  m.status === "posted" || m.journal_status === "posted";
 
 /** Unmatch posted mutation → reverse the journal, then return to matching queue. */
 const canUnmatch = (m: BankMutation) =>
@@ -1162,7 +1166,9 @@ const canReopen = (m: BankMutation) =>
 
 /** Delete → jangan hapus yang sudah posted. */
 const canDelete = (m: BankMutation) =>
-  m.status !== "posted" && m.source !== "bank_import";
+  m.status !== "posted" &&
+  m.journal_status !== "posted" &&
+  m.source !== "bank_import";
 
 /** Multi-allocation hanya tersedia untuk uang masuk yang belum final. */
 const canMultiAllocate = (m: BankMutation) =>
@@ -5393,7 +5399,11 @@ function MutationCard({
               </div>
             )}
 
-            {m.status === "approved_pending_posting" && m.journal_entry_id && (
+            {m.status === "approved_pending_posting"
+              && m.journal_entry_id
+              && m.journal_status !== "posted"
+              && m.journal_status !== "voided"
+              && m.journal_status !== "reversed" && (
               <div className="mt-2 text-xs text-yellow-700 dark:text-yellow-400 flex items-center gap-1">
                 <FileText className="w-3 h-3" />
                 Draft jurnal #{m.journal_entry_id} sudah dibuat — siap diposting

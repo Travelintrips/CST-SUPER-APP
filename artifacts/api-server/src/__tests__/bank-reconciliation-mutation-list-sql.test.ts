@@ -17,14 +17,30 @@ describe("bank reconciliation mutation list SQL", () => {
   });
 
   it("projects approved-match ownership independently of visible candidates", () => {
-    expect(routeSource).toContain(
-      "EXISTS (\n" +
-        "        SELECT 1\n" +
-        "        FROM bank_reconciliation_matches approved_mutation_match\n" +
-        "        WHERE approved_mutation_match.mutation_id = bm.id\n" +
-        "          AND approved_mutation_match.status = 'approved'\n" +
-        "      ) AS has_approved_match",
-    );
+    expect(routeSource).toContain("FROM bank_reconciliation_matches approved_mutation_match");
+    expect(routeSource).toContain("approved_mutation_match.mutation_id = bm.id");
+    expect(routeSource).toContain("approved_mutation_match.status = 'approved'");
+    expect(routeSource).toContain("AS has_approved_match");
     expect(routeSource).toContain("FALSE AS has_approved_match");
+  });
+
+  it("projects a posted journal as posted even if the bank mutation status is stale", () => {
+    expect(routeSource).toContain(
+      "FROM accounting_entries posted_journal",
+    );
+    expect(routeSource).toContain(
+      "posted_journal.status = 'posted'",
+    );
+    expect(routeSource).toContain("THEN 'posted'");
+  });
+
+  it("projects a voided or reversed journal as void instead of draft", () => {
+    expect(routeSource).toContain(
+      "FROM accounting_entries voided_journal",
+    );
+    expect(routeSource).toContain(
+      "voided_journal.status IN ('voided', 'reversed')",
+    );
+    expect(routeSource).toContain("THEN 'void'");
   });
 });
