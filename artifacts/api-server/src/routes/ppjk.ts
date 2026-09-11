@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import {
   db,
   ppjkOrdersTable,
@@ -279,8 +280,15 @@ const PPJK_DELETE_PROTECTED_STATUSES = [
   "completed",
 ] as const;
 
+const publicTrackingLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ── GET /api/ppjk/public/track/:orderNumber — public tracking ────────────────
-router.get(["/public/track/:orderNumber", "/public/track/*orderNumber"], async (req, res) => {
+router.get(["/public/track/:orderNumber", "/public/track/*orderNumber"], publicTrackingLimit, async (req, res) => {
   const rawParam = (req.params as Record<string, string>).orderNumber ?? (req.params as Record<string, string>)["0"] ?? "";
   const orderNumber = decodeURIComponent(rawParam);
 
@@ -291,23 +299,10 @@ router.get(["/public/track/:orderNumber", "/public/track/*orderNumber"], async (
       tradeType: ppjkOrdersTable.tradeType,
       status: ppjkOrdersTable.status,
       customsStatus: ppjkOrdersTable.customsStatus,
-      commodity: ppjkOrdersTable.commodity,
-      hsCode: ppjkOrdersTable.hsCode,
       origin: ppjkOrdersTable.origin,
       destination: ppjkOrdersTable.destination,
       portOfEntry: ppjkOrdersTable.portOfEntry,
-      kantorPabean: ppjkOrdersTable.kantorPabean,
       jenisPelayanan: ppjkOrdersTable.jenisPelayanan,
-      nomorAju: ppjkOrdersTable.nomorAju,
-      nomorPib: ppjkOrdersTable.nomorPib,
-      nomorPeb: ppjkOrdersTable.nomorPeb,
-      nomorSppb: ppjkOrdersTable.nomorSppb,
-      tanggalAju: ppjkOrdersTable.tanggalAju,
-      grossWeight: ppjkOrdersTable.grossWeight,
-      cbm: ppjkOrdersTable.cbm,
-      koli: ppjkOrdersTable.koli,
-      slaDeadline: ppjkOrdersTable.slaDeadline,
-      isOverdue: ppjkOrdersTable.isOverdue,
       createdAt: ppjkOrdersTable.createdAt,
       updatedAt: ppjkOrdersTable.updatedAt,
     })
@@ -324,8 +319,6 @@ router.get(["/public/track/:orderNumber", "/public/track/*orderNumber"], async (
       action: ppjkStatusLogsTable.oldStatus,
       fromStatus: ppjkStatusLogsTable.oldStatus,
       toStatus: ppjkStatusLogsTable.newStatus,
-      changedBy: ppjkStatusLogsTable.changedBy,
-      notes: ppjkStatusLogsTable.notes,
       createdAt: ppjkStatusLogsTable.changedAt,
     })
     .from(ppjkStatusLogsTable)
@@ -339,8 +332,6 @@ router.get(["/public/track/:orderNumber", "/public/track/*orderNumber"], async (
         action: ppjkAuditLogsTable.action,
         fromStatus: ppjkAuditLogsTable.fromStatus,
         toStatus: ppjkAuditLogsTable.toStatus,
-        changedBy: ppjkAuditLogsTable.changedBy,
-        notes: ppjkAuditLogsTable.notes,
         createdAt: ppjkAuditLogsTable.createdAt,
       }).from(ppjkAuditLogsTable)
         .where(eq(ppjkAuditLogsTable.ppjkOrderId, id))
