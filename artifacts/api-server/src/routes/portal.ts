@@ -2699,6 +2699,237 @@ router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
   }
 });
 
+// GET /api/portal/me/invoices/:id — customer-owned invoice detail.
+// The resource check intentionally mirrors the already-validated invoice list:
+// display fields are never used as an authorization boundary.
+router.get("/me/invoices/:id", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.doc_number AS "documentNumber",
+        sd.invoice_date AS "invoiceDate",
+        sd.due_date AS "dueDate",
+        sd.total_amount AS subtotal,
+        sd.tax_amount AS "taxAmount",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.notes,
+        sd.invoice_pdf_url AS "invoicePdfUrl",
+        sd.proof_url IS NOT NULL AS "hasPaymentProof",
+        sd.proof_uploaded_at AS "proofUploadedAt",
+        sd.proof_remarks AS "proofRemarks",
+        COALESCE(lo.order_number, po.po_number, sd.doc_number) AS "orderNumber",
+        CASE
+          WHEN lo.id IS NOT NULL THEN 'logistic'
+          WHEN po.id IS NOT NULL THEN 'marketplace'
+          ELSE 'sales'
+        END AS "sourceType"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      LEFT JOIN mkt_purchase_orders po ON po.sales_document_id = sd.id
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+
+    const invoice = result.rows[0] as Record<string, unknown> | undefined;
+    if (!invoice) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+
+    const lineResult = await db.execute(sql`
+      SELECT
+        id,
+        name,
+        description,
+        quantity,
+        unit_price AS "unitPrice",
+        subtotal
+      FROM sales_document_lines
+      WHERE document_id = ${id}
+      ORDER BY id ASC
+    `);
+
+    const amount = Number(invoice.amount ?? 0);
+    const amountPaid = Number(invoice.amountPaid ?? 0);
+    return res.json({
+      ...invoice,
+      amount,
+      amountPaid,
+      outstanding: Math.max(0, amount - amountPaid),
+      lines: lineResult.rows.map((line) => ({
+        ...line,
+        quantity: Number((line as any).quantity ?? 0),
+        unitPrice: Number((line as any).unitPrice ?? 0),
+        subtotal: Number((line as any).subtotal ?? 0),
+      })),
+      paymentProof: {
+        uploaded: invoice.hasPaymentProof === true,
+        uploadedAt: invoice.proofUploadedAt ?? null,
+        remarks: invoice.proofRemarks ?? null,
+      },
+      // Never return the stored object path or an unscoped public URL.
+      invoicePdfUrl: null,
+      canDownload:
+        typeof invoice.invoicePdfUrl === "string" &&
+        invoice.invoicePdfUrl.startsWith("/") &&
+        !/^https?:\/\//i.test(invoice.invoicePdfUrl),
+    });
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice detail error");
+    return res.status(500).json({ error: "Gagal memuat detail invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/download — owner-guarded private PDF access.
+// Legacy/public URLs fail closed until the document is stored as a private
+// object-storage path that can be signed for this authenticated owner.
+router.get("/me/invoices/:id/download", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT sd.invoice_pdf_url AS "invoicePdfUrl"
+      FROM sales_documents sd
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1 FROM logistic_orders lo
+            WHERE lo.id = sd.logistic_order_id
+              AND lo.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1 FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+    const storedPath = (result.rows[0] as { invoicePdfUrl?: unknown } | undefined)?.invoicePdfUrl;
+    if (typeof storedPath !== "string" || !storedPath.trim()) {
+      return res.status(404).json({ error: "PDF invoice belum tersedia" });
+    }
+    if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+      return res.status(409).json({ error: "PDF invoice legacy belum tersedia melalui kanal privat" });
+    }
+
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice download error");
+    return res.status(500).json({ error: "Gagal mengakses PDF invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof — owner-guarded proof metadata.
+router.get("/me/invoices/:id/payment-proof", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.id, sd.proof_url AS "proofUrl", sd.proof_uploaded_at AS "uploadedAt",
+           sd.proof_remarks AS remarks
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const proof = result.rows[0] as Record<string, unknown> | undefined;
+  if (!proof) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+  return res.json({
+    uploaded: Boolean(proof.proofUrl),
+    uploadedAt: proof.uploadedAt ?? null,
+    remarks: proof.remarks ?? null,
+    downloadUrl: proof.proofUrl ? `/api/portal/me/invoices/${id}/payment-proof/file` : null,
+  });
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof/file — customer-owned signed URL.
+router.get("/me/invoices/:id/payment-proof/file", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.proof_url AS "proofUrl"
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND sd.proof_url IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const storedPath = (result.rows[0] as { proofUrl?: unknown } | undefined)?.proofUrl;
+  if (typeof storedPath !== "string" || !storedPath.trim()) {
+    return res.status(404).json({ error: "Bukti pembayaran belum tersedia" });
+  }
+  if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+    return res.status(409).json({ error: "Bukti pembayaran legacy belum tersedia melalui kanal privat" });
+  }
+  try {
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal payment proof download error");
+    return res.status(500).json({ error: "Gagal mengakses bukti pembayaran" });
+  }
+});
+
 // ── GET /api/portal/vendor-catalog/compare — Perbandingan harga antar vendor ──
 router.get("/vendor-catalog/compare", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");

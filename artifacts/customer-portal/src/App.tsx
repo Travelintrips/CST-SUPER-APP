@@ -278,7 +278,7 @@ function OAuthRedirectHandler() {
 }
 
 // ── Route guard: redirect to /login if not authenticated ────────────────────
-function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
+function ProtectedRoute({ component: Comp, adminOnly = false }: { component: ComponentType; adminOnly?: boolean }) {
   const [location, navigate] = useLocation();
   const [authorized, setAuthorized] = useState(false);
 
@@ -295,6 +295,11 @@ function ProtectedRoute({ component: Comp }: { component: ComponentType }) {
       }
 
       const role = bootstrap.role;
+      if (adminOnly) {
+        if (role !== "admin") navigate("/dashboard");
+        else setAuthorized(true);
+        return;
+      }
       const isAdminPath = location === "/admin" || location.startsWith("/admin/");
       if (role === "admin") {
         if (!isAdminPath) navigate("/admin");
@@ -372,14 +377,14 @@ function AppShell() {
         <Route path="/logistic-order/order-success" component={LogisticOrderSuccess} />
         <Route path="/logistic-order/track/:orderNumber" component={LogisticTrack} />
         <Route path="/logistic-order/track" component={LogisticTrack} />
-        <Route path="/logistic-order/admin/orders/:id" component={LogisticAdminOrderDetail} />
-        <Route path="/logistic-order/admin" component={LogisticAdmin} />
+        <Route path="/logistic-order/admin/orders/:id">{() => <ProtectedRoute component={LogisticAdminOrderDetail} adminOnly />}</Route>
+        <Route path="/logistic-order/admin">{() => <ProtectedRoute component={LogisticAdmin} adminOnly />}</Route>
         <Route path="/book" component={LogisticBook} />
         <Route path="/logistic-order-success" component={LogisticOrderSuccess} />
         <Route path="/track/:orderNumber" component={LogisticTrack} />
         <Route path="/track" component={LogisticTrack} />
-        <Route path="/logistic-admin" component={LogisticAdmin} />
-        <Route path="/logistic-admin/orders/:id" component={LogisticAdminOrderDetail} />
+        <Route path="/logistic-admin">{() => <ProtectedRoute component={LogisticAdmin} adminOnly />}</Route>
+        <Route path="/logistic-admin/orders/:id">{() => <ProtectedRoute component={LogisticAdminOrderDetail} adminOnly />}</Route>
         <Route path="/calculator" component={Calculator} />
         <Route path="/kalkulator-biaya-logistik" component={LogisticCostCalculator} />
         <Route path="/kalkulator-impor" component={ImportTariffCalculator} />

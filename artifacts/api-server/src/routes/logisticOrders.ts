@@ -32,7 +32,7 @@ import { isPpjkOrder, autoCreatePpjkOrderInTx } from "../lib/ppjkAutoCreate.js";
 import { calcTax, calcGrandTotal } from "../lib/taxHelper.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
-import { optionalCustomerPortalAuth, requirePortalAdmin, type PortalAuthReq } from "../lib/supabaseAuth.js";
+import { optionalCustomerPortalAuth, requireCustomerPortalAuth, requirePortalAdmin, type PortalAuthReq } from "../lib/supabaseAuth.js";
 import { verifyPortalJwt } from "../lib/portalJwt.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
 import { externalIntegrationsDisabled } from "../lib/safeDev.js";
@@ -762,6 +762,7 @@ export const logisticOrderTrackPublicRouter = Router();
 logisticOrderTrackPublicRouter.get(
   "/track/:orderNumber",
   publicLookupRateLimit,
+  optionalCustomerPortalAuth,
   async (req: Request, res: Response) => {
     const orderNumber = String(String(req.params.orderNumber) ?? "").toUpperCase().trim();
     if (!orderNumber) return res.status(400).json({ message: "Nomor order tidak valid" });
@@ -779,10 +780,12 @@ logisticOrderTrackPublicRouter.get(
     // (route, invoice, driver job, POD photos, WhatsApp-derived contact info)
     // from being harvested by anyone who can guess/enumerate an order number,
     // since knowing the order number alone is no longer sufficient credential.
-    const ownerEmail = await getAuthenticatedPortalEmail(req);
-    const isOwner = !!ownerEmail && !!order.email && ownerEmail.toLowerCase() === order.email.toLowerCase();
+    const authenticatedCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+    const isCanonicalOwner =
+      authenticatedCustomerId != null &&
+      order.portalCustomerId === authenticatedCustomerId;
 
-    if (!isOwner) {
+    if (!isCanonicalOwner) {
       const phoneDigitsOnFile = (order.phone ?? "").replace(/\D/g, "");
       const last4OnFile = phoneDigitsOnFile.slice(-4);
       const providedPhone = String(req.query.phone ?? "").replace(/\D/g, "");
@@ -1007,18 +1010,26 @@ logisticOrderTrackPublicRouter.get(
 
     return res.json({
       ...toPublicOrder(order),
-      customerName: order.customerName,
-      grandTotal: order.grandTotal ? parseFloat(order.grandTotal) : null,
-      subtotal: order.subtotal ? parseFloat(order.subtotal) : null,
-      tax: order.tax ? parseFloat(order.tax) : null,
+      // Phone-verified public tracking is intentionally status-only. Financial,
+      // invoice, POD, driver, and customer identity data require canonical
+      // portal ownership rather than email/phone display-field matching.
+      customerName: isCanonicalOwner ? order.customerName : null,
+      grandTotal: isCanonicalOwner && order.grandTotal ? parseFloat(order.grandTotal) : null,
+      subtotal: isCanonicalOwner && order.subtotal ? parseFloat(order.subtotal) : null,
+      tax: isCanonicalOwner && order.tax ? parseFloat(order.tax) : null,
       items: items.map(toPublicItem),
-      driverJob: driverJobData,
-      rfqQuote,
+      driverJob: isCanonicalOwner ? driverJobData : null,
+      rfqQuote: isCanonicalOwner ? rfqQuote : null,
       orderUpdates: updatesData,
-      progressEvents: progressEventsMapped,
-      podSubmissions,
-      invoiceLinks,
-      autoInvoice,
+      progressEvents: isCanonicalOwner ? progressEventsMapped : progressEventsMapped.map((event) => ({
+        id: event.id,
+        stepKey: event.stepKey,
+        stepLabel: event.stepLabel,
+        createdAt: event.createdAt,
+      })),
+      podSubmissions: isCanonicalOwner ? podSubmissions : [],
+      invoiceLinks: isCanonicalOwner ? invoiceLinks : [],
+      autoInvoice: isCanonicalOwner ? autoInvoice : null,
     });
   }
 );
@@ -1072,21 +1083,25 @@ function _paylabsBuildSigPayload2(method: string, endpoint: string, bodyJson: st
   return `${method}:${endpoint}:${bodyHash}:${ts}`;
 }
 
-// POST /api/logistic/orders/:orderNumber/create-paylabs-link — PUBLIC
-logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Request, res: Response) => {
+// POST /api/logistic/orders/:orderNumber/create-paylabs-link — customer-owned order only.
+logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", requireCustomerPortalAuth, async (req: Request, res: Response) => {
   const orderNumber = String(req.params.orderNumber ?? "");
   const [order] = await db
     .select({
       id: logisticOrdersTable.id,
       orderNumber: logisticOrdersTable.orderNumber,
       companyId: logisticOrdersTable.companyId,
+      portalCustomerId: logisticOrdersTable.portalCustomerId,
       customerName: logisticOrdersTable.customerName,
       phone: logisticOrdersTable.phone,
       grandTotal: logisticOrdersTable.grandTotal,
       status: logisticOrdersTable.status,
     })
     .from(logisticOrdersTable)
-    .where(eq(logisticOrdersTable.orderNumber, orderNumber))
+    .where(and(
+      eq(logisticOrdersTable.orderNumber, orderNumber),
+      eq(logisticOrdersTable.portalCustomerId, (req as PortalAuthReq).portalCustomerId),
+    ))
     .limit(1);
   if (!order) return res.status(404).json({ message: "Pesanan tidak ditemukan" });
   if (order.status === "Cancelled") {
@@ -1249,8 +1264,10 @@ logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Reque
   });
 });
 
-// PATCH /api/logistic/orders/:orderNumber/payment-proof — PUBLIC
-logisticOrdersRouter.patch("/:orderNumber/payment-proof", async (req: Request, res: Response) => {
+// PATCH /api/logistic/orders/:orderNumber/payment-proof — customer-owned order only.
+// The previous public route allowed anyone with an order number to overwrite the
+// payment proof path. The order's portal_customer_id is the authorization key.
+logisticOrdersRouter.patch("/:orderNumber/payment-proof", requireCustomerPortalAuth, async (req: Request, res: Response) => {
   const orderNumber = String(req.params.orderNumber ?? "");
   const { proofUrl } = req.body as { proofUrl?: unknown };
   if (!proofUrl || typeof proofUrl !== "string" || !proofUrl.trim()) {
@@ -1260,10 +1277,16 @@ logisticOrdersRouter.patch("/:orderNumber/payment-proof", async (req: Request, r
   const [order] = await db
     .select({ id: logisticOrdersTable.id, createdAt: logisticOrdersTable.createdAt })
     .from(logisticOrdersTable)
-    .where(eq(logisticOrdersTable.orderNumber, orderNumber))
+    .where(and(
+      eq(logisticOrdersTable.orderNumber, orderNumber),
+      eq(logisticOrdersTable.portalCustomerId, (req as PortalAuthReq).portalCustomerId),
+    ))
     .limit(1);
   if (!order) return res.status(404).json({ message: "Pesanan tidak ditemukan" });
   if (order.createdAt < dayAgo) return res.status(403).json({ message: "Batas waktu upload bukti telah lewat (24 jam)" });
+  if (!/^\/objects\//.test(proofUrl.trim())) {
+    return res.status(400).json({ message: "Lokasi bukti pembayaran tidak valid" });
+  }
   await db.execute(sql`UPDATE logistic_orders SET payment_proof_url = ${proofUrl.trim()} WHERE id = ${order.id}`);
   return res.json({ ok: true });
 });
@@ -2881,4 +2904,5 @@ logisticOrdersRouter.post(
   }
 );
 
-// NOTE: create-paylabs-link & payment-proof endpoints are registered ABOVE the auth wall (public).
+// NOTE: customer payment endpoints are registered ABOVE the staff auth wall so
+// they can use Customer Portal auth; each endpoint performs its own ownership check.

@@ -21,6 +21,7 @@ export const oceanFreightPublicRouter = Router();
 
 const estimateLimit = rateLimit({ windowMs: 60_000, max: 30, standardHeaders: true, legacyHeaders: false });
 const submitLimit   = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
+const publicTrackingLimit = rateLimit({ windowMs: 60_000, max: 5, standardHeaders: true, legacyHeaders: false });
 
 // ── GET /options ──────────────────────────────────────────────────────────────
 oceanFreightPublicRouter.get("/options", async (_req: Request, res: Response) => {
@@ -562,12 +563,15 @@ oceanFreightPublicRouter.post("/inquiry", submitLimit, optionalCustomerPortalAut
 });
 
 // ── GET /track/:orderNumber ───────────────────────────────────────────────────
-oceanFreightPublicRouter.get("/track/:orderNumber", async (req: Request, res: Response) => {
+oceanFreightPublicRouter.get("/track/:orderNumber", publicTrackingLimit, async (req: Request, res: Response) => {
   try {
     const orderNumber = String(req.params.orderNumber ?? "");
-    const res2 = await db.execute(sql`SELECT order_number, customer_name, origin_city, origin_port, destination_city, destination_port, shipment_type, container_type, container_qty, total_cbm, carrier, vessel_name, voyage, etd, eta, booking_number, bl_number, tracking_status, status, created_at FROM ocean_freight_orders WHERE order_number = ${orderNumber}`);
+    const res2 = await db.execute(sql`SELECT order_number, origin_city, origin_port, destination_city, destination_port, shipment_type, carrier, vessel_name, voyage, etd, eta, booking_number, bl_number, tracking_status, status, created_at FROM ocean_freight_orders WHERE order_number = ${orderNumber}`);
     const order = res2.rows[0];
     if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
+    // Keep customer identity, cargo quantity/volume, and financial data out of
+    // an enumerable public tracking URL. Those belong to authenticated portal
+    // views and document endpoints.
     res.json(order);
   } catch (err) {
     logger.error({ err }, "[ocean-freight-public] GET /track/:orderNumber");

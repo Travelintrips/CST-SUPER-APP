@@ -150,7 +150,6 @@ vendorTrackingPublicRouter.get("/:token", trackingGetLimiter, async (req: Reques
       token,
       vendorName: tracking.vendor_name,
       orderNumber: tracking.order_number,
-      customerName: tracking.customer_name,
       shipmentType: tracking.shipment_type,
       origin: tracking.origin,
       destination: tracking.destination,
