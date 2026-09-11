@@ -7,6 +7,9 @@ import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.j
 import { isValidPortalPhone, normalizePortalPhone } from "../lib/phoneUtils.js";
 import { sendViaService } from "../lib/waTransport.js";
 import { logger } from "../lib/logger.js";
+import { logActivity } from "../lib/activityLog.js";
+import { setMarketplaceDealPrice } from "../lib/services/mktDealPriceService.js";
+import { inviteVendorToRfq } from "../lib/services/vendorInvitationService.js";
 
 /**
  * Canonical read-only Customer Portal workload.
@@ -701,6 +704,242 @@ router.post("/:service/:id/actions", async (req: Request, res: Response) => {
     }
     console.error("[portal-admin-service-ops] action failed", { service, id, action, error });
     return res.status(500).json({ error: "Gagal menjalankan action lifecycle" });
+  }
+});
+
+router.get("/marketplace/:rfqId/vendor-routing", async (req: Request, res: Response) => {
+  const rfqId = Number(req.params.rfqId);
+  if (!Number.isInteger(rfqId) || rfqId <= 0) {
+    return res.status(400).json({ ok: false, error: "RFQ tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        COALESCE(r.catalog_vendor_id, catalog.vendor_id)::int AS vendor_id,
+        s.name::text AS vendor_name,
+        s.is_active::boolean AS vendor_active,
+        q.id::int AS quote_id,
+        q.status::text AS quote_status
+      FROM mkt_rfqs r
+      LEFT JOIN LATERAL (
+        SELECT vci.vendor_id
+        FROM mkt_rfq_lines line
+        JOIN vendor_catalog_items vci ON vci.id = line.vendor_catalog_item_id
+        WHERE line.rfq_id = r.id
+        ORDER BY line.sort_order ASC, line.id ASC
+        LIMIT 1
+      ) catalog ON TRUE
+      LEFT JOIN suppliers s ON s.id = COALESCE(r.catalog_vendor_id, catalog.vendor_id)
+      LEFT JOIN LATERAL (
+        SELECT id, status
+        FROM mkt_vendor_quotes
+        WHERE rfq_id = r.id
+          AND vendor_id = COALESCE(r.catalog_vendor_id, catalog.vendor_id)
+        ORDER BY id DESC
+        LIMIT 1
+      ) q ON TRUE
+      WHERE r.id = ${rfqId}
+      LIMIT 1
+    `);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (!row) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+    return res.json({
+      ok: true,
+      data: {
+        hasVendor: row.vendor_id != null,
+        vendorId: row.vendor_id == null ? null : Number(row.vendor_id),
+        vendorName: row.vendor_name == null ? null : String(row.vendor_name),
+        vendorActive: row.vendor_active == null ? null : Boolean(row.vendor_active),
+        quoteId: row.quote_id == null ? null : Number(row.quote_id),
+        quoteStatus: row.quote_status == null ? null : String(row.quote_status),
+      },
+    });
+  } catch (error) {
+    logger.warn({ err: error, rfqId }, "[portal-admin-service-ops] vendor routing read failed");
+    return res.status(500).json({ ok: false, error: "Gagal memuat vendor produk" });
+  }
+});
+
+router.post("/marketplace/:rfqId/vendor-routing/invite", async (req: Request, res: Response) => {
+  const rfqId = Number(req.params.rfqId);
+  const requestedVendorId = Number(req.body?.vendorId);
+  if (!Number.isInteger(rfqId) || rfqId <= 0) {
+    return res.status(400).json({ ok: false, error: "RFQ tidak valid" });
+  }
+
+  try {
+    const candidate = await db.execute(sql`
+      SELECT COALESCE(r.catalog_vendor_id, catalog.vendor_id)::int AS vendor_id
+      FROM mkt_rfqs r
+      LEFT JOIN LATERAL (
+        SELECT vci.vendor_id
+        FROM mkt_rfq_lines line
+        JOIN vendor_catalog_items vci ON vci.id = line.vendor_catalog_item_id
+        WHERE line.rfq_id = r.id
+        ORDER BY line.sort_order ASC, line.id ASC
+        LIMIT 1
+      ) catalog ON TRUE
+      WHERE r.id = ${rfqId}
+      LIMIT 1
+    `);
+    const catalogVendorId = Number((candidate.rows[0] as { vendor_id?: number | null } | undefined)?.vendor_id);
+    if (!Number.isInteger(catalogVendorId) || catalogVendorId <= 0) {
+      return res.status(422).json({ ok: false, error: "RFQ ini tidak memiliki vendor produk katalog" });
+    }
+    if (Number.isInteger(requestedVendorId) && requestedVendorId !== catalogVendorId) {
+      return res.status(422).json({ ok: false, error: "Vendor harus merupakan pemilik produk pada RFQ ini" });
+    }
+
+    const portalAdmin = req as Request & { isInternalSession?: boolean; portalCustomerId?: number; user?: { id?: string; name?: string } };
+    const result = await inviteVendorToRfq({
+      rfqId,
+      vendorId: catalogVendorId,
+      adminId: portalAdmin.isInternalSession
+        ? portalAdmin.user?.id ?? "internal-portal-admin"
+        : `portal-admin:${portalAdmin.portalCustomerId ?? "unknown"}`,
+      adminName: portalAdmin.user?.name ?? "Customer Portal Admin",
+      ipAddress: req.ip ?? null,
+    });
+    if (!result.ok) {
+      const status = result.code === "RFQ_NOT_FOUND" || result.code === "VENDOR_NOT_FOUND"
+        ? 404
+        : result.code === "DUPLICATE_INVITE" ? 409
+          : result.code === "VENDOR_INACTIVE" ? 422 : 500;
+      return res.status(status).json({ ok: false, error: result.message });
+    }
+    return res.status(201).json({
+      ok: true,
+      data: {
+        quoteId: result.quoteId,
+        vendorName: result.vendorName,
+        status: result.status,
+        validUntil: result.validUntil.toISOString(),
+      },
+    });
+  } catch (error) {
+    logger.warn({ err: error, rfqId }, "[portal-admin-service-ops] vendor routing invite failed");
+    return res.status(500).json({ ok: false, error: "Gagal mengirim RFQ ke vendor produk" });
+  }
+});
+
+router.get("/marketplace/:rfqId/deal-price", async (req: Request, res: Response) => {
+  const rfqId = Number(req.params.rfqId);
+  if (!Number.isInteger(rfqId) || rfqId <= 0) {
+    return res.status(400).json({ ok: false, error: "RFQ tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        vq.id AS quote_id,
+        vq.status::text AS quote_status,
+        vq.updated_at,
+        s.name AS vendor_name,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'rfqLineId', vql.rfq_line_id,
+              'itemName', rl.item_name,
+              'unit', rl.item_unit,
+              'offeredQty', vql.offered_qty,
+              'vendorUnitPrice', vql.offered_unit_price,
+              'vendorSubtotal', vql.subtotal,
+              'dealUnitPrice', vql.negotiated_unit_price,
+              'dealSubtotal', vql.negotiated_subtotal
+            ) ORDER BY vql.rfq_line_id
+          ) FILTER (WHERE vql.id IS NOT NULL),
+          '[]'::json
+        ) AS lines
+      FROM mkt_vendor_quotes vq
+      JOIN suppliers s ON s.id = vq.vendor_id
+      LEFT JOIN mkt_vendor_quote_lines vql ON vql.quote_id = vq.id
+      LEFT JOIN mkt_rfq_lines rl ON rl.id = vql.rfq_line_id
+      WHERE vq.rfq_id = ${rfqId}
+        AND vq.status::text IN ('submitted', 'selected')
+      GROUP BY vq.id, vq.status, vq.updated_at, s.name
+      ORDER BY vq.id
+    `);
+
+    const quotes = (result.rows as Array<Record<string, unknown>>).map((quote) => {
+      const lines = Array.isArray(quote.lines) ? quote.lines : [];
+      const dealTotal = lines.every((line) => {
+        const value = (line as Record<string, unknown>).dealSubtotal;
+        return value !== null && value !== undefined;
+      })
+        ? lines.reduce((sum, line) => sum + Number((line as Record<string, unknown>).dealSubtotal), 0)
+        : null;
+      return { ...quote, dealTotal };
+    });
+
+    return res.json({ ok: true, data: { rfqId, quotes } });
+  } catch (error) {
+    logger.warn({ err: error, rfqId }, "[portal-admin-service-ops] deal price read failed");
+    return res.status(500).json({ ok: false, error: "Gagal memuat harga deal" });
+  }
+});
+
+router.put("/marketplace/:rfqId/deal-price/:quoteId", async (req: Request, res: Response) => {
+  const rfqId = Number(req.params.rfqId);
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(rfqId) || rfqId <= 0 || !Number.isInteger(quoteId) || quoteId <= 0) {
+    return res.status(400).json({ ok: false, error: "RFQ atau quote tidak valid" });
+  }
+
+  const body = req.body as {
+    expectedUpdatedAt?: unknown;
+    dealNotes?: unknown;
+    lines?: unknown;
+  };
+  if (!Array.isArray(body.lines) || body.lines.length === 0) {
+    return res.status(422).json({ ok: false, error: "Semua harga deal wajib diisi" });
+  }
+  const lines = body.lines.map((line) => {
+    const item = line as { rfqLineId?: unknown; dealUnitPrice?: unknown };
+    return {
+      rfqLineId: Number(item.rfqLineId),
+      dealUnitPrice: Number(item.dealUnitPrice),
+    };
+  });
+  if (lines.some((line) => !Number.isInteger(line.rfqLineId) || line.rfqLineId <= 0 || !Number.isFinite(line.dealUnitPrice) || line.dealUnitPrice <= 0)) {
+    return res.status(422).json({ ok: false, error: "Harga deal harus berupa angka lebih besar dari nol" });
+  }
+
+  const portalAdmin = req as Request & { portalCustomerId?: number; isInternalSession?: boolean; user?: { id?: string; name?: string } };
+  const actorId = portalAdmin.isInternalSession
+    ? portalAdmin.user?.id ?? "internal-portal-admin"
+    : `portal-admin:${portalAdmin.portalCustomerId ?? "unknown"}`;
+
+  try {
+    const result = await setMarketplaceDealPrice({
+      rfqId,
+      quoteId,
+      actorId,
+      lines,
+      dealNotes: typeof body.dealNotes === "string" ? body.dealNotes : null,
+      expectedUpdatedAt: typeof body.expectedUpdatedAt === "string" ? body.expectedUpdatedAt : null,
+    });
+    if (!result.ok) {
+      const status = result.code === "QUOTE_NOT_FOUND" ? 404
+        : ["DEAL_PRICE_LOCKED", "STALE_DEAL_PRICE"].includes(result.code) ? 409
+          : 422;
+      return res.status(status).json({ ok: false, error: result.code, message: result.message });
+    }
+
+    await logActivity({
+      mktRfqId: rfqId,
+      mktVendorQuoteId: quoteId,
+      actorType: "admin",
+      actorId,
+      actorName: portalAdmin.user?.name ?? actorId,
+      action: "mkt_deal_price_updated",
+      description: `Harga deal quote ${quoteId} diperbarui dari Customer Portal Admin`,
+      newValue: { quoteId, rfqId, lines: result.lines, dealTotal: result.dealTotal, notes: typeof body.dealNotes === "string" ? body.dealNotes : null },
+    });
+    return res.json({ ok: true, data: result });
+  } catch (error) {
+    logger.warn({ err: error, rfqId, quoteId }, "[portal-admin-service-ops] deal price update failed");
+    return res.status(500).json({ ok: false, error: "Gagal menyimpan harga deal" });
   }
 });
 

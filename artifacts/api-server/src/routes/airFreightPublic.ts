@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
@@ -14,6 +15,12 @@ import { getPortalCustomerContext } from "../lib/services/portalCustomerContextS
 import { NotificationService } from "../lib/services/notificationService.js";
 
 const router = Router();
+const publicTrackingLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ── POST /public/estimate — public rate estimation (no auth) ──────────────────
 router.post("/public/estimate", async (req: Request, res: Response) => {
@@ -296,17 +303,18 @@ router.post("/public/orders", optionalCustomerPortalAuth, async (req: Request, r
 });
 
 // ── GET /public/track/:orderNumber — public tracking (no auth) ───────────────
-router.get("/public/track/:orderNumber", async (req: Request, res: Response) => {
+// This legacy alias is used by the Customer Portal, so it must have the same
+// status-safe disclosure contract and rate limit as /track/:orderNumber.
+router.get("/public/track/:orderNumber", publicTrackingLimit, async (req: Request, res: Response) => {
   try {
     const orderNumber = String(req.params.orderNumber ?? "");
     const r = await db.execute(sql`
       SELECT
-        o.order_number, o.customer_name,
+        o.order_number,
         o.origin_city, o.origin_airport, o.destination_city, o.destination_airport,
-        o.chargeable_weight, o.koli, o.commodity, o.status, o.tracking_status,
+        o.status, o.tracking_status,
         o.booking_number, o.mawb, o.hawb,
-        o.approved_at, o.booking_confirmed_at, o.quoted_at,
-        o.grand_total, o.final_price_idr,
+        o.approved_at, o.booking_confirmed_at,
         r.airline, r.flight_number, r.etd, r.eta, r.transit_days
       FROM air_freight_orders o
       LEFT JOIN air_freight_rates r ON r.id = o.final_rate_id
@@ -316,13 +324,38 @@ router.get("/public/track/:orderNumber", async (req: Request, res: Response) => 
     if (!r.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
 
     const events = await db.execute(sql`
-      SELECT event_type, note, created_at
+      SELECT event_type, created_at
       FROM air_freight_tracking_events
       WHERE order_id = (SELECT id FROM air_freight_orders WHERE order_number = ${orderNumber} LIMIT 1)
       ORDER BY created_at ASC
     `);
 
-    res.json({ order: r.rows[0], events: events.rows });
+    const order = r.rows[0] as Record<string, unknown>;
+    res.json({
+      order: {
+        order_number: order.order_number,
+        origin_city: order.origin_city,
+        origin_airport: order.origin_airport,
+        destination_city: order.destination_city,
+        destination_airport: order.destination_airport,
+        status: order.status,
+        tracking_status: order.tracking_status,
+        booking_number: order.booking_number,
+        mawb: order.mawb,
+        hawb: order.hawb,
+        approved_at: order.approved_at,
+        booking_confirmed_at: order.booking_confirmed_at,
+        airline: order.airline,
+        flight_number: order.flight_number,
+        etd: order.etd,
+        eta: order.eta,
+        transit_days: order.transit_days,
+      },
+      events: events.rows.map((event) => ({
+        event_type: event.event_type,
+        created_at: event.created_at,
+      })),
+    });
   } catch (err) {
     console.error("[air-freight-public] GET /public/track error:", err);
     res.status(500).json({ error: "Gagal memuat tracking" });
@@ -506,14 +539,13 @@ router.post("/approval/:token/decline", async (req: Request, res: Response) => {
 });
 
 // ── GET /track/:orderNumber — public tracking ─────────────────────────────────
-router.get("/track/:orderNumber", async (req: Request, res: Response) => {
+router.get("/track/:orderNumber", publicTrackingLimit, async (req: Request, res: Response) => {
   try {
     const orderNumber = String(req.params.orderNumber ?? "");
     const r = await db.execute(sql`
       SELECT
-        o.order_number, o.customer_name,
+        o.order_number,
         o.origin_city, o.origin_airport, o.destination_city, o.destination_airport,
-        o.chargeable_weight, o.koli, o.commodity,
         o.status, o.tracking_status,
         o.booking_number, o.mawb, o.hawb,
         o.approved_at, o.booking_confirmed_at,
@@ -532,7 +564,34 @@ router.get("/track/:orderNumber", async (req: Request, res: Response) => {
       WHERE order_id = (SELECT id FROM air_freight_orders WHERE order_number = ${orderNumber})
       ORDER BY created_at ASC
     `);
-    res.json({ order, events: events.rows });
+    // Public order-number tracking is deliberately status-only. Customer
+    // identity, cargo value/weight, and financial data stay in authenticated
+    // portal flows and are never disclosed by an enumerable URL.
+    res.json({
+      order: {
+        order_number: order.order_number,
+        origin_city: order.origin_city,
+        origin_airport: order.origin_airport,
+        destination_city: order.destination_city,
+        destination_airport: order.destination_airport,
+        status: order.status,
+        tracking_status: order.tracking_status,
+        booking_number: order.booking_number,
+        mawb: order.mawb,
+        hawb: order.hawb,
+        approved_at: order.approved_at,
+        booking_confirmed_at: order.booking_confirmed_at,
+        airline: order.airline,
+        flight_number: order.flight_number,
+        etd: order.etd,
+        eta: order.eta,
+        transit_days: order.transit_days,
+      },
+      events: events.rows.map((event) => ({
+        event_type: event.event_type,
+        created_at: event.created_at,
+      })),
+    });
   } catch (err) {
     console.error("[air-freight-public] GET /track/:orderNumber error:", err);
     res.status(500).json({ error: "Gagal memuat tracking" });

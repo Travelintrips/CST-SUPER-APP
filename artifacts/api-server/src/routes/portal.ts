@@ -224,6 +224,7 @@ import {
   listSalesOrders,
   listLogisticOrders,
   listProductOrders,
+  listPortalOrderFeed,
   listPortalServiceOrders,
   createSalesOrder,
   cancelSalesOrder,
@@ -412,13 +413,16 @@ async function listByType(type: string) {
 
 // GET /api/portal/services  — item_type = 'jasa' (active only, public)
 router.get("/services", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
+  // Public catalog data changes through admin workflows, not per request.
+  // A short browser/CDN cache avoids making every public page wait for the
+  // same relatively expensive catalog joins.
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("jasa"));
 });
 
 // GET /api/portal/products  — item_type = 'barang'
 router.get("/products", async (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("barang"));
 });
 
@@ -1503,9 +1507,10 @@ router.post("/order-upload-url", requireCustomerPortalAuth, (_req, res) => {
 
 // GET /api/portal/orders — returns sales orders for the authenticated portal customer
 router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listSalesOrders(portalCustId));
+    return res.json(await listSalesOrders(portalCustId, portalReq.portalCustomer));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1514,9 +1519,10 @@ router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
 
 // GET /api/portal/logistic-orders — returns logistic orders for the authenticated portal customer
 router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listLogisticOrders(portalCustId));
+    return res.json(await listLogisticOrders(portalCustId, portalReq.portalCustomer));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1525,9 +1531,24 @@ router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
 
 // GET /api/portal/product-orders — returns portal product orders for the customer
 router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
-  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
   try {
-    return res.json(await listProductOrders(portalCustId));
+    return res.json(await listProductOrders(portalCustId, portalReq.portalCustomer));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/order-feed — one read for the Customer Portal orders page.
+router.get("/order-feed", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  try {
+    return res.json(await listPortalOrderFeed(
+      portalReq.portalCustomerId,
+      portalReq.portalCustomer,
+    ));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -1540,7 +1561,10 @@ router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
 router.get("/service-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
-    return res.json(await listPortalServiceOrders(portalCustId));
+    return res.json(await listPortalServiceOrders(
+      portalCustId,
+      (req as PortalAuthReq).portalCustomer,
+    ));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;
@@ -2606,18 +2630,20 @@ router.get("/me/dashboard-stats", requirePortalAuth, async (req, res) => {
     return res.json(await getPortalDashboardStats(customerId, role));
   } catch (err) {
     req.log?.error({ err }, "dashboard-stats error");
-    // Graceful fallback — don't break the dashboard if tables don't exist yet
-    if (role === "vendor") {
-      return res.json({ rfqReceived: 0, rfqSubmitted: 0, fulfillmentPending: 0, completedOrders: 0 });
-    }
-    return res.json({
-      totalOrders: 0, activeOrders: 0, completedOrders: 0,
-      invoiceOutstandingCount: 0, invoiceOutstandingAmount: 0, trackingActive: 0,
-    });
+    // Do not turn a database/schema error into valid-looking zero statistics.
+    // The portal can render the other feeds, while the UI marks these stats
+    // unavailable and the server log retains the actual failure.
+    return res.status(500).json({ message: "Gagal memuat statistik dashboard" });
   }
 });
 
 // GET /api/portal/me/invoices — Customer invoice list (from sales_documents)
+//
+// Ownership is deliberately resolved from immutable/canonical relations:
+//   - the originating logistic order owns individual customer invoices; or
+//   - an active portal company membership owns company-scoped invoices.
+//
+// Never use customer_name, email, phone, or a mutable display field here.
 router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   try {
@@ -2625,34 +2651,282 @@ router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
       id: number;
       invoiceNumber: string;
       amount: string;
+       amountPaid: string | null;
       status: string;
       dueDate: string | null;
       createdAt: string;
       orderNumber: string | null;
     }>(sql`
       SELECT
-        id,
-        doc_number      AS "invoiceNumber",
-        grand_total     AS amount,
-        invoice_status  AS status,
-        due_date        AS "dueDate",
-        created_at      AS "createdAt",
-        doc_number      AS "orderNumber"
-      FROM sales_documents
-      WHERE status NOT IN ('cancelled', 'draft')
-        AND LOWER(customer_name) = LOWER(
-          (SELECT name FROM portal_customers WHERE id = ${customerId} LIMIT 1)
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.due_date AS "dueDate",
+        sd.created_at AS "createdAt",
+        COALESCE(lo.order_number, sd.doc_number) AS "orderNumber"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      WHERE sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
         )
-      ORDER BY created_at DESC
+      ORDER BY sd.created_at DESC
       LIMIT 100
     `);
     return res.json(result.rows.map(r => ({
       ...r,
       amount: Number(r.amount ?? 0),
+      amountPaid: Number(r.amountPaid ?? 0),
     })));
   } catch (err) {
     req.log?.error({ err }, "portal me/invoices error");
     return res.status(500).json({ error: "Gagal memuat invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id — customer-owned invoice detail.
+// The resource check intentionally mirrors the already-validated invoice list:
+// display fields are never used as an authorization boundary.
+router.get("/me/invoices/:id", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.doc_number AS "documentNumber",
+        sd.invoice_date AS "invoiceDate",
+        sd.due_date AS "dueDate",
+        sd.total_amount AS subtotal,
+        sd.tax_amount AS "taxAmount",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.notes,
+        sd.invoice_pdf_url AS "invoicePdfUrl",
+        sd.proof_url IS NOT NULL AS "hasPaymentProof",
+        sd.proof_uploaded_at AS "proofUploadedAt",
+        sd.proof_remarks AS "proofRemarks",
+        COALESCE(lo.order_number, po.po_number, sd.doc_number) AS "orderNumber",
+        CASE
+          WHEN lo.id IS NOT NULL THEN 'logistic'
+          WHEN po.id IS NOT NULL THEN 'marketplace'
+          ELSE 'sales'
+        END AS "sourceType"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      LEFT JOIN mkt_purchase_orders po ON po.sales_document_id = sd.id
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+
+    const invoice = result.rows[0] as Record<string, unknown> | undefined;
+    if (!invoice) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+
+    const lineResult = await db.execute(sql`
+      SELECT
+        id,
+        name,
+        description,
+        quantity,
+        unit_price AS "unitPrice",
+        subtotal
+      FROM sales_document_lines
+      WHERE document_id = ${id}
+      ORDER BY id ASC
+    `);
+
+    const amount = Number(invoice.amount ?? 0);
+    const amountPaid = Number(invoice.amountPaid ?? 0);
+    return res.json({
+      ...invoice,
+      amount,
+      amountPaid,
+      outstanding: Math.max(0, amount - amountPaid),
+      lines: lineResult.rows.map((line) => ({
+        ...line,
+        quantity: Number((line as any).quantity ?? 0),
+        unitPrice: Number((line as any).unitPrice ?? 0),
+        subtotal: Number((line as any).subtotal ?? 0),
+      })),
+      paymentProof: {
+        uploaded: invoice.hasPaymentProof === true,
+        uploadedAt: invoice.proofUploadedAt ?? null,
+        remarks: invoice.proofRemarks ?? null,
+      },
+      // Never return the stored object path or an unscoped public URL.
+      invoicePdfUrl: null,
+      canDownload:
+        typeof invoice.invoicePdfUrl === "string" &&
+        invoice.invoicePdfUrl.startsWith("/") &&
+        !/^https?:\/\//i.test(invoice.invoicePdfUrl),
+    });
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice detail error");
+    return res.status(500).json({ error: "Gagal memuat detail invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/download — owner-guarded private PDF access.
+// Legacy/public URLs fail closed until the document is stored as a private
+// object-storage path that can be signed for this authenticated owner.
+router.get("/me/invoices/:id/download", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT sd.invoice_pdf_url AS "invoicePdfUrl"
+      FROM sales_documents sd
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1 FROM logistic_orders lo
+            WHERE lo.id = sd.logistic_order_id
+              AND lo.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1 FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+    const storedPath = (result.rows[0] as { invoicePdfUrl?: unknown } | undefined)?.invoicePdfUrl;
+    if (typeof storedPath !== "string" || !storedPath.trim()) {
+      return res.status(404).json({ error: "PDF invoice belum tersedia" });
+    }
+    if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+      return res.status(409).json({ error: "PDF invoice legacy belum tersedia melalui kanal privat" });
+    }
+
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice download error");
+    return res.status(500).json({ error: "Gagal mengakses PDF invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof — owner-guarded proof metadata.
+router.get("/me/invoices/:id/payment-proof", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.id, sd.proof_url AS "proofUrl", sd.proof_uploaded_at AS "uploadedAt",
+           sd.proof_remarks AS remarks
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const proof = result.rows[0] as Record<string, unknown> | undefined;
+  if (!proof) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+  return res.json({
+    uploaded: Boolean(proof.proofUrl),
+    uploadedAt: proof.uploadedAt ?? null,
+    remarks: proof.remarks ?? null,
+    downloadUrl: proof.proofUrl ? `/api/portal/me/invoices/${id}/payment-proof/file` : null,
+  });
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof/file — customer-owned signed URL.
+router.get("/me/invoices/:id/payment-proof/file", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.proof_url AS "proofUrl"
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND sd.proof_url IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const storedPath = (result.rows[0] as { proofUrl?: unknown } | undefined)?.proofUrl;
+  if (typeof storedPath !== "string" || !storedPath.trim()) {
+    return res.status(404).json({ error: "Bukti pembayaran belum tersedia" });
+  }
+  if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+    return res.status(409).json({ error: "Bukti pembayaran legacy belum tersedia melalui kanal privat" });
+  }
+  try {
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal payment proof download error");
+    return res.status(500).json({ error: "Gagal mengakses bukti pembayaran" });
   }
 });
 
@@ -4773,7 +5047,8 @@ router.post("/vendor-invite/:token/reject", async (req, res) => {
 
 // POST /api/portal/admin/vendor-invitations/:id/approve — admin approves an
 // accepted invitation and atomically activates the vendor, publishes the
-// supplier, creates the vendor account mapping, and publishes submitted items.
+// supplier, creates the vendor account mapping, and queues submitted items for
+// separate product review.
 router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -4782,6 +5057,13 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
     ? String((req as PortalAuthReq).portalCustomerId)
     : "admin";
   const portalOrigin = process.env.PORTAL_ORIGIN ?? `${req.protocol}://${req.get("host")}`;
+  const queuedProductNotifications: Array<{
+    catalogItemId: number;
+    submissionId: number;
+    productName: string;
+    vendorName: string;
+    supplierId: number;
+  }> = [];
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -4991,8 +5273,8 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
         }
       }
 
-      // Persist the approval before publishing products. Re-running the
-      // transaction keeps the same supplier and uses the NOT EXISTS guard.
+      // Persist the approval before creating product submissions. Re-running
+      // the transaction keeps the same supplier and uses the NOT EXISTS guard.
       await tx.execute(sql`
         UPDATE portal_vendor_invitations
         SET supplier_id = ${supplierId},
@@ -5010,36 +5292,118 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
           const pCat = typeof p.category === "string" ? p.category.trim() : null;
           const pCatKey = pCat && hasInCodeTemplate(pCat) ? pCat : null;
           const pTpl = pCatKey ? resolveTemplate(pCatKey) : null;
-          await tx.execute(sql`
-            INSERT INTO vendor_catalog_items
-              (vendor_id, vendor_name, type, name, description, kategori,
-               category_key, template_id, template_version, template_snapshot,
-               status, is_published, is_active, published_at, media_assets)
-            SELECT
-              ${supplierId}, ${persistedSupplierName}, 'product', ${productName},
-              ${p.description ?? null}, ${pCat}, ${pCatKey},
-              ${pTpl?.category ?? null}, ${pTpl?.version ?? null},
-              ${pTpl ? JSON.stringify(pTpl) : null}::jsonb,
-              'published', TRUE, TRUE, NOW(),
-              ${JSON.stringify((p.mediaUrls ?? []).map((u: string) => ({ url: u })))}::jsonb
-            WHERE NOT EXISTS (
-              SELECT 1 FROM vendor_catalog_items
-              WHERE vendor_id = ${supplierId}
-                AND type = 'product'
-                AND name = ${productName}
-            )
+
+          const existing = await tx.execute(sql`
+            SELECT id
+            FROM vendor_catalog_items
+            WHERE vendor_id = ${supplierId}
+              AND type = 'product'
+              AND name = ${productName}
+            LIMIT 1
           `);
+          if ((existing as any).rows?.length) continue;
+
+          const mediaAssets = Array.isArray(p.mediaUrls)
+            ? p.mediaUrls
+                .filter((u: unknown): u is string => typeof u === "string" && u.trim() !== "")
+                .map((url: string) => ({ url: url.trim() }))
+            : [];
+
+          const [submission] = await tx
+            .insert(vendorCatalogSubmissionsTable)
+            .values({
+              linkId:          null,
+              token:           randomUUID(),
+              supplierId,
+              vendorName:      persistedSupplierName,
+              categoryKey:     pCatKey,
+              serviceType:     "product",
+              templateKind:    "product",
+              templateId:      pTpl?.category ?? null,
+              templateVersion: pTpl?.version ?? null,
+              templateSnapshot: pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              specValues:      null,
+              name:            productName,
+              description:     typeof p.description === "string" ? p.description.trim() || null : null,
+              unit:            typeof p.unit === "string" ? p.unit.trim() || null : null,
+              mediaAssets,
+              priceBase:       "0",
+              currency:        "IDR",
+              status:          "submitted",
+            })
+            .returning({ id: vendorCatalogSubmissionsTable.id });
+
+          if (!submission) throw new Error(`Gagal membuat submission produk "${productName}"`);
+
+          const [catalogItem] = await tx
+            .insert(vendorCatalogItemsTable)
+            .values({
+              vendorId:          supplierId,
+              vendorName:        persistedSupplierName,
+              type:              "product",
+              name:              productName,
+              description:       typeof p.description === "string" ? p.description.trim() || null : null,
+              kategori:          pCat,
+              categoryKey:       pCatKey,
+              templateId:        pTpl?.category ?? null,
+              templateVersion:   pTpl?.version ?? null,
+              templateSnapshot:  pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              mediaAssets,
+              status:             "pending_review",
+              isPublished:       false,
+              isActive:           true,
+              sourceSubmissionId: submission.id,
+            })
+            .returning({ id: vendorCatalogItemsTable.id });
+
+          if (!catalogItem) throw new Error(`Gagal membuat item katalog "${productName}"`);
+
+          await tx
+            .update(vendorCatalogSubmissionsTable)
+            .set({ catalogItemId: catalogItem.id, updatedAt: new Date() })
+            .where(eq(vendorCatalogSubmissionsTable.id, submission.id));
+
+          queuedProductNotifications.push({
+            catalogItemId: catalogItem.id,
+            submissionId: submission.id,
+            productName,
+            vendorName: persistedSupplierName,
+            supplierId,
+          });
         }
       }
 
       return {
         supplierId,
+        queuedProducts: queuedProductNotifications.length,
         portalCustomerId,
         credentialEmail,
         credentialNeedsSetup,
         loginIdentifier: vendorEmail ? "email/password" : "WhatsApp OTP",
       };
     });
+
+    for (const product of queuedProductNotifications) {
+      void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+        type:         "vendor_product_submitted",
+        orderId:      product.catalogItemId,
+        orderNumber:  String(product.catalogItemId),
+        customerName: product.vendorName,
+        title:        "Produk Vendor Menunggu Persetujuan",
+        body:         `"${product.productName}" dari ${product.vendorName} menunggu review admin.`,
+        targetRole:   "admin",
+        supplierId:   product.supplierId,
+        productName:  product.productName,
+        catalogItemId: product.catalogItemId,
+        submissionId: product.submissionId,
+      }).catch((notificationError: unknown) => {
+        console.error("[portal] vendor invitation product notification failed", notificationError);
+      });
+    }
 
     let credentialSetup = result.loginIdentifier === "WhatsApp OTP"
       ? "whatsapp_otp"
@@ -5062,6 +5426,7 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
       login_url: `${portalOrigin}/login`,
       login_identifier: result.loginIdentifier,
       dashboard_url: `${portalOrigin}/vendor-dashboard`,
+      products_pending_review: result.queuedProducts,
     });
   } catch (e: any) {
     console.error("[portal] POST vendor-invitations approve error", e);

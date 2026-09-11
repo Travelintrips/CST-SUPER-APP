@@ -4,17 +4,19 @@ description: Migration from Replit Object Storage (GCS) to Supabase Storage; key
 ---
 
 ## Rule
-`SUPABASE_SERVICE_ROLE_KEY` dalam Replit Secrets saat ini berisi nilai literal `"SUPABASE_SERVICE_ROLE_KEY"` (nama variable, bukan JWT). Sampai difix, sistem otomatis fallback ke `SUPABASE_SERVICE_ROLE_KEY_DEV` + `SUPABASE_URL_DEV`.
+Seluruh jalur object storage aktif menggunakan Supabase Storage melalui `ObjectStorageService`; pemilihan kredensial dipisahkan oleh `APP_ENV` dan tidak boleh fallback dari production ke DEV.
 
-**Why:** User salah input secret (paste nama variable bukan nilai). Key production JWT dimulai `eyJ` dan panjangnya ~220 karakter. DEV key tersimpan benar di `SUPABASE_SERVICE_ROLE_KEY_DEV`.
+**Why:** Storage Replit/GCS tidak boleh menjadi backend aktif. Fallback lintas environment dapat menulis file ke project Supabase yang salah dan mencampur data development dengan production.
 
-**How to apply:** `objectStorage.ts` dan `dbBackup.ts` cek `_rawKey.length > 100` sebelum memilih URL+key mana yang dipakai.
+**How to apply:** `objectStorage.ts` memilih URL/key berdasarkan `APP_ENV`, hanya menerima hosted Supabase URL, dan memakai bucket `public-assets` atau `private-uploads`. Jangan menambahkan fallback Replit/GCS.
 
 ## Buckets
 - DEV project: `https://xssrfshdrtdfupgqwfdw.supabase.co`
   - `public-assets` (public, 50MB limit) ✅ dibuat
   - `private-uploads` (private, 50MB limit) ✅ dibuat
-- Production project: `https://nzdweipzckfszczzqtuw.supabase.co` — belum ada buckets (key tidak valid)
+- Production project: `https://nzdweipzckfszczzqtuw.supabase.co`
+  - `public-assets` (public, 50MB limit) ✅ tersedia
+  - `private-uploads` (private, 50MB limit) ✅ tersedia
 
 ## Upload path format
 `uploadPrivateEntity()` → `/objects/uploads/<uuid>.<ext>` (private-uploads bucket, subpath `uploads/<uuid>.<ext>`)

@@ -1,11 +1,7 @@
 import { Router } from "express";
-import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
-import { sendViaService as sendWhatsApp, sendToAdminGroup } from "../lib/waTransport.js";
-import { getAdminWa, getAdminGroupWa } from "../lib/adminWa.js";
-import { postEntry, postPurchaseReturn, resolveCostCenterId } from "../lib/accounting.js";
-import { classifyExpense } from "../lib/expense_classifier.js";
+import { postEntry, postPurchaseReturn } from "../lib/accounting.js";
 import {
   db,
   purchaseRequestsTable,
@@ -21,9 +17,6 @@ import {
   purchaseReturnLinesTable,
   vendorInvoicesTable,
   vendorInvoiceLinesTable,
-  vendorInvoiceLineTaxesTable,
-  vendorWithholdingRecordsTable,
-  vendorInvoiceCoaMappingsTable,
   paymentRequestsTable,
   paymentRequestItemsTable,
   landedCostsTable,
@@ -37,47 +30,11 @@ import {
   suppliersTable,
   productsTable,
   accountingSettingsTable,
-  chartOfAccountsTable,
-  accountingEntriesTable,
-  accountingEntryLinesTable,
   whStockTable,
   whMovementsTable,
 } from "@workspace/db";
-import { eq, desc, and, sql, inArray, or, isNull } from "drizzle-orm";
-import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
-import { audit } from "../lib/unifiedAudit.js";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import { getInCodeTemplate, resolveTemplate, type ProductTemplateOverride } from "@workspace/product-templates";
-import {
-  guardInvoiceUpdate,
-  lockInvoiceSnapshot,
-  runSapInvoiceLockEngine,
-  createSapJournal,
-  reverseJournal,
-  storeSapJournal,
-  getSapJournalByInvoice,
-} from "../lib/sapInvoiceLockEngine.js";
-import { sapInvoiceLockMiddleware } from "../middlewares/sapInvoiceLockMiddleware.js";
-import { sapAuditMiddleware } from "../middlewares/sapAuditMiddleware.js";
-import { isInvoiceTaxBalanced } from "../lib/invoiceTaxPostingPolicy.js";
-import { buildSapTaxInput } from "../lib/sapTaxEngine.js";
-import {
-  buildGrossVendorInvoicePostingLines,
-  evaluateThreeWayMatchLines,
-  evaluateVendorInvoicePostingGate,
-  normalizeVendorLineMappingKey,
-} from "../lib/vendorPaymentHardening.js";
-import { recalculateVendorInvoiceBreakdown } from "../lib/invoiceWithholdingCalculation.js";
-import { resolveDefaultWithholdingAccountId } from "../lib/vendorWithholdingAccounts.js";
-import {
-  APPROVAL_STATES,
-  loadOrCreateApprovalState,
-  approveDocument,
-  rejectDocument,
-  saveApprovalState,
-  buildAuditLog,
-  writeSapAuditLog,
-} from "../lib/sapApprovalEngine.js";
-import { resolveVendorPayableAccountId } from "../lib/vendorPayableAccount.js";
 
 const router = Router();
 
@@ -91,33 +48,6 @@ router.use(async (req, res, next) => {
 function num(v: unknown): number { return Number(v ?? 0); }
 function idr(n: number): string { return n.toFixed(2); }
 
-async function findApprovedVendorCoaMapping(input: {
-  companyId: number;
-  supplierId?: number;
-  productId?: number;
-  mappingKey?: string | null;
-}): Promise<number | null> {
-  const key = normalizeVendorLineMappingKey(input.mappingKey);
-  if (!key) return null;
-  const rows = await db.execute<{ coa_account_id: number }>(sql`
-    SELECT coa_account_id
-    FROM vendor_invoice_coa_mappings
-    WHERE company_id = ${input.companyId}
-      AND mapping_key = ${key}
-      AND status = 'approved'
-      AND (supplier_id IS NULL OR supplier_id = ${input.supplierId ?? null})
-      AND (product_id IS NULL OR product_id = ${input.productId ?? null})
-    ORDER BY (supplier_id IS NOT NULL) DESC, (product_id IS NOT NULL) DESC, updated_at DESC
-    LIMIT 1
-  `);
-  const row = (rows as any).rows?.[0] ?? (Array.isArray(rows) ? (rows as any)[0] : undefined);
-  return row?.coa_account_id ? Number(row.coa_account_id) : null;
-}
-
-function actorId(req: any): string {
-  return String(req.user?.email ?? req.user?.id ?? "SYSTEM");
-}
-
 async function nextSeq(table: string, prefix: string, col: string): Promise<string> {
   const year = new Date().getFullYear();
   const pattern = `${prefix}/${year}/%`;
@@ -129,82 +59,10 @@ async function nextSeq(table: string, prefix: string, col: string): Promise<stri
   return `${prefix}/${year}/${seq}`;
 }
 
-const PR_ACTION_EMOJI: Record<string, string> = {
-  submitted: "📋",
-  approved:  "✅",
-  rejected:  "❌",
-  cancelled: "🚫",
-};
-
-async function notifyPrAction(
-  prId: number,
-  pr: { prNumber: string; requestedBy: string | null; department: string | null; createdBy?: string | null },
-  action: string,
-  notes?: string,
-  actorName?: string,
-): Promise<void> {
-  try {
-    const lines = await db.select().from(purchaseRequestLinesTable).where(eq(purchaseRequestLinesTable.prId, prId));
-    const totalEst = lines.reduce((s, l) => s + Number(l.estimatedCost ?? 0) * Number(l.quantity ?? 1), 0);
-    const fmt = (n: number) => new Intl.NumberFormat("id-ID").format(n);
-
-    const statusLabel: Record<string, string> = {
-      submit:   "disubmit untuk approval",
-      approve:  "disetujui",
-      reject:   "ditolak",
-      cancel:   "dibatalkan",
-    };
-    const emoji = PR_ACTION_EMOJI[action === "submit" ? "submitted" : action === "approve" ? "approved" : action === "reject" ? "rejected" : "cancelled"] ?? "📄";
-
-    const itemLines = lines.slice(0, 5).map((l, i) =>
-      `  ${i + 1}. ${l.name} — ${l.quantity} ${l.unit}`
-    ).join("\n");
-    const moreItems = lines.length > 5 ? `\n  ... dan ${lines.length - 5} item lainnya` : "";
-
-    let msg = `${emoji} *Purchase Request ${statusLabel[action] ?? action}*\n\n` +
-      `📄 No PR   : *${pr.prNumber}*\n` +
-      `👤 Pemohon : ${pr.requestedBy ?? "-"}\n` +
-      `🏢 Divisi  : ${pr.department ?? "-"}\n` +
-      `📦 Items   :\n${itemLines}${moreItems}\n` +
-      `💰 Est. Total: Rp ${fmt(totalEst)}`;
-
-    if (notes?.trim()) {
-      msg += `\n📝 Catatan : ${notes}`;
-    }
-    if (actorName?.trim() && action !== "submit") {
-      msg += `\n👤 Oleh    : ${actorName}`;
-    }
-
-    const waOpts = { context: "pr-action", refType: "purchase_request", refId: String(prId) };
-
-    // ── Notifikasi ke admin group / admin WA ──────────────────────────────────
-    const [adminGroup, adminWa] = await Promise.all([getAdminGroupWa(), getAdminWa()]);
-    if (adminGroup) {
-      sendToAdminGroup(adminGroup, msg, waOpts).catch(() => undefined);
-    } else if (adminWa) {
-      sendWhatsApp(adminWa, msg, waOpts).catch(() => undefined);
-    }
-
-    // ── Notifikasi ke requester (approved / rejected saja) ────────────────────
-    if ((action === "approve" || action === "reject") && pr.createdBy) {
-      try {
-        const [requesterRow] = await db.execute(
-          sql`SELECT whatsapp FROM users WHERE id = ${pr.createdBy} LIMIT 1`
-        ) as any;
-        const requesterWa = (requesterRow?.rows?.[0] ?? requesterRow?.[0])?.whatsapp as string | null | undefined;
-        if (requesterWa?.trim()) {
-          const requesterMsg = action === "approve"
-            ? `✅ *PR Anda Disetujui*\n\n📄 No PR : *${pr.prNumber}*\n${notes?.trim() ? `📝 Catatan : ${notes}\n` : ""}👤 Oleh  : ${actorName ?? "Approver"}`
-            : `❌ *PR Anda Ditolak*\n\n📄 No PR : *${pr.prNumber}*\n${notes?.trim() ? `📝 Alasan : ${notes}\n` : ""}👤 Oleh  : ${actorName ?? "Approver"}\n\nSilakan buat PR baru jika diperlukan.`;
-          sendWhatsApp(requesterWa.trim(), requesterMsg, { ...waOpts, refId: `${prId}-req` }).catch(() => undefined);
-        }
-      } catch {
-        // tidak ada WA requester — skip
-      }
-    }
-  } catch {
-    // fire-and-forget — jangan block response
-  }
+function resolveCompanyId(req: { query: Record<string, unknown>; body: Record<string, unknown> }): number {
+  const raw = (req.query["company"] ?? req.query["companyId"] ?? req.body["companyId"]) as string | undefined;
+  const n = raw ? parseInt(String(raw), 10) : NaN;
+  return Number.isNaN(n) ? 1 : n;
 }
 
 // Boot migration: add template columns to purchase_requests
@@ -214,72 +72,6 @@ db.execute(sql`
   ALTER TABLE purchase_requests ADD COLUMN IF NOT EXISTS template_version TEXT;
   ALTER TABLE purchase_requests ADD COLUMN IF NOT EXISTS template_snapshot JSONB;
 `).catch((e: unknown) => console.warn("[purchase_requests] boot migration warn:", e));
-
-// Boot migration: SAP Approval States table
-db.execute(sql`
-  CREATE TABLE IF NOT EXISTS sap_approval_states (
-    id            SERIAL PRIMARY KEY,
-    entity_type   TEXT NOT NULL,
-    entity_id     TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'DRAFT',
-    current_approver TEXT NULL,
-    approval_history JSONB NOT NULL DEFAULT '[]'::jsonb,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (entity_type, entity_id)
-  );
-`).then(() => db.execute(sql`
-  CREATE INDEX IF NOT EXISTS idx_sap_approval_states_entity ON sap_approval_states(entity_type, entity_id);
-`)).catch((e: unknown) => console.warn("[sap_approval_states] boot migration warn:", e));
-
-// Boot migration: SAP Audit Ledger (immutable append-only)
-db.execute(sql`
-  CREATE TABLE IF NOT EXISTS sap_audit_ledger (
-    id          TEXT PRIMARY KEY,
-    entity_type TEXT NOT NULL,
-    entity_id   TEXT NOT NULL,
-    action      TEXT NOT NULL,
-    actor_id    TEXT NULL,
-    role        TEXT NULL,
-    before_data JSONB NULL,
-    after_data  JSONB NULL,
-    timestamp   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`).then(() => db.execute(sql`
-  CREATE INDEX IF NOT EXISTS idx_sap_audit_ledger_entity ON sap_audit_ledger(entity_type, entity_id);
-`)).then(() => db.execute(sql`
-  CREATE INDEX IF NOT EXISTS idx_sap_audit_ledger_ts ON sap_audit_ledger(timestamp DESC);
-`)).catch((e: unknown) => console.warn("[sap_audit_ledger] boot migration warn:", e));
-
-// Boot migration: SAP Journal tables (sap_journals + sap_journal_entries)
-// Chained with .then() to avoid race condition on pgBouncer — index must come after table
-db.execute(sql`
-  CREATE TABLE IF NOT EXISTS sap_journals (
-    id            TEXT PRIMARY KEY,
-    invoice_id    TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'POSTED',
-    reversed_from TEXT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-`).then(() => db.execute(sql`
-  CREATE INDEX IF NOT EXISTS idx_sap_journals_invoice_id ON sap_journals(invoice_id);
-`)).catch((e: unknown) => console.warn("[sap_journals] boot migration warn:", e));
-
-db.execute(sql`
-  CREATE TABLE IF NOT EXISTS sap_journal_entries (
-    id         TEXT PRIMARY KEY,
-    journal_id TEXT NOT NULL,
-    account    TEXT NOT NULL,
-    debit      BIGINT NOT NULL DEFAULT 0,
-    credit     BIGINT NOT NULL DEFAULT 0
-  );
-`).then(() => db.execute(sql`
-  CREATE INDEX IF NOT EXISTS idx_sap_journal_entries_journal_id ON sap_journal_entries(journal_id);
-`)).catch((e: unknown) => console.warn("[sap_journal_entries] boot migration warn:", e));
-
-// Boot migration: source_pr_id — propagate PR origin to purchase_documents for Sport Center accounting
-db.execute(sql`
-  ALTER TABLE purchase_documents ADD COLUMN IF NOT EXISTS source_pr_id INTEGER;
-`).catch((e: unknown) => console.warn("[purchase_documents] source_pr_id boot migration warn:", e));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UOM
@@ -297,7 +89,7 @@ router.post("/uom", async (req, res) => {
 });
 
 router.delete("/uom/:id", async (req, res) => {
-  await db.delete(uomMasterTable).where(eq(uomMasterTable.id, Number(String(req.params.id))));
+  await db.delete(uomMasterTable).where(eq(uomMasterTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -325,11 +117,9 @@ router.get("/pr", async (req, res) => {
 });
 
 router.get("/pr/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [pr] = await db.select().from(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, id));
   if (!pr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(pr.companyId, cid, req, res, { resourceType: "purchase_request", resourceId: id })) return;
   const lines = await db.select().from(purchaseRequestLinesTable).where(eq(purchaseRequestLinesTable.prId, id));
   const approvals = await db.select().from(purchaseApprovalsTable)
     .where(and(eq(purchaseApprovalsTable.docType, "PR"), eq(purchaseApprovalsTable.docId, id)))
@@ -375,12 +165,8 @@ router.post("/pr", async (req, res) => {
 });
 
 router.put("/pr/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
-  const [prOwner] = await db.select({ companyId: purchaseRequestsTable.companyId }).from(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, id));
-  if (!prOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(prOwner.companyId, cid, req, res, { resourceType: "purchase_request", resourceId: id })) return;
   const [pr] = await db.update(purchaseRequestsTable).set({
     warehouseId: body.warehouseId ? Number(body.warehouseId) : undefined,
     requestedBy: body.requestedBy ? String(body.requestedBy) : undefined,
@@ -416,17 +202,14 @@ router.put("/pr/:id", async (req, res) => {
 });
 
 router.post("/pr/:id/action", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const { action, notes, approverName, approverId } = req.body as Record<string, string>;
   const [pr] = await db.select().from(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, id));
   if (!pr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(pr.companyId, cid, req, res, { resourceType: "purchase_request", resourceId: id })) return;
 
   if (action === "submit") {
     await db.update(purchaseRequestsTable).set({ status: "submitted", updatedAt: new Date() }).where(eq(purchaseRequestsTable.id, id));
     await db.insert(purchaseApprovalsTable).values({ docType: "PR", docId: id, step: 1, status: "pending", approverName: approverName ?? null, approverId: approverId ?? null });
-    notifyPrAction(id, pr, "submit", notes, undefined).catch(() => undefined);
   } else if (action === "approve") {
     const [pending] = await db.select().from(purchaseApprovalsTable)
       .where(and(eq(purchaseApprovalsTable.docType, "PR"), eq(purchaseApprovalsTable.docId, id), eq(purchaseApprovalsTable.status, "pending")))
@@ -435,7 +218,6 @@ router.post("/pr/:id/action", async (req, res) => {
       await db.update(purchaseApprovalsTable).set({ status: "approved", notes: notes ?? null, approvedAt: new Date() }).where(eq(purchaseApprovalsTable.id, pending.id));
     }
     await db.update(purchaseRequestsTable).set({ status: "approved", updatedAt: new Date() }).where(eq(purchaseRequestsTable.id, id));
-    notifyPrAction(id, pr, "approve", notes, approverName).catch(() => undefined);
   } else if (action === "reject") {
     const [pending] = await db.select().from(purchaseApprovalsTable)
       .where(and(eq(purchaseApprovalsTable.docType, "PR"), eq(purchaseApprovalsTable.docId, id), eq(purchaseApprovalsTable.status, "pending")))
@@ -444,10 +226,8 @@ router.post("/pr/:id/action", async (req, res) => {
       await db.update(purchaseApprovalsTable).set({ status: "rejected", notes: notes ?? null, rejectedAt: new Date() }).where(eq(purchaseApprovalsTable.id, pending.id));
     }
     await db.update(purchaseRequestsTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(purchaseRequestsTable.id, id));
-    notifyPrAction(id, pr, "reject", notes, approverName).catch(() => undefined);
   } else if (action === "cancel") {
     await db.update(purchaseRequestsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(purchaseRequestsTable.id, id));
-    notifyPrAction(id, pr, "cancel", notes, undefined).catch(() => undefined);
   } else if (action === "convert_rfq") {
     // Create an RFQ (purchase_documents kind=rfq) from this PR
     const lines = await db.select().from(purchaseRequestLinesTable).where(eq(purchaseRequestLinesTable.prId, id));
@@ -464,7 +244,7 @@ router.post("/pr/:id/action", async (req, res) => {
     let templateVersion: string | null = null;
     if (categoryKey) {
       const dbOverrides = await db.select().from(productTemplatesTable).where(eq(productTemplatesTable.categoryKey, categoryKey)).limit(1);
-      const override = dbOverrides[0] ? {
+      const override: ProductTemplateOverride | null = dbOverrides[0] ? {
         categoryKey: dbOverrides[0].categoryKey,
         label: dbOverrides[0].label,
         version: dbOverrides[0].version,
@@ -475,8 +255,8 @@ router.post("/pr/:id/action", async (req, res) => {
         packagingInstructions: dbOverrides[0].packagingInstructions ?? null,
         conditionalRules: dbOverrides[0].conditionalRules as ProductTemplateOverride["conditionalRules"],
         validationRules: dbOverrides[0].validationRules as ProductTemplateOverride["validationRules"],
-      } as unknown as ProductTemplateOverride : null;
-      const resolved = resolveTemplate(categoryKey, override ?? null);
+      } satisfies ProductTemplateOverride : null;
+      const resolved = resolveTemplate(categoryKey, override);
       if (resolved) {
         templateSnapshot = resolved as unknown as Record<string, unknown>;
         templateId = resolved.category;
@@ -501,8 +281,6 @@ router.post("/pr/:id/action", async (req, res) => {
       templateVersion: (pr as any).templateVersion ?? null,
       templateSnapshot: (pr as any).templateSnapshot ?? null,
     }).returning();
-    // Propagate source_pr_id untuk traceability (Sport Center dan modul lain)
-    await db.execute(sql`UPDATE purchase_documents SET source_pr_id = ${id} WHERE id = ${rfq!.id}`);
     if (lines.length > 0) {
       await db.insert(purchaseDocumentLinesTable).values(
         lines.map((l) => ({
@@ -525,13 +303,7 @@ router.post("/pr/:id/action", async (req, res) => {
 });
 
 router.delete("/pr/:id", async (req, res) => {
-  await db.delete(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, Number(String(req.params.id))));
-  const id = Number(req.params.id);
-  const [prOwner] = await db.select({ companyId: purchaseRequestsTable.companyId }).from(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, id));
-  if (!prOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(prOwner.companyId, cid, req, res, { resourceType: "purchase_request", resourceId: id })) return;
-  await db.delete(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, id));
+  await db.delete(purchaseRequestsTable).where(eq(purchaseRequestsTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -548,18 +320,15 @@ router.get("/vq", async (req, res) => {
 });
 
 router.get("/vq/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [vq] = await db.select().from(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, id));
   if (!vq) { res.status(404).json({ error: "Not found" }); return; }
-  const [rfqCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vq.rfqId));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(rfqCo?.companyId, cid, req, res, { resourceType: "vendor_quotation", resourceId: id })) return;
   const lines = await db.select().from(vendorQuotationLinesTable).where(eq(vendorQuotationLinesTable.quotationId, id));
   res.json({ ...vq, lines });
 });
 
 router.get("/vq/compare/:rfqId", async (req, res) => {
-  const rfqId = Number(String(req.params.rfqId));
+  const rfqId = Number(req.params.rfqId);
   const quotations = await db.select().from(vendorQuotationsTable).where(eq(vendorQuotationsTable.rfqId, rfqId));
   const result = await Promise.all(quotations.map(async (vq) => {
     const lines = await db.select().from(vendorQuotationLinesTable).where(eq(vendorQuotationLinesTable.quotationId, vq.id));
@@ -606,13 +375,8 @@ router.post("/vq", async (req, res) => {
 });
 
 router.put("/vq/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
-  const [vqOwner] = await db.select({ rfqId: vendorQuotationsTable.rfqId }).from(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, id));
-  if (!vqOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const [rfqCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vqOwner.rfqId));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(rfqCo?.companyId, cid, req, res, { resourceType: "vendor_quotation", resourceId: id })) return;
   const [vq] = await db.update(vendorQuotationsTable).set({
     supplierName: body.supplierName ? String(body.supplierName) : undefined,
     validUntil: body.validUntil ? new Date(String(body.validUntil)) : undefined,
@@ -650,12 +414,9 @@ router.put("/vq/:id", async (req, res) => {
 
 router.post("/vq/:id/select", async (req, res) => {
   // Select this quotation → update vendor on parent RFQ → create PO
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [vq] = await db.select().from(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, id));
   if (!vq) { res.status(404).json({ error: "Not found" }); return; }
-  const [rfqCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vq.rfqId));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(rfqCo?.companyId, cid, req, res, { resourceType: "vendor_quotation", resourceId: id })) return;
   await db.update(vendorQuotationsTable).set({ status: "selected", updatedAt: new Date() }).where(eq(vendorQuotationsTable.id, id));
   await db.update(vendorQuotationsTable).set({ status: "rejected", updatedAt: new Date() })
     .where(and(eq(vendorQuotationsTable.rfqId, vq.rfqId), sql`id != ${id}`));
@@ -667,15 +428,11 @@ router.post("/vq/:id/select", async (req, res) => {
   const countRow = ((poResult as any).rows?.[0] ?? (Array.isArray(poResult) ? poResult[0] : { seq: 0 })) as { seq: number };
   const seq = (Number(countRow.seq) + 1).toString().padStart(5, "0");
   const poNumber = `PO/${year}/${seq}`;
-  // Ambil source_pr_id dari RFQ agar bisa dipropagasi ke PO
-  const rfqSourcePrRow = await db.execute(sql`SELECT source_pr_id FROM purchase_documents WHERE id = ${vq.rfqId} LIMIT 1`);
-  const rfqSourcePrId = (rfqSourcePrRow.rows[0] as any)?.source_pr_id ?? null;
-
   const [po] = await db.insert(purchaseDocumentsTable).values({
     docNumber: poNumber,
     kind: "order",
     status: "confirmed",
-    companyId: rfq?.companyId ?? cid,
+    companyId: rfq?.companyId ?? 1,
     supplierId: vq.supplierId ?? undefined,
     supplierName: vq.supplierName,
     totalAmount: vq.totalAmount,
@@ -694,10 +451,6 @@ router.post("/vq/:id/select", async (req, res) => {
     templateVersion: (rfq as any)?.templateVersion ?? null,
     templateSnapshot: (rfq as any)?.templateSnapshot ?? null,
   }).returning();
-  // Propagate source_pr_id dari RFQ ke PO
-  if (rfqSourcePrId) {
-    await db.execute(sql`UPDATE purchase_documents SET source_pr_id = ${rfqSourcePrId} WHERE id = ${po!.id}`);
-  }
   if (vqLines.length > 0) {
     await db.insert(purchaseDocumentLinesTable).values(
       vqLines.map((l) => ({
@@ -714,14 +467,7 @@ router.post("/vq/:id/select", async (req, res) => {
 });
 
 router.delete("/vq/:id", async (req, res) => {
-  await db.delete(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, Number(String(req.params.id))));
-  const id = Number(req.params.id);
-  const [vqOwner] = await db.select({ rfqId: vendorQuotationsTable.rfqId }).from(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, id));
-  if (!vqOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const [rfqCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vqOwner.rfqId));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(rfqCo?.companyId, cid, req, res, { resourceType: "vendor_quotation", resourceId: id })) return;
-  await db.delete(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, id));
+  await db.delete(vendorQuotationsTable).where(eq(vendorQuotationsTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -742,11 +488,9 @@ router.get("/gr", async (req, res) => {
 });
 
 router.get("/gr/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [gr] = await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, id));
   if (!gr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(gr.companyId, cid, req, res, { resourceType: "goods_receipt", resourceId: id })) return;
   const lines = await db.select().from(goodsReceiptLinesTable).where(eq(goodsReceiptLinesTable.grId, id));
   const [po] = await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, gr.poId));
   res.json({ ...gr, lines, po });
@@ -796,12 +540,8 @@ router.post("/gr", async (req, res) => {
 });
 
 router.put("/gr/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
-  const [grOwner] = await db.select({ companyId: goodsReceiptsTable.companyId }).from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, id));
-  if (!grOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(grOwner.companyId, cid, req, res, { resourceType: "goods_receipt", resourceId: id })) return;
   const [gr] = await db.update(goodsReceiptsTable).set({
     warehouseId: body.warehouseId ? Number(body.warehouseId) : undefined,
     receiveDate: body.receiveDate ? new Date(String(body.receiveDate)) : undefined,
@@ -841,12 +581,10 @@ router.put("/gr/:id", async (req, res) => {
 });
 
 router.post("/gr/:id/confirm", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const { confirmedBy } = req.body as Record<string, string>;
   const [gr] = await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, id));
   if (!gr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(gr.companyId, cid, req, res, { resourceType: "goods_receipt", resourceId: id })) return;
   if (gr.status !== "draft") { res.status(400).json({ error: "Already confirmed" }); return; }
 
   await db.update(goodsReceiptsTable).set({ status: "confirmed", confirmedBy: confirmedBy ?? null, confirmedAt: new Date(), updatedAt: new Date() }).where(eq(goodsReceiptsTable.id, id));
@@ -894,24 +632,11 @@ router.post("/gr/:id/confirm", async (req, res) => {
   // Post accounting journal: Dr Inventory / Cr GR/IR (proper 3-way match accrual)
   // GR/IR (2-1045) acts as clearing account; cleared when vendor invoice (bill) is posted.
   try {
-    const settings = await ensureAccountingSettings(gr.companyId ?? cid);
+    const settings = await ensureAccountingSettings(gr.companyId ?? 1);
     const totalCost = lines.reduce((s, l) => s + num(l.qtyReceived) * num(l.unitCost), 0);
-
-    // Resolve GR/IR account — settings first, fallback: langsung cari akun 2-1045
-    let effectiveGrirId: number | null = settings.grirAccountId ?? null;
-    if (!effectiveGrirId) {
-      const grirRow = (await db.execute(sql`
-        SELECT id FROM chart_of_accounts
-        WHERE code LIKE '2-1045%'
-          AND (company_id = ${gr.companyId ?? null} OR company_id IS NULL)
-        ORDER BY id LIMIT 1
-      `)).rows[0] as { id: number } | undefined;
-      effectiveGrirId = grirRow?.id ?? null;
-    }
-
-    if (!effectiveGrirId) {
-      console.warn(`[GRN ${gr.grNumber}] grirAccountId & akun 2-1045 tidak ditemukan — lewati GRN accrual.`);
-    } else if (totalCost > 0 && settings.inventoryAccountId && settings.purchaseJournalId) {
+    const creditAccountId = settings.grirAccountId ?? settings.apAccountId; // fallback to AP if no GR/IR
+    if (totalCost > 0 && settings.inventoryAccountId && settings.purchaseJournalId && creditAccountId) {
+      const isGrir = !!settings.grirAccountId;
       const entry = await postEntry({
         journalId: settings.purchaseJournalId,
         date: new Date(),
@@ -919,10 +644,10 @@ router.post("/gr/:id/confirm", async (req, res) => {
         description: `Penerimaan Barang ${gr.grNumber}`,
         source: "grn_receipt",
         sourceId: id,
-        companyId: gr.companyId ?? cid,
+        companyId: gr.companyId ?? 1,
         lines: [
           { accountId: settings.inventoryAccountId, debit: totalCost, credit: 0, description: `Persediaan masuk: ${gr.grNumber}` },
-          { accountId: effectiveGrirId, debit: 0, credit: totalCost, description: `GR/IR accrual: ${gr.grNumber}` },
+          { accountId: creditAccountId, debit: 0, credit: totalCost, description: isGrir ? `GR/IR accrual: ${gr.grNumber}` : `AP accrual: ${gr.grNumber}` },
         ],
       }, "PUR");
       if (entry?.id) {
@@ -938,13 +663,7 @@ router.post("/gr/:id/confirm", async (req, res) => {
 });
 
 router.post("/gr/:id/cancel", async (req, res) => {
-  await db.update(goodsReceiptsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(goodsReceiptsTable.id, Number(String(req.params.id))));
-  const id = Number(req.params.id);
-  const [grOwner] = await db.select({ companyId: goodsReceiptsTable.companyId }).from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, id));
-  if (!grOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(grOwner.companyId, cid, req, res, { resourceType: "goods_receipt", resourceId: id })) return;
-  await db.update(goodsReceiptsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(goodsReceiptsTable.id, id));
+  await db.update(goodsReceiptsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(goodsReceiptsTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -961,11 +680,9 @@ router.get("/qc", async (req, res) => {
 });
 
 router.get("/qc/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [qc] = await db.select().from(qcInspectionsTable).where(eq(qcInspectionsTable.id, id));
   if (!qc) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(qc.companyId, cid, req, res, { resourceType: "qc_inspection", resourceId: id })) return;
   const lines = await db.select().from(qcLinesTable).where(eq(qcLinesTable.qcId, id));
   const [gr] = await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, qc.grId));
   res.json({ ...qc, lines, gr });
@@ -1002,12 +719,8 @@ router.post("/qc", async (req, res) => {
 });
 
 router.put("/qc/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
-  const [qcOwner] = await db.select({ companyId: qcInspectionsTable.companyId }).from(qcInspectionsTable).where(eq(qcInspectionsTable.id, id));
-  if (!qcOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(qcOwner.companyId, cid, req, res, { resourceType: "qc_inspection", resourceId: id })) return;
   const [qc] = await db.update(qcInspectionsTable).set({
     inspectorName: body.inspectorName ? String(body.inspectorName) : undefined,
     notes: body.notes ? String(body.notes) : undefined,
@@ -1035,12 +748,8 @@ router.put("/qc/:id", async (req, res) => {
 });
 
 router.post("/qc/:id/action", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const { action, inspectorName, notes } = req.body as Record<string, string>;
-  const [qcOwner] = await db.select({ companyId: qcInspectionsTable.companyId }).from(qcInspectionsTable).where(eq(qcInspectionsTable.id, id));
-  if (!qcOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(qcOwner.companyId, cid, req, res, { resourceType: "qc_inspection", resourceId: id })) return;
   const lines = await db.select().from(qcLinesTable).where(eq(qcLinesTable.qcId, id));
   const totalFailed = lines.reduce((s, l) => s + num(l.qtyFailed), 0);
   const totalPassed = lines.reduce((s, l) => s + num(l.qtyPassed), 0);
@@ -1067,11 +776,9 @@ router.get("/returns", async (req, res) => {
 });
 
 router.get("/returns/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [ret] = await db.select().from(purchaseReturnsTable).where(eq(purchaseReturnsTable.id, id));
   if (!ret) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(ret.companyId, cid, req, res, { resourceType: "purchase_return", resourceId: id })) return;
   const lines = await db.select().from(purchaseReturnLinesTable).where(eq(purchaseReturnLinesTable.returnId, id));
   res.json({ ...ret, lines });
 });
@@ -1113,12 +820,10 @@ router.post("/returns", async (req, res) => {
 });
 
 router.post("/returns/:id/confirm", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const { confirmedBy } = req.body as Record<string, string>;
   const [ret] = await db.select().from(purchaseReturnsTable).where(eq(purchaseReturnsTable.id, id));
   if (!ret) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(ret.companyId, cid, req, res, { resourceType: "purchase_return", resourceId: id })) return;
   await db.update(purchaseReturnsTable).set({ status: "confirmed", confirmedBy: confirmedBy ?? null, confirmedAt: new Date(), updatedAt: new Date() }).where(eq(purchaseReturnsTable.id, id));
 
   const lines = await db.select().from(purchaseReturnLinesTable).where(eq(purchaseReturnLinesTable.returnId, id));
@@ -1169,13 +874,7 @@ router.post("/returns/:id/confirm", async (req, res) => {
 });
 
 router.post("/returns/:id/cancel", async (req, res) => {
-  await db.update(purchaseReturnsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(purchaseReturnsTable.id, Number(String(req.params.id))));
-  const id = Number(req.params.id);
-  const [retOwner] = await db.select({ companyId: purchaseReturnsTable.companyId }).from(purchaseReturnsTable).where(eq(purchaseReturnsTable.id, id));
-  if (!retOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(retOwner.companyId, cid, req, res, { resourceType: "purchase_return", resourceId: id })) return;
-  await db.update(purchaseReturnsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(purchaseReturnsTable.id, id));
+  await db.update(purchaseReturnsTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(purchaseReturnsTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -1188,469 +887,26 @@ router.get("/vendor-invoices", async (req, res) => {
   const rows = await db.select().from(vendorInvoicesTable)
     .where(eq(vendorInvoicesTable.companyId, companyId))
     .orderBy(desc(vendorInvoicesTable.createdAt));
-  const journalIds = rows
-    .map((row) => row.journalEntryId)
-    .filter((journalId): journalId is number => journalId != null);
-  const journalRows = journalIds.length > 0
-    ? await db.select({
-        id: accountingEntriesTable.id,
-        status: accountingEntriesTable.status,
-        entryNumber: accountingEntriesTable.entryNumber,
-      }).from(accountingEntriesTable).where(inArray(accountingEntriesTable.id, journalIds))
-    : [];
-  const journalById = new Map(journalRows.map((journal) => [journal.id, journal]));
-  res.json(rows.map((row) => ({
-    ...row,
-    journalStatus: row.journalEntryId == null ? null : journalById.get(row.journalEntryId)?.status ?? null,
-    journalEntryNumber: row.journalEntryId == null ? null : journalById.get(row.journalEntryId)?.entryNumber ?? null,
-  })));
-});
-
-// Return approved vendor-specific COA mappings so invoice capture can show the
-// real account from the company's chart instead of only the OCR text hint.
-router.get("/vendor-invoices/coa-mappings", async (req, res) => {
-  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  const supplierId = Number(req.query.supplierId);
-  if (!Number.isInteger(supplierId) || supplierId <= 0) {
-    res.status(400).json({ error: "supplier_id_required", message: "supplierId wajib valid." });
-    return;
-  }
-
-  const rows = await db.select({
-    mappingKey: vendorInvoiceCoaMappingsTable.mappingKey,
-    coaAccountId: vendorInvoiceCoaMappingsTable.coaAccountId,
-    coaCode: chartOfAccountsTable.code,
-    coaName: chartOfAccountsTable.name,
-  })
-    .from(vendorInvoiceCoaMappingsTable)
-    .innerJoin(
-      chartOfAccountsTable,
-      eq(chartOfAccountsTable.id, vendorInvoiceCoaMappingsTable.coaAccountId),
-    )
-    .where(and(
-      eq(vendorInvoiceCoaMappingsTable.companyId, companyId),
-      eq(vendorInvoiceCoaMappingsTable.supplierId, supplierId),
-      eq(vendorInvoiceCoaMappingsTable.status, "approved"),
-      eq(chartOfAccountsTable.isActive, true),
-      eq(chartOfAccountsTable.isPostable, true),
-    ))
-    .orderBy(vendorInvoiceCoaMappingsTable.updatedAt);
-
   res.json(rows);
 });
 
-// Accounts that Finance may select when confirming withholding tax per line.
-// Keep this scoped and typed so the UI cannot accidentally submit an expense
-// or asset account as a PPh liability.
-router.get("/vendor-invoices/liability-accounts", async (req, res) => {
-  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  const rows = await db.select({
-    id: chartOfAccountsTable.id,
-    code: chartOfAccountsTable.code,
-    name: chartOfAccountsTable.name,
-  })
-    .from(chartOfAccountsTable)
-    .where(and(
-      or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, companyId)),
-      eq(chartOfAccountsTable.type, "liability"),
-      eq(chartOfAccountsTable.isActive, true),
-      eq(chartOfAccountsTable.isPostable, true),
-    ))
-    .orderBy(chartOfAccountsTable.code);
-
-  res.json(rows);
-});
-
-router.get("/vendor-invoices/:id", async (req, res, next) => {
-  const id = Number(String(req.params.id));
-  if (!Number.isInteger(id) || id <= 0) {
-    next();
-    return;
-  }
+router.get("/vendor-invoices/:id", async (req, res) => {
+  const id = Number(req.params.id);
   const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  const lines = await db.select().from(vendorInvoiceLinesTable)
-    .where(eq(vendorInvoiceLinesTable.invoiceId, id))
-    .orderBy(vendorInvoiceLinesTable.id);
-  const lineTaxes = await db.select().from(vendorInvoiceLineTaxesTable).where(
-    inArray(vendorInvoiceLineTaxesTable.invoiceLineId, lines.map((line) => line.id)),
-  );
-  const withholdingRecords = await db.select().from(vendorWithholdingRecordsTable).where(
-    eq(vendorWithholdingRecordsTable.vendorInvoiceId, id),
-  );
+  const lines = await db.select().from(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
   const po = vi.poId ? (await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vi.poId)))[0] : null;
   const gr = vi.grId ? (await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, vi.grId)))[0] : null;
-  const [journal] = vi.journalEntryId == null
-    ? []
-    : await db.select({
-        status: accountingEntriesTable.status,
-        entryNumber: accountingEntriesTable.entryNumber,
-      }).from(accountingEntriesTable)
-        .where(eq(accountingEntriesTable.id, vi.journalEntryId))
-        .limit(1);
-  res.json({
-    ...vi,
-    journalStatus: journal?.status ?? null,
-    journalEntryNumber: journal?.entryNumber ?? null,
-    lines,
-    lineTaxes,
-    withholdingRecords,
-    po,
-    gr,
-  });
-});
-
-// Reset only an orphaned vendor-invoice settlement. This is intentionally
-// stricter than a normal edit: posted payment journals must be reversed through
-// bank reconciliation before an invoice can be marked unpaid again.
-router.post("/vendor-invoices/:id/reset-payment", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
-  if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ error: "vendor_invoice_id_invalid", message: "ID invoice tidak valid." });
-    return;
-  }
-  if (reason.length < 10 || reason.length > 2000) {
-    res.status(400).json({
-      error: "reset_payment_reason_required",
-      message: "Alasan koreksi wajib diisi antara 10 dan 2000 karakter.",
-    });
-    return;
-  }
-
-  const [owner] = await db
-    .select({
-      id: vendorInvoicesTable.id,
-      companyId: vendorInvoicesTable.companyId,
-    })
-    .from(vendorInvoicesTable)
-    .where(eq(vendorInvoicesTable.id, id))
-    .limit(1);
-  if (!owner) {
-    res.status(404).json({ error: "vendor_invoice_not_found", message: "Invoice tidak ditemukan." });
-    return;
-  }
-
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(owner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  try {
-    const result = await db.transaction(async (tx) => {
-      const invoiceResult = await tx.execute(sql`
-        SELECT id, company_id, invoice_number, status, amount_paid, grand_total
-        FROM vendor_invoices
-        WHERE id = ${id} AND company_id = ${owner.companyId ?? cid}
-        FOR UPDATE
-      `);
-      const invoice = invoiceResult.rows[0] as Record<string, unknown> | undefined;
-      if (!invoice) {
-        throw Object.assign(new Error("Invoice tidak ditemukan pada company aktif."), { httpStatus: 404 });
-      }
-
-      const amountPaid = num(invoice.amount_paid);
-      if (amountPaid <= 0.01) {
-        throw Object.assign(new Error("Invoice sudah berstatus belum terbayar."), { httpStatus: 409 });
-      }
-
-      const matchResult = await tx.execute(sql`
-        SELECT
-          brm.id AS match_id,
-          brm.mutation_id,
-          brm.status AS match_status,
-          brm.match_reason,
-          bm.status AS mutation_status,
-          bm.amount AS mutation_amount,
-          bm.journal_entry_id
-        FROM bank_reconciliation_matches brm
-        INNER JOIN bank_mutations bm ON bm.id = brm.mutation_id
-        WHERE brm.candidate_type = 'vendor_invoice'
-          AND brm.candidate_id = ${id}
-          AND brm.status = 'approved'
-        ORDER BY brm.id
-        FOR UPDATE OF brm, bm
-      `);
-      const matches = matchResult.rows as Array<Record<string, unknown>>;
-      if (matches.length === 0) {
-        throw Object.assign(
-          new Error("Sumber settlement invoice tidak ditemukan. Reset diblokir dan perlu review Finance."),
-          { httpStatus: 422 },
-        );
-      }
-
-      const unsafeMatch = matches.find((match) =>
-        match.journal_entry_id != null ||
-        ["approved", "approved_pending_posting", "posted", "void"].includes(
-          String(match.mutation_status ?? "").toLowerCase(),
-        ),
-      );
-      if (unsafeMatch) {
-        throw Object.assign(
-          new Error("Settlement memiliki jurnal atau status bank aktif. Gunakan workflow reversal bank reconciliation terlebih dahulu."),
-          { httpStatus: 409 },
-        );
-      }
-
-      const settlementTotal = matches.reduce((sum, match) => sum + num(match.mutation_amount), 0);
-      if (Math.abs(settlementTotal - amountPaid) > 0.01) {
-        throw Object.assign(
-          new Error(
-            `Nominal settlement (${idr(settlementTotal)}) tidak sama dengan amount_paid invoice (${idr(amountPaid)}). Reset diblokir untuk mencegah saldo tidak konsisten.`,
-          ),
-          { httpStatus: 409 },
-        );
-      }
-
-      for (const match of matches) {
-        const mutationId = Number(match.mutation_id);
-        await tx.execute(sql`
-          UPDATE bank_reconciliation_matches
-          SET
-            status = 'rejected',
-            match_reason = CONCAT(
-              COALESCE(match_reason, ''),
-              ${` | Reset pembayaran invoice oleh admin: ${reason}`}
-            )
-          WHERE id = ${Number(match.match_id)}
-            AND status = 'approved'
-        `);
-        await tx.execute(sql`
-          INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
-          VALUES (
-            ${mutationId},
-            'VENDOR_INVOICE_PAYMENT_RESET',
-            ${String((req as any).user?.email ?? "admin")},
-            ${JSON.stringify({
-              invoice_id: id,
-              invoice_number: invoice.invoice_number,
-              match_id: Number(match.match_id),
-              amount: num(match.mutation_amount),
-              reason,
-            })}
-          )
-        `);
-      }
-
-      const [updatedInvoice] = await tx
-        .update(vendorInvoicesTable)
-        .set({
-          amountPaid: "0",
-          status: "posted",
-          updatedAt: new Date(),
-        })
-        .where(and(
-          eq(vendorInvoicesTable.id, id),
-          eq(vendorInvoicesTable.companyId, owner.companyId ?? cid),
-        ))
-        .returning({
-          id: vendorInvoicesTable.id,
-          invoiceNumber: vendorInvoicesTable.invoiceNumber,
-          status: vendorInvoicesTable.status,
-          amountPaid: vendorInvoicesTable.amountPaid,
-          grandTotal: vendorInvoicesTable.grandTotal,
-        });
-
-      if (!updatedInvoice) {
-        throw Object.assign(new Error("Invoice gagal diperbarui."), { httpStatus: 409 });
-      }
-      return {
-        invoice: updatedInvoice,
-        previousAmountPaid: amountPaid,
-        rejectedMatchIds: matches.map((match) => Number(match.match_id)),
-        rejectedMutationIds: matches.map((match) => Number(match.mutation_id)),
-        reason,
-      };
-    });
-
-    audit(req, {
-      action: "reversal",
-      module: "purchase",
-      resourceId: id,
-      companyId: owner.companyId,
-      before: {
-        invoice_number: result.invoice.invoiceNumber,
-        amount_paid: result.previousAmountPaid,
-        status: "paid/settled",
-      },
-      after: {
-        amount_paid: 0,
-        status: result.invoice.status,
-        rejected_match_ids: result.rejectedMatchIds,
-        rejected_mutation_ids: result.rejectedMutationIds,
-        reason,
-      },
-    });
-    res.json({ ok: true, ...result });
-  } catch (error: any) {
-    const status = Number(error?.httpStatus) || 500;
-    res.status(status).json({
-      error: error?.message ?? "Reset pembayaran invoice gagal.",
-      code: status === 500 ? "RESET_PAYMENT_FAILED" : undefined,
-    });
-  }
-});
-
-router.get("/vendor-invoices/check-duplicate", async (req, res) => {
-  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  const vendorInvoiceRef = req.query.vendorInvoiceRef ? String(req.query.vendorInvoiceRef).trim() : "";
-  const supplierId = req.query.supplierId ? Number(req.query.supplierId) : undefined;
-  const supplierName = req.query.supplierName ? String(req.query.supplierName).trim() : "";
-
-  if (!vendorInvoiceRef || (!supplierId && !supplierName)) {
-    res.json({ duplicate: false });
-    return;
-  }
-
-  const dupWhere = supplierId
-    ? and(
-        eq(vendorInvoicesTable.companyId, companyId),
-        sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
-        eq(vendorInvoicesTable.supplierId, supplierId),
-        sql`${vendorInvoicesTable.status} != 'cancelled'`,
-      )
-    : and(
-        eq(vendorInvoicesTable.companyId, companyId),
-        sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
-        sql`lower(${vendorInvoicesTable.supplierName}) = lower(${supplierName})`,
-        sql`${vendorInvoicesTable.status} != 'cancelled'`,
-      );
-
-  const [existing] = await db
-    .select({ id: vendorInvoicesTable.id, invoiceNumber: vendorInvoicesTable.invoiceNumber })
-    .from(vendorInvoicesTable)
-    .where(dupWhere)
-    .limit(1);
-
-  if (!existing) {
-    res.json({ duplicate: false });
-    return;
-  }
-  res.json({
-    duplicate: true,
-    existingInvoiceId: existing.id,
-    existingInvoiceNumber: existing.invoiceNumber,
-    message: `Invoice vendor dengan nomor "${vendorInvoiceRef}" untuk supplier ini sudah pernah diinput sebagai ${existing.invoiceNumber}.`,
-  });
+  res.json({ ...vi, lines, po, gr });
 });
 
 router.post("/vendor-invoices", async (req, res) => {
   const body = req.body as Record<string, unknown>;
   const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-
-  const vendorInvoiceRef = body.vendorInvoiceRef ? String(body.vendorInvoiceRef).trim() : "";
-  const supplierId = body.supplierId ? Number(body.supplierId) : undefined;
-  const supplierName = String(body.supplierName ?? "").trim();
-
-  if (supplierId) {
-    const [supplier] = await db
-      .select({ id: suppliersTable.id, companyId: suppliersTable.companyId })
-      .from(suppliersTable)
-      .where(eq(suppliersTable.id, supplierId))
-      .limit(1);
-    if (!supplier) {
-      res.status(422).json({ error: "supplier_not_found", message: "Supplier tidak ditemukan." });
-      return;
-    }
-    if (supplier.companyId != null && supplier.companyId !== companyId) {
-      res.status(403).json({ error: "supplier_company_mismatch", message: "Supplier bukan milik company aktif." });
-      return;
-    }
-  }
-
-  if (vendorInvoiceRef) {
-    const dupWhere = supplierId
-      ? and(
-          eq(vendorInvoicesTable.companyId, companyId),
-          sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
-          eq(vendorInvoicesTable.supplierId, supplierId),
-          sql`${vendorInvoicesTable.status} != 'cancelled'`,
-        )
-      : and(
-          eq(vendorInvoicesTable.companyId, companyId),
-          sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
-          sql`lower(${vendorInvoicesTable.supplierName}) = lower(${supplierName})`,
-          sql`${vendorInvoicesTable.status} != 'cancelled'`,
-        );
-
-    const [existing] = await db
-      .select({ id: vendorInvoicesTable.id, invoiceNumber: vendorInvoicesTable.invoiceNumber })
-      .from(vendorInvoicesTable)
-      .where(dupWhere)
-      .limit(1);
-
-    if (existing) {
-      res.status(409).json({
-        error: "duplicate_vendor_invoice",
-        message: `Invoice vendor dengan nomor "${vendorInvoiceRef}" untuk supplier ini sudah pernah diinput sebagai ${existing.invoiceNumber}. Tidak bisa input ulang.`,
-        existingInvoiceId: existing.id,
-        existingInvoiceNumber: existing.invoiceNumber,
-      });
-      return;
-    }
-  }
-
   const invoiceNumber = await nextSeq("vendor_invoices", "VI", "invoice_number");
   const lines = (body.lines as Record<string, unknown>[]) ?? [];
-
-  // SAP Lock: if SAP header values are provided, they are the canonical source of truth.
-  // Otherwise fall back to summing lines (manual invoice creation flow).
-  const headerNet   = body.headerNet   != null && Number.isFinite(Number(body.headerNet))   ? Number(body.headerNet)   : null;
-  const headerVat   = body.headerVat   != null && Number.isFinite(Number(body.headerVat))   ? Number(body.headerVat)   : null;
-  const headerGross = body.headerGross != null && Number.isFinite(Number(body.headerGross)) ? Number(body.headerGross) : null;
-  const requestedWithholdingTaxAmount =
-    body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
-      ? Math.max(0, Number(body.withholdingTaxAmount))
-      : 0;
-  const hasSapHeader = headerGross != null;
-  const taxReviewRequired = body.taxReviewRequired === true;
-  const taxReviewReason = body.taxReviewReason ? String(body.taxReviewReason) : null;
-  const withholdingTaxType = body.withholdingTaxType ? String(body.withholdingTaxType) : null;
-  const taxObject = body.taxObject ? String(body.taxObject) : null;
-  const rawInvoiceBreakdown =
-    body.invoiceBreakdown && typeof body.invoiceBreakdown === "object" && !Array.isArray(body.invoiceBreakdown)
-      ? body.invoiceBreakdown as Record<string, unknown>
-      : null;
-  const recalculatedBreakdown = rawInvoiceBreakdown
-    ? recalculateVendorInvoiceBreakdown(rawInvoiceBreakdown, supplierName)
-    : null;
-  const recalculatedWithholdingAmount = num(
-    recalculatedBreakdown?.withholding?.amount ??
-    recalculatedBreakdown?.totals?.withholding_tax_amount,
-  );
-  const canonicalInvoiceBreakdown = recalculatedBreakdown
-    ? {
-        ...rawInvoiceBreakdown,
-        components: recalculatedBreakdown.components,
-        withholding_tax: recalculatedBreakdown.withholding,
-        totals: recalculatedBreakdown.totals,
-        flags: Array.from(new Set([
-          ...(Array.isArray(rawInvoiceBreakdown?.flags) ? rawInvoiceBreakdown.flags : []),
-          ...recalculatedBreakdown.flags,
-        ])),
-        vendor_policy_applied: recalculatedBreakdown.vendorPolicyApplied,
-      }
-    : rawInvoiceBreakdown;
-
-  const lineCommercialTotal = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
-  const resolvedSapHeader = hasSapHeader
-    ? buildSapTaxInput({
-        subtotal: headerNet,
-        tax: headerVat,
-        total_amount: headerGross,
-         invoice_breakdown: canonicalInvoiceBreakdown,
-      })
-    : null;
-  const totalAmount = hasSapHeader
-    ? (resolvedSapHeader?.net ?? (headerNet ?? (headerGross - (headerVat ?? 0))))
-    : lineCommercialTotal;
-  const taxAmount = hasSapHeader
-    ? (resolvedSapHeader?.vat ?? (headerVat ?? 0))
-    : lines.reduce((s, l) => s + num(l.taxAmount), 0);
-  const grandTotal = hasSapHeader
-    ? (resolvedSapHeader?.gross ?? headerGross)
-    : (totalAmount + taxAmount);
-
+  const totalAmount = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
+  const taxAmount = lines.reduce((s, l) => s + num(l.taxAmount), 0);
   const dueDate = body.dueDate
     ? new Date(String(body.dueDate))
     : new Date(Date.now() + (Number(body.paymentTermDays ?? 30)) * 86400000);
@@ -1661,14 +917,7 @@ router.post("/vendor-invoices", async (req, res) => {
   let poTemplateVersion: string | null = null;
   let poTemplateSnapshot: Record<string, unknown> | null = null;
   if (body.poId) {
-    const [po] = await db.select().from(purchaseDocumentsTable).where(and(
-      eq(purchaseDocumentsTable.id, Number(body.poId)),
-      eq(purchaseDocumentsTable.companyId, companyId),
-    )).limit(1);
-    if (!po) {
-      res.status(422).json({ error: "purchase_order_company_mismatch", message: "Purchase Order tidak ditemukan pada company aktif." });
-      return;
-    }
+    const [po] = await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, Number(body.poId))).limit(1);
     if (po) {
       poCategoryKey = po.categoryKey ?? null;
       poTemplateId = po.templateId ?? null;
@@ -1676,130 +925,13 @@ router.post("/vendor-invoices", async (req, res) => {
       poTemplateSnapshot = (po.templateSnapshot as Record<string, unknown> | null) ?? null;
     }
   }
-  if (body.grId) {
-    const [gr] = await db.select({ id: goodsReceiptsTable.id }).from(goodsReceiptsTable).where(and(
-      eq(goodsReceiptsTable.id, Number(body.grId)),
-      eq(goodsReceiptsTable.companyId, companyId),
-    )).limit(1);
-    if (!gr) {
-      res.status(422).json({ error: "goods_receipt_company_mismatch", message: "Goods Receipt tidak ditemukan pada company aktif." });
-      return;
-    }
-  }
-
-  const lineValues = await Promise.all(lines.map(async (l, lineIndex) => {
-    const productId = l.productId ? Number(l.productId) : undefined;
-    // Reusable mappings follow the vendor's invoice-line description.
-    // coa_hint is only an AI classification and may change between OCR runs.
-    const mappingKey = normalizeVendorLineMappingKey(l.mappingKey ?? l.name);
-    const mappedCoaId = await findApprovedVendorCoaMapping({
-      companyId,
-      supplierId,
-      productId,
-      mappingKey,
-    });
-    const explicitCoaId = l.coaAccountId != null && Number.isInteger(Number(l.coaAccountId))
-      ? Number(l.coaAccountId)
-      : null;
-    // An explicit user selection wins over an older vendor mapping. This lets
-    // Finance intentionally change the vendor's reusable reference.
-    const coaAccountId = explicitCoaId ?? mappedCoaId;
-    const coaResolutionStatus = explicitCoaId || mappedCoaId || l.coaResolutionStatus === "confirmed"
-      ? "confirmed"
-      : "unresolved";
-    const explicitWithholdingTaxes = (
-      Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []
-    ) as Record<string, unknown>[];
-    const breakdownComponent = recalculatedBreakdown?.components?.[lineIndex] as Record<string, unknown> | undefined;
-    const derivedWithholdingAmount = num(
-      breakdownComponent?.withholding_tax_amount ??
-      breakdownComponent?.withholdingAmount,
-    );
-    const withholdingTaxes = explicitWithholdingTaxes.length > 0
-      ? explicitWithholdingTaxes
-      : derivedWithholdingAmount > 0
-        ? [{
-            taxType: String(
-              breakdownComponent?.withholding_tax_type ??
-              recalculatedBreakdown?.withholding?.tax_type ??
-              withholdingTaxType ??
-              "UNRESOLVED",
-            ),
-            taxObject: String(
-              breakdownComponent?.withholding_tax_object ??
-              breakdownComponent?.label ??
-              taxObject ??
-              "UNRESOLVED",
-            ),
-            taxAmount: derivedWithholdingAmount,
-            baseAmount: num(breakdownComponent?.dpp) || num(l.quantity) * num(l.unitCost),
-          }]
-        : [];
-    const normalizedWithholdingTaxes: Record<string, unknown>[] = await Promise.all(withholdingTaxes.map(async (tax) => {
-      const canonicalTaxAmount = num(breakdownComponent?.withholding_tax_amount);
-      const taxType = String(
-        breakdownComponent?.withholding_tax_type ?? tax.taxType ?? "UNRESOLVED",
-      ).trim() || "UNRESOLVED";
-      const taxObjectValue = String(
-        breakdownComponent?.withholding_tax_object ?? tax.taxObject ?? breakdownComponent?.label ?? "UNRESOLVED",
-      ).trim() || "UNRESOLVED";
-      const explicitLiabilityAccountId = Number(tax.liabilityAccountId ?? tax.accountId);
-      const liabilityAccountId = Number.isInteger(explicitLiabilityAccountId) && explicitLiabilityAccountId > 0
-        ? explicitLiabilityAccountId
-        : await resolveDefaultWithholdingAccountId(companyId, taxType);
-      return {
-        ...tax,
-        taxType,
-        taxObject: taxObjectValue,
-        ...(canonicalTaxAmount > 0 ? { taxAmount: canonicalTaxAmount } : {}),
-        liabilityAccountId: liabilityAccountId ?? undefined,
-        reviewReason: liabilityAccountId
-          ? "Akun liability diusulkan otomatis; menunggu konfirmasi Finance."
-          : "Akun liability PPh belum ditemukan; wajib dipilih Finance.",
-      };
-    }));
-    return {
-      invoiceId: 0,
-      productId,
-      name: String(l.name ?? ""),
-      quantity: String(l.quantity ?? "1"),
-      unit: String(l.unit ?? "pcs"),
-      unitCost: String(l.unitCost ?? "0"),
-      subtotal: String(num(l.quantity) * num(l.unitCost)),
-      taxAmount: String(l.taxAmount ?? "0"),
-      coaHint: l.coaHint ? String(l.coaHint) : undefined,
-      coaAccountId: coaAccountId ?? undefined,
-      coaResolutionStatus,
-      coaConfirmedBy: explicitCoaId ? "invoice_capture" : mappedCoaId ? "approved_mapping" : undefined,
-      coaConfirmedAt: explicitCoaId || mappedCoaId ? new Date() : undefined,
-      coaMappingKey: mappingKey || undefined,
-      notes: l.notes ? String(l.notes) : undefined,
-      _withholdingTaxes: normalizedWithholdingTaxes,
-    };
-  }));
-  const hasLineWithholding = lineValues.some((line) => line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0));
-  const lineWithholdingAmount = lineValues.reduce(
-    (sum, line) => sum + line._withholdingTaxes.reduce((lineSum, tax) => lineSum + num(tax.taxAmount), 0),
-    0,
-  );
-  const withholdingTaxAmount = lineWithholdingAmount > 0
-    ? lineWithholdingAmount
-    : recalculatedWithholdingAmount > 0
-      ? recalculatedWithholdingAmount
-      : requestedWithholdingTaxAmount;
-  const hasUnresolvedWithholding = lineValues.some((line) =>
-    line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0 && !tax.liabilityAccountId),
-  );
-  const withholdingNeedsReview =
-    withholdingTaxAmount > 0
-    && (!hasLineWithholding || hasUnresolvedWithholding);
 
   const [vi] = await db.insert(vendorInvoicesTable).values({
     invoiceNumber,
-    vendorInvoiceRef: vendorInvoiceRef || undefined,
+    vendorInvoiceRef: body.vendorInvoiceRef ? String(body.vendorInvoiceRef) : undefined,
     companyId,
-    supplierId: supplierId,
-    supplierName,
+    supplierId: body.supplierId ? Number(body.supplierId) : undefined,
+    supplierName: String(body.supplierName ?? ""),
     poId: body.poId ? Number(body.poId) : undefined,
     grId: body.grId ? Number(body.grId) : undefined,
     invoiceDate: body.invoiceDate ? new Date(String(body.invoiceDate)) : new Date(),
@@ -1807,149 +939,35 @@ router.post("/vendor-invoices", async (req, res) => {
     paymentTermDays: body.paymentTermDays ? Number(body.paymentTermDays) : 30,
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
-    withholdingTaxAmount: String(withholdingTaxAmount),
-    taxReviewStatus: withholdingNeedsReview ? "required" : "not_required",
-    taxReviewReason: withholdingNeedsReview ? taxReviewReason : null,
-    withholdingReviewStatus: withholdingNeedsReview ? "required" : "not_required",
-    withholdingTaxType,
-    taxObject,
-    grandTotal: String(grandTotal),
+    grandTotal: String(totalAmount + taxAmount),
     notes: body.notes ? String(body.notes) : undefined,
-    invoiceBreakdown: canonicalInvoiceBreakdown ?? undefined,
     createdBy: body.createdBy ? String(body.createdBy) : undefined,
     ...(poCategoryKey ? { categoryKey: poCategoryKey, templateId: poTemplateId, templateVersion: poTemplateVersion, templateSnapshot: poTemplateSnapshot } : {}),
   }).returning();
   if (lines.length > 0) {
-    const insertedLines = await db.insert(vendorInvoiceLinesTable).values(
-      lineValues.map(({ _withholdingTaxes: _taxes, invoiceId: _unused, ...line }) => ({
-        ...line,
+    await db.insert(vendorInvoiceLinesTable).values(
+      lines.map((l) => ({
         invoiceId: vi!.id,
-      })),
-    ).returning({ id: vendorInvoiceLinesTable.id });
-    for (let i = 0; i < insertedLines.length; i += 1) {
-      const taxes = lineValues[i]?._withholdingTaxes ?? [];
-      for (const tax of taxes) {
-        if (num(tax.taxAmount) <= 0) continue;
-        await db.insert(vendorInvoiceLineTaxesTable).values({
-          invoiceLineId: insertedLines[i]!.id,
-          companyId,
-          taxType: String(tax.taxType ?? "UNRESOLVED"),
-          taxObject: String(tax.taxObject ?? "UNRESOLVED"),
-          baseAmount: String(tax.baseAmount ?? lineValues[i]!.subtotal),
-          taxAmount: String(tax.taxAmount),
-           liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
-          resolutionStatus: tax.liabilityAccountId ? "confirmed" : "tax_review",
-          reviewReason: tax.liabilityAccountId
-            ? null
-            : String(tax.reviewReason ?? "COA Hutang PPh belum terpetakan"),
-        });
-      }
-    }
+        productId: l.productId ? Number(l.productId) : undefined,
+        name: String(l.name ?? ""),
+        quantity: String(l.quantity ?? "1"),
+        unit: String(l.unit ?? "pcs"),
+        unitCost: String(l.unitCost ?? "0"),
+        subtotal: String(num(l.quantity) * num(l.unitCost)),
+        taxAmount: String(l.taxAmount ?? "0"),
+        notes: l.notes ? String(l.notes) : undefined,
+      }))
+    );
   }
   res.json(vi);
 });
 
-router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
+router.put("/vendor-invoices/:id", async (req, res) => {
+  const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  // ── SAP INVOICE LOCK GUARD ─────────────────────────────────────────────────
-  // Block all financial field updates on POSTED / MATCHED / PAID invoices.
-  // Source: sapInvoiceLockEngine.ts — NO EXCEPTIONS, NO OVERRIDE.
-  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "UNKNOWN";
-  const guard = await guardInvoiceUpdate(id, Object.keys(body), actor);
-  if (guard.blocked) {
-    res.status(409).json({
-      error: guard.message,
-      sap_lock: {
-        status: guard.sapResult?.status ?? "LOCKED",
-        tax_mode: guard.sapResult?.tax_mode ?? "HEADER_TAX_LOCKED",
-        validated: guard.sapResult?.validated ?? false,
-        flags: guard.sapResult?.flags ?? [],
-        blocked_fields: guard.blockedFields,
-      },
-    });
-    return;
-  }
-  // ── END SAP LOCK GUARD ─────────────────────────────────────────────────────
-
-  // Withholding records are immutable lifecycle evidence. Reject the edit
-  // before touching the invoice header; the previous order updated the header
-  // to "required" and only then returned 409, leaving reviewed invoices in a
-  // contradictory partial state.
-  const existingWithholding = await db.select({ id: vendorWithholdingRecordsTable.id })
-    .from(vendorWithholdingRecordsTable)
-    .where(eq(vendorWithholdingRecordsTable.vendorInvoiceId, id))
-    .limit(1);
-  if (existingWithholding.length > 0) {
-    res.status(409).json({
-      error: "withholding_review_locked",
-      message: "Invoice memiliki lifecycle withholding. Selesaikan atau batalkan review sebelum mengubah line.",
-    });
-    return;
-  }
-
   const lines = (body.lines as Record<string, unknown>[]) ?? [];
   const totalAmount = lines.reduce((s, l) => s + num(l.quantity) * num(l.unitCost), 0);
   const taxAmount = lines.reduce((s, l) => s + num(l.taxAmount), 0);
-  const requestedWithholdingTaxAmount =
-    body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
-      ? Math.max(0, Number(body.withholdingTaxAmount))
-      : undefined;
-  const updatedLineValues = await Promise.all(lines.map(async (l) => {
-    const withholdingTaxes = (
-      Array.isArray(l.withholdingTaxes) ? l.withholdingTaxes : Array.isArray(l.taxes) ? l.taxes : []
-    ) as Record<string, unknown>[];
-    const normalizedWithholdingTaxes: Record<string, unknown>[] = await Promise.all(withholdingTaxes.map(async (tax) => {
-      const taxType = String(tax.taxType ?? "UNRESOLVED").trim() || "UNRESOLVED";
-      const taxObject = String(tax.taxObject ?? "UNRESOLVED").trim() || "UNRESOLVED";
-      const explicitLiabilityAccountId = Number(tax.liabilityAccountId ?? tax.accountId);
-      const liabilityAccountId = Number.isInteger(explicitLiabilityAccountId) && explicitLiabilityAccountId > 0
-        ? explicitLiabilityAccountId
-        : await resolveDefaultWithholdingAccountId(cid, taxType);
-      return {
-        ...tax,
-        taxType,
-        taxObject,
-        liabilityAccountId: liabilityAccountId ?? undefined,
-        reviewReason: liabilityAccountId
-          ? "Akun liability diusulkan otomatis; menunggu konfirmasi Finance."
-          : "Akun liability PPh belum ditemukan; wajib dipilih Finance.",
-      };
-    }));
-    return {
-      productId: l.productId ? Number(l.productId) : undefined,
-      name: String(l.name ?? ""),
-      quantity: String(l.quantity ?? "1"),
-      unit: String(l.unit ?? "pcs"),
-      unitCost: String(l.unitCost ?? "0"),
-      subtotal: String(num(l.quantity) * num(l.unitCost)),
-      taxAmount: String(l.taxAmount ?? "0"),
-      coaHint: l.coaHint ? String(l.coaHint) : undefined,
-      coaAccountId: l.coaAccountId ? Number(l.coaAccountId) : undefined,
-      coaResolutionStatus: l.coaResolutionStatus === "confirmed" ? "confirmed" : "unresolved",
-      notes: l.notes ? String(l.notes) : undefined,
-      _withholdingTaxes: normalizedWithholdingTaxes,
-    };
-  }));
-  const updatedHasWithholding = updatedLineValues.some((line) => line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0));
-  const updatedWithholdingTaxAmount = updatedLineValues.reduce(
-    (sum, line) => sum + line._withholdingTaxes.reduce((lineSum, tax) => lineSum + num(tax.taxAmount), 0),
-    0,
-  );
-  const withholdingTaxAmount = updatedWithholdingTaxAmount > 0
-    ? updatedWithholdingTaxAmount
-    : requestedWithholdingTaxAmount;
-  const updatedHasUnresolvedWithholding = updatedLineValues.some((line) =>
-    line._withholdingTaxes.some((tax) => num(tax.taxAmount) > 0 && !tax.liabilityAccountId),
-  );
-  const updatedWithholdingNeedsReview =
-    Number(withholdingTaxAmount ?? 0) > 0
-    && (!updatedHasWithholding || updatedHasUnresolvedWithholding);
   const [vi] = await db.update(vendorInvoicesTable).set({
     vendorInvoiceRef: body.vendorInvoiceRef ? String(body.vendorInvoiceRef) : undefined,
     supplierName: body.supplierName ? String(body.supplierName) : undefined,
@@ -1961,765 +979,77 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
     grandTotal: String(totalAmount + taxAmount),
-    ...(withholdingTaxAmount !== undefined ? { withholdingTaxAmount: String(withholdingTaxAmount) } : {}),
-    taxReviewStatus: updatedWithholdingNeedsReview ? "required" : "not_required",
-    taxReviewReason: updatedWithholdingNeedsReview ? "COA Hutang PPh belum terpetakan." : null,
-    withholdingReviewStatus: updatedWithholdingNeedsReview ? "required" : "not_required",
     notes: body.notes ? String(body.notes) : undefined,
-    ...(body.invoiceBreakdown !== undefined
-      ? {
-          invoiceBreakdown:
-            body.invoiceBreakdown && typeof body.invoiceBreakdown === "object"
-              ? body.invoiceBreakdown as Record<string, unknown>
-              : null,
-        }
-      : {}),
     updatedAt: new Date(),
   }).where(eq(vendorInvoicesTable.id, id)).returning();
   await db.delete(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
   if (lines.length > 0) {
-    const insertedLines = await db.insert(vendorInvoiceLinesTable).values(
-      updatedLineValues.map(({ _withholdingTaxes: _taxes, ...line }) => ({
+    await db.insert(vendorInvoiceLinesTable).values(
+      lines.map((l) => ({
         invoiceId: id,
-        ...line,
+        productId: l.productId ? Number(l.productId) : undefined,
+        name: String(l.name ?? ""),
+        quantity: String(l.quantity ?? "1"),
+        unit: String(l.unit ?? "pcs"),
+        unitCost: String(l.unitCost ?? "0"),
+        subtotal: String(num(l.quantity) * num(l.unitCost)),
+        taxAmount: String(l.taxAmount ?? "0"),
       }))
-    ).returning({ id: vendorInvoiceLinesTable.id });
-    for (let i = 0; i < insertedLines.length; i += 1) {
-      for (const tax of updatedLineValues[i]?._withholdingTaxes ?? []) {
-        if (num(tax.taxAmount) <= 0) continue;
-        await db.insert(vendorInvoiceLineTaxesTable).values({
-          invoiceLineId: insertedLines[i]!.id,
-          companyId: cid,
-          taxType: String(tax.taxType ?? "UNRESOLVED"),
-          taxObject: String(tax.taxObject ?? "UNRESOLVED"),
-          baseAmount: String(tax.baseAmount ?? updatedLineValues[i]!.subtotal),
-          taxAmount: String(tax.taxAmount),
-          liabilityAccountId: tax.liabilityAccountId ? Number(tax.liabilityAccountId) : undefined,
-          resolutionStatus: tax.liabilityAccountId ? "confirmed" : "tax_review",
-          reviewReason: tax.liabilityAccountId
-            ? null
-            : String(tax.reviewReason ?? "COA Hutang PPh belum terpetakan"),
-        });
-      }
-    }
+    );
   }
   res.json(vi);
 });
 
-// Finance review is deliberately separate from invoice capture. OCR and vendor
-// input can suggest a COA/tax object, but only this scoped action confirms it.
-router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  if (vi.status !== "draft") {
-    res.status(409).json({ error: "invoice_not_editable", message: "Finance review hanya dapat dilakukan saat invoice masih draft." });
-    return;
-  }
-
-  const body = req.body as Record<string, unknown>;
-  const lineReviews = Array.isArray(body.lines) ? body.lines as Record<string, unknown>[] : [];
-  const taxReviews = Array.isArray(body.taxes) ? body.taxes as Record<string, unknown>[] : [];
-  const reviewer = actorId(req);
-
-  for (const review of lineReviews) {
-    const lineId = Number(review.lineId);
-    const coaAccountId = Number(review.coaAccountId);
-    if (!Number.isInteger(lineId) || !Number.isInteger(coaAccountId) || coaAccountId <= 0) {
-      res.status(422).json({ error: "invalid_coa_review", message: "lineId dan coaAccountId wajib valid." });
-      return;
-    }
-    const [line] = await db.select({ id: vendorInvoiceLinesTable.id, name: vendorInvoiceLinesTable.name, productId: vendorInvoiceLinesTable.productId })
-      .from(vendorInvoiceLinesTable)
-      .where(and(eq(vendorInvoiceLinesTable.id, lineId), eq(vendorInvoiceLinesTable.invoiceId, id)));
-    if (!line) {
-      res.status(422).json({ error: "line_not_found", message: `Line invoice ${lineId} tidak ditemukan.` });
-      return;
-    }
-    const [coa] = await db.select({ id: chartOfAccountsTable.id }).from(chartOfAccountsTable).where(and(
-      eq(chartOfAccountsTable.id, coaAccountId),
-      or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, cid)),
-      eq(chartOfAccountsTable.isActive, true),
-      eq(chartOfAccountsTable.isPostable, true),
-    ));
-    if (!coa) {
-      res.status(422).json({ error: "coa_not_found", message: `COA ${coaAccountId} tidak ditemukan.` });
-      return;
-    }
-    const mappingKey = normalizeVendorLineMappingKey(review.mappingKey ?? line.name);
-    await db.update(vendorInvoiceLinesTable).set({
-      coaAccountId,
-      coaResolutionStatus: "confirmed",
-      coaConfirmedBy: reviewer,
-      coaConfirmedAt: new Date(),
-      coaMappingKey: mappingKey || null,
-    }).where(eq(vendorInvoiceLinesTable.id, lineId));
-
-    if (review.saveReusableRule === true && mappingKey) {
-      const existing = await db.execute(sql`
-        SELECT id FROM vendor_invoice_coa_mappings
-        WHERE company_id = ${cid}
-          AND mapping_key = ${mappingKey}
-          AND supplier_id IS NOT DISTINCT FROM ${vi.supplierId ?? null}
-          AND product_id IS NOT DISTINCT FROM ${line.productId ?? null}
-        LIMIT 1
-      `);
-      const existingRow = (existing as any).rows?.[0];
-      if (existingRow?.id) {
-        await db.execute(sql`
-          UPDATE vendor_invoice_coa_mappings
-          SET coa_account_id = ${coaAccountId}, status = 'approved',
-              approved_by = ${reviewer}, approved_at = NOW(), updated_at = NOW()
-          WHERE id = ${Number(existingRow.id)} AND company_id = ${cid}
-        `);
-      } else {
-        await db.execute(sql`
-          INSERT INTO vendor_invoice_coa_mappings
-            (company_id, supplier_id, product_id, mapping_key, coa_account_id, status, approved_by)
-          VALUES
-            (${cid}, ${vi.supplierId ?? null}, ${line.productId ?? null}, ${mappingKey}, ${coaAccountId}, 'approved', ${reviewer})
-        `);
-      }
-    }
-  }
-
-  for (const review of taxReviews) {
-    const lineId = Number(review.invoiceLineId);
-    const taxAmount = num(review.taxAmount);
-    const taxType = String(review.taxType ?? "").trim();
-    const taxObject = String(review.taxObject ?? "").trim();
-    const liabilityAccountId = Number(review.liabilityAccountId);
-    if (!Number.isInteger(lineId) || !taxType || !taxObject || !Number.isFinite(taxAmount) || taxAmount <= 0 || !Number.isInteger(liabilityAccountId)) {
-      res.status(422).json({ error: "invalid_tax_review", message: "Tax review wajib memiliki line, jenis, object, nilai, dan akun liability." });
-      return;
-    }
-    const [line] = await db.select({ id: vendorInvoiceLinesTable.id }).from(vendorInvoiceLinesTable).where(
-      and(eq(vendorInvoiceLinesTable.id, lineId), eq(vendorInvoiceLinesTable.invoiceId, id)),
-    );
-    if (!line) {
-      res.status(422).json({ error: "line_not_found", message: `Line invoice ${lineId} tidak ditemukan.` });
-      return;
-    }
-    const [liability] = await db.select({ id: chartOfAccountsTable.id, type: chartOfAccountsTable.type })
-      .from(chartOfAccountsTable).where(eq(chartOfAccountsTable.id, liabilityAccountId));
-    if (!liability || liability.type !== "liability") {
-      res.status(422).json({ error: "invalid_tax_liability", message: "Akun withholding harus bertipe liability." });
-      return;
-    }
-    const taxRows = await db.execute(sql`
-      INSERT INTO vendor_invoice_line_taxes
-        (invoice_line_id, company_id, tax_type, tax_object, base_amount, tax_amount,
-         liability_account_id, resolution_status, review_reason, reviewed_by, reviewed_at, updated_at)
-      VALUES
-        (${lineId}, ${cid}, ${taxType}, ${taxObject}, ${String(review.baseAmount ?? 0)}, ${String(taxAmount)},
-         ${liabilityAccountId}, 'confirmed', NULL, ${reviewer}, NOW(), NOW())
-      ON CONFLICT (invoice_line_id, tax_type, tax_object)
-      DO UPDATE SET base_amount = EXCLUDED.base_amount,
-                    tax_amount = EXCLUDED.tax_amount,
-                    liability_account_id = EXCLUDED.liability_account_id,
-                    resolution_status = 'confirmed',
-                    review_reason = NULL,
-                    reviewed_by = EXCLUDED.reviewed_by,
-                    reviewed_at = NOW(),
-                    updated_at = NOW()
-      RETURNING id
-    `);
-    const taxRow = (taxRows as any).rows?.[0];
-    if (taxRow?.id) {
-      await db.execute(sql`
-        INSERT INTO vendor_withholding_records
-          (company_id, vendor_invoice_id, invoice_line_id, line_tax_id, tax_type, tax_object,
-           base_amount, tax_amount, liability_account_id, status)
-        VALUES
-          (${cid}, ${id}, ${lineId}, ${Number(taxRow.id)}, ${taxType}, ${taxObject},
-           ${String(review.baseAmount ?? 0)}, ${String(taxAmount)}, ${liabilityAccountId}, 'proof_pending')
-        ON CONFLICT (line_tax_id) DO UPDATE SET
-          tax_amount = EXCLUDED.tax_amount,
-          liability_account_id = EXCLUDED.liability_account_id,
-          updated_at = NOW()
-      `);
-    }
-  }
-
-  const taxSummaryRows = taxReviews.length > 0
-    ? await db.execute<{ tax_amount: string; tax_types: string | null }>(sql`
-        SELECT
-          COALESCE(SUM(tax_amount), 0)::text AS tax_amount,
-          STRING_AGG(DISTINCT tax_type, ' + ' ORDER BY tax_type) AS tax_types
-        FROM vendor_invoice_line_taxes
-        WHERE company_id = ${cid}
-          AND invoice_line_id IN (
-            SELECT id FROM vendor_invoice_lines WHERE invoice_id = ${id}
-          )
-      `)
-    : null;
-  const taxSummary = ((taxSummaryRows as any)?.rows?.[0] ?? null) as {
-    tax_amount?: string;
-    tax_types?: string | null;
-  } | null;
-
-  await db.update(vendorInvoicesTable).set({
-    taxReviewStatus: taxReviews.length > 0 ? "not_required" : vi.taxReviewStatus,
-    taxReviewReason: taxReviews.length > 0 ? null : vi.taxReviewReason,
-    withholdingReviewStatus: taxReviews.length > 0 ? "reviewed" : vi.withholdingReviewStatus,
-    withholdingReviewCompletedBy: reviewer,
-    withholdingReviewCompletedAt: new Date(),
-    withholdingTaxType: taxReviews.length > 0 ? (taxSummary?.tax_types ?? vi.withholdingTaxType) : vi.withholdingTaxType,
-    taxObject: taxReviews.length > 0 ? "Per-line withholding tax" : vi.taxObject,
-    // Keep the legacy header as a visible aggregate for compatibility. The
-    // line-tax rows remain authoritative for multi-rate settlement.
-    withholdingTaxAmount: taxReviews.length > 0
-      ? String(num(taxSummary?.tax_amount))
-      : vi.withholdingTaxAmount,
-    updatedAt: new Date(),
-  }).where(eq(vendorInvoicesTable.id, id));
-
-  res.json({ ok: true, invoiceId: id, reviewedBy: reviewer });
-});
-
-router.post("/vendor-invoices/:id/withholding-proof", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  const [vi] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  const body = req.body as Record<string, unknown>;
-  const lineTaxId = Number(body.lineTaxId);
-  if (!Number.isInteger(lineTaxId) || !String(body.proofReference ?? body.proofObjectPath ?? "").trim()) {
-    res.status(422).json({ error: "proof_required", message: "lineTaxId dan referensi/objek bukti potong wajib diisi." });
-    return;
-  }
-  const updated = await db.execute(sql`
-    UPDATE vendor_withholding_records
-    SET status = 'proof_received',
-        proof_object_path = ${body.proofObjectPath ? String(body.proofObjectPath) : null},
-        proof_reference = ${body.proofReference ? String(body.proofReference) : null},
-        proof_content_type = ${body.proofContentType ? String(body.proofContentType) : null},
-        proof_issued_at = ${body.proofIssuedAt ? new Date(String(body.proofIssuedAt)) : null},
-        reviewed_by = ${actorId(req)}, reviewed_at = NOW(), updated_at = NOW()
-    WHERE id = ${lineTaxId} AND vendor_invoice_id = ${id} AND company_id = ${cid}
-    RETURNING id
-  `);
-  if (!(updated as any).rows?.length) {
-    res.status(404).json({ error: "withholding_record_not_found" });
-    return;
-  }
-  res.json({ ok: true, status: "proof_received", recordId: lineTaxId });
-});
-
 router.post("/vendor-invoices/:id/post", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  if (vi.status !== "draft") {
-    res.status(409).json({
-      error: "vendor_invoice_already_posted",
-      message: "Invoice sudah bukan draft. Gunakan aksi Pulihkan Journal untuk journal draft yang tertaut.",
-    });
-    return;
-  }
-
-  const invoiceLines = await db.select().from(vendorInvoiceLinesTable)
-    .where(eq(vendorInvoiceLinesTable.invoiceId, id))
-    .orderBy(vendorInvoiceLinesTable.id);
-  const hardeningResult = invoiceLines.length === 0
-    ? null
-    : await db.execute(sql`
-        SELECT
-          lit.invoice_line_id,
-          lit.tax_type,
-          lit.tax_object,
-          lit.tax_amount,
-          lit.liability_account_id,
-          lit.resolution_status,
-          vwr.status AS withholding_record_status
-        FROM vendor_invoice_line_taxes lit
-        LEFT JOIN vendor_withholding_records vwr
-          ON vwr.line_tax_id = lit.id
-         AND vwr.vendor_invoice_id = ${id}
-         AND vwr.company_id = ${cid}
-        WHERE lit.company_id = ${cid}
-          AND lit.invoice_line_id IN (${sql.join(invoiceLines.map((line) => sql`${line.id}`), sql`, `)})
-      `);
-  const hardeningRows = hardeningResult
-    ? ((hardeningResult as any).rows ?? [])
-    : [];
-  const withholdingTaxes = hardeningRows.map((row: any) => ({
-    invoiceLineId: Number(row.invoice_line_id),
-    taxType: row.tax_type,
-    taxObject: row.tax_object,
-    taxAmount: row.tax_amount,
-    liabilityAccountId: row.liability_account_id == null ? null : Number(row.liability_account_id),
-    resolutionStatus: row.resolution_status,
-    withholdingRecordStatus: row.withholding_record_status,
-  }));
-  const postingGate = evaluateVendorInvoicePostingGate({
-    lines: invoiceLines,
-    withholdingTaxes,
-    legacyTaxReviewStatus: vi.taxReviewStatus,
-    legacyWithholdingTaxType: vi.withholdingTaxType,
-    legacyWithholdingTaxAmount: vi.withholdingTaxAmount,
-  });
-  if (invoiceLines.length === 0 || !postingGate.ok) {
-    res.status(422).json({
-      error: "vendor_invoice_review_required",
-      message: "Invoice belum memenuhi review Finance per line sebelum posting.",
-      reasons: invoiceLines.length === 0
-        ? [{ code: "INVOICE_LINES_REQUIRED", message: "Invoice wajib memiliki minimal satu line." }]
-        : postingGate.reasons,
-    });
-    return;
-  }
+  if (vi.status !== "draft") { res.status(400).json({ error: "Already posted" }); return; }
 
   // 3-way match check
   let matchStatus = "unmatched";
   let matchNotes = "";
-  if (vi.grId && !vi.poId) {
-    res.status(422).json({ error: "three_way_match_required", message: "Goods Receipt harus terhubung ke Purchase Order." });
-    return;
-  }
-  if (vi.poId) {
-    const [po] = await db.select().from(purchaseDocumentsTable).where(and(
-      eq(purchaseDocumentsTable.id, vi.poId),
-      eq(purchaseDocumentsTable.companyId, cid),
-    ));
-    const [gr] = vi.grId
-      ? await db.select().from(goodsReceiptsTable).where(and(
-          eq(goodsReceiptsTable.id, vi.grId),
-          eq(goodsReceiptsTable.companyId, cid),
-        ))
-      : [];
-    if (!po || !gr || gr.status !== "confirmed") {
-      res.status(422).json({
-        error: "three_way_match_required",
-        message: "PO dan Goods Receipt confirmed wajib tersedia sebelum invoice diposting.",
-      });
-      return;
+  if (vi.poId && vi.grId) {
+    const [po] = await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vi.poId));
+    const [gr] = await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, vi.grId));
+    if (po && gr && gr.status === "confirmed") {
+      const poTotal = num(po.grandTotal);
+      const viTotal = num(vi.grandTotal);
+      const diff = Math.abs(poTotal - viTotal);
+      if (diff < 1) { matchStatus = "matched"; matchNotes = "PO, GR, VI amounts match"; }
+      else { matchStatus = "partial"; matchNotes = `Variance: ${diff.toFixed(2)}`; }
     }
-    const poLines = await db.select().from(purchaseDocumentLinesTable).where(eq(purchaseDocumentLinesTable.documentId, po.id));
-    const grLines = await db.select().from(goodsReceiptLinesTable).where(eq(goodsReceiptLinesTable.grId, gr.id));
-    const usedPo = new Set<number>();
-    const matchLines = invoiceLines.map((line) => {
-      const lineName = normalizeVendorLineMappingKey(line.name);
-      const poLine = poLines.find((candidate) =>
-        !usedPo.has(candidate.id) &&
-        ((line.productId != null && candidate.productId === line.productId) ||
-          (line.productId == null && normalizeVendorLineMappingKey(candidate.name) === lineName)),
-      );
-      if (poLine) usedPo.add(poLine.id);
-      const grLine = poLine ? grLines.find((candidate) => candidate.poLineId === poLine.id) : undefined;
-      return {
-        poLineId: poLine?.id ?? line.id,
-        invoiceQuantity: num(line.quantity),
-        invoiceUnitPrice: num(line.unitCost),
-        acceptedQuantity: num(grLine?.qtyReceived),
-        poUnitPrice: num(poLine?.unitCost),
-      };
-    });
-    const match = evaluateThreeWayMatchLines(matchLines, {
-      total: num(vi.grandTotal),
-      poTotal: num(po.grandTotal),
-      tolerance: 0.01,
-    });
-    if (!match.ok) {
-      res.status(422).json({
-        error: "three_way_match_out_of_tolerance",
-        message: "PO-GR-Invoice variance berada di luar tolerance; invoice tetap draft untuk review.",
-        reasons: match.reasons,
-      });
-      return;
-    }
-    matchStatus = "matched";
-    matchNotes = "PO, GR, dan invoice matched per line dalam tolerance.";
-  }
-
-  // Deteksi Sport Center: cek apakah VI berasal dari PR dengan department = SPORT_CENTER
-  let isSportCenter = false;
-  let sportCenterFacility: string | null = null;
-  let scFacilityId: number | null = null;
-  if (vi.poId) {
-    const scCheck = await db.execute(sql`
-      SELECT pr.department, pr.notes AS pr_notes, smr.facility_id AS sc_facility_id
-      FROM purchase_documents po
-      JOIN purchase_requests pr ON pr.id = po.source_pr_id
-      LEFT JOIN sport_maintenance_requests smr ON smr.purchase_request_id = pr.id
-      WHERE po.id = ${vi.poId} AND pr.department = 'SPORT_CENTER'
-      LIMIT 1
-    `);
-    if (scCheck.rows.length > 0) {
-      isSportCenter = true;
-      const prNotes = String((scCheck.rows[0] as any).pr_notes ?? "");
-      const facilityMatch = prNotes.match(/Fasilitas:\s*([^|]+)/);
-      sportCenterFacility = facilityMatch ? facilityMatch[1].trim() : null;
-      const rawFacilityId = (scCheck.rows[0] as any).sc_facility_id;
-      scFacilityId = rawFacilityId ? Number(rawFacilityId) : null;
-    }
+  } else if (vi.poId) {
+    matchStatus = "partial"; matchNotes = "No GR linked";
   }
 
   // Post journal
   try {
-    const invoiceCompanyId = vi.companyId ?? resolveCompanyId(req);
-    const settings = await ensureAccountingSettings(invoiceCompanyId);
-    // Re-resolve explicit invoice breakdown evidence at the final posting
-    // boundary. Older OCR drafts may have persisted a zero header tax even
-    // though the breakdown contains a reconciled PPN amount.
-    const resolvedSapHeader = buildSapTaxInput({
-      subtotal: num(vi.totalAmount),
-      tax: num(vi.taxAmount),
-      total_amount: num(vi.grandTotal),
-      invoice_breakdown: vi.invoiceBreakdown,
-    });
-    const netAmount = resolvedSapHeader.net ?? num(vi.totalAmount);
-    const taxAmount = resolvedSapHeader.vat ?? num(vi.taxAmount);
-    const grandTotal = resolvedSapHeader.gross ?? num(vi.grandTotal);
-    const postedFinancialValues = {
-      totalAmount: String(netAmount),
-      taxAmount: String(taxAmount),
-      grandTotal: String(grandTotal),
-    };
-    const lines: Array<{ accountId: number; debit: number; credit: number; description: string }> = [];
-
-    // Header values are the financial source of truth. Never create a
-    // partial journal for an OCR/malformed invoice.
-    if (
-      netAmount < 0 ||
-      taxAmount < 0 ||
-      grandTotal < 0 ||
-      !isInvoiceTaxBalanced(netAmount, taxAmount, grandTotal)
-    ) {
-      return res.status(422).json({
-        message: "Invoice tidak dapat diposting: DPP + PPN harus sama dengan total invoice.",
-      });
-    }
-    if (!settings.purchaseJournalId || !settings.apAccountId) {
-      return res.status(422).json({
-        message: "Invoice tidak dapat diposting: jurnal pembelian atau akun hutang belum dikonfigurasi.",
-      });
-    }
-    let vendorPayableAccountId: number;
-    try {
-      vendorPayableAccountId = await resolveVendorPayableAccountId(
-        db,
-        invoiceCompanyId,
-        settings.apAccountId,
-      );
-    } catch (error) {
-      return res.status(422).json({
-        error: "vendor_payable_account_required",
-        message: error instanceof Error
-          ? error.message
-          : "COA Hutang Pemasok/Vendor tidak dapat ditentukan.",
-      });
-    }
-    if (taxAmount > 0 && !settings.ppnInputAccountId) {
-      return res.status(422).json({
-        message: "Invoice tidak dapat diposting: akun PPN Masukan belum dikonfigurasi.",
-      });
-    }
-
-    const grossPostingLines = buildGrossVendorInvoicePostingLines({
-      lines: invoiceLines.map((line) => ({
-        coaAccountId: Number(line.coaAccountId),
-        subtotal: num(line.subtotal),
-        description: line.name,
-      })),
-      ppnInputAccountId: settings.ppnInputAccountId,
-      taxAmount,
-      apAccountId: vendorPayableAccountId,
-      grandTotal,
-    });
-    const lineNet = invoiceLines.reduce((sum, line) => sum + num(line.subtotal), 0);
-    if (Math.abs(lineNet - netAmount) > 0.01) {
-      return res.status(422).json({
-        error: "invoice_line_total_mismatch",
-        message: "Total line invoice tidak sama dengan DPP header; koreksi line atau header sebelum posting.",
-      });
-    }
-
-    if (isSportCenter) {
-      // Sport Center: Debit Biaya Operasional (purchaseExpenseAccountId), Credit Hutang Vendor (AP)
-
-      // FASE 6C: ambil lines VI untuk klasifikasi expense
-      const viLinesForClass = await db.select().from(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
-      const firstItemName = viLinesForClass[0]?.name ?? sportCenterFacility ?? "";
-      const expenseCategory = classifyExpense(firstItemName);
-
-      // FASE 6C: resolve SPORT_CENTER cost center ID
-      const scCostCenterId = await resolveCostCenterId("SPORT_CENTER", invoiceCompanyId);
-
-      // FASE 6B: validasi wajib — reject jika cost_center tidak ditemukan
-      if (!scCostCenterId) {
-        res.status(422).json({
-          error: "Sport Center expense tidak dapat di-post: cost center 'SPORT_CENTER' tidak ditemukan. Pastikan cost center sudah dibuat di master data.",
-        });
-        return;
-      }
-      // FASE 6B: reject jika maintenance expense tanpa facility_id
-      if (expenseCategory === "maintenance" && !scFacilityId) {
-        res.status(422).json({
-          error: `Sport Center expense kategori 'maintenance' wajib memiliki facility_id. Cek apakah purchase request dibuat via route request-maintenance dengan facility yang valid.`,
-        });
-        return;
-      }
-
-      const facilityDesc = sportCenterFacility ? ` — ${sportCenterFacility}` : "";
-      lines.push(...grossPostingLines.map((line) => ({
-        ...line,
-        description: `${line.description}${facilityDesc}`,
-      })));
-      if (lines.length >= 2) {
-        const entry = await postEntry({
-          journalId: settings.purchaseJournalId!,
-          date: vi.invoiceDate ?? new Date(),
-          ref: vi.invoiceNumber,
-          description: `[SPORT_CENTER] Vendor Invoice ${vi.invoiceNumber} — ${vi.supplierName}`,
-          source: "sport_center_operational_expense",
-          sourceId: id,
-          companyId: invoiceCompanyId,
-          costCenterId: scCostCenterId,
-          facilityId: scFacilityId,
-          expenseCategory,
-          lines,
-        }, "PUR");
-        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
-      } else {
-        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
-      }
+    const settings = await ensureAccountingSettings(vi.companyId ?? 1);
+    const grandTotal = num(vi.grandTotal);
+    const taxAmount = num(vi.taxAmount);
+    const netAmount = grandTotal - taxAmount;
+    const lines = [];
+    // Step 3 Fix A: jika VI linked ke GR, debit GR/IR (clearing 3-way match). Jika tidak, debit akun beban pembelian.
+    const debitAccId = (vi.grId && settings.grirAccountId) ? settings.grirAccountId : settings.purchaseExpenseAccountId;
+    const debitDesc = (vi.grId && settings.grirAccountId) ? `GR/IR clearing ${vi.invoiceNumber}` : "Purchase expense";
+    if (debitAccId) lines.push({ accountId: debitAccId, debit: netAmount, credit: 0, description: debitDesc });
+    if (taxAmount > 0 && settings.ppnInputAccountId) lines.push({ accountId: settings.ppnInputAccountId!, debit: taxAmount, credit: 0, description: "VAT in" });
+    if (settings.apAccountId) lines.push({ accountId: settings.apAccountId!, debit: 0, credit: grandTotal, description: "AP vendor invoice" });
+    if (lines.length >= 2) {
+      const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: vi.companyId ?? 1, lines }, "PUR");
+      await db.update(vendorInvoicesTable).set({ status: "posted", threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
     } else {
-      // Standard purchase bill posting: every invoice line keeps its own
-      // Finance-confirmed COA; no purchase-expense fallback is allowed.
-      // Jika ada GRN terkait:
-      //   - grirAccountId ada → DR GR/IR (clearing accrual dari GRN)
-      //   - grirAccountId tidak ada → GRN tidak membuat accrual, jadi DR Persediaan langsung
-      // Jika tidak ada GRN: DR Beban Pembelian (service/expense)
-      lines.push(...grossPostingLines.map((line) => ({
-        ...line,
-        description: line.description ?? "",
-      })));
-      if (lines.length >= 2) {
-        const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: vi.invoiceDate ?? new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: invoiceCompanyId, lines }, "PUR");
-         await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
-      } else {
-        await db.update(vendorInvoicesTable).set({ ...postedFinancialValues, status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
-      }
+      await db.update(vendorInvoicesTable).set({ status: "posted", threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
     }
-  } catch (e) {
-    // A journal error must not be converted into a false posted invoice.
-    console.error("[VI post]", e);
-    return res.status(422).json({
-      message: "Invoice tersimpan sebagai draft karena jurnal gagal dibuat. Periksa konfigurasi akuntansi lalu coba lagi.",
-    });
-  }
+  } catch (e) { console.error("[VI post]", e); await db.update(vendorInvoicesTable).set({ status: "posted", updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id)); }
 
   const [updated] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-
-  // ── SAP INVOICE LOCK: store immutable snapshot after posting ───────────────
-  // Runs async — non-blocking, non-fatal.
-  if (updated) {
-    const postActor = (req as any).user?.email ?? (req as any).user?.id ?? "SYSTEM";
-    lockInvoiceSnapshot(id, {
-      id: updated.id,
-      status: updated.status,
-      totalAmount: updated.totalAmount,
-      taxAmount: updated.taxAmount,
-      grandTotal: updated.grandTotal,
-      invoiceNumber: updated.invoiceNumber,
-      companyId: updated.companyId,
-    }, postActor).catch(() => {});
-  }
-  // ── END SAP LOCK SNAPSHOT ──────────────────────────────────────────────────
-
   res.json(updated);
 });
 
-/**
- * Controlled recovery for the split-brain state:
- * vendor invoice is already posted, but its exact linked purchase journal is
- * still draft. This route must never create a second journal and must never
- * scan or promote an unrelated/orphan journal.
- */
-router.post("/vendor-invoices/:id/recover-journal", async (req, res) => {
-  const id = Number(String(req.params.id));
-  if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ error: "invalid_vendor_invoice_id" });
-    return;
-  }
-
-  const [owner] = await db
-    .select({ companyId: vendorInvoicesTable.companyId })
-    .from(vendorInvoicesTable)
-    .where(eq(vendorInvoicesTable.id, id))
-    .limit(1);
-  if (!owner) {
-    res.status(404).json({ error: "Not found" });
-    return;
-  }
-
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(owner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const result = await db.transaction(async (tx) => {
-    const invoiceResult = await tx.execute(sql`
-      SELECT id, company_id, status, journal_entry_id
-      FROM vendor_invoices
-      WHERE id = ${id} AND company_id = ${owner.companyId ?? cid}
-      FOR UPDATE
-    `);
-    const invoice = (invoiceResult as any).rows?.[0] as
-      | { id: number; company_id: number | null; status: string; journal_entry_id: number | null }
-      | undefined;
-
-    if (!invoice) {
-      return {
-        ok: false as const,
-        status: 404,
-        error: "vendor_invoice_not_found",
-        message: "Invoice tidak ditemukan pada company aktif.",
-      };
-    }
-    if (invoice.status === "draft") {
-      return {
-        ok: false as const,
-        status: 409,
-        error: "vendor_invoice_still_draft",
-        message: "Invoice masih draft. Gunakan aksi Post Invoice, bukan recovery journal.",
-      };
-    }
-    if (invoice.status !== "posted") {
-      return {
-        ok: false as const,
-        status: 409,
-        error: "vendor_invoice_recovery_status_not_allowed",
-        message: `Recovery hanya diperbolehkan untuk invoice berstatus posted; status saat ini ${invoice.status}.`,
-      };
-    }
-    if (invoice.journal_entry_id == null) {
-      return {
-        ok: false as const,
-        status: 422,
-        error: "vendor_invoice_journal_missing",
-        message: "Invoice sudah posted tetapi tidak memiliki journal tertaut. Jangan membuat journal baru dari recovery ini; lakukan review Finance.",
-      };
-    }
-
-    const journalResult = await tx.execute(sql`
-      SELECT id, entry_number, status, source, source_id, company_id
-      FROM accounting_entries
-      WHERE id = ${invoice.journal_entry_id}
-        AND company_id = ${invoice.company_id ?? cid}
-      FOR UPDATE
-    `);
-    const journal = (journalResult as any).rows?.[0] as
-      | { id: number; entry_number: string; status: string; source: string; source_id: number | null; company_id: number | null }
-      | undefined;
-
-    if (!journal) {
-      return {
-        ok: false as const,
-        status: 422,
-        error: "vendor_invoice_journal_not_found",
-        message: "Journal tertaut tidak ditemukan pada company yang sama; review Finance diperlukan.",
-      };
-    }
-    if (journal.status !== "draft") {
-      return {
-        ok: false as const,
-        status: 409,
-        error: "vendor_invoice_journal_not_draft",
-        message: `Journal ${journal.entry_number} sudah berstatus ${journal.status}; tidak ada recovery yang dilakukan.`,
-      };
-    }
-    if (journal.source !== "purchase_bill" || Number(journal.source_id) !== id) {
-      return {
-        ok: false as const,
-        status: 422,
-        error: "vendor_invoice_journal_identity_mismatch",
-        message: `Journal ${journal.entry_number} bukan journal purchase bill yang tepat untuk invoice ini; tidak ada recovery yang dilakukan.`,
-      };
-    }
-
-    const lineResult = await tx.execute(sql`
-      SELECT debit, credit
-      FROM accounting_entry_lines
-      WHERE entry_id = ${journal.id}
-    `);
-    const lines = ((lineResult as any).rows ?? []) as Array<{ debit: unknown; credit: unknown }>;
-    const debit = lines.reduce((sum, line) => sum + num(line.debit), 0);
-    const credit = lines.reduce((sum, line) => sum + num(line.credit), 0);
-    if (lines.length === 0 || Math.abs(debit - credit) > 0.01) {
-      return {
-        ok: false as const,
-        status: 422,
-        error: "vendor_invoice_draft_journal_unbalanced",
-        message: `Journal ${journal.entry_number} masih draft dan tidak balance (debit ${debit.toFixed(2)}, credit ${credit.toFixed(2)}); koreksi Finance diperlukan.`,
-      };
-    }
-
-    const promoted = await tx.execute(sql`
-      UPDATE accounting_entries
-      SET status = 'posted',
-          posted_at = COALESCE(posted_at, NOW())
-      WHERE id = ${journal.id} AND status = 'draft'
-      RETURNING id, entry_number, status, posted_at
-    `);
-    const promotedRow = (promoted as any).rows?.[0];
-    if (!promotedRow) {
-      return {
-        ok: false as const,
-        status: 409,
-        error: "vendor_invoice_journal_recovery_race",
-        message: "Journal berubah oleh proses lain sebelum recovery selesai; muat ulang dan periksa status terbaru.",
-      };
-    }
-
-    return {
-      ok: true as const,
-      invoiceId: id,
-      journal: promotedRow,
-    };
-  });
-
-  if (!result.ok) {
-    res.status(result.status).json(result);
-    return;
-  }
-  res.json(result);
-});
-
 router.post("/vendor-invoices/:id/cancel", async (req, res) => {
-  const id = Number(req.params.id);
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  const [current] = await db.select({
-    status: vendorInvoicesTable.status,
-    isLocked: vendorInvoicesTable.isLocked,
-  }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id)).limit(1);
-  if (current?.isLocked || current?.status === "posted" || current?.status === "paid") {
-    res.status(409).json({ error: "posted_invoice_requires_reversal", message: "Invoice posted/locked tidak boleh dibatalkan langsung; gunakan reversal/correction flow." });
-    return;
-  }
-  await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
-  res.json({ ok: true });
-});
-
-router.delete("/vendor-invoices/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  if (vi.isLocked || vi.status === "posted" || vi.status === "paid") {
-    res.status(409).json({ error: "posted_invoice_requires_reversal", message: "Invoice posted/locked tidak boleh dihapus; gunakan reversal/correction flow." });
-    return;
-  }
-  await db.delete(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
-  await db.delete(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
+  await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, Number(req.params.id)));
   res.json({ ok: true });
 });
 
@@ -2736,11 +1066,9 @@ router.get("/payment-requests", async (req, res) => {
 });
 
 router.get("/payment-requests/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [pr] = await db.select().from(paymentRequestsTable).where(eq(paymentRequestsTable.id, id));
   if (!pr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(pr.companyId, cid, req, res, { resourceType: "payment_request", resourceId: id })) return;
   const items = await db.select().from(paymentRequestItemsTable).where(eq(paymentRequestItemsTable.paymentRequestId, id));
   res.json({ ...pr, items });
 });
@@ -2776,12 +1104,10 @@ router.post("/payment-requests", async (req, res) => {
 });
 
 router.post("/payment-requests/:id/action", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const { action, approvedBy, paymentMethod, bankAccount, paymentDate } = req.body as Record<string, string>;
   const [pr] = await db.select().from(paymentRequestsTable).where(eq(paymentRequestsTable.id, id));
   if (!pr) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(pr.companyId, cid, req, res, { resourceType: "payment_request", resourceId: id })) return;
 
   if (action === "submit") {
     await db.update(paymentRequestsTable).set({ status: "submitted", updatedAt: new Date() }).where(eq(paymentRequestsTable.id, id));
@@ -2790,45 +1116,35 @@ router.post("/payment-requests/:id/action", async (req, res) => {
   } else if (action === "reject") {
     await db.update(paymentRequestsTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(paymentRequestsTable.id, id));
   } else if (action === "pay") {
-    // Phase 2: Pembayaran WAJIB melalui Bank Disbursement.
-    // Endpoint ini tidak lagi memanggil postEntry() langsung.
-    // Frontend harus membuat BD terlebih dahulu, lalu kirim bdId ke sini.
-    const { bdId } = req.body as Record<string, unknown>;
-    if (!bdId) {
-      res.status(422).json({
-        error: "payment_requires_bd",
-        message: "Pembayaran harus dilakukan melalui Bank Disbursement. Buat BD terlebih dahulu, kemudian kirimkan bdId.",
-      });
-      return;
-    }
-
-    // Verifikasi BD exists dan statusnya posted
-    const [bdRow] = await db.execute<{ id: number; status: string; disbursement_number: string; total_amount: string }>(
-      sql`SELECT id, status, disbursement_number, total_amount FROM bank_disbursements WHERE id = ${Number(bdId)} AND company_id = ${pr.companyId ?? cid}`
-    ).then((r) => (Array.isArray(r) ? r : (r as any).rows ?? []) as Array<{ id: number; status: string; disbursement_number: string; total_amount: string }>);
-
-    if (!bdRow) {
-      res.status(404).json({ error: "bd_not_found", message: `Bank Disbursement #${bdId} tidak ditemukan.` });
-      return;
-    }
-    if (bdRow.status !== "posted") {
-      res.status(409).json({ error: "bd_not_posted", message: `Bank Disbursement ${bdRow.disbursement_number} belum berstatus posted (status: ${bdRow.status}).` });
-      return;
-    }
-
     const paidDate = paymentDate ? new Date(paymentDate) : new Date();
-    // Mark PR as paid — journal sudah diposting oleh BD, tidak perlu postEntry ulang
-    await db.update(paymentRequestsTable).set({
-      status: "paid",
-      paidAmount: pr.totalAmount,
-      paymentMethod: paymentMethod ?? null,
-      bankAccount: bankAccount ?? null,
-      paymentDate: paidDate,
-      updatedAt: new Date(),
-    }).where(eq(paymentRequestsTable.id, id));
-
-    // Update vendor invoices sebagai paid (logic tetap sama seperti sebelumnya)
     const items = await db.select().from(paymentRequestItemsTable).where(eq(paymentRequestItemsTable.paymentRequestId, id));
+    // Post payment journal
+    try {
+      const settings = await ensureAccountingSettings(pr.companyId ?? 1);
+      const totalAmount = num(pr.totalAmount);
+      if (settings.apAccountId && settings.defaultBankAccountId) {
+        const entry = await postEntry({
+          journalId: settings.bankJournalId ?? settings.purchaseJournalId!,
+          date: paidDate,
+          ref: pr.payReqNumber,
+          description: `Payment to ${pr.supplierName}`,
+          source: "purchase_payment",
+          sourceId: id,
+          companyId: pr.companyId ?? 1,
+          lines: [
+            { accountId: settings.apAccountId!, debit: totalAmount, credit: 0, description: "AP settlement" },
+            { accountId: settings.defaultBankAccountId!, debit: 0, credit: totalAmount, description: "Bank/Cash out" },
+          ],
+        }, "BANK");
+        await db.update(paymentRequestsTable).set({ status: "paid", paidAmount: pr.totalAmount, paymentMethod: paymentMethod ?? null, bankAccount: bankAccount ?? null, paymentDate: paidDate, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(paymentRequestsTable.id, id));
+      } else {
+        await db.update(paymentRequestsTable).set({ status: "paid", paidAmount: pr.totalAmount, paymentDate: paidDate, updatedAt: new Date() }).where(eq(paymentRequestsTable.id, id));
+      }
+    } catch (e) {
+      console.error("[payment]", e);
+      await db.update(paymentRequestsTable).set({ status: "paid", paidAmount: pr.totalAmount, paymentDate: paidDate, updatedAt: new Date() }).where(eq(paymentRequestsTable.id, id));
+    }
+    // Update vendor invoices as paid
     for (const item of items) {
       if (item.vendorInvoiceId) {
         const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, item.vendorInvoiceId));
@@ -2860,11 +1176,9 @@ router.get("/landed-costs", async (req, res) => {
 });
 
 router.get("/landed-costs/:id", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [lc] = await db.select().from(landedCostsTable).where(eq(landedCostsTable.id, id));
   if (!lc) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(lc.companyId, cid, req, res, { resourceType: "landed_cost", resourceId: id })) return;
   const lines = await db.select().from(landedCostLinesTable).where(eq(landedCostLinesTable.lcId, id));
   const allocations = await db.select().from(landedCostAllocationsTable).where(eq(landedCostAllocationsTable.lcId, id));
   res.json({ ...lc, lines, allocations });
@@ -2901,12 +1215,9 @@ router.post("/landed-costs", async (req, res) => {
 });
 
 router.post("/landed-costs/:id/allocate", async (req, res) => {
-  const id = Number(String(req.params.id));
+  const id = Number(req.params.id);
   const [lc] = await db.select().from(landedCostsTable).where(eq(landedCostsTable.id, id));
-  if (!lc) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(lc.companyId, cid, req, res, { resourceType: "landed_cost", resourceId: id })) return;
-  if (!lc.grId) { res.status(400).json({ error: "No GR linked" }); return; }
+  if (!lc || !lc.grId) { res.status(400).json({ error: "No GR linked" }); return; }
 
   const grLines = await db.select().from(goodsReceiptLinesTable).where(eq(goodsReceiptLinesTable.grId, lc.grId));
   const totalCost = num(lc.totalCost);
@@ -2938,11 +1249,7 @@ router.post("/landed-costs/:id/allocate", async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 router.get("/po-approvals/:poId", async (req, res) => {
-  const poId = Number(String(req.params.poId));
-  const [poCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, poId));
-  if (!poCo) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(poCo.companyId, cid, req, res, { resourceType: "purchase_document", resourceId: poId })) return;
+  const poId = Number(req.params.poId);
   const rows = await db.select().from(purchaseApprovalsTable)
     .where(and(eq(purchaseApprovalsTable.docType, "PO"), eq(purchaseApprovalsTable.docId, poId)))
     .orderBy(purchaseApprovalsTable.step);
@@ -2950,12 +1257,8 @@ router.get("/po-approvals/:poId", async (req, res) => {
 });
 
 router.post("/po-approvals/:poId/action", async (req, res) => {
-  const poId = Number(String(req.params.poId));
+  const poId = Number(req.params.poId);
   const { action, notes, approverName, approverId } = req.body as Record<string, string>;
-  const [poCo] = await db.select({ companyId: purchaseDocumentsTable.companyId }).from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, poId));
-  if (!poCo) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(poCo.companyId, cid, req, res, { resourceType: "purchase_document", resourceId: poId })) return;
   if (action === "submit") {
     await db.insert(purchaseApprovalsTable).values({ docType: "PO", docId: poId, step: 1, status: "pending", approverName: approverName ?? null, approverId: approverId ?? null });
     await db.update(purchaseDocumentsTable).set({ status: "sent", updatedAt: new Date() }).where(eq(purchaseDocumentsTable.id, poId));
@@ -2974,321 +1277,6 @@ router.post("/po-approvals/:poId/action", async (req, res) => {
   }
   const [updated] = await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, poId));
   res.json(updated);
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SAP APPROVAL WORKFLOW — Endpoints
-// POST /vendor-invoices/:id/sap-submit   → DRAFT → PENDING_APPROVAL
-// POST /vendor-invoices/:id/sap-approve  → advance to next approval level
-// POST /vendor-invoices/:id/sap-reject   → any → DRAFT
-// POST /vendor-invoices/:id/sap-lock     → POSTED → LOCKED
-// GET  /vendor-invoices/:id/sap-status   → current state + history + audit trail
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post("/vendor-invoices/:id/sap-submit", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "SYSTEM";
-  const role  = (req as any).user?.role  ?? "user";
-
-  try {
-    let doc = await loadOrCreateApprovalState("vendor_invoice", id);
-    if (doc.status !== APPROVAL_STATES.DRAFT) {
-      res.status(422).json({ error: "ALREADY_SUBMITTED", current_status: doc.status });
-      return;
-    }
-    doc = approveDocument(doc, role, actor, (req.body as any)?.note ?? null);
-    await saveApprovalState(doc);
-    res.json({ ok: true, document_id: id, status: doc.status, approval_history: doc.approval_history });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(400).json({ error: msg });
-  }
-});
-
-router.post("/vendor-invoices/:id/sap-approve", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "SYSTEM";
-  const role  = (req as any).user?.role  ?? "user";
-
-  try {
-    let doc = await loadOrCreateApprovalState("vendor_invoice", id);
-    if (doc.status === APPROVAL_STATES.DRAFT) {
-      res.status(422).json({ error: "MUST_SUBMIT_FIRST — call sap-submit before approving" });
-      return;
-    }
-    const before = { ...doc };
-    doc = approveDocument(doc, role, actor, (req.body as any)?.note ?? null);
-    await saveApprovalState(doc);
-
-    // Write manual audit entry (middleware handles res.json hook, this is belt-and-suspenders)
-    await writeSapAuditLog(buildAuditLog({
-      entityType: "vendor_invoice",
-      entityId:   id,
-      action:     `SAP_APPROVE → ${doc.status}`,
-      actorId:    actor,
-      role,
-      before:     before,
-      after:      doc,
-    })).catch(() => {});
-
-    res.json({ ok: true, document_id: id, status: doc.status, current_approver: doc.current_approver, approval_history: doc.approval_history });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const status = msg === "DOCUMENT_LOCKED" ? 403 : msg.startsWith("INVALID_STATE") ? 422 : 400;
-    res.status(status).json({ error: msg });
-  }
-});
-
-router.post("/vendor-invoices/:id/sap-reject", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "SYSTEM";
-  const role  = (req as any).user?.role  ?? "user";
-
-  try {
-    let doc = await loadOrCreateApprovalState("vendor_invoice", id);
-    const before = { ...doc };
-    doc = rejectDocument(doc, role, actor, (req.body as any)?.note ?? null);
-    await saveApprovalState(doc);
-    res.json({ ok: true, document_id: id, status: doc.status, approval_history: doc.approval_history });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(400).json({ error: msg });
-  }
-});
-
-router.post("/vendor-invoices/:id/sap-lock", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [vi] = await db.select({ companyId: vendorInvoicesTable.companyId, status: vendorInvoicesTable.status }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const actor = (req as any).user?.email ?? (req as any).user?.id ?? "SYSTEM";
-  const role  = (req as any).user?.role  ?? "user";
-
-  try {
-    let doc = await loadOrCreateApprovalState("vendor_invoice", id);
-    if (doc.status !== APPROVAL_STATES.POSTED) {
-      res.status(422).json({ error: `CANNOT_LOCK — document must be POSTED first (current: ${doc.status})` });
-      return;
-    }
-    doc = approveDocument(doc, role, actor, "SYSTEM LOCK");
-    await saveApprovalState(doc);
-    // Also set DB-level is_locked = true
-    await db.execute(sql`UPDATE vendor_invoices SET is_locked = true WHERE id = ${id}`);
-    res.json({ ok: true, document_id: id, status: doc.status });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(400).json({ error: msg });
-  }
-});
-
-router.get("/vendor-invoices/:id/sap-status", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const [doc, auditRows] = await Promise.all([
-    loadOrCreateApprovalState("vendor_invoice", id),
-    db.execute<{ id: string; action: string; actor_id: string | null; role: string | null; timestamp: string }>(sql`
-      SELECT id, action, actor_id, role, timestamp::text
-      FROM   sap_audit_ledger
-      WHERE  entity_type = 'vendor_invoice'
-        AND  entity_id   = ${String(id)}
-      ORDER  BY timestamp DESC
-      LIMIT  50
-    `),
-  ]);
-
-  res.json({
-    document_id:      id,
-    status:           doc.status,
-    current_approver: doc.current_approver,
-    approval_history: doc.approval_history,
-    audit_trail:      auditRows.rows,
-    updated_at:       doc.updated_at,
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SAP JOURNAL POSTING ENGINE — Endpoints
-// POST /vendor-invoices/:id/sap-journal  → create POSTED journal from invoice
-// GET  /vendor-invoices/:id/sap-journal  → fetch latest POSTED journal
-// POST /vendor-invoices/:id/sap-reverse  → create REVERSED journal from posted journal
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.post("/vendor-invoices/:id/sap-journal", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!vi) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  try {
-    const journal = createSapJournal({
-      id:          vi.id,
-      status:      vi.status,
-      totalAmount: vi.totalAmount,
-      taxAmount:   vi.taxAmount,
-      grandTotal:  vi.grandTotal,
-    });
-    const stored = await storeSapJournal(journal);
-    res.status(201).json(stored);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const status = msg === "INVOICE_NOT_POSTED" ? 422
-                 : msg.startsWith("JOURNAL_NOT_BALANCED") ? 400 : 500;
-    res.status(status).json({ error: msg });
-  }
-});
-
-router.get("/vendor-invoices/:id/sap-journal", async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const journal = await getSapJournalByInvoice(id);
-  if (!journal) { res.status(404).json({ error: "No POSTED journal found for this invoice" }); return; }
-  res.json(journal);
-});
-
-router.post("/vendor-invoices/:id/sap-reverse", sapAuditMiddleware, async (req, res) => {
-  const id = Number(String(req.params.id));
-  const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
-  if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
-  const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
-  if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-
-  const original = await getSapJournalByInvoice(id);
-  if (!original) { res.status(404).json({ error: "No POSTED journal found for this invoice — cannot reverse" }); return; }
-
-  try {
-    const reversed = reverseJournal(original);
-    const stored   = await storeSapJournal(reversed);
-
-    // Mark the original journal as reversed in DB
-    await db.execute(sql`
-      UPDATE sap_journals SET status = 'REVERSED' WHERE id = ${original.journal_id}
-    `);
-
-    res.status(201).json(stored);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    res.status(400).json({ error: msg });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SAP AUDIT LEDGER — Global Query Endpoint
-// GET /sap-audit-ledger
-//   ?entity_type=vendor_invoice
-//   &entity_id=42
-//   &invoice_number=VI-2026-001   ← NEW: filter by human-readable invoice number
-//   &action=SAP_APPROVE
-//   &actor_id=admin@example.com
-//   &from=2026-01-01
-//   &to=2026-12-31
-//   &limit=50&offset=0
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.get("/sap-audit-ledger", async (req, res) => {
-  const {
-    entity_type, entity_id, action: actionFilter,
-    actor_id, from, to, invoice_number,
-  } = req.query as Record<string, string | undefined>;
-
-  const limit  = Math.min(Number(req.query.limit  ?? 100), 500);
-  const offset = Math.max(Number(req.query.offset ?? 0), 0);
-
-  // When invoice_number is supplied, resolve matching entity_ids via vendor_invoices JOIN.
-  // This avoids exposing raw SQL to the client while keeping the filter accurate.
-  const invoiceNumFilter = invoice_number?.trim();
-
-  const [rows, countRows] = await Promise.all([
-    db.execute<{
-      id: string; entity_type: string; entity_id: string;
-      action: string; actor_id: string | null; role: string | null;
-      before_data: unknown; after_data: unknown; timestamp: string;
-      invoice_number: string | null;
-    }>(sql`
-      SELECT sal.id, sal.entity_type, sal.entity_id, sal.action, sal.actor_id, sal.role,
-             sal.before_data, sal.after_data, sal.timestamp::text,
-             vi.invoice_number
-      FROM   sap_audit_ledger sal
-      LEFT   JOIN vendor_invoices vi
-             ON  sal.entity_type = 'vendor_invoice'
-             AND sal.entity_id   = vi.id::text
-      WHERE  TRUE
-        ${entity_type      ? sql`AND sal.entity_type = ${entity_type}` : sql``}
-        ${entity_id        ? sql`AND sal.entity_id   = ${entity_id}`   : sql``}
-        ${invoiceNumFilter ? sql`AND vi.invoice_number ILIKE ${"%" + invoiceNumFilter + "%"}` : sql``}
-        ${actionFilter     ? sql`AND sal.action ILIKE ${"%" + actionFilter + "%"}` : sql``}
-        ${actor_id         ? sql`AND sal.actor_id ILIKE ${"%" + actor_id + "%"}` : sql``}
-        ${from             ? sql`AND sal.timestamp >= ${from}::timestamptz`       : sql``}
-        ${to               ? sql`AND sal.timestamp <= ${to}::timestamptz + interval '1 day'` : sql``}
-      ORDER  BY sal.timestamp DESC
-      LIMIT  ${limit} OFFSET ${offset}
-    `),
-    db.execute<{ total: number }>(sql`
-      SELECT COUNT(*)::int AS total
-      FROM   sap_audit_ledger sal
-      LEFT   JOIN vendor_invoices vi
-             ON  sal.entity_type = 'vendor_invoice'
-             AND sal.entity_id   = vi.id::text
-      WHERE  TRUE
-        ${entity_type      ? sql`AND sal.entity_type = ${entity_type}` : sql``}
-        ${entity_id        ? sql`AND sal.entity_id   = ${entity_id}`   : sql``}
-        ${invoiceNumFilter ? sql`AND vi.invoice_number ILIKE ${"%" + invoiceNumFilter + "%"}` : sql``}
-        ${actionFilter     ? sql`AND sal.action ILIKE ${"%" + actionFilter + "%"}` : sql``}
-        ${actor_id         ? sql`AND sal.actor_id ILIKE ${"%" + actor_id + "%"}` : sql``}
-        ${from             ? sql`AND sal.timestamp >= ${from}::timestamptz`       : sql``}
-        ${to               ? sql`AND sal.timestamp <= ${to}::timestamptz + interval '1 day'` : sql``}
-    `),
-  ]);
-
-  res.json({
-    items:  rows.rows,
-    total:  (countRows.rows[0] as any)?.total ?? 0,
-    limit,
-    offset,
-  });
-});
-
-// GET /sap-audit-ledger/stats — action counts grouped by entity_type + action
-router.get("/sap-audit-ledger/stats", async (_req, res) => {
-  const rows = await db.execute<{
-    entity_type: string; action: string; count: number; last_seen: string;
-  }>(sql`
-    SELECT entity_type,
-           action,
-           COUNT(*)::int  AS count,
-           MAX(timestamp)::text AS last_seen
-    FROM   sap_audit_ledger
-    GROUP  BY entity_type, action
-    ORDER  BY count DESC
-    LIMIT  100
-  `);
-
-  res.json(rows.rows);
 });
 
 export default router;

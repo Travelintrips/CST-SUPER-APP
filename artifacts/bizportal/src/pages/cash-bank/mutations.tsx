@@ -5,10 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
-import { ArrowLeft, RefreshCw, ArrowDownLeft, ArrowUpRight, List } from "lucide-react";
+import { ArrowLeft, RefreshCw, Link2, List } from "lucide-react";
 
 const API = "/api";
 function fmt(n: number | string) { return new Intl.NumberFormat("id-ID").format(Number(n) || 0); }
+function maskAccountNumber(value: unknown) {
+  const digits = String(value ?? "").trim();
+  if (!digits) return "";
+  if (digits.length <= 4) return digits;
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+}
 
 export default function CashBankMutations() {
   const { activeCompanyId } = useCompany();
@@ -24,9 +30,9 @@ export default function CashBankMutations() {
     if (!activeCompanyId) return;
     setLoading(true);
     const params = new URLSearchParams({ companyId: String(activeCompanyId), limit: "100" });
-    if (accountId !== "all") params.append("accountId", accountId);
-    if (from) params.append("startDate", from);
-    if (to) params.append("endDate", to);
+    if (accountId !== "all") params.append("account_id", accountId);
+    if (from) params.append("from", from);
+    if (to) params.append("to", to);
 
     const [mutR, accR] = await Promise.all([
       fetch(`${API}/cash-bank/mutations?${params}`, { credentials: "include" }),
@@ -101,7 +107,7 @@ export default function CashBankMutations() {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ background: "#0F172A" }}>
-                {["Tanggal", "No. Jurnal", "Keterangan", "Rekening", "Debit", "Kredit", "Saldo Berjalan"].map(h => (
+                {["Tanggal", "No. Jurnal", "Keterangan", "Rekening / Sumber", "Debit", "Kredit", "Saldo Berjalan"].map(h => (
                   <th key={h} className="px-3 py-2.5 text-left text-slate-400 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -109,10 +115,35 @@ export default function CashBankMutations() {
             <tbody>
               {mutations.map((m, i) => (
                 <tr key={m.line_id} style={{ background: i % 2 === 0 ? "rgba(30,41,59,0.5)" : "rgba(15,23,42,0.5)", borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{m.entry_date}</td>
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{m.date}</td>
                   <td className="px-3 py-2 font-mono text-slate-300 whitespace-nowrap">{m.entry_number}</td>
                   <td className="px-3 py-2 text-slate-300 max-w-xs truncate">{m.line_desc || m.entry_desc}</td>
-                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{m.bank_account_name}</td>
+                  <td className="px-3 py-2 text-slate-400 min-w-[190px]">
+                    <div className="font-medium text-slate-300 whitespace-nowrap">
+                      {m.bank_account_name || "Rekening belum dipetakan"}
+                    </div>
+                    {(m.bank_name || m.account_number) && (
+                      <div className="text-[10px] text-slate-500 whitespace-nowrap">
+                        {[m.bank_name, maskAccountNumber(m.account_number)].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                    {m.source_connection_label ? (
+                      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-cyan-300 whitespace-nowrap" title="Koneksi Google Sheet sumber mutasi">
+                        <Link2 size={11} className="shrink-0" />
+                        <span>Google Sheet: {m.source_connection_label}</span>
+                        {m.source_bank_name && <span className="text-slate-500">· {m.source_bank_name}</span>}
+                        {m.source_account_number && <span className="text-slate-500">· {maskAccountNumber(m.source_account_number)}</span>}
+                        {m.source_sheet_tab && <span className="text-slate-500">· {m.source_sheet_tab}</span>}
+                      </div>
+                    ) : m.mutation_source_account ? (
+                      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-cyan-300 whitespace-nowrap" title="Sumber rekening dari data mutasi">
+                        <Link2 size={11} className="shrink-0" />
+                        <span>Sumber: {m.mutation_source_account}</span>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[10px] text-slate-600 whitespace-nowrap">Sumber koneksi tidak tercatat</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-green-400 font-mono text-right whitespace-nowrap">
                     {parseFloat(m.debit || "0") > 0 ? `Rp ${fmt(m.debit)}` : "—"}
                   </td>

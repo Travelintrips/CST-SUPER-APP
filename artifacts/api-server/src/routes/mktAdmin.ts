@@ -41,6 +41,7 @@ import {
   getQuoteComparisonData,
   selectVendorAndCreatePo,
 } from "../lib/services/vendorSelectionService.js";
+import { setMarketplaceDealPrice } from "../lib/services/mktDealPriceService.js";
 import {
   getDualWriteStats,
   getFailedDualWriteEntries,
@@ -530,6 +531,116 @@ router.get("/rfqs/:rfqId/comparison", async (req, res) => {
     logger.warn({ err, rfqId }, "[mktAdmin] getQuoteComparisonData error");
     return res.status(500).json({ ok: false, error: "Gagal memuat comparison data" });
   }
+});
+
+// ── Marketplace negotiated/deal price ───────────────────────────────────────
+// Vendor cost is returned only to this authenticated admin surface. Customer
+// routes use their own buyer-safe projection below.
+router.get("/rfqs/:rfqId/quotes/:quoteId/deal-price", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const rfqId = Number(req.params["rfqId"]);
+  const quoteId = Number(req.params["quoteId"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0 || !Number.isInteger(quoteId) || quoteId <= 0) {
+    return res.status(400).json({ ok: false, error: "rfqId dan quoteId harus integer positif" });
+  }
+
+  try {
+    const { db, mktRfqsTable, mktVendorQuotesTable, mktVendorQuoteLinesTable, mktRfqLinesTable, suppliersTable } =
+      await import("@workspace/db");
+    const { and, eq } = await import("drizzle-orm");
+    const [quote] = await db.select({
+      id: mktVendorQuotesTable.id,
+      rfqId: mktVendorQuotesTable.rfqId,
+      status: mktVendorQuotesTable.status,
+      updatedAt: mktVendorQuotesTable.updatedAt,
+      negotiatedBy: mktVendorQuotesTable.negotiatedBy,
+      negotiatedAt: mktVendorQuotesTable.negotiatedAt,
+      negotiatedNotes: mktVendorQuotesTable.negotiatedNotes,
+      vendorName: suppliersTable.name,
+      rfqStatus: mktRfqsTable.status,
+    }).from(mktVendorQuotesTable)
+      .innerJoin(mktRfqsTable, eq(mktRfqsTable.id, mktVendorQuotesTable.rfqId))
+      .innerJoin(suppliersTable, eq(suppliersTable.id, mktVendorQuotesTable.vendorId))
+      .where(and(eq(mktVendorQuotesTable.id, quoteId), eq(mktVendorQuotesTable.rfqId, rfqId)))
+      .limit(1);
+    if (!quote) return res.status(404).json({ ok: false, error: "Vendor quote tidak ditemukan" });
+
+    const lines = await db.select({
+      rfqLineId: mktVendorQuoteLinesTable.rfqLineId,
+      itemName: mktRfqLinesTable.itemName,
+      offeredQty: mktVendorQuoteLinesTable.offeredQty,
+      vendorUnitPrice: mktVendorQuoteLinesTable.offeredUnitPrice,
+      vendorSubtotal: mktVendorQuoteLinesTable.subtotal,
+      dealUnitPrice: mktVendorQuoteLinesTable.negotiatedUnitPrice,
+      dealSubtotal: mktVendorQuoteLinesTable.negotiatedSubtotal,
+      unit: mktRfqLinesTable.itemUnit,
+    }).from(mktVendorQuoteLinesTable)
+      .innerJoin(mktRfqLinesTable, eq(mktRfqLinesTable.id, mktVendorQuoteLinesTable.rfqLineId))
+      .where(eq(mktVendorQuoteLinesTable.quoteId, quoteId));
+    return res.json({
+      ok: true,
+      data: {
+        ...quote,
+        lines,
+        dealTotal: lines.every((line) => line.dealSubtotal != null)
+          ? lines.reduce((sum, line) => sum + Number(line.dealSubtotal), 0)
+          : null,
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, rfqId, quoteId }, "[mktAdmin] get deal price error");
+    return res.status(500).json({ ok: false, error: "Gagal memuat harga deal" });
+  }
+});
+
+router.put("/rfqs/:rfqId/quotes/:quoteId/deal-price", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const rfqId = Number(req.params["rfqId"]);
+  const quoteId = Number(req.params["quoteId"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0 || !Number.isInteger(quoteId) || quoteId <= 0) {
+    return res.status(400).json({ ok: false, error: "rfqId dan quoteId harus integer positif" });
+  }
+  const schema = z.object({
+    expectedUpdatedAt: z.string().datetime().nullable().optional(),
+    dealNotes: z.string().trim().max(4000).nullable().optional(),
+    lines: z.array(z.object({
+      rfqLineId: z.coerce.number().int().positive(),
+      dealUnitPrice: z.coerce.number().finite().positive(),
+    }).strict()).min(1).max(500),
+  }).strict();
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(422).json({ ok: false, error: "INVALID_DEAL_PRICE_BODY", details: parsed.error.flatten() });
+
+  const user = req.user as { id?: string; name?: string } | undefined;
+  const actorId = user?.id ?? "unknown";
+  const result = await setMarketplaceDealPrice({
+    rfqId,
+    quoteId,
+    actorId,
+    lines: parsed.data.lines,
+    dealNotes: parsed.data.dealNotes,
+    expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+  });
+  if (!result.ok) {
+    const status = ["QUOTE_NOT_FOUND"].includes(result.code) ? 404
+      : ["DEAL_PRICE_LOCKED", "STALE_DEAL_PRICE"].includes(result.code) ? 409
+        : 422;
+    return res.status(status).json({ ok: false, error: result.code, message: result.message });
+  }
+
+  await logActivity({
+    mktRfqId: rfqId,
+    mktVendorQuoteId: quoteId,
+    actorType: "admin",
+    actorId,
+    actorName: user?.name ?? actorId,
+    action: "mkt_deal_price_updated",
+    description: `Harga deal quote ${quoteId} diperbarui`,
+    newValue: { quoteId, rfqId, lines: result.lines, dealTotal: result.dealTotal, notes: parsed.data.dealNotes ?? null },
+  });
+  return res.json({ ok: true, data: result });
 });
 
 // ── Phase 2E: Select Vendor ───────────────────────────────────────────────────
@@ -2008,6 +2119,26 @@ router.post("/rfqs/:rfqId/send-to-customer", async (req, res) => {
       return res.status(422).json({
         ok: false,
         error: `Vendor quote harus dalam status submitted (current: ${quoteStatus})`,
+      });
+    }
+
+    const dealPriceRows = await db.execute(sql`
+      SELECT COUNT(*)::int AS total_lines,
+             COUNT(*) FILTER (
+               WHERE negotiated_unit_price IS NULL
+                  OR negotiated_subtotal IS NULL
+                  OR negotiated_unit_price::numeric <= 0
+                  OR negotiated_subtotal::numeric <= 0
+             )::int AS missing_lines
+      FROM mkt_vendor_quote_lines
+      WHERE quote_id = ${quoteIdNum}
+    `);
+    const dealPriceRow = ((dealPriceRows as any).rows ?? dealPriceRows)[0] as Record<string, unknown> | undefined;
+    if (!dealPriceRow || Number(dealPriceRow["total_lines"] ?? 0) === 0 || Number(dealPriceRow["missing_lines"] ?? 0) > 0) {
+      return res.status(422).json({
+        ok: false,
+        error: "DEAL_PRICE_REQUIRED",
+        message: "Semua line harus memiliki harga deal sebelum quotation dikirim ke customer.",
       });
     }
 

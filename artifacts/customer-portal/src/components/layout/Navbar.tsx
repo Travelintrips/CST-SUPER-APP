@@ -540,7 +540,12 @@ export function Navbar() {
   const totalCount = logisticCount;
 
   const { data: company } = useGetPortalCompany({
-    query: { queryKey: ["getPortalCompany"] },
+    query: {
+      queryKey: ["getPortalCompany"],
+      enabled: isAuth,
+      staleTime: 60_000,
+      retry: 1,
+    },
   });
 
   useEffect(() => {
@@ -666,6 +671,7 @@ export function Navbar() {
       ] as MarketplaceResult[];
     },
     staleTime: 30_000,
+    enabled: searchOpen || searchFocused,
   });
 
   // Smart autocomplete is sourced from all currently active portal offerings.

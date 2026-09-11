@@ -60,8 +60,10 @@ describe("vendor lifecycle continuation", () => {
     });
 
     it("publishes products in the transaction with a duplicate guard", () => {
-      expect(routeSource).toContain("WHERE NOT EXISTS (");
-      expect(routeSource).toContain("type = 'product'");
+      expect(routeSource).toMatch(
+        /SELECT id[\s\S]{0,240}FROM vendor_catalog_items[\s\S]{0,240}vendor_id = \$\{supplierId\}[\s\S]{0,240}type = 'product'[\s\S]{0,240}name = \$\{productName\}/,
+      );
+      expect(routeSource).toContain("if ((existing as any).rows?.length) continue;");
       expect(routeSource).not.toMatch(
         /vendor_catalog_items[\s\S]{0,1800}\.catch\(\(e: unknown\)/,
       );

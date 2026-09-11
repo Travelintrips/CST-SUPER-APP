@@ -111,6 +111,7 @@ import { runExceptionEnumMigration, runOrderExceptionsMigration } from "./lib/se
 import { runVendorCompanyAssignmentsMigration } from "./lib/vendorCompanyAssignmentsMigration.js";
 import { runVendorCatalogSchemaMigration } from "./lib/vendorCatalogSchemaMigration.js";
 import { runFeaturedProductMigration, ensureVendorFeaturedPackage } from "./lib/featuredProductMigration.js";
+import { runMktDealPriceMigration } from "./lib/mktDealPriceMigration.js";
 import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
@@ -195,7 +196,10 @@ import { runBtkiMigration } from "./lib/btkiMigration.js";
 import { runFinancialPeriodMigration } from "./lib/financialPeriodMigration.js";
 import { runFinancialClosingMigration } from "./lib/financialClosingMigration.js";
 import { runSapHardeningMigration } from "./lib/sapHardeningMigration.js";
-import { runFinanceGovernanceMigration } from "./lib/financeGovernanceMigration.js";
+import {
+  ensurePostedEntryVoidTransitionGuard,
+  runFinanceGovernanceMigration,
+} from "./lib/financeGovernanceMigration.js";
 import { startDriftMonitorWorker } from "./lib/monitoring/dataDriftDetector.js";
 import { runBankDisbursementMigration, runExpenseDisbursementBridgeMigration } from "./lib/bankDisbursementMigration.js";
 import { runVendorPaymentsMigration } from "./lib/vendorPaymentsMigration.js";
@@ -2019,6 +2023,12 @@ async function startServer() {
         ensureVendorInvoiceCaptureSchema,
       );
       logger.info("Vendor Invoice capture schema ready");
+      logger.info("Pre-start migration: posted-entry void transition guard starting");
+      await runPreStartSubstepWithRetry(
+        "posted_entry_void_transition_guard_v1",
+        ensurePostedEntryVoidTransitionGuard,
+      );
+      logger.info("Posted-entry void transition guard ready");
       return timeStartupStage("Pre-start schema migrations", async () => {
       console.log("[startup] Migration registry initialization complete");
       for (let attempt = 1; attempt <= 10; attempt++) {
@@ -2152,6 +2162,7 @@ async function startServer() {
     .then(() => runWithRetry("Vendor catalog schema migration", runVendorCatalogSchemaMigration))
     .then(() => runWithRetry("Vendor profile hardening migration (Phase Final)", runVendorProfileMigration))
     .then(() => runWithRetry("Featured product migration", runFeaturedProductMigration))
+       .then(() => runWithRetry("Marketplace negotiated/deal price migration", runMktDealPriceMigration))
        .then(() => runWithRetry("Marketplace legacy write idempotency migration", runMarketplaceLegacyWriteIdempotencyMigration))
        .then(() => runWithRetry("Marketplace vendor invoice migration", runMktVendorInvoiceMigration))
        .then(() => runWithRetry("Marketplace AP preparation migration", runMktApPreparationMigration))

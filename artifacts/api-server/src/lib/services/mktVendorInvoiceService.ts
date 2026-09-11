@@ -199,6 +199,7 @@ export async function createMarketplaceVendorInvoice(
       const poLines = await tx.select().from(mktPurchaseOrderLinesTable)
         .where(eq(mktPurchaseOrderLinesTable.poId, po.id));
       const poLineIds = new Set(poLines.map((line) => line.id));
+      const poLineMap = new Map(poLines.map((line) => [line.id, line]));
       if (input.lines.some((line) =>
         !Number.isInteger(line.poLineId) || line.poLineId <= 0 ||
         !poLineIds.has(line.poLineId) ||
@@ -208,6 +209,16 @@ export async function createMarketplaceVendorInvoice(
         !closeEnough(money(line.subtotal), money(line.quantity * line.unitPrice)),
       )) {
         return { ok: false as const, code: "INVALID_LINE" as const, message: "Invoice line tidak valid atau tidak berasal dari PO" };
+      }
+      if (input.lines.some((line) => {
+        const poLine = poLineMap.get(line.poLineId);
+        return !poLine || !closeEnough(line.unitPrice, Number(poLine.unitPrice));
+      })) {
+        return {
+          ok: false as const,
+          code: "INVALID_LINE" as const,
+          message: "Harga invoice harus sama dengan harga transaksi pada PO",
+        };
       }
 
       const duplicate = await tx.select().from(vendorInvoicesTable).where(and(

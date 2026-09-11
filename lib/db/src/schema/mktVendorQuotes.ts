@@ -65,6 +65,12 @@ export const mktVendorQuotesTable = pgTable("mkt_vendor_quotes", {
   // round 1 = initial quote, 2 = first requote, dst.
   // Di-increment saat vendor submit ulang dari 'requote_requested'
 
+  // Harga deal hasil negosiasi internal. Harga vendor asli tetap dipertahankan
+  // untuk audit; harga deal menjadi harga customer/PO saat diisi admin.
+  negotiatedBy:    text("negotiated_by"),
+  negotiatedAt:    timestamp("negotiated_at"),
+  negotiatedNotes: text("negotiated_notes"),
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [

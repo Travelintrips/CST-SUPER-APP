@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RfqStatusBadge, ApprovalStatusBadge, QuoteStatusBadge } from "@/components/marketplace/MktStatusBadge";
 import { RequoteDialog } from "@/components/marketplace/RequoteDialog";
+import { DealPriceDialog } from "@/components/marketplace/DealPriceDialog";
 import { toast } from "sonner";
 import {
   ArrowLeft, Scale, Users, UserCheck, Building2, Calendar, Send,
@@ -97,6 +98,7 @@ export default function MktRfqDetailPage() {
   const qc = useQueryClient();
 
   const [requoteTarget, setRequoteTarget] = useState<VendorQuote | null>(null);
+  const [dealTarget, setDealTarget] = useState<VendorQuote | null>(null);
   const [inviteForm, setInviteForm] = useState({ open: false, vendorId: "", notes: "" });
 
   const { data: rfqData } = useQuery<{ ok: boolean; data: RfqDetail }>({
@@ -280,6 +282,16 @@ export default function MktRfqDetailPage() {
                             )}
                           </TableCell>
                           <TableCell className="text-right">
+                            {["submitted", "selected"].includes(q.status) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-orange-600 hover:bg-orange-50 h-7 text-xs"
+                                onClick={() => setDealTarget(q)}
+                              >
+                                Harga Deal
+                              </Button>
+                            )}
                             {q.status === "submitted" && (
                               <Button
                                 variant="ghost"
@@ -335,6 +347,15 @@ export default function MktRfqDetailPage() {
           currentRound={requoteTarget.requoteRound}
         />
       )}
+
+      <DealPriceDialog
+        open={!!dealTarget}
+        onClose={() => setDealTarget(null)}
+        rfqId={rfqIdNum}
+        quoteId={dealTarget?.id ?? null}
+        vendorName={dealTarget?.vendorName ?? "Vendor"}
+        locked={["customer_review", "awarded", "cancelled", "expired"].includes(rfqData?.data.rfqStatus ?? "")}
+      />
 
       <Dialog open={inviteForm.open} onOpenChange={(v) => { if (!v) setInviteForm({ open: false, vendorId: "", notes: "" }); }}>
         <DialogContent className="max-w-sm">

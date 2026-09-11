@@ -14,3 +14,14 @@ Current reconciliation screens may hide an `approved` historical match from the 
 **Why:** The production mutation view derives its badge from `bank_mutations.status`, while candidate views commonly filter out already-approved history. An orphan match can therefore look absent and still keep the mutation posted.
 
 **How to apply:** Inspect `bank_reconciliation_matches` and `bank_mutations` together, then use a governed rejection plus journal reversal/void path when the candidate or journal identity is orphaned.
+An approved `vendor_invoice` match can remain in reconciliation history after both
+the referenced invoice master and its accounting entry disappear. The mutation's
+`posted` status is independent from whether the candidate can still be rendered
+in the current source-backed view.
+
+**Why:** Source-backed projections can hide an orphaned candidate while the
+historical match row and mutation state remain authoritative operational evidence.
+
+**How to apply:** Audit `bank_mutations`, `bank_reconciliation_matches`,
+`vendor_invoices`, and `accounting_entries` together before deciding whether the
+row is stale, orphaned, or a valid posted settlement.

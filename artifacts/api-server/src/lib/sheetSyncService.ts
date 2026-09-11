@@ -28,6 +28,11 @@ import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
 import {
+  normalizeAccountDigits,
+  resolveSheetBankAccountId,
+  type SheetAccountCandidate,
+} from "./sheetConfigAccountBinding.js";
+import {
   isDevelopmentEnvironment,
   isReconciliationWorkerEnabled,
   positiveIntEnv,
@@ -410,6 +415,8 @@ interface SheetConfig {
   sheet_id: string;
   tab_name: string;
   label: string;
+  bank_account_number?: string | null;
+  bank_name?: string | null;
 }
 
 export async function syncOneConfig(cfg: SheetConfig): Promise<{
@@ -418,7 +425,14 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   parsed: number;
   existing: number;
 }> {
-  const { id: configId, company_id, sheet_id: sheetId, tab_name: tabName, label } = cfg;
+  const {
+    id: configId,
+    company_id,
+    sheet_id: sheetId,
+    tab_name: tabName,
+    label,
+    bank_account_number: configuredAccountNumber,
+  } = cfg;
   const syncStartMs = Date.now();
 
   // Read sheet
@@ -484,32 +498,63 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   }
   // Resolve all possible destination accounts once. The previous per-row
   // probe held the single development pool in a 46-row serial loop.
-  const accountNumbers: Array<{ id: number; digits: string }> = [];
+  const accountNumbers: SheetAccountCandidate[] = [];
   try {
     const { rows: accountRows } = await db.execute(sql.raw(`
-      SELECT id, account_number
+      SELECT id, account_number, company_id
       FROM company_bank_accounts
       WHERE is_active = TRUE
         AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
         AND account_number IS NOT NULL
     `));
-    for (const row of accountRows as Array<{ id?: number; account_number?: string }>) {
-      const digits = String(row.account_number ?? "").replace(/\D/g, "");
-      if (row.id != null && digits) accountNumbers.push({ id: Number(row.id), digits });
+    for (const row of accountRows as Array<{
+      id?: number;
+      account_number?: string;
+      company_id?: number | null;
+    }>) {
+      const digits = normalizeAccountDigits(row.account_number);
+      if (row.id != null && digits) {
+        accountNumbers.push({
+          id: Number(row.id),
+          digits,
+          companyId: row.company_id == null ? null : Number(row.company_id),
+        });
+      }
     }
   } catch (err: any) {
     logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Gagal memuat daftar rekening");
   }
 
   const resolveBankAccountId = (p: ParsedRow): number | null => {
-    const statementDigits = `${p.bank ?? ""} ${p.description}`.replace(/\D/g, "");
-    return (
-      accountNumbers
-        .sort((a, b) => b.digits.length - a.digits.length)
-        .find((account) => statementDigits.includes(account.digits))
-        ?.id ?? null
-    );
+    return resolveSheetBankAccountId({
+      configuredAccountNumber,
+      rowBank: p.bank,
+      rowDescription: p.description,
+      companyId: company_id,
+      accounts: accountNumbers,
+    });
   };
+
+  const configuredAccountDigits = normalizeAccountDigits(configuredAccountNumber);
+  if (configuredAccountDigits) {
+    const configuredAccountExists = accountNumbers.some(
+      (account) => account.digits === configuredAccountDigits,
+    );
+    if (!configuredAccountExists) {
+      const errorMessage =
+        `Nomor rekening "${configuredAccountNumber}" pada config "${label}" ` +
+        "belum terdaftar sebagai company_bank_accounts aktif.";
+      await db.execute(sql.raw(`
+        UPDATE bank_sheet_configs
+        SET last_sync_status = 'error',
+            last_sync_error = '${errorMessage.replace(/'/g, "''")}',
+            last_synced_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${configId}
+      `)).catch(() => {});
+      throw new Error(errorMessage);
+    }
+  }
 
   // Build new rows in memory, then insert them in one statement.
   const newMutations: Array<{ id: number; parsed: ParsedRow }> = [];
@@ -613,7 +658,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         const decision = await runReconDecisionStack(decisionInput);
         if (decision.decisionSource === "MANUAL_RULE" && decision.matchedRuleId) {
           const ruleRows = await db.execute(sql`
-            SELECT target_coa_code, confidence_score
+            SELECT target_coa_code, confidence_score, candidate_requirement
             FROM recon_rules
             WHERE id = ${Number(decision.matchedRuleId)}
               AND company_id = ${Number(company_id)}
@@ -623,8 +668,50 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           const matchedRule = (ruleRows.rows as any[])[0] as {
             target_coa_code?: string | null;
             confidence_score?: number | string | null;
+            candidate_requirement?: string | null;
           } | undefined;
           const targetCoaCode = String(matchedRule?.target_coa_code ?? "").trim();
+          const candidateRequirement = matchedRule?.candidate_requirement === "required"
+            ? "required"
+            : "not_required";
+
+          // A Rule AI hit is classification evidence, not a transaction
+          // candidate. Required-candidate rules must use the same source
+          // matcher as the API route instead of inserting recon_rule as if it
+          // were an approvable business record.
+          if (candidateRequirement === "required") {
+            const candidateResult = await runUnifiedMatching({
+              id,
+              amount: p.amount,
+              transaction_date: p.transaction_date,
+              mutation_key: p.mutation_key,
+              normalized_description: p.normalized_description,
+              direction: p.direction,
+              company_id,
+              bank_account_id: p.bank_account_id ?? null,
+              provider_name: p.provider_name,
+            }, "sheet-sync");
+            await db.execute(sql`
+              INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+              VALUES (
+                ${id},
+                'RULE_ENGINE_MATCH',
+                'sheet-sync',
+                ${JSON.stringify({
+                  rule_id: Number(decision.matchedRuleId),
+                  matched_rule_id: Number(decision.matchedRuleId),
+                  candidate_requirement: candidateRequirement,
+                  candidate_count: candidateResult.all.length,
+                  best_candidate_type: candidateResult.best?.candidate.type ?? null,
+                  best_candidate_id: candidateResult.best?.candidate.id ?? null,
+                  status: candidateResult.status,
+                  source: "sheet-sync",
+                })}::jsonb
+              )
+            `).catch(() => {});
+            continue;
+          }
+
           const autoPostPlan = planReferenceCoaAutoPost({
             targetCoaCode,
             ruleConfidence: matchedRule?.confidence_score == null
@@ -795,71 +882,71 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
               (SELECT COALESCE(lo.customer_name, '')
-               FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_id)
+               FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
               (SELECT COALESCE(ap.partner_name, '')
                FROM accounting_payments ap
-               WHERE ap.id = brm_cand.candidate_id)
+               WHERE ap.id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
               (SELECT COALESCE(c.name, '')
                FROM sales_documents sd
                LEFT JOIN customers c ON c.id = sd.customer_id
-               WHERE sd.id = brm_cand.candidate_id)
+               WHERE sd.id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
               (SELECT COALESCE(e.description, '')
-               FROM expenses e WHERE e.id = brm_cand.candidate_id)
+               FROM expenses e WHERE e.id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
               (SELECT COALESCE(c.name, sb.customer_name, '')
                FROM sport_payments sp
                LEFT JOIN customers c ON c.id = sp.customer_id
                LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-               WHERE sp.id = brm_cand.candidate_id)
+               WHERE sp.id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN
               (SELECT COALESCE(t.business_name, '')
                FROM tenant_invoices ti
                LEFT JOIN tenants t ON t.id = ti.tenant_id
-               WHERE ti.id = brm_cand.candidate_id)
+               WHERE ti.id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_name,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT order_number FROM logistic_orders WHERE id = brm_cand.candidate_id)
+              (SELECT order_number FROM logistic_orders WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
-              (SELECT COALESCE(payment_number, ref, '') FROM accounting_payments WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(payment_number, ref, '') FROM accounting_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
-              (SELECT doc_number FROM sales_documents WHERE id = brm_cand.candidate_id)
+              (SELECT doc_number FROM sales_documents WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
-              (SELECT COALESCE(expense_number, '') FROM expenses WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(expense_number, '') FROM expenses WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
-              (SELECT 'SPORT-' || booking_id::text FROM sport_payments WHERE id = brm_cand.candidate_id)
+              (SELECT 'SPORT-' || booking_id::text FROM sport_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN
-              (SELECT invoice_number FROM tenant_invoices WHERE id = brm_cand.candidate_id)
+              (SELECT invoice_number FROM tenant_invoices WHERE id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_ref,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT COALESCE(lo.company_name, '') FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_id)
+              (SELECT COALESCE(lo.company_name, '') FROM logistic_orders lo WHERE lo.id = brm_cand.candidate_numeric_id)
             WHEN 'invoice' THEN
-              (SELECT COALESCE(c.company_name, '') FROM sales_documents sd LEFT JOIN customers c ON c.id = sd.customer_id WHERE sd.id = brm_cand.candidate_id)
+              (SELECT COALESCE(c.company_name, '') FROM sales_documents sd LEFT JOIN customers c ON c.id = sd.customer_id WHERE sd.id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
-              (SELECT COALESCE(c.company_name, '') FROM sport_payments sp LEFT JOIN customers c ON c.id = sp.customer_id WHERE sp.id = brm_cand.candidate_id)
+              (SELECT COALESCE(c.company_name, '') FROM sport_payments sp LEFT JOIN customers c ON c.id = sp.customer_id WHERE sp.id = brm_cand.candidate_numeric_id)
             ELSE NULL
           END, '') AS detail_company,
         COALESCE(
           CASE brm_cand.candidate_type
             WHEN 'logistic_order' THEN
-              (SELECT TRIM(COALESCE(service_category,'') || ' ' || COALESCE(origin,'') || CASE WHEN destination IS NOT NULL THEN ' → ' || destination ELSE '' END) FROM logistic_orders WHERE id = brm_cand.candidate_id)
+              (SELECT TRIM(COALESCE(service_category,'') || ' ' || COALESCE(origin,'') || CASE WHEN destination IS NOT NULL THEN ' → ' || destination ELSE '' END) FROM logistic_orders WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'accounting_payment' THEN
-              (SELECT COALESCE(payment_type::text, '') FROM accounting_payments WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(payment_type::text, '') FROM accounting_payments WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'expense' THEN
-              (SELECT COALESCE(description, '') FROM expenses WHERE id = brm_cand.candidate_id)
+              (SELECT COALESCE(description, '') FROM expenses WHERE id = brm_cand.candidate_numeric_id)
             WHEN 'sport_payment' THEN
               (SELECT COALESCE(sb.facility_name, 'Sport Center')
                FROM sport_payments sp
                LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-               WHERE sp.id = brm_cand.candidate_id)
+               WHERE sp.id = brm_cand.candidate_numeric_id)
             WHEN 'tenant_invoice' THEN 'Sewa Tenant'
             ELSE NULL
           END, '') AS detail_service
@@ -876,6 +963,11 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       LEFT JOIN LATERAL (
         -- Ambil kandidat terbaik: approved diprioritaskan, fallback ke candidate score tertinggi
         SELECT candidate_type, candidate_id, candidate_source,
+               CASE
+                 WHEN candidate_id::text ~ '^[0-9]+$'
+                   THEN candidate_id::text::bigint
+                 ELSE NULL
+               END AS candidate_numeric_id,
                (status = 'approved') AS is_approved
         FROM bank_reconciliation_matches
         WHERE mutation_id = bm.id
@@ -1242,7 +1334,8 @@ export async function triggerWritebackForMutation(mutationId: number): Promise<v
   try {
     const { rows } = await db.execute(sql.raw(`
       SELECT bm.sheet_config_id,
-             bsc.sheet_id, bsc.tab_name, bsc.label, bsc.company_id, bsc.id AS cfg_id
+             bsc.sheet_id, bsc.tab_name, bsc.label, bsc.company_id,
+             bsc.bank_account_number, bsc.bank_name, bsc.id AS cfg_id
       FROM bank_mutations bm
       JOIN bank_sheet_configs bsc ON bsc.id = bm.sheet_config_id
       WHERE bm.id = ${mutationId}
@@ -1258,6 +1351,8 @@ export async function triggerWritebackForMutation(mutationId: number): Promise<v
       sheet_id:   String(row.sheet_id),
       tab_name:   String(row.tab_name),
       label:      String(row.label),
+      bank_account_number: row.bank_account_number == null ? null : String(row.bank_account_number),
+      bank_name:  row.bank_name == null ? null : String(row.bank_name),
     });
   } catch (err: any) {
     logger.warn(
@@ -1295,7 +1390,7 @@ export async function syncAllSheetConfigs(companyId?: number): Promise<void> {
   try {
     const companyFilter = companyId == null ? "" : ` AND company_id = ${companyId}`;
     const { rows } = await db.execute(sql.raw(
-      `SELECT id, company_id, sheet_id, tab_name, label
+      `SELECT id, company_id, sheet_id, tab_name, label, bank_account_number, bank_name
        FROM bank_sheet_configs
        WHERE is_active = TRUE${companyFilter}`,
     ));

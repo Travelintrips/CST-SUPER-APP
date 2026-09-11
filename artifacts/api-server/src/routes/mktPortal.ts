@@ -851,9 +851,9 @@ router.get("/rfqs/:id/quotation", async (req: Request, res: Response) => {
         rfqLineId:        mktVendorQuoteLinesTable.rfqLineId,
         itemName:         mktRfqLinesTable.itemName,
         requestedQty:     mktRfqLinesTable.requestedQty,
-        offeredUnitPrice: mktVendorQuoteLinesTable.offeredUnitPrice,
+        dealUnitPrice:    mktVendorQuoteLinesTable.negotiatedUnitPrice,
         offeredQty:       mktVendorQuoteLinesTable.offeredQty,
-        subtotal:         mktVendorQuoteLinesTable.subtotal,
+        dealSubtotal:     mktVendorQuoteLinesTable.negotiatedSubtotal,
         currency:         mktVendorQuoteLinesTable.currency,
         leadTimeDays:     mktVendorQuoteLinesTable.leadTimeDays,
         stockStatus:      mktVendorQuoteLinesTable.stockStatus,
@@ -863,7 +863,10 @@ router.get("/rfqs/:id/quotation", async (req: Request, res: Response) => {
       .leftJoin(mktRfqLinesTable, eq(mktVendorQuoteLinesTable.rfqLineId, mktRfqLinesTable.id))
       .where(eq(mktVendorQuoteLinesTable.quoteId, proposedQuoteId));
 
-    const grandTotal = lines.reduce((s, l) => s + Number(l.subtotal ?? 0), 0);
+    if (lines.length === 0 || lines.some((line) => line.dealUnitPrice == null || line.dealSubtotal == null)) {
+      return res.status(409).json({ ok: false, error: "DEAL_PRICE_REQUIRED", message: "Quotation belum memiliki harga deal lengkap" });
+    }
+    const grandTotal = lines.reduce((s, l) => s + Number(l.dealSubtotal ?? 0), 0);
 
     return res.json({ ok: true, data: { ...quote, lines, grandTotal } });
   } catch (err: unknown) {

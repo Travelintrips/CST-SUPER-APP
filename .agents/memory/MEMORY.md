@@ -1,4 +1,7 @@
+- [Marketplace deal price concurrency](marketplace-deal-price-concurrency.md) — optimistic deal-price updates need a locked quote, checked update result, and monotonic millisecond timestamp.
+- [Vendor product approval boundary](vendor-product-approval-boundary.md) — every vendor-originated product, including onboarding products, must enter pending review before marketplace publication.
 - [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
+- [Mockup Sandbox dependency links](mockup-sandbox-dependency-links.md) — a declared Vite dependency can lose its workspace binary link; restore the filtered package install before changing workflows.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
 - [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
@@ -21,6 +24,8 @@
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
 - [Portal auth bootstrap recovery](portal-auth-bootstrap-recovery.md) — a valid HttpOnly session without the readable hint must recover through canonical bootstrap, not remain on `/login`.
+- [Portal authenticated query reuse](portal-authenticated-query-reuse.md) — portal list routes should reuse middleware-loaded customer identity; duplicate identity reads amplify pooler latency during parallel dashboard loads.
+- [Quality gate shared project references](quality-gate-shared-project-references.md) — build composite shared declarations before dependent typechecks; parallel large checks can cause TS6305 or Node heap exhaustion.
 - [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
 - [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
@@ -85,6 +90,7 @@
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
 - [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
 - [Bank reconciliation polymorphic IDs](bank-reconciliation-polymorphic-candidate-id.md) — match candidate IDs are live text identities; normalize safely before comparing to integer/bigint source IDs.
+- [Bank reconciliation UNION types](bank-reconciliation-union-types.md) — normalize enum/text projections explicitly so PROD schema differences cannot break the full mutation list.
 - [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
 - [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
 - [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
@@ -106,6 +112,7 @@
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [Accounting master-data period lock](accounting-master-data-period-lock.md) — period-lock hanya untuk mutasi ledger; CRUD jurnal/COA/settings adalah master data dan tidak memerlukan tanggal transaksi.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
+- [Canonical repair diagnosis refresh](canonical-repair-diagnosis-refresh.md) — after admin repair, derive diagnostic state from live canonical ownership/journal tables, not persisted error snapshots.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
@@ -136,4 +143,15 @@
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
+- [Production accounting orphan audit](production-accounting-orphan-audit.md) — final status must prove a transaction entry and canonical source; master journals and legacy source tags are insufficient.
+- [Posted bank unmatch lifecycle](posted-bank-unmatch-lifecycle.md) — posted bank mutations need reversal first, then reopen while releasing approved matches back to candidates.
 - [QRIS auto-approval refresh](qris-auto-approval-refresh.md) — source corrections must pass the authenticated request into candidate refresh so MATCHED snapshots reach canonical auto-approval on the active listener.
+- [Audit proof cleanup boundary](audit-proof-cleanup-boundary.md) — fixture cleanup must preserve append-only audit evidence and verify mutable residuals separately.
+- [Legacy portal ownership](legacy-portal-ownership.md) — all-null historical Ocean/Trucking ownership is orphaned; never auto-map by mutable contact fields.
+- [Reconciliation repair diagnosis](reconciliation-repair-diagnosis.md) — emit exact SQL only for a journal-less stale approved match; posted/canonical financial states require guarded workflow or developer action.
+- [Marketplace deal price boundary](marketplace-deal-price-boundary.md) — vendor cost and customer deal price stay separate; customer approval snapshots deal price into PO and invoice.
+- [Reconciliation table schema qualification](reconciliation-table-schema-qualification.md) — production has same-named match tables in public and sport_center; lifecycle SQL must qualify public and normalize legacy types.
+- [Canonical correlation root parity](canonical-correlation-root-parity.md) — TS, views, routines, and list projections must reject malformed repeated `:supp:` markers consistently.
+- [Customer Portal marketplace vendor routing](customer-portal-marketplace-vendor-routing.md) — vendor onboarding and RFQ quote invitation are distinct, but product-owner routing belongs in Customer Portal.
+- [Rule AI candidate approval boundary](rule-ai-candidate-approval-boundary.md) — candidate_required is an approval invariant: recon_rule evidence never substitutes for a real transaction candidate.
+- [Customer tracking disclosure boundary](customer-tracking-disclosure-boundary.md) — public tracking is status-safe and rate-limited; financial, invoice, POD, and identity detail require canonical portal ownership.

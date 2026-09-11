@@ -31,6 +31,10 @@ export const mktVendorQuoteLinesTable = pgTable("mkt_vendor_quote_lines", {
   offeredQty: numeric("offered_qty", { precision: 12, scale: 3 }).notNull(),
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
 
+  // Harga hasil negosiasi admin. NULL berarti gunakan harga vendor.
+  negotiatedUnitPrice: numeric("negotiated_unit_price", { precision: 14, scale: 2 }),
+  negotiatedSubtotal: numeric("negotiated_subtotal", { precision: 14, scale: 2 }),
+
   // ── Phase 2D — Vendor Quote Submission per-line fields [KEPUTUSAN #7-#9] ──
   currency: text("currency"),                          // KEPUTUSAN #8 — ISO 4217 text, wajib saat submit
   minimumOrderQty: numeric("minimum_order_qty", { precision: 12, scale: 3 }), // KEPUTUSAN #9 — opsional
