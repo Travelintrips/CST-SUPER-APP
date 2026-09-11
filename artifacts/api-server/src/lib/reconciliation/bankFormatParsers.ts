@@ -15,6 +15,19 @@ export interface ParsedBankRow {
   rawSource?: string;
 }
 
+/**
+ * Bank statement columns use the bank's perspective:
+ * Debit/Keluar = money leaving the account, Credit/Masuk = money entering it.
+ * Keep this mapping shared across import paths so Sheet, CSV, and Excel
+ * reconciliation use the same direction semantics.
+ */
+export function directionFromBankColumns(
+  debitAmount: number,
+  creditAmount: number,
+): "IN" | "OUT" {
+  return debitAmount > 0 ? "OUT" : creditAmount > 0 ? "IN" : "OUT";
+}
+
 // ── Format Detector ──────────────────────────────────────────────────────────
 
 export type BankFileFormat = "csv" | "excel" | "mt940" | "camt053";

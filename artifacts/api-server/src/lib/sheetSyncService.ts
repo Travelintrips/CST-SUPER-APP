@@ -27,6 +27,7 @@ import { planReferenceCoaAutoPost } from "./reconciliation/referenceCoaAutoPost.
 import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
+import { directionFromBankColumns } from "./reconciliation/bankFormatParsers.js";
 import {
   normalizeAccountDigits,
   resolveSheetBankAccountId,
@@ -297,8 +298,8 @@ function parseSheetRows(rows: string[][], logLabel = ""): { headers: string[]; p
     const amount    = kreditAmt || debitAmt;
     if (!amount) continue;
 
-    // Konvensi akuntansi standar: Debit = uang masuk ke rekening (IN), Kredit = uang keluar (OUT)
-    const direction: "IN" | "OUT" = debitAmt > 0 ? "IN" : "OUT";
+    // Bank statement semantics: Debit/Keluar = money out, Credit/Masuk = money in.
+    const direction = directionFromBankColumns(debitAmt, kreditAmt);
     const description = get(descCol);
     const bank        = bankCol >= 0 ? (get(bankCol) || null) : null;
     // Use canonical key — same algorithm as CSV/Excel so cross-source dedup works.

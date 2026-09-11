@@ -32,6 +32,7 @@ import {
 } from "../lib/reconciliation/canonicalMutationKey.js";
 import {
   buildMutationKeyFromParsed,
+  directionFromBankColumns,
   parseCSVText,
   type ParsedBankRow,
 } from "../lib/reconciliation/bankFormatParsers.js";
@@ -54,8 +55,8 @@ function csvKey(row: ParsedBankRow): string {
 // Simulate what sheetSyncService.ts parseSheetRows does for a single row
 function sheetKeyFromRowData(opts: {
   date: string;
-  debitAmt: number;   // debitAmt > 0 → IN (money received)
-  kreditAmt: number;  // kreditAmt > 0 → OUT (money paid)
+  debitAmt: number;   // debitAmt > 0 → OUT (money paid)
+  kreditAmt: number;  // kreditAmt > 0 → IN (money received)
   description: string;
 }): string {
   // sheetSyncService.ts line 269:
@@ -69,6 +70,16 @@ function sheetKeyFromRowData(opts: {
     bank_account_id: null,
   });
 }
+
+describe("directionFromBankColumns — bank statement semantics", () => {
+  it("classifies Debit/Keluar vendor payments as OUT", () => {
+    expect(directionFromBankColumns(12_480_000, 0)).toBe("OUT");
+  });
+
+  it("classifies Credit/Masuk receipts as IN", () => {
+    expect(directionFromBankColumns(0, 12_480_000)).toBe("IN");
+  });
+});
 
 // ─── 1. canonicalMutationKey — pure logic tests ────────────────────────────
 

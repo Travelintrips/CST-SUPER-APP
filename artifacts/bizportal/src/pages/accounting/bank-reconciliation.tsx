@@ -6410,6 +6410,12 @@ function MutationDetailPanel({
     canonicalApprovalCandidate,
   );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
+  const hasSportCenterEvidence = isQrisMutation(m) || cands.some(candidate =>
+    candidate.candidate_type === "sport_payment"
+    || candidate.candidate_type === "qris_settlement"
+    || candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+    || candidate.details?.sourceType === "sport_center"
+  );
   const canGenerateQrisForMutation = isQrisMutation(m)
     && qrisAudit == null
     && onGenerateQrisCandidates != null;
@@ -6481,16 +6487,20 @@ function MutationDetailPanel({
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
                       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
-                        <div><p className="text-xs text-muted-foreground">Uang masuk bank</p><p className="font-semibold tabular-nums">{idr(evidence.bankAmount)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">{m.direction === "IN" ? "Uang masuk bank" : "Uang keluar bank"}</p><p className="font-semibold tabular-nums">{idr(evidence.bankAmount)}</p></div>
                         <div><p className="text-xs text-muted-foreground">Transaksi ditemukan</p><p className="font-semibold tabular-nums">{idr(evidence.foundAmount)}</p></div>
                         <div><p className="text-xs text-muted-foreground">MDR / potongan</p><p className="font-semibold tabular-nums">{idr(evidence.deduction)}</p></div>
-                        <div><p className="text-xs text-muted-foreground">Seharusnya diterima</p><p className="font-semibold tabular-nums">{idr(evidence.expectedAmount)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">{m.direction === "IN" ? "Seharusnya diterima" : "Seharusnya dibayar"}</p><p className="font-semibold tabular-nums">{idr(evidence.expectedAmount)}</p></div>
                       </div>
                     </div>
                     {incomplete && evidence.missingAmount > 0 && (
                       <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
                         <p className="font-semibold">Masih ada {idr(evidence.missingAmount)} yang belum ditemukan.</p>
-                        <p className="mt-1 text-xs leading-relaxed">Sistem belum menemukan transaksi Sport Center yang menjelaskan seluruh uang masuk bank ini.</p>
+                        <p className="mt-1 text-xs leading-relaxed">
+                          {hasSportCenterEvidence
+                            ? "Sistem belum menemukan transaksi Sport Center yang menjelaskan seluruh mutasi bank ini."
+                            : `Sistem belum menemukan transaksi yang menjelaskan seluruh ${m.direction === "IN" ? "uang masuk" : "pembayaran keluar"} bank ini.`}
+                        </p>
                         <Button
                           size="sm"
                           variant="outline"
