@@ -137,6 +137,32 @@ const fulfillmentWriteLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan fulfillment." },
 });
 const podUpload = imagePdfUpload(20);
+const CreateShipmentBodySchema = z.object({
+  shipmentType: z.string().trim().max(100).optional().nullable(),
+  carrierName: z.string().trim().max(200).optional().nullable(),
+  trackingNumber: z.string().trim().max(200).optional().nullable(),
+  vehicleType: z.string().trim().max(100).optional().nullable(),
+  vehicleNumber: z.string().trim().max(100).optional().nullable(),
+  driverName: z.string().trim().max(200).optional().nullable(),
+  driverPhone: z.string().trim().max(50).optional().nullable(),
+  containerNumber: z.string().trim().max(100).optional().nullable(),
+  sealNumber: z.string().trim().max(100).optional().nullable(),
+  origin: z.string().trim().max(500).optional().nullable(),
+  destination: z.string().trim().max(500).optional().nullable(),
+  plannedDeparture: z.coerce.date().optional().nullable(),
+  estimatedArrival: z.coerce.date().optional().nullable(),
+  notes: z.string().trim().max(4000).optional().nullable(),
+  items: z.array(z.object({
+    poLineId: z.coerce.number().int().positive(),
+    lineNumber: z.coerce.number().int().positive(),
+    qty: z.coerce.number().finite().positive(),
+    uom: z.string().trim().max(50).optional().nullable(),
+    weight: z.coerce.number().finite().positive().optional().nullable(),
+    volume: z.coerce.number().finite().positive().optional().nullable(),
+    packageCount: z.coerce.number().int().positive().optional().nullable(),
+    remarks: z.string().trim().max(2000).optional().nullable(),
+  }).strict()).min(1).max(500),
+}).strict();
 const GoodsReceiptBodySchema = z.object({
   receiptType: z.enum(["full", "partial", "rejected"]),
   inspectionStatus: z.enum(["pending", "passed", "failed"]).optional(),
@@ -1840,32 +1866,36 @@ router.post("/purchase-orders/:id/close", makeLifecycleHandler(closePo));
 // POST /api/mkt/admin/shipments/:shipmentId/events           — append event (append-only)
 // GET  /api/mkt/admin/shipments/:shipmentId/timeline         — list events chronologically
 
-router.post("/purchase-orders/:id/shipments", async (req, res) => {
-  const ok = await requireAdmin(req, res);
-  if (!ok) return;
-
+router.post(
+  "/purchase-orders/:id/shipments",
+  fulfillmentWriteLimiter,
+  requireAdminMiddleware,
+  validateBody(CreateShipmentBodySchema),
+  async (req, res) => {
   const poId = Number(req.params["id"]);
   if (!Number.isInteger(poId) || poId <= 0) {
     return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
   }
 
-  const body = req.body ?? {};
-  if (!Array.isArray(body.items) || body.items.length === 0) {
-    return res.status(400).json({ ok: false, error: "items wajib diisi (minimal 1 item)" });
-  }
-
   try {
-    const result = await createShipment({ poId, ...body }, getActorFromReq(req));
+    const body = req.body as z.infer<typeof CreateShipmentBodySchema>;
+    const result = await createShipment({ ...body, poId }, getActorFromReq(req));
     if (!result.ok) {
-      const status = result.code === "PO_NOT_FOUND" ? 404 : 422;
+      const status = result.code === "PO_NOT_FOUND" ? 404 : result.code === "DUPLICATE_REQUEST" ? 409 : 422;
       return res.status(status).json({ ok: false, error: result.code, message: result.message });
     }
-    return res.status(201).json({ ok: true, shipment: result.shipment, items: result.items });
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists === true,
+      shipment: result.shipment,
+      items: result.items,
+    });
   } catch (err: unknown) {
     logger.warn({ err, poId }, "[mktAdmin] createShipment error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
-});
+  },
+);
 
 router.get("/purchase-orders/:id/shipments", async (req, res) => {
   const ok = await requireAdmin(req, res);
@@ -1905,10 +1935,11 @@ router.get("/shipments/:shipmentId", async (req, res) => {
   }
 });
 
-router.post("/shipments/:shipmentId/events", async (req, res) => {
-  const ok = await requireAdmin(req, res);
-  if (!ok) return;
-
+router.post(
+  "/shipments/:shipmentId/events",
+  fulfillmentWriteLimiter,
+  requireAdminMiddleware,
+  async (req, res) => {
   const shipmentId = Number(req.params["shipmentId"]);
   if (!Number.isInteger(shipmentId) || shipmentId <= 0) {
     return res.status(400).json({ ok: false, error: "shipmentId harus berupa integer positif" });
@@ -1923,12 +1954,17 @@ router.post("/shipments/:shipmentId/events", async (req, res) => {
     if (!result.ok) {
       return res.status(result.code === "SHIPMENT_NOT_FOUND" ? 404 : 409).json({ ok: false, error: result.code, currentStatus: result.currentStatus });
     }
-    return res.status(201).json({ ok: true, event: result.event });
+    return res.status(result.alreadyAppended ? 200 : 201).json({
+      ok: true,
+      alreadyAppended: result.alreadyAppended === true,
+      event: result.event,
+    });
   } catch (err: unknown) {
     logger.warn({ err, shipmentId }, "[mktAdmin] appendShipmentEvent error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
-});
+  },
+);
 
 router.get("/shipments/:shipmentId/timeline", async (req, res) => {
   const ok = await requireAdmin(req, res);

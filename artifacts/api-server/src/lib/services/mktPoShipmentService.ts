@@ -116,7 +116,15 @@ export type CreateShipmentResult =
     }
   | {
       ok: false;
-      code: "PO_NOT_FOUND" | "PO_NOT_ELIGIBLE" | "NO_ITEMS" | "INVALID_PO_LINE" | "DUPLICATE_PO_LINE";
+      code:
+        | "PO_NOT_FOUND"
+        | "PO_NOT_ELIGIBLE"
+        | "NO_ITEMS"
+        | "INVALID_PO_LINE"
+        | "DUPLICATE_PO_LINE"
+        | "QTY_INVALID"
+        | "QTY_EXCEEDS_PO_LINE"
+        | "DUPLICATE_REQUEST";
       message?: string;
     };
 
@@ -184,6 +192,29 @@ async function createShipmentInternal(
             .from(mktPoShipmentItemsTable)
             .where(eq(mktPoShipmentItemsTable.shipmentId, existing.id))
             .orderBy(asc(mktPoShipmentItemsTable.lineNumber));
+          const sameRequest =
+            existing.carrierName === (input.carrierName ?? null)
+            && existing.trackingNumber === (input.trackingNumber ?? null)
+            && existing.origin === (input.origin ?? null)
+            && existing.destination === (input.destination ?? null)
+            && existing.notes === (input.notes ?? null)
+            && existingItems.length === input.items.length
+            && input.items.every((item) => {
+              const found = existingItems.find((row) => row.poLineId === item.poLineId);
+              return found
+                && Number(found.qty) === Number(item.qty)
+                && found.lineNumber === item.lineNumber;
+            });
+          if (!sameRequest) {
+            return {
+              kind: "failure" as const,
+              result: {
+                ok: false as const,
+                code: "DUPLICATE_REQUEST" as const,
+                message: "Shipment untuk PO ini sudah dibuat dengan payload berbeda",
+              },
+            };
+          }
           return {
             kind: "success" as const,
             po,
@@ -208,7 +239,7 @@ async function createShipmentInternal(
       // Validate every referenced po_line actually belongs to this PO while
       // the parent PO lock is held.
       const validLines = await tx
-        .select({ id: mktPurchaseOrderLinesTable.id })
+        .select({ id: mktPurchaseOrderLinesTable.id, qty: mktPurchaseOrderLinesTable.qty })
         .from(mktPurchaseOrderLinesTable)
         .where(and(eq(mktPurchaseOrderLinesTable.poId, input.poId), inArray(mktPurchaseOrderLinesTable.id, lineIds)));
       const validLineIdSet = new Set(validLines.map((l) => l.id));
@@ -222,6 +253,50 @@ async function createShipmentInternal(
             message: `po_line_id ${invalid} tidak ditemukan pada PO ini`,
           },
         };
+      }
+
+      const lineById = new Map(validLines.map((line) => [line.id, Number(line.qty)]));
+      const requestedByLine = new Map<number, number>();
+      for (const item of input.items) {
+        const qty = Number(item.qty);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return {
+            kind: "failure" as const,
+            result: { ok: false as const, code: "QTY_INVALID" as const, message: "Qty shipment harus lebih besar dari nol" },
+          };
+        }
+        requestedByLine.set(item.poLineId, (requestedByLine.get(item.poLineId) ?? 0) + qty);
+      }
+
+      const existingItems = await tx
+        .select({
+          poLineId: mktPoShipmentItemsTable.poLineId,
+          qty: mktPoShipmentItemsTable.qty,
+        })
+        .from(mktPoShipmentItemsTable)
+        .innerJoin(mktPoShipmentsTable, eq(mktPoShipmentItemsTable.shipmentId, mktPoShipmentsTable.id))
+        .where(and(
+          eq(mktPoShipmentsTable.poId, input.poId),
+          sql`${mktPoShipmentsTable.shipmentStatus} <> 'cancelled'`,
+          inArray(mktPoShipmentItemsTable.poLineId, lineIds),
+        ));
+      const shippedByLine = new Map<number, number>();
+      for (const item of existingItems) {
+        shippedByLine.set(item.poLineId, (shippedByLine.get(item.poLineId) ?? 0) + Number(item.qty));
+      }
+      for (const [poLineId, requestedQty] of requestedByLine) {
+        const orderedQty = lineById.get(poLineId) ?? 0;
+        const alreadyShipped = shippedByLine.get(poLineId) ?? 0;
+        if (alreadyShipped + requestedQty > orderedQty + 0.005) {
+          return {
+            kind: "failure" as const,
+            result: {
+              ok: false as const,
+              code: "QTY_EXCEEDS_PO_LINE" as const,
+              message: `Qty shipment melebihi sisa PO line ${poLineId}`,
+            },
+          };
+        }
       }
 
       const now = new Date();

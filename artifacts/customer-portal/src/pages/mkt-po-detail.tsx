@@ -92,6 +92,13 @@ interface TimelineEvent {
   createdAt: string;
 }
 
+interface PodView {
+  available: boolean;
+  url: string;
+  uploadedAt: string;
+  note: string | null;
+}
+
 interface GoodsReceipt {
   id: number;
   shipmentId: number;
@@ -618,6 +625,19 @@ function TimelineTab({ shipmentId }: { shipmentId: number | null }) {
     },
     enabled: shipmentId != null,
   });
+  const { data: podData } = useQuery<{ ok: boolean; data: PodView }>({
+    queryKey: ["mkt-shipment-pod", shipmentId],
+    queryFn: async () => {
+      const res = await fetch(`/api/mkt/portal/shipments/${shipmentId!}/pod`, {
+        credentials: "include",
+      });
+      if (res.status === 404) return { ok: false, data: undefined as never };
+      if (!res.ok) throw new Error("Gagal memuat POD");
+      return res.json();
+    },
+    enabled: shipmentId != null,
+    staleTime: 30_000,
+  });
 
   if (!shipmentId) return (
     <Card className="border-dashed">
@@ -641,6 +661,7 @@ function TimelineTab({ shipmentId }: { shipmentId: number | null }) {
   );
 
   const events = data?.data ?? [];
+  const pod = podData?.ok ? podData.data : null;
 
   if (events.length === 0) return (
     <Card className="border-dashed">
@@ -696,6 +717,27 @@ function TimelineTab({ shipmentId }: { shipmentId: number | null }) {
           ))}
         </div>
       </div>
+      {pod && (
+        <Card className="border-emerald-200 bg-emerald-50 mt-4">
+          <CardContent className="p-4 flex flex-wrap items-center gap-3">
+            <FileText className="w-4 h-4 text-emerald-600" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-emerald-800">Proof of Delivery tersedia</p>
+              <p className="text-xs text-emerald-700">
+                Diunggah {fmtDateTime(pod.uploadedAt)}{pod.note ? ` — ${pod.note}` : ""}
+              </p>
+            </div>
+            <a
+              href={pod.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+            >
+              Lihat POD
+            </a>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

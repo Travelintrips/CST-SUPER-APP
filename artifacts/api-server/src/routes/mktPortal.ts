@@ -43,6 +43,7 @@ import { runMarketplaceDestinationMigration } from "../lib/marketplaceDestinatio
 import { validateBody } from "../lib/middleware/validateBody.js";
 import { logActivity } from "../lib/activityLog.js";
 import { getPortalCustomerContext } from "../lib/services/portalCustomerContextService.js";
+import { ObjectStorageService } from "../lib/objectStorage.js";
 
 const router = Router();
 
@@ -626,8 +627,67 @@ router.get("/shipments/:shipmentId/timeline", async (req: Request, res: Response
   }
 });
 
+// ── GET /api/mkt/portal/shipments/:shipmentId/pod ────────────────────────────
+// Return a short-lived signed URL only after the shipment ownership check.
+// The private object path is never exposed to the buyer.
+router.get("/shipments/:shipmentId/pod", async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const shipmentId = Number(req.params["shipmentId"]);
+  if (!Number.isInteger(shipmentId) || shipmentId <= 0) {
+    return res.status(400).json({ ok: false, error: "shipmentId harus berupa integer positif" });
+  }
+
+  try {
+    const { db, mktPurchaseOrdersTable, mktRfqsTable, mktPoShipmentEventsTable } = await import("@workspace/db");
+    const { and, eq, desc, isNotNull } = await import("drizzle-orm");
+    const { getShipmentById } = await import("../lib/services/mktPoShipmentService.js");
+
+    const shipment = await getShipmentById(shipmentId);
+    if (!shipment) return res.status(404).json({ ok: false, error: "Shipment tidak ditemukan" });
+
+    const [own] = await db
+      .select({ id: mktPurchaseOrdersTable.id })
+      .from(mktPurchaseOrdersTable)
+      .innerJoin(mktRfqsTable, and(
+        eq(mktPurchaseOrdersTable.rfqId, mktRfqsTable.id),
+        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+      ))
+      .where(eq(mktPurchaseOrdersTable.id, shipment.poId))
+      .limit(1);
+    if (!own) return res.status(404).json({ ok: false, error: "Shipment tidak ditemukan" });
+
+    const [pod] = await db
+      .select({
+        createdAt: mktPoShipmentEventsTable.createdAt,
+        note: mktPoShipmentEventsTable.note,
+        attachmentObjectPath: mktPoShipmentEventsTable.attachmentObjectPath,
+      })
+      .from(mktPoShipmentEventsTable)
+      .where(and(
+        eq(mktPoShipmentEventsTable.shipmentId, shipmentId),
+        eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+        isNotNull(mktPoShipmentEventsTable.attachmentObjectPath),
+      ))
+      .orderBy(desc(mktPoShipmentEventsTable.eventSequence))
+      .limit(1);
+    if (!pod?.attachmentObjectPath) {
+      return res.status(404).json({ ok: false, error: "POD_NOT_FOUND" });
+    }
+
+    const signedUrl = await new ObjectStorageService().getSignedUrl(pod.attachmentObjectPath, 300);
+    return res.json({
+      ok: true,
+      data: { available: true, url: signedUrl, uploadedAt: pod.createdAt, note: pod.note },
+    });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, shipmentId }, "[mktPortal] getBuyerShipmentPod error");
+    return res.status(500).json({ ok: false, error: "Gagal memuat POD" });
+  }
+});
+
 // ── GET /api/mkt/portal/shipments/:shipmentId/goods-receipts ─────────────────
-// Read-only. Buyer goods receipt CREATION = GAP (backend belum tersedia).
+// Read-only. Receipt creation remains an operator action; buyers can verify the
+// canonical full/partial/rejected result here.
 router.get("/shipments/:shipmentId/goods-receipts", async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const shipmentId = Number(req.params["shipmentId"]);
@@ -944,7 +1004,15 @@ router.post("/rfqs/:id/customer-approve", writeLimiter, validateBody(CustomerApp
         } catch { /* non-fatal — fall through to 409 */ }
         return res.status(409).json({ ok: false, error: result.message });
       }
-      return res.status(500).json({ ok: false, error: result.message });
+      const status =
+        result.code === "RFQ_NOT_FOUND" || result.code === "QUOTE_NOT_FOUND"
+          ? 404
+          : result.code === "QUOTE_NO_LONGER_SUBMITTED"
+            || result.code === "DEAL_PRICE_REQUIRED"
+            || result.code === "DB_ERROR"
+            ? 409
+            : 422;
+      return res.status(status).json({ ok: false, error: result.code, message: result.message });
     }
 
     // WA to buyer — recipientPhone was previously omitted, so the row always

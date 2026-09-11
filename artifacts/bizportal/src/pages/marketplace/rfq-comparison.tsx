@@ -94,8 +94,6 @@ export default function MktRfqComparisonPage() {
   const qc = useQueryClient();
 
   const [requoteTarget, setRequoteTarget] = useState<ComparisonQuote | null>(null);
-  const [selectTarget, setSelectTarget] = useState<ComparisonQuote | null>(null);
-  const [selectNotes, setSelectNotes] = useState("");
   const [sendToCustomerTarget, setSendToCustomerTarget] = useState<ComparisonQuote | null>(null);
   const [sendToCustomerNotes, setSendToCustomerNotes] = useState("");
   const [dealTarget, setDealTarget] = useState<ComparisonQuote | null>(null);
@@ -111,33 +109,6 @@ export default function MktRfqComparisonPage() {
       return res.json();
     },
     enabled: !!rfqIdNum,
-  });
-
-  const selectMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectTarget) throw new Error("Tidak ada vendor dipilih");
-      const res = await fetch(`/api/mkt/admin/rfqs/${rfqIdNum}/select-vendor`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ quoteId: selectTarget.id, notes: selectNotes || undefined }),
-      });
-      if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? "Gagal memilih vendor");
-      }
-      return res.json();
-    },
-    onSuccess: (result: { ok: boolean; data: { poNumber: string; vendor: string; total: number } }) => {
-      toast.success(`PO ${result.data.poNumber} berhasil dibuat untuk ${result.data.vendor}`);
-      setSelectTarget(null);
-      setSelectNotes("");
-      void qc.invalidateQueries({ queryKey: ["mkt-comparison", rfqIdNum] });
-    },
-    onError: (e: Error) => {
-      toast.error(e.message);
-      setSelectTarget(null);
-    },
   });
 
   const sendToCustomerMutation = useMutation({
@@ -385,15 +356,6 @@ export default function MktRfqComparisonPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="w-full border-green-300 text-green-700 hover:bg-green-50 text-xs"
-                            onClick={() => { setSelectTarget(q); setSelectNotes(""); }}
-                          >
-                            <Trophy className="w-3 h-3 mr-1" />
-                            Award Langsung
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
                             className="w-full border-orange-300 text-orange-700 hover:bg-orange-50"
                             onClick={() => setRequoteTarget(q)}
                           >
@@ -500,53 +462,6 @@ export default function MktRfqComparisonPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Award Langsung */}
-      <Dialog open={!!selectTarget} onOpenChange={(v) => { if (!v) setSelectTarget(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-green-700">
-              <Trophy className="w-5 h-5" />
-              Konfirmasi Pilih Vendor
-            </DialogTitle>
-          </DialogHeader>
-          {selectTarget && (
-            <div className="space-y-4">
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                <p className="font-semibold text-green-800 text-lg">{selectTarget.vendorName}</p>
-                {selectTarget.totalAmount != null && (
-                  <p className="text-2xl font-bold text-green-700 mt-1">{idr(selectTarget.totalAmount)}</p>
-                )}
-              </div>
-              <p className="text-sm text-gray-600">
-                Memilih vendor ini akan membuat <strong>Purchase Order</strong> otomatis dan
-                menolak semua penawaran vendor lain. Tindakan ini tidak dapat dibatalkan.
-              </p>
-              <div>
-                <Label>Catatan (opsional)</Label>
-                <Textarea
-                  value={selectNotes}
-                  onChange={(e) => setSelectNotes(e.target.value)}
-                  rows={2}
-                  className="resize-none mt-1"
-                  placeholder="Catatan keputusan pemilihan vendor"
-                />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectTarget(null)} disabled={selectMutation.isPending}>
-              Batal
-            </Button>
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={() => selectMutation.mutate()}
-              disabled={selectMutation.isPending}
-            >
-              {selectMutation.isPending ? "Memproses…" : "Konfirmasi & Buat PO"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </AppShell>
   );
 }

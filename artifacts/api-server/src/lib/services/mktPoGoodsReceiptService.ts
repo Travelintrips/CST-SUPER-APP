@@ -46,7 +46,24 @@ export interface CreateGoodsReceiptInput {
 
 export type CreateGoodsReceiptResult =
   | { ok: true; receipt: GoodsReceiptRow; items: GoodsReceiptItemRow[]; poStatusUpdatedTo: string | null; alreadyExists?: boolean }
-  | { ok: false; code: "PO_NOT_FOUND" | "PO_CANCELLED" | "SHIPMENT_NOT_FOUND" | "SHIPMENT_CANCELLED" | "SHIPMENT_NOT_DELIVERED" | "POD_REQUIRED" | "NO_ITEMS" | "INVALID_SHIPMENT_ITEM" | "QTY_MISMATCH"; message?: string; details?: unknown };
+  | {
+      ok: false;
+      code:
+        | "PO_NOT_FOUND"
+        | "PO_CANCELLED"
+        | "SHIPMENT_NOT_FOUND"
+        | "SHIPMENT_CANCELLED"
+        | "SHIPMENT_NOT_DELIVERED"
+        | "POD_REQUIRED"
+        | "NO_ITEMS"
+        | "INVALID_SHIPMENT_ITEM"
+        | "DUPLICATE_SHIPMENT_ITEM"
+        | "QTY_MISMATCH"
+        | "QTY_INVALID"
+        | "QTY_EXCEEDS_SHIPMENT";
+      message?: string;
+      details?: unknown;
+    };
 
 function toNum(v: string | number): number {
   return typeof v === "number" ? v : parseFloat(v);
@@ -68,6 +85,29 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
     .filter(Boolean);
   if (mismatches.length > 0) {
     return { ok: false, code: "QTY_MISMATCH", message: "accepted_qty + rejected_qty harus sama dengan received_qty", details: mismatches };
+  }
+  const duplicateItemIds = input.items
+    .map((item) => item.shipmentItemId)
+    .filter((id, index, ids) => ids.indexOf(id) !== index);
+  if (duplicateItemIds.length > 0) {
+    return {
+      ok: false,
+      code: "DUPLICATE_SHIPMENT_ITEM",
+      message: "Satu shipment item hanya boleh muncul sekali dalam goods receipt",
+      details: [...new Set(duplicateItemIds)],
+    };
+  }
+  const invalidQty = input.items.find((item) => {
+    const received = toNum(item.receivedQty);
+    const accepted = toNum(item.acceptedQty);
+    const rejected = toNum(item.rejectedQty);
+    return ![received, accepted, rejected].every(Number.isFinite)
+      || received < 0
+      || accepted < 0
+      || rejected < 0;
+  });
+  if (invalidQty) {
+    return { ok: false, code: "QTY_INVALID", message: "Qty goods receipt harus berupa angka non-negatif" };
   }
 
   const now = new Date();
@@ -132,7 +172,11 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
 
     const shipmentItemIds = input.items.map((i) => i.shipmentItemId);
     const validShipmentItems = await tx
-      .select({ id: mktPoShipmentItemsTable.id, poLineId: mktPoShipmentItemsTable.poLineId })
+      .select({
+        id: mktPoShipmentItemsTable.id,
+        poLineId: mktPoShipmentItemsTable.poLineId,
+        qty: mktPoShipmentItemsTable.qty,
+      })
       .from(mktPoShipmentItemsTable)
       .where(and(eq(mktPoShipmentItemsTable.shipmentId, input.shipmentId), inArray(mktPoShipmentItemsTable.id, shipmentItemIds)));
     const validIdSet = new Set(validShipmentItems.map((i) => i.id));
@@ -141,6 +185,52 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       return {
         kind: "failure" as const,
         result: { ok: false as const, code: "INVALID_SHIPMENT_ITEM" as const, message: `shipment_item_id ${invalid} tidak ditemukan pada shipment ini` },
+      };
+    }
+
+    const priorReceiptItems = await tx
+      .select({
+        shipmentItemId: mktPoGoodsReceiptItemsTable.shipmentItemId,
+        receivedQty: mktPoGoodsReceiptItemsTable.receivedQty,
+      })
+      .from(mktPoGoodsReceiptItemsTable)
+      .innerJoin(
+        mktPoGoodsReceiptsTable,
+        eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id),
+      )
+      .where(and(
+        eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId),
+        inArray(mktPoGoodsReceiptItemsTable.shipmentItemId, shipmentItemIds),
+      ));
+    const alreadyReceivedByItem = new Map<number, number>();
+    for (const item of priorReceiptItems) {
+      alreadyReceivedByItem.set(
+        item.shipmentItemId,
+        (alreadyReceivedByItem.get(item.shipmentItemId) ?? 0) + Number(item.receivedQty),
+      );
+    }
+    const shipmentItemById = new Map(validShipmentItems.map((item) => [item.id, item]));
+    const overage = input.items.find((item) => {
+      const received = toNum(item.receivedQty);
+      const shipmentItem = shipmentItemById.get(item.shipmentItemId);
+      return shipmentItem
+        && (alreadyReceivedByItem.get(item.shipmentItemId) ?? 0) + received > Number(shipmentItem.qty) + 0.005;
+    });
+    if (overage) {
+      const shipmentItem = shipmentItemById.get(overage.shipmentItemId)!;
+      return {
+        kind: "failure" as const,
+        result: {
+          ok: false as const,
+          code: "QTY_EXCEEDS_SHIPMENT" as const,
+          message: `Qty diterima melebihi qty shipment item ${overage.shipmentItemId}`,
+          details: {
+            shipmentItemId: overage.shipmentItemId,
+            shipmentQty: Number(shipmentItem.qty),
+            alreadyReceived: alreadyReceivedByItem.get(overage.shipmentItemId) ?? 0,
+            requested: toNum(overage.receivedQty),
+          },
+        },
       };
     }
 
