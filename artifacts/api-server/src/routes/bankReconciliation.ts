@@ -140,6 +140,11 @@ import {
   CANONICAL_CANDIDATE_STALE,
   checkQrisCandidateFreshness,
 } from "../lib/reconciliation/qrisCandidateContract.js";
+import {
+  ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
+  ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
+} from "../lib/reconciliation/qrisCandidateEligibility.js";
 import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
 import {
   asRepairResult,
@@ -268,9 +273,7 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
             AND qris_existing_approval.status = 'approved'
             AND ${currentReconciliationMatchResultSql("qris_existing_approval")}
         )
-        AND UPPER(COALESCE(qris_ready.status, '')) NOT IN (
-          'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-        )
+         AND LOWER(COALESCE(qris_ready.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
         AND ${qrisCandidateSourcePaymentMethodSql("qris_ready", "qris_ready_item")}
         AND UPPER(COALESCE(qris_ready.reconciliation_status, '')) = 'MATCHED'
         AND qris_ready.estimated_settlement_date::text = ${alias}.transaction_date::text
@@ -286,9 +289,7 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
           SELECT qris_latest.id
           FROM qris_mutation_batch_candidates qris_latest
           WHERE qris_latest.mutation_id = ${alias}.id
-            AND UPPER(COALESCE(qris_latest.status, '')) NOT IN (
-              'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-            )
+             AND LOWER(COALESCE(qris_latest.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
             AND ${qrisCandidateSourcePaymentMethodSql("qris_latest", "qris_latest_item")}
           ORDER BY qris_latest.updated_at DESC, qris_latest.id DESC
           LIMIT 1
@@ -5268,6 +5269,7 @@ router.get("/mutations", async (req, res) => {
             SELECT 1
             FROM qris_settlements qs_h1
             WHERE qs_h1.id = ${candidateIdAsBigIntSql("m")}
+              AND qs_h1.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
               AND qs_h1.settlement_date::text = bm.transaction_date::text
           )
         )
@@ -5309,7 +5311,7 @@ router.get("/mutations", async (req, res) => {
                 JOIN sport_center.payment_settlement_batches psb
                   ON psb.id = psi.settlement_id
                 WHERE psi.item_status = 'active'
-                  AND psb.status IN ('posted', 'reconciled')
+                   AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                   AND psi.payment_id IN (
                     SELECT (item->>'paymentId')::int
                     FROM jsonb_array_elements(qc.payment_items) item
@@ -5326,7 +5328,7 @@ router.get("/mutations", async (req, res) => {
                         ON psb.id = psi.settlement_id
                       WHERE psi.payment_id = (item->>'paymentId')::int
                         AND psi.item_status = 'active'
-                        AND psb.status IN ('posted', 'reconciled')
+                        AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                     )`
     : "";
 
@@ -5968,9 +5970,7 @@ router.get("/mutations", async (req, res) => {
             WHERE qc.mutation_id = bm.id
               AND qc.estimated_settlement_date::text = bm.transaction_date::text
               AND ${qrisSnapshotHMinusOneSql}
-               AND UPPER(COALESCE(qc.status, '')) NOT IN (
-                 'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-               )
+               AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
                AND ${qrisSnapshotPaymentMethodSql}
                AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
            ORDER BY
@@ -5987,11 +5987,14 @@ router.get("/mutations", async (req, res) => {
                FROM (
                  SELECT qsi.sport_payment_id AS payment_id
                  FROM qris_settlement_items qsi
+                 JOIN qris_settlements qsettled
+                   ON qsettled.id = qsi.settlement_id
                  WHERE qsi.sport_payment_id IN (
                    SELECT (item->>'paymentId')::int
                    FROM jsonb_array_elements(qc.payment_items) item
                    WHERE item->>'paymentId' IS NOT NULL
                  )
+                   AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
                  ${canonicalSettledUnionSql}
                ) settled
              ), '[]'::jsonb),
@@ -6071,9 +6074,7 @@ router.get("/mutations", async (req, res) => {
            WHERE qc.mutation_id = bm.id
                 AND qc.estimated_settlement_date::text = bm.transaction_date::text
              AND ${qrisSnapshotHMinusOneSql}
-              AND UPPER(COALESCE(qc.status, '')) NOT IN (
-                'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-              )
+             AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
               AND ${qrisSnapshotPaymentMethodSql}
               AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
          ) AS qris_candidate_audits
@@ -6106,9 +6107,7 @@ router.get("/mutations", async (req, res) => {
           )
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
-            AND UPPER(COALESCE(qc.status, '')) NOT IN (
-              'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-            )
+            AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
             AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1

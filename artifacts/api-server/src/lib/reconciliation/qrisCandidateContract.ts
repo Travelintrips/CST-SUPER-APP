@@ -1,5 +1,16 @@
 export const CANONICAL_CANDIDATE_STALE = "CANONICAL_CANDIDATE_STALE";
 
+export {
+  ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
+  ACTIVE_CANONICAL_SETTLEMENT_STATUSES,
+  ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
+  ACTIVE_QRIS_CANDIDATE_STATUSES,
+  isActiveCanonicalSettlementStatus,
+  isActiveLegacyQrisSettlementStatus,
+  isActiveQrisCandidateStatus,
+} from "./qrisCandidateEligibility.js";
+
 export interface QrisCandidateSnapshotItem {
   paymentId: number;
   grossAmount: number;

@@ -17,6 +17,12 @@ import {
   resolveActiveBankAccountId,
   type ActiveBankAccount,
 } from "./bankAccountIdentity.js";
+import {
+  ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
+  ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
+  isActiveQrisCandidateStatus,
+} from "./qrisCandidateEligibility.js";
 
 function esc(value: unknown): string {
   return String(value ?? "").replace(/'/g, "''");
@@ -90,7 +96,8 @@ function makeCanonicalFragments(available: boolean) {
              ON psb.id = psi.settlement_id
            WHERE psi.payment_id = sp.id
              AND psi.item_status = 'active'
-           ORDER BY CASE WHEN psb.status IN ('posted', 'reconciled') THEN 0 ELSE 1 END,
+              AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+            ORDER BY CASE WHEN psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL} THEN 0 ELSE 1 END,
                     psi.settlement_id DESC
            LIMIT 1
          )`
@@ -104,7 +111,7 @@ function makeCanonicalFragments(available: boolean) {
              ON psb.id = psi.settlement_id
            WHERE psi.payment_id = sp.id
              AND psi.item_status = 'active'
-             AND psb.status IN ('posted', 'reconciled')
+              AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
          )`
     : "FALSE";
 
@@ -117,7 +124,8 @@ function makeCanonicalFragments(available: boolean) {
                 FROM sport_center.payment_settlement_items psi
                 JOIN sport_center.payment_settlement_batches psb
                   ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
+                 WHERE psi.item_status = 'active'
+                   AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                   AND psi.payment_id IN (
                     SELECT (item->>'paymentId')::int
                     FROM jsonb_array_elements(c.payment_items) item
@@ -136,7 +144,7 @@ function makeCanonicalFragments(available: boolean) {
                       ON psb.id = psi.settlement_id
                     WHERE psi.payment_id = (item->>'paymentId')::int
                       AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
+                      AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                   )`
     : "";
 
@@ -148,7 +156,7 @@ function makeCanonicalFragments(available: boolean) {
                       ON psb.id = psi.settlement_id
                     WHERE psi.payment_id = sp.id
                       AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
+                      AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                   )`
     : "";
 
@@ -222,8 +230,8 @@ function makeCanonicalFragments(available: boolean) {
                 FROM sport_center.payment_settlement_items psi
                 JOIN sport_center.payment_settlement_batches psb
                   ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
-                  AND psb.status IN ('posted', 'reconciled')
+                 WHERE psi.item_status = 'active'
+                   AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                   AND psi.payment_id IN (
                     SELECT (item->>'paymentId')::int
                     FROM jsonb_array_elements(c.payment_items) item
@@ -662,8 +670,7 @@ export async function generateQrisCandidates(options: {
       let persistedCandidateId: number | null = null;
       const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
         Number(row.mutation_id) === candidate.mutationId
-        && !["approved", "completed", "superseded", "stale", "ineligible"]
-          .includes(String(row.status ?? "").toLowerCase()),
+         && isActiveQrisCandidateStatus(row.status),
       );
       const existingItems = existing?.payment_items == null
         ? []
@@ -708,7 +715,7 @@ export async function generateQrisCandidates(options: {
               review_reason = 'Kandidat superseded: canonical payment membership/amount/settlement evidence berubah.',
               updated_at = NOW()
           WHERE id = ${Number(existing!.id)}
-            AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+            AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
         `));
         // A reviewer may have approved the snapshot after the initial read.
         // Do not insert a replacement when that conditional transition loses:
@@ -740,7 +747,7 @@ export async function generateQrisCandidates(options: {
               generated_at = NOW(),
               updated_at = NOW()
           WHERE id = ${Number(existing.id)}
-            AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+            AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
         `));
         // A zero-row refresh means a concurrent finalization (or another
         // regeneration) won. Never reopen or replace its snapshot.
@@ -848,7 +855,7 @@ export async function generateQrisCandidates(options: {
                 review_reason = 'Kandidat ditutup: metadata QRIS canonical tidak lagi lengkap atau tidak unik; tidak ada fallback sintetis.',
                 updated_at = NOW()
             WHERE id = ${Number(existing.id)}
-              AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+              AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
           `));
         }
       } catch (error) {
@@ -889,7 +896,7 @@ export async function listQrisCandidates(options: {
   const completedFilter = options.includeCompleted
     ? ""
     : `
-        AND UPPER(COALESCE(c.status, '')) NOT IN ('APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE')
+        AND LOWER(COALESCE(c.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
           ('posted', 'approved', 'approved_pending_posting', 'void')
         AND NOT EXISTS (
@@ -1033,7 +1040,10 @@ export async function listQrisCandidates(options: {
                   AND NOT EXISTS (
                     SELECT 1
                     FROM qris_settlement_items qsi
+                    JOIN qris_settlements qsettled
+                      ON qsettled.id = qsi.settlement_id
                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                      AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
                   )
                   ${canonicalSettledExcludeSql}
               ) current_payment
@@ -1062,7 +1072,10 @@ export async function listQrisCandidates(options: {
                   AND NOT EXISTS (
                     SELECT 1
                     FROM qris_settlement_items qsi
+                    JOIN qris_settlements qsettled
+                      ON qsettled.id = qsi.settlement_id
                     WHERE qsi.sport_payment_id = sp.id
+                      AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
                   )
                   ${canonicalSettledExcludeByIdSql}
               )
@@ -1072,32 +1085,38 @@ export async function listQrisCandidates(options: {
               SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
               FROM (
                 SELECT qsi.sport_payment_id AS payment_id
-                FROM qris_settlement_items qsi
-                WHERE qsi.sport_payment_id IN (
+                 FROM qris_settlement_items qsi
+                 JOIN qris_settlements qsettled
+                   ON qsettled.id = qsi.settlement_id
+                 WHERE qsi.sport_payment_id IN (
                   SELECT (item->>'paymentId')::int
                   FROM jsonb_array_elements(c.payment_items) item
                   WHERE item->>'paymentId' IS NOT NULL
-                )
-                ${canonicalSettledUnionSql}
+                 )
+                   AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+                 ${canonicalSettledUnionSql}
               ) settled
              ), '[]'::jsonb) AS settled_payment_ids,
              COALESCE((
                SELECT jsonb_agg(active.payment_id ORDER BY active.payment_id)
                FROM (
                  SELECT i.payment_id
-                 FROM sport_center.payment_settlement_items i
-                 WHERE i.payment_id IN (
+                  FROM sport_center.payment_settlement_items i
+                  JOIN sport_center.payment_settlement_batches b
+                    ON b.id = i.settlement_id
+                  WHERE i.payment_id IN (
                    SELECT (item->>'paymentId')::int
                    FROM jsonb_array_elements(c.payment_items) item
                    WHERE item->>'paymentId' IS NOT NULL
                  )
-                   AND i.item_status = 'active'
+                    AND i.item_status = 'active'
+                    AND b.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
                ) active
              ), '[]'::jsonb) AS active_settlement_payment_ids,
              ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
-     WHERE c.status IN ('candidate_auto_matched', 'candidate_review')
+     WHERE c.status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
        AND c.reconciliation_status IN ('MATCHED', 'REVIEW', 'UNMATCHED')
        AND c.estimated_settlement_date::text = bm.transaction_date::text
        AND NOT EXISTS (

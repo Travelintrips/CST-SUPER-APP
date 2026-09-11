@@ -1344,7 +1344,9 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
   // labels in the bank description are enrichment only. In particular,
   // Mandiri's SA/KR markers must not hide an approvable H-1 candidate.
   return audits.filter((audit) =>
-    !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase())
+    ["candidate_auto_matched", "candidate_review"].includes(
+      String(audit.status ?? "").toLowerCase(),
+    )
     // H-1 is an exact settlement cohort: candidate expected settlement date
     // must be the same calendar date as the bank mutation.
     && isSameCalendarDate(m.transaction_date, audit.estimated_settlement_date)
@@ -8193,7 +8195,7 @@ export default function BankReconciliationPage() {
   };
 
   const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
-    !["approved", "completed", "superseded", "stale", "ineligible"].includes(
+    ["candidate_auto_matched", "candidate_review"].includes(
       String(candidate.status ?? "").toLowerCase(),
     ),
   );
@@ -8202,7 +8204,9 @@ export default function BankReconciliationPage() {
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
     && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
-    && String(candidate.status ?? "").toLowerCase() !== "approved"
+     && ["candidate_auto_matched", "candidate_review"].includes(
+       String(candidate.status ?? "").toLowerCase(),
+     )
     && candidate.current_evidence_valid !== false
     && getUnconfirmedQrisPaymentIds(candidate).length === 0
     && getAvailableQrisPaymentIds(candidate).length > 0;
