@@ -263,11 +263,46 @@ function parseSheetRows(rows: string[][], logLabel = ""): { headers: string[]; p
     return bestIdx;
   };
 
-  const dateCol   = findDateColSmart();
-  const descCol   = findDescColSmart(dateCol);
-  const kreditCol = colIdx(["kredit", "credit", "masuk", "cr", "jumlah masuk"]);
-  const debitCol  = colIdx(["debit", "keluar", "db", "out", "jumlah keluar"]);
-  const bankCol   = colIdx(["bank", "rekening", "akun"]);
+  let dateCol   = findDateColSmart();
+  let descCol   = findDescColSmart(dateCol);
+  let kreditCol = colIdx(["kredit", "credit", "masuk", "cr", "jumlah masuk"]);
+  let debitCol  = colIdx(["debit", "keluar", "db", "out", "jumlah keluar"]);
+  let bankCol   = colIdx(["bank", "rekening", "akun"]);
+  let dataStartIndex = 1;
+
+  // Some operational cash sheets have no header row: the first row is blank
+  // and data starts at A2 with [date, description, debit, credit]. Support
+  // that layout without treating the first data row as a header. Keep the
+  // synthetic source headers in memory so system columns are appended after
+  // the four source columns instead of overwriting the date/amount cells.
+  if (dateCol < 0 && descCol < 0 && kreditCol < 0 && debitCol < 0) {
+    const firstDataIndex = rows.findIndex((row) => {
+      const firstCell = String(row?.[0] ?? "").trim();
+      return firstCell !== "" && parseIndonesianDate(firstCell) !== null;
+    });
+    if (firstDataIndex >= 0) {
+      dataStartIndex = firstDataIndex;
+      const existingSystemHeaders = rawHeaders.slice(4);
+      rawHeaders.splice(
+        0,
+        rawHeaders.length,
+        "tanggal",
+        "keterangan",
+        "debit",
+        "kredit",
+        ...existingSystemHeaders,
+      );
+      dateCol = 0;
+      descCol = 1;
+      debitCol = 2;
+      kreditCol = 3;
+      bankCol = -1;
+      logger.info(
+        { label: logLabel, dataStartIndex },
+        "[sheetSync] Menggunakan mapping positional tanpa header",
+      );
+    }
+  }
 
   logger.info(
     { label: logLabel, dateCol, descCol, kreditCol, debitCol, bankCol,
@@ -281,7 +316,7 @@ function parseSheetRows(rows: string[][], logLabel = ""): { headers: string[]; p
 
   const parsed: ParsedRow[] = [];
 
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = dataStartIndex; i < rows.length; i++) {
     const row = rows[i];
     if (!row || row.every((c) => !c?.trim())) continue;
 
@@ -452,12 +487,71 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   }
 
   const { headers, parsed } = parseSheetRows(rows, label);
+
+  // Resolve all possible destination accounts once. The previous per-row
+  // probe held the single development pool in a 46-row serial loop.
+  const accountNumbers: SheetAccountCandidate[] = [];
+  try {
+    const { rows: accountRows } = await db.execute(sql.raw(`
+      SELECT id, account_number, company_id
+      FROM company_bank_accounts
+      WHERE is_active = TRUE
+        AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
+        AND account_number IS NOT NULL
+    `));
+    for (const row of accountRows as Array<{
+      id?: number;
+      account_number?: string;
+      company_id?: number | null;
+    }>) {
+      const digits = normalizeAccountDigits(row.account_number);
+      if (row.id != null && digits) {
+        accountNumbers.push({
+          id: Number(row.id),
+          digits,
+          companyId: row.company_id == null ? null : Number(row.company_id),
+        });
+      }
+    }
+  } catch (err: any) {
+    logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Gagal memuat daftar rekening");
+  }
+
+  const configuredAccountDigits = normalizeAccountDigits(configuredAccountNumber);
+  if (configuredAccountDigits) {
+    const configuredAccountExists = accountNumbers.some(
+      (account) => account.digits === configuredAccountDigits,
+    );
+    if (!configuredAccountExists) {
+      const errorMessage =
+        `Nomor rekening "${configuredAccountNumber}" pada config "${label}" ` +
+        "belum terdaftar sebagai company_bank_accounts aktif.";
+      await db.execute(sql.raw(`
+        UPDATE bank_sheet_configs
+        SET last_sync_status = 'error',
+            last_sync_error = '${errorMessage.replace(/'/g, "''")}',
+            last_synced_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${configId}
+      `)).catch(() => {});
+      throw new Error(errorMessage);
+    }
+  }
+
   if (parsed.length === 0) {
+    const hasDataRows = rows.slice(1).some((row) => row?.some((cell) => String(cell ?? "").trim() !== ""));
+    const syncError = hasDataRows
+      ? "Tidak ada baris yang dapat diparse. Pastikan kolom tanggal dan nominal tersedia."
+      : null;
     await db.execute(sql.raw(`
       UPDATE bank_sheet_configs
-      SET last_sync_status = 'ok', last_sync_error = NULL, last_synced_at = NOW(), updated_at = NOW()
+      SET last_sync_status = '${syncError ? "error" : "ok"}',
+          last_sync_error = ${syncError ? `'${syncError.replace(/'/g, "''")}'` : "NULL"},
+          last_synced_at = NOW(),
+          updated_at = NOW()
       WHERE id = ${configId}
     `)).catch(() => {});
+    if (syncError) throw new Error(syncError);
     return { imported: 0, total: rows.length > 0 ? rows.length - 1 : 0, parsed: 0, existing: 0 };
   }
 
@@ -497,34 +591,6 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       if (r.canonical_key) existingKeys.add(r.canonical_key);
     }
   }
-  // Resolve all possible destination accounts once. The previous per-row
-  // probe held the single development pool in a 46-row serial loop.
-  const accountNumbers: SheetAccountCandidate[] = [];
-  try {
-    const { rows: accountRows } = await db.execute(sql.raw(`
-      SELECT id, account_number, company_id
-      FROM company_bank_accounts
-      WHERE is_active = TRUE
-        AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
-        AND account_number IS NOT NULL
-    `));
-    for (const row of accountRows as Array<{
-      id?: number;
-      account_number?: string;
-      company_id?: number | null;
-    }>) {
-      const digits = normalizeAccountDigits(row.account_number);
-      if (row.id != null && digits) {
-        accountNumbers.push({
-          id: Number(row.id),
-          digits,
-          companyId: row.company_id == null ? null : Number(row.company_id),
-        });
-      }
-    }
-  } catch (err: any) {
-    logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Gagal memuat daftar rekening");
-  }
 
   const resolveBankAccountId = (p: ParsedRow): number | null => {
     return resolveSheetBankAccountId({
@@ -535,27 +601,6 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       accounts: accountNumbers,
     });
   };
-
-  const configuredAccountDigits = normalizeAccountDigits(configuredAccountNumber);
-  if (configuredAccountDigits) {
-    const configuredAccountExists = accountNumbers.some(
-      (account) => account.digits === configuredAccountDigits,
-    );
-    if (!configuredAccountExists) {
-      const errorMessage =
-        `Nomor rekening "${configuredAccountNumber}" pada config "${label}" ` +
-        "belum terdaftar sebagai company_bank_accounts aktif.";
-      await db.execute(sql.raw(`
-        UPDATE bank_sheet_configs
-        SET last_sync_status = 'error',
-            last_sync_error = '${errorMessage.replace(/'/g, "''")}',
-            last_synced_at = NOW(),
-            updated_at = NOW()
-        WHERE id = ${configId}
-      `)).catch(() => {});
-      throw new Error(errorMessage);
-    }
-  }
 
   // Build new rows in memory, then insert them in one statement.
   const newMutations: Array<{ id: number; parsed: ParsedRow }> = [];

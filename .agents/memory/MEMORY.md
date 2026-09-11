@@ -1,6 +1,7 @@
 - [Bank statement direction semantics](bank-statement-direction-semantics.md) — bank Debit/Keluar is OUT and Credit/Masuk is IN; share this mapping across every import path.
 - [Marketplace deal price concurrency](marketplace-deal-price-concurrency.md) — optimistic deal-price updates need a locked quote, checked update result, and monotonic millisecond timestamp.
 - [Vendor product approval boundary](vendor-product-approval-boundary.md) — every vendor-originated product, including onboarding products, must enter pending review before marketplace publication.
+- [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
 - [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
@@ -47,7 +48,6 @@
 - [Freight runtime forward migration](freight-runtime-forward-migration.md) — changes to already-applied 0001 need a separate additive migration for existing environments.
 - [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
 - [Canonical settlement legacy FK repair](canonical-settlement-legacy-fk-repair.md) — invalid historical mutation links must not block global readiness; rebuild only verifiable payment identities.
-- [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
 - [Payment accounting outbox gap](payment-accounting-outbox-gap.md) — failed payment_confirmed outbox events can leave canonical payments/journals without public mirrors or settlement cohort membership.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
@@ -107,11 +107,9 @@
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
 - [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
-- [Accounting master-data period lock](accounting-master-data-period-lock.md) — period-lock hanya untuk mutasi ledger; CRUD jurnal/COA/settings adalah master data dan tidak memerlukan tanggal transaksi.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
 - [Canonical repair diagnosis refresh](canonical-repair-diagnosis-refresh.md) — after admin repair, derive diagnostic state from live canonical ownership/journal tables, not persisted error snapshots.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
-- [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
 - [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
@@ -154,3 +152,4 @@
 - [Rule AI candidate approval boundary](rule-ai-candidate-approval-boundary.md) — candidate_required is an approval invariant: recon_rule evidence never substitutes for a real transaction candidate.
 - [Customer tracking disclosure boundary](customer-tracking-disclosure-boundary.md) — public tracking is status-safe and rate-limited; financial, invoice, POD, and identity detail require canonical portal ownership.
 - [Candidate payment identity bridge](candidate-payment-identity-bridge.md) — QRIS snapshots may contain public mirror IDs; approval must resolve SCPAY-SC identity before canonical settlement.
+- [Sheet sync runtime gates](sheet-sync-runtime-gates.md) — Sheet sync needs Service Account credentials and an active account binding; zero parsed rows can falsely leave status as ok.

@@ -9576,7 +9576,7 @@ export default function BankReconciliationPage() {
         {/* Canonical QRIS settlement queue/history. The legacy candidate audit
             remains available below for bank-evidence approval compatibility,
             but this is the source-of-truth view for settlement lifecycle. */}
-        {filterPaymentType !== "bank_transfer" && <Collapsible
+        {false && filterPaymentType !== "bank_transfer" && <Collapsible
           open={showCanonicalSettlementQueue}
           onOpenChange={setShowCanonicalSettlementQueue}
           className="w-full"
