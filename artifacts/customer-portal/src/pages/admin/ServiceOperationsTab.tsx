@@ -16,6 +16,7 @@ import {
 import { getAuthHeaders } from "@/lib/auth";
 import { MarketplaceDealPriceEditor } from "@/components/admin/MarketplaceDealPriceEditor";
 import { MarketplaceVendorAssignment } from "@/components/admin/MarketplaceVendorAssignment";
+import { ProductOrderDealPriceEditor } from "@/components/admin/ProductOrderDealPriceEditor";
 
 type ServiceSummary = {
   service_key: string;
@@ -447,6 +448,14 @@ export function ServiceOperationsTab() {
                     <MarketplaceVendorAssignment rfqId={selected.id} />
                     <MarketplaceDealPriceEditor rfqId={selected.id} rfqStatus={String(selected.record["status"] ?? "")} />
                   </>
+                )}
+                {selected.service === "product-order" && (
+                  <ProductOrderDealPriceEditor
+                    orderId={selected.id}
+                    status={String(selected.record["status"] ?? "")}
+                    initialVendorName={selected.record["vendor_name_selected"] as string | null | undefined}
+                    initialQuotedPrice={selected.record["vendor_quoted_price"] as string | number | null | undefined}
+                  />
                 )}
                 {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("approve") && (
                   <button type="button" disabled={actionBusy} onClick={() => void runAction("approve")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">

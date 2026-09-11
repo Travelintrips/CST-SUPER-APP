@@ -2454,7 +2454,13 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
       pickup_location = ${pickupLocation?.trim() ?? null},
       updated_at = NOW()
     WHERE id = ${id}
-      AND status IN ('Product RFQ Sent', 'Product Quote Received')
+      AND status IN (
+        'Product RFQ Sent',
+        'Product Quote Received',
+        'Submitted',
+        'submitted',
+        'Quote Request'
+      )
     RETURNING id, status
   `);
   if (phaseUpdated.rows.length === 0) {
