@@ -60,6 +60,36 @@ describe("canonical repair diagnosis", () => {
     expect(refreshed.code).toBe("CANONICAL_STATE_VALID");
   });
 
+  it("resolves a repaired matched mutation with one approved owner and a reconciled settlement", () => {
+    const refreshed = classifyCanonicalRepairState({
+      ...canonicalState,
+      // The public bank mutation intentionally has no generic journal entry.
+      // Its canonical settlement journal is the authoritative ledger link.
+      mutationId: 7001,
+      mutationStatus: "matched",
+      mutationJournalEntryId: null,
+      approvedMatchCount: 1,
+      matchCandidateId: 204,
+      candidateId: 204,
+      candidateStatus: "reconciled",
+      candidateBankMutationId: 7001,
+      candidateCanonicalBankMutationId: 7001,
+      candidateSettlementJournalId: 880,
+      candidateApprovedMutationIds: [7001],
+      canonicalJournalExists: true,
+      canonicalJournalStatus: "posted",
+      canonicalJournalType: "settlement",
+      canonicalJournalIsReversal: false,
+      canonicalJournalSettlementBatchId: 204,
+    });
+
+    expect(refreshed).toEqual({
+      valid: true,
+      code: "CANONICAL_STATE_VALID",
+      reason: expect.stringContaining("State canonical sudah valid"),
+    });
+  });
+
   it("keeps ownership and journal safeguards fail-closed", () => {
     expect(
       classifyCanonicalRepairState({

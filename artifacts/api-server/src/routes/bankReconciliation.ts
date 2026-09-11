@@ -702,7 +702,7 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     SELECT
       id, mutation_id, candidate_id, candidate_type, candidate_source,
       status, match_score, match_reason
-    FROM bank_reconciliation_matches
+    FROM public.bank_reconciliation_matches
     WHERE mutation_id = ${mutationId}
     ORDER BY
       CASE status WHEN 'approved' THEN 0 WHEN 'candidate' THEN 1 ELSE 2 END,
@@ -775,11 +775,11 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
 
     const approvedOwnerResult = await db.execute(sql`
       SELECT mutation_id
-      FROM bank_reconciliation_matches
-      WHERE candidate_type = 'qris_settlement'
-        AND candidate_source = ${CANONICAL_SETTLEMENT_SOURCE}
+      FROM public.bank_reconciliation_matches
+      WHERE candidate_type::text = 'qris_settlement'
+        AND candidate_source::text = ${CANONICAL_SETTLEMENT_SOURCE}
         AND candidate_id::text = ${String(candidateId)}
-        AND status = 'approved'
+        AND status::text = 'approved'
     `);
     canonicalState = classifyCanonicalRepairState({
       mutationId,

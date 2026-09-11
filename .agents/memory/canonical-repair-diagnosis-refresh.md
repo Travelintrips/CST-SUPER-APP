@@ -7,4 +7,4 @@ Canonical repair diagnosis must classify the current database state from the ban
 
 **Why:** Admin SQL or controlled repair can make ownership valid while cached diagnostics still report `FINANCIAL_STATE_REQUIRES_REVIEW`, causing a stale developer-action card and misleading operators.
 
-**How to apply:** Use no-store/fresh reads, invalidate derived UI queries after repair, and expose `CANONICAL_STATE_VALID` only when exact ownership, date/amount, and posted journal invariants pass. Keep all conflicts fail-closed.
+**How to apply:** Use no-store/fresh reads, invalidate derived UI queries after repair, and expose `CANONICAL_STATE_VALID` only when exact ownership, date/amount, and posted journal invariants pass. A canonical settlement batch in `reconciled` is valid alongside `posted`; the public mutation's generic journal link may remain NULL when the settlement journal is valid. Keep all conflicts fail-closed.

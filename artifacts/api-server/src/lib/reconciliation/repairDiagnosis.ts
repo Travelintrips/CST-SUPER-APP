@@ -41,9 +41,11 @@ const sameDate = (left: string | null, right: string | null) =>
 
 /**
  * Canonical ownership is already valid when the public mutation is only linked
- * to one source-aware match and the canonical batch owns its own posted
- * settlement journal. This is a read-only classification; it never repairs or
- * weakens an approval/posting guard.
+ * to one source-aware match and the canonical batch remains in a valid
+ * settlement state with a consistent settlement journal. A reconciled batch is
+ * already a completed canonical state, not a financial inconsistency. This is
+ * a read-only classification; it never repairs or weakens an approval/posting
+ * guard.
  */
 export function classifyCanonicalRepairState(
   state: CanonicalRepairStateInput,
@@ -67,13 +69,17 @@ export function classifyCanonicalRepairState(
       state.candidateCanonicalBankMutationId == null
       || state.candidateCanonicalBankMutationId === state.mutationId
     );
+  const candidateSettlementStatus = state.candidateStatus?.toLowerCase();
+  const candidateSettlementIsValid =
+    candidateSettlementStatus === "posted"
+    || candidateSettlementStatus === "reconciled";
   const journalIsValid =
-    state.canonicalJournalExists
+    state.candidateSettlementJournalId != null
+    && state.canonicalJournalExists
     && state.canonicalJournalStatus?.toLowerCase() === "posted"
     && state.canonicalJournalType?.toLowerCase() === "settlement"
     && state.canonicalJournalIsReversal === false
-    && state.canonicalJournalSettlementBatchId === state.candidateId
-    && state.candidateSettlementJournalId != null;
+    && state.canonicalJournalSettlementBatchId === state.candidateId;
 
   const valid =
     state.mutationStatus === "matched"
@@ -83,7 +89,7 @@ export function classifyCanonicalRepairState(
     && state.matchCandidateSource === state.canonicalSource
     && Number(state.matchCandidateId) === state.candidateId
     && state.candidateExists
-    && state.candidateStatus?.toLowerCase() === "posted"
+    && candidateSettlementIsValid
     && state.candidateCompanyId === state.mutationCompanyId
     && candidateOwnsMutation
     && approvedMutationIds.length === 1
