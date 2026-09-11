@@ -18,8 +18,16 @@
  * exclude-list, of columns.
  */
 
-import { db, mktPurchaseOrdersTable, mktPurchaseOrderLinesTable } from "@workspace/db";
-import { eq, and, asc } from "drizzle-orm";
+import {
+  db,
+  mktPurchaseOrdersTable,
+  mktPurchaseOrderLinesTable,
+  mktPoShipmentsTable,
+  mktPoShipmentEventsTable,
+  mktPoGoodsReceiptsTable,
+  mktPoGoodsReceiptItemsTable,
+} from "@workspace/db";
+import { eq, and, asc, sql } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { rotateVendorToken, findPoByVendorToken, markVendorTokenUsed, type TokenLookupFailure } from "./mktVendorPoTokenService.js";
@@ -35,7 +43,7 @@ export interface ActorInfo {
   actorName?: string | null;
 }
 
-export type TransitionFailureCode = "NOT_FOUND" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE";
+export type TransitionFailureCode = "NOT_FOUND" | "INVALID_TRANSITION" | "CONCURRENT_UPDATE" | "FULFILLMENT_EVIDENCE_REQUIRED";
 
 export type TransitionResult<T extends object = object> =
   | ({ ok: true; po: PoRow; previousStatus: PoStatus } & T)
@@ -158,18 +166,82 @@ export const setReadyToShip = (poId: number, actor: ActorInfo) =>
 export const setInTransit = (poId: number, actor: ActorInfo) =>
   simpleAdminTransition(poId, ["ready_to_ship"], "in_transit", "in_transit", (po) => `PO ${po.poNumber} dalam pengiriman`, actor);
 
-export const markDelivered = (poId: number, actor: ActorInfo) =>
-  simpleAdminTransition(poId, ["in_transit", "partially_delivered"], "delivered", "delivered", (po) => `PO ${po.poNumber} telah diterima`, actor, {
+type FulfillmentEvidence = { ok: true } | { ok: false; code: "FULFILLMENT_EVIDENCE_REQUIRED" };
+
+async function hasCompletedFulfillmentEvidence(poId: number): Promise<boolean> {
+  const [po] = await db
+    .select({ id: mktPurchaseOrdersTable.id })
+    .from(mktPurchaseOrdersTable)
+    .where(eq(mktPurchaseOrdersTable.id, poId))
+    .limit(1);
+  if (!po) return false;
+
+  const [{ ordered }] = await db
+    .select({ ordered: sql<string>`COALESCE(SUM(${mktPurchaseOrderLinesTable.qty}), 0)` })
+    .from(mktPurchaseOrderLinesTable)
+    .where(eq(mktPurchaseOrderLinesTable.poId, poId));
+  const [{ accepted }] = await db
+    .select({ accepted: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.acceptedQty}), 0)` })
+    .from(mktPoGoodsReceiptItemsTable)
+    .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+    .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+    .where(eq(mktPoShipmentsTable.poId, poId));
+  if (Number(accepted) < Number(ordered) || Number(ordered) <= 0) return false;
+
+  const [notPassed] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(mktPoGoodsReceiptItemsTable)
+    .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+    .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+    .where(and(
+      eq(mktPoShipmentsTable.poId, poId),
+      sql`${mktPoGoodsReceiptItemsTable.acceptedQty} > 0`,
+      sql`${mktPoGoodsReceiptsTable.inspectionStatus} <> 'passed'`,
+    ));
+  if (Number(notPassed?.count ?? 0) > 0) return false;
+
+  const [pod] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(mktPoShipmentEventsTable)
+    .innerJoin(mktPoShipmentsTable, eq(mktPoShipmentEventsTable.shipmentId, mktPoShipmentsTable.id))
+    .where(and(
+      eq(mktPoShipmentsTable.poId, poId),
+      eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+    ));
+  return Number(pod?.count ?? 0) > 0;
+}
+
+async function requireFulfillmentEvidence(poId: number): Promise<FulfillmentEvidence> {
+  return (await hasCompletedFulfillmentEvidence(poId))
+    ? { ok: true }
+    : { ok: false, code: "FULFILLMENT_EVIDENCE_REQUIRED" };
+}
+
+export async function markDelivered(poId: number, actor: ActorInfo): Promise<TransitionResult> {
+  const evidence = await requireFulfillmentEvidence(poId);
+  if (!evidence.ok) return evidence;
+  return simpleAdminTransition(poId, ["in_transit"], "delivered", "delivered", (po) => `PO ${po.poNumber} telah diterima`, actor, {
     actualCompletionDate: new Date().toISOString().slice(0, 10) as unknown as string,
   });
+}
 
-export const completePo = (poId: number, actor: ActorInfo) =>
-  simpleAdminTransition(poId, ["delivered", "partially_delivered"], "completed", "completed", (po) => `PO ${po.poNumber} selesai`, actor);
+export async function completePo(poId: number, actor: ActorInfo): Promise<TransitionResult> {
+  const evidence = await requireFulfillmentEvidence(poId);
+  if (!evidence.ok) return evidence;
+  return simpleAdminTransition(poId, ["delivered"], "completed", "completed", (po) => `PO ${po.poNumber} selesai`, actor);
+}
 
-export const closePo = (poId: number, actor: ActorInfo) =>
-  simpleAdminTransition(poId, ["completed", "rejected_goods"], "closed", "closed", (po) => `PO ${po.poNumber} ditutup`, actor, {
+export async function closePo(poId: number, actor: ActorInfo): Promise<TransitionResult> {
+  const current = await findCurrentPo(poId);
+  if (!current) return { ok: false, code: "NOT_FOUND" };
+  if (current.status === "completed") {
+    const evidence = await requireFulfillmentEvidence(poId);
+    if (!evidence.ok) return evidence;
+  }
+  return simpleAdminTransition(poId, ["completed", "rejected_goods"], "closed", "closed", (po) => `PO ${po.poNumber} ditutup`, actor, {
     closedAt: new Date(),
   });
+}
 
 // ── VENDOR TRANSITIONS (via opaque token) ───────────────────────────────────
 

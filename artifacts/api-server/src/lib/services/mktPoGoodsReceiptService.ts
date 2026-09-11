@@ -3,9 +3,8 @@
  *
  * - createGoodsReceipt(): header + item lines in one transaction.
  *   App-layer validation: accepted_qty + rejected_qty = received_qty per
- *   item (not a DB CHECK constraint, per schema comment, to keep manual
- *   admin overrides possible — but the service still rejects it by default;
- *   pass `allowMismatch: true` explicitly to bypass, which is logged).
+ *   item (not a DB CHECK constraint, per schema comment). There is no client
+ *   override: a receipt with unbalanced quantities is always rejected.
  * - After insert, recomputes the PO's aggregate fulfillment status by
  *   comparing SUM(accepted_qty) across ALL goods receipts for the PO against
  *   SUM(qty) across all PO lines:
@@ -43,7 +42,6 @@ export interface CreateGoodsReceiptInput {
   receivedAt?: Date | null;
   notes?: string | null;
   items: CreateGoodsReceiptItemInput[];
-  allowMismatch?: boolean;
 }
 
 export type CreateGoodsReceiptResult =
@@ -59,20 +57,17 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
     return { ok: false, code: "NO_ITEMS", message: "Goods receipt harus punya minimal 1 item" };
   }
 
-  // Validate accepted + rejected = received per item, unless explicitly bypassed.
-  if (!input.allowMismatch) {
-    const mismatches = input.items
-      .map((item) => {
-        const received = toNum(item.receivedQty);
-        const accepted = toNum(item.acceptedQty);
-        const rejected = toNum(item.rejectedQty);
-        const diff = Math.abs(received - (accepted + rejected));
-        return diff > 0.005 ? { shipmentItemId: item.shipmentItemId, received, accepted, rejected } : null;
-      })
-      .filter(Boolean);
-    if (mismatches.length > 0) {
-      return { ok: false, code: "QTY_MISMATCH", message: "accepted_qty + rejected_qty harus sama dengan received_qty", details: mismatches };
-    }
+  const mismatches = input.items
+    .map((item) => {
+      const received = toNum(item.receivedQty);
+      const accepted = toNum(item.acceptedQty);
+      const rejected = toNum(item.rejectedQty);
+      const diff = Math.abs(received - (accepted + rejected));
+      return diff > 0.005 ? { shipmentItemId: item.shipmentItemId, received, accepted, rejected } : null;
+    })
+    .filter(Boolean);
+  if (mismatches.length > 0) {
+    return { ok: false, code: "QTY_MISMATCH", message: "accepted_qty + rejected_qty harus sama dengan received_qty", details: mismatches };
   }
 
   const now = new Date();
@@ -239,13 +234,21 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
         .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
         .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
         .where(eq(mktPoShipmentsTable.poId, po.id));
+      const [{ acceptedNotPassed }] = await tx
+        .select({
+          acceptedNotPassed: sql<string>`COALESCE(SUM(CASE WHEN ${mktPoGoodsReceiptItemsTable.acceptedQty} > 0 AND ${mktPoGoodsReceiptsTable.inspectionStatus} <> 'passed' THEN ${mktPoGoodsReceiptItemsTable.acceptedQty} ELSE 0 END), 0)`,
+        })
+        .from(mktPoGoodsReceiptItemsTable)
+        .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+        .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+        .where(eq(mktPoShipmentsTable.poId, po.id));
 
       const ordered = parseFloat(orderedTotal) || 0;
       const accepted = parseFloat(acceptedTotal) || 0;
       const rejected = parseFloat(rejectedTotal) || 0;
       const nextStatus = ordered > 0 && accepted <= 0 && rejected > 0
         ? "rejected_goods"
-        : ordered > 0 && accepted >= ordered
+        : ordered > 0 && accepted >= ordered && Number(acceptedNotPassed) <= 0
           ? "delivered"
           : accepted > 0 || rejected > 0
             ? "partially_delivered"

@@ -18,6 +18,8 @@ import {
   Truck, ClipboardCheck, Clock, Activity, Info, CheckCircle2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -74,12 +76,14 @@ interface Shipment {
   id: number;
   poId: number;
   shipmentNumber: string;
-  status: string;
-  dispatchedAt: string | null;
+  shipmentStatus: string;
+  shipmentType: string | null;
   estimatedArrival: string | null;
   actualArrival: string | null;
-  carrier: string | null;
+  carrierName: string | null;
   trackingNumber: string | null;
+  origin: string | null;
+  destination: string | null;
   notes: string | null;
   createdAt: string;
 }
@@ -89,10 +93,19 @@ interface ShipmentEvent {
   shipmentId: number;
   eventType: string;
   note: string | null;
+  actorType: string;
   actorId: string | null;
-  actorName: string | null;
-  occurredAt: string;
   createdAt: string;
+  createdAt: string;
+}
+
+interface ShipmentItem {
+  id: number;
+  shipmentId: number;
+  poLineId: number;
+  lineNumber: number;
+  qty: string;
+  uom: string | null;
 }
 
 interface GoodsReceipt {
@@ -226,7 +239,7 @@ function ShipmentCard({ shipment }: { shipment: Shipment }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <ShipmentStatusBadge status={shipment.status} />
+            <ShipmentStatusBadge status={shipment.shipmentStatus} />
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setExpanded(!expanded)}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
@@ -237,7 +250,7 @@ function ShipmentCard({ shipment }: { shipment: Shipment }) {
       {expanded && (
         <CardContent className="pt-0 space-y-4">
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <div><span className="text-muted-foreground">Carrier:</span> <span className="font-medium">{shipment.carrier ?? "—"}</span></div>
+            <div><span className="text-muted-foreground">Carrier:</span> <span className="font-medium">{shipment.carrierName ?? "—"}</span></div>
             <div><span className="text-muted-foreground">Tracking:</span> <span className="font-mono text-xs">{shipment.trackingNumber ?? "—"}</span></div>
             <div><span className="text-muted-foreground">Estimasi Tiba:</span> <span className="font-medium">{fmtDate(shipment.estimatedArrival)}</span></div>
             <div><span className="text-muted-foreground">Tiba Aktual:</span> <span className="font-medium">{fmtDate(shipment.actualArrival)}</span></div>
@@ -260,7 +273,7 @@ function ShipmentCard({ shipment }: { shipment: Shipment }) {
                     <div>
                       <span className="font-medium">{ev.eventType}</span>
                       {ev.note && <span className="text-muted-foreground"> — {ev.note}</span>}
-                      <p className="text-xs text-muted-foreground">{fmtDateTime(ev.occurredAt)}{ev.actorName ? ` · ${ev.actorName}` : ""}</p>
+                      <p className="text-xs text-muted-foreground">{fmtDateTime(ev.createdAt)}{ev.actorId ? ` · ${ev.actorType}:${ev.actorId}` : ""}</p>
                     </div>
                   </div>
                 ))}
@@ -286,8 +299,66 @@ function ShipmentCard({ shipment }: { shipment: Shipment }) {
               </div>
             ))}
           </div>
+          <ShipmentActionPanel shipment={shipment} />
         </CardContent>
       )}
+    </Card>
+  );
+}
+
+function CreateShipmentPanel({ poId, lines }: { poId: number; lines: PoLine[] }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [carrierName, setCarrierName] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
+  const [notes, setNotes] = useState("");
+  const create = useMutation({
+    mutationFn: async () => {
+      if (lines.length === 0) throw new Error("PO belum memiliki item");
+      const res = await fetch(`/api/mkt/admin/purchase-orders/${poId}/shipments`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          carrierName: carrierName || undefined,
+          trackingNumber: trackingNumber || undefined,
+          origin: origin || undefined,
+          destination: destination || undefined,
+          notes: notes || undefined,
+          items: lines.map((line) => ({
+            poLineId: line.id,
+            lineNumber: line.lineNumber,
+            qty: Number(line.qty),
+            uom: line.unit,
+          })),
+        }),
+      });
+      const result = await res.json() as { ok?: boolean; error?: string; message?: string };
+      if (!res.ok || !result.ok) throw new Error(result.message ?? result.error ?? `HTTP ${res.status}`);
+      return result;
+    },
+    onSuccess: () => {
+      toast({ title: "Shipment dibuat" });
+      setCarrierName(""); setTrackingNumber(""); setOrigin(""); setDestination(""); setNotes("");
+      void queryClient.invalidateQueries({ queryKey: ["mkt-po-shipments", poId] });
+    },
+    onError: (error: Error) => toast({ title: "Shipment gagal dibuat", description: error.message, variant: "destructive" }),
+  });
+  return (
+    <Card className="border-dashed border-blue-300">
+      <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Truck className="w-4 h-4 text-blue-500" />Buat Shipment Baru</CardTitle></CardHeader>
+      <CardContent className="grid gap-3 md:grid-cols-2">
+        <Input placeholder="Carrier" value={carrierName} onChange={(e) => setCarrierName(e.target.value)} />
+        <Input placeholder="Nomor tracking" value={trackingNumber} onChange={(e) => setTrackingNumber(e.target.value)} />
+        <Input placeholder="Origin" value={origin} onChange={(e) => setOrigin(e.target.value)} />
+        <Input placeholder="Destination" value={destination} onChange={(e) => setDestination(e.target.value)} />
+        <Textarea placeholder="Catatan shipment" value={notes} onChange={(e) => setNotes(e.target.value)} className="md:col-span-2" />
+        <Button className="md:col-span-2" disabled={create.isPending || lines.length === 0} onClick={() => create.mutate()}>
+          {create.isPending ? "Menyimpan..." : "Create Shipment"}
+        </Button>
+      </CardContent>
     </Card>
   );
 }
@@ -311,7 +382,7 @@ function GoodsReceiptPanel({ shipment }: { shipment: Shipment }) {
         <div className="flex items-center gap-2">
           <Truck className="w-4 h-4 text-blue-500" />
           <CardTitle className="text-sm">{shipment.shipmentNumber}</CardTitle>
-          <ShipmentStatusBadge status={shipment.status} />
+          <ShipmentStatusBadge status={shipment.shipmentStatus} />
         </div>
       </CardHeader>
       <CardContent>
@@ -355,7 +426,7 @@ function ShipmentTimeline({ shipment }: { shipment: Shipment }) {
         <div className="flex items-center gap-2">
           <Truck className="w-4 h-4 text-blue-500" />
           <CardTitle className="text-sm">{shipment.shipmentNumber}</CardTitle>
-          <ShipmentStatusBadge status={shipment.status} />
+          <ShipmentStatusBadge status={shipment.shipmentStatus} />
         </div>
       </CardHeader>
       <CardContent>
@@ -371,8 +442,8 @@ function ShipmentTimeline({ shipment }: { shipment: Shipment }) {
                 <p className="text-sm font-semibold">{ev.eventType}</p>
                 {ev.note && <p className="text-xs text-muted-foreground">{ev.note}</p>}
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {new Date(ev.occurredAt).toLocaleString("id-ID")}
-                  {ev.actorName ? ` · ${ev.actorName}` : ""}
+                  {new Date(ev.createdAt).toLocaleString("id-ID")}
+                  {ev.actorId ? ` · ${ev.actorType}:${ev.actorId}` : ""}
                 </p>
               </li>
             ))}
@@ -380,6 +451,138 @@ function ShipmentTimeline({ shipment }: { shipment: Shipment }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ShipmentActionPanel({ shipment }: { shipment: Shipment }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [eventType, setEventType] = useState("packing");
+  const [eventNote, setEventNote] = useState("");
+  const [podFile, setPodFile] = useState<File | null>(null);
+  const [receiptType, setReceiptType] = useState<"full" | "partial" | "rejected">("full");
+  const [inspectionStatus, setInspectionStatus] = useState<"pending" | "passed" | "failed">("passed");
+  const [receiptNotes, setReceiptNotes] = useState("");
+  const [quantities, setQuantities] = useState<Record<number, { accepted: string; rejected: string }>>({});
+
+  const { data: detailData } = useQuery<{ ok: boolean; items: ShipmentItem[] }>({
+    queryKey: ["mkt-shipment-detail", shipment.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: shipment.shipmentStatus === "delivered",
+  });
+  const items = detailData?.items ?? [];
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["mkt-po-shipments", shipment.poId] });
+    void queryClient.invalidateQueries({ queryKey: ["mkt-shipment-timeline", shipment.id] });
+    void queryClient.invalidateQueries({ queryKey: ["mkt-shipment-receipts", shipment.id] });
+    void queryClient.invalidateQueries({ queryKey: ["mkt-po-detail", shipment.poId] });
+  };
+  const post = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}/events`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const result = await res.json() as { ok?: boolean; error?: string; message?: string };
+      if (!res.ok || !result.ok) throw new Error(result.message ?? result.error ?? `HTTP ${res.status}`);
+      return result;
+    },
+    onSuccess: () => { toast({ title: "Event tersimpan" }); setEventNote(""); refresh(); },
+    onError: (error: Error) => toast({ title: "Event gagal", description: error.message, variant: "destructive" }),
+  });
+  const uploadPod = useMutation({
+    mutationFn: async () => {
+      if (!podFile) throw new Error("Pilih file POD terlebih dahulu");
+      const form = new FormData();
+      form.append("file", podFile);
+      const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}/pod`, { method: "POST", credentials: "include", body: form });
+      const result = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !result.ok) throw new Error(result.error ?? `HTTP ${res.status}`);
+      return result;
+    },
+    onSuccess: () => { toast({ title: "POD tersimpan" }); setPodFile(null); refresh(); },
+    onError: (error: Error) => toast({ title: "Upload POD gagal", description: error.message, variant: "destructive" }),
+  });
+  const receive = useMutation({
+    mutationFn: async () => {
+      if (items.length === 0) throw new Error("Item shipment belum tersedia");
+      const body = {
+        receiptType,
+        inspectionStatus,
+        notes: receiptNotes || undefined,
+        items: items.map((item) => {
+          const q = quantities[item.id] ?? { accepted: "0", rejected: "0" };
+          return {
+            shipmentItemId: item.id,
+            receivedQty: Number(q.accepted) + Number(q.rejected),
+            acceptedQty: Number(q.accepted),
+            rejectedQty: Number(q.rejected),
+          };
+        }),
+      };
+      const res = await fetch(`/api/mkt/admin/shipments/${shipment.id}/goods-receipts`, {
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const result = await res.json() as { ok?: boolean; error?: string; message?: string };
+      if (!res.ok || !result.ok) throw new Error(result.message ?? result.error ?? `HTTP ${res.status}`);
+      return result;
+    },
+    onSuccess: () => { toast({ title: "Goods receipt tersimpan" }); setReceiptNotes(""); refresh(); },
+    onError: (error: Error) => toast({ title: "Goods receipt gagal", description: error.message, variant: "destructive" }),
+  });
+
+  const allowedEvents: Record<string, string[]> = {
+    planned: ["packing"], packing: ["loaded", "departed"], loading: ["departed"],
+    ready_to_ship: ["departed"], in_transit: ["customs", "arrived", "delivered"],
+    customs: ["warehouse", "arrived"], warehouse: ["arrived", "delivered"], arrived: ["delivered"],
+  };
+  const eventOptions = allowedEvents[shipment.shipmentStatus] ?? [];
+  return (
+    <div className="border-t pt-4 space-y-4">
+      <div className="grid gap-2 md:grid-cols-[180px_1fr_auto] items-end">
+        <label className="text-xs font-medium">Tracking event<select className="mt-1 w-full h-9 rounded-md border bg-background px-2 text-sm" value={eventType} onChange={(e) => setEventType(e.target.value)}>
+          {eventOptions.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select></label>
+        <Input value={eventNote} onChange={(e) => setEventNote(e.target.value)} placeholder="Catatan / lokasi event" />
+        <Button size="sm" disabled={post.isPending || eventOptions.length === 0} onClick={() => post.mutate({ eventType, note: eventNote || undefined })}>Simpan Event</Button>
+      </div>
+      {shipment.shipmentStatus === "delivered" && (
+        <div className="rounded-md border p-3 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Proof of Delivery</p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Input type="file" accept="image/*,.pdf" className="max-w-sm" onChange={(e) => setPodFile(e.target.files?.[0] ?? null)} />
+            <Button size="sm" variant="outline" disabled={!podFile || uploadPod.isPending} onClick={() => uploadPod.mutate()}>Upload POD</Button>
+          </div>
+        </div>
+      )}
+      {shipment.shipmentStatus === "delivered" && (
+        <div className="rounded-md border p-3 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Goods Receipt</p>
+          <div className="flex flex-wrap gap-2">
+            <select className="h-9 rounded-md border bg-background px-2 text-sm" value={receiptType} onChange={(e) => setReceiptType(e.target.value as typeof receiptType)}>
+              <option value="full">Full</option><option value="partial">Partial</option><option value="rejected">Rejected</option>
+            </select>
+            <select className="h-9 rounded-md border bg-background px-2 text-sm" value={inspectionStatus} onChange={(e) => setInspectionStatus(e.target.value as typeof inspectionStatus)}>
+              <option value="passed">Inspection passed</option><option value="pending">Inspection pending</option><option value="failed">Inspection failed</option>
+            </select>
+            <Input placeholder="Catatan penerimaan" value={receiptNotes} onChange={(e) => setReceiptNotes(e.target.value)} className="min-w-56" />
+          </div>
+          {items.map((item) => {
+            const q = quantities[item.id] ?? { accepted: "0", rejected: "0" };
+            return <div key={item.id} className="grid grid-cols-[1fr_120px_120px] gap-2 items-center text-sm">
+              <span>Line {item.lineNumber} · maksimal {item.qty} {item.uom ?? ""}</span>
+              <Input type="number" min="0" max={item.qty} step="any" placeholder="Accepted" value={q.accepted} onChange={(e) => setQuantities((prev) => ({ ...prev, [item.id]: { ...q, accepted: e.target.value } }))} />
+              <Input type="number" min="0" max={item.qty} step="any" placeholder="Rejected" value={q.rejected} onChange={(e) => setQuantities((prev) => ({ ...prev, [item.id]: { ...q, rejected: e.target.value } }))} />
+            </div>;
+          })}
+          <Button size="sm" disabled={receive.isPending || items.length === 0} onClick={() => receive.mutate()}>Simpan Goods Receipt</Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -728,6 +931,9 @@ export default function MktPoDetailPage() {
 
           <TabsContent value="shipment" className="mt-4">
             <div className="space-y-4">
+              {["production", "ready_to_ship", "in_transit"].includes(po.status) && (
+                <CreateShipmentPanel poId={poId} lines={poLines} />
+              )}
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Daftar Pengiriman ({shipments.length})</h3>
               </div>

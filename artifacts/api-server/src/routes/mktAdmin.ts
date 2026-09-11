@@ -142,7 +142,6 @@ const GoodsReceiptBodySchema = z.object({
   inspectionStatus: z.enum(["pending", "passed", "failed"]).optional(),
   receivedAt: z.coerce.date().optional().nullable(),
   notes: z.string().trim().max(4000).optional().nullable(),
-  allowMismatch: z.boolean().optional(),
   items: z.array(z.object({
     shipmentItemId: z.coerce.number().int().positive(),
     receivedQty: z.coerce.number().finite().nonnegative(),
@@ -154,6 +153,13 @@ const GoodsReceiptBodySchema = z.object({
 }).strict();
 const PodNoteSchema = z.object({
   note: z.string().trim().max(2000).optional().nullable(),
+}).strict();
+const ShipmentEventBodySchema = z.object({
+  eventType: z.enum(["packing", "loaded", "departed", "customs", "warehouse", "arrived", "delivered"]),
+  note: z.string().trim().max(2000).optional().nullable(),
+  location: z.string().trim().max(500).optional().nullable(),
+  latitude: z.coerce.number().finite().min(-90).max(90).optional().nullable(),
+  longitude: z.coerce.number().finite().min(-180).max(180).optional().nullable(),
 }).strict();
 
 async function requireAdminMiddleware(req: any, res: any, next: () => void): Promise<void> {
@@ -665,7 +671,15 @@ router.post("/rfqs/:rfqId/select-vendor", async (req, res) => {
     return res.status(400).json({ ok: false, error: "quoteId harus berupa integer positif" });
   }
 
-  const _adminUser = req.user as { id?: string; name?: string } | undefined;
+  // Direct admin award is intentionally disabled. The only canonical path to
+  // PO creation is customer_review -> customer-approve, so an operator cannot
+  // bypass the buyer approval boundary by calling this legacy endpoint.
+  return res.status(409).json({
+    ok: false,
+    code: "CUSTOMER_APPROVAL_REQUIRED",
+    error: "Quotation harus dikirim ke customer dan disetujui sebelum PO dibuat.",
+  });
+  /* const _adminUser = req.user as { id?: string; name?: string } | undefined;
   const adminId    = _adminUser?.id ?? "unknown";
   const adminName  = _adminUser?.name ?? adminId;
 
@@ -702,6 +716,7 @@ router.post("/rfqs/:rfqId/select-vendor", async (req, res) => {
       rejectedCount: result.rejectedCount,
     },
   });
+  */
 });
 
 // ── Phase 2E: Purchase Order list ─────────────────────────────────────────────
@@ -1779,6 +1794,8 @@ function mapLifecycleFailureStatus(code: string): number {
       return 409;
     case "CONCURRENT_UPDATE":
       return 409;
+    case "FULFILLMENT_EVIDENCE_REQUIRED":
+      return 422;
     default:
       return 400;
   }
@@ -1896,15 +1913,15 @@ router.post("/shipments/:shipmentId/events", async (req, res) => {
   if (!Number.isInteger(shipmentId) || shipmentId <= 0) {
     return res.status(400).json({ ok: false, error: "shipmentId harus berupa integer positif" });
   }
-  const eventType = typeof req.body?.eventType === "string" ? req.body.eventType.trim() : "";
-  if (!eventType) {
-    return res.status(400).json({ ok: false, error: "eventType wajib diisi" });
+  const parsed = ShipmentEventBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: "INVALID_EVENT", details: parsed.error.flatten() });
   }
 
   try {
-    const result = await appendShipmentEvent({ shipmentId, ...req.body, eventType }, getActorFromReq(req));
+    const result = await appendShipmentEvent({ shipmentId, ...parsed.data }, getActorFromReq(req));
     if (!result.ok) {
-      return res.status(404).json({ ok: false, error: result.code });
+      return res.status(result.code === "SHIPMENT_NOT_FOUND" ? 404 : 409).json({ ok: false, error: result.code, currentStatus: result.currentStatus });
     }
     return res.status(201).json({ ok: true, event: result.event });
   } catch (err: unknown) {
