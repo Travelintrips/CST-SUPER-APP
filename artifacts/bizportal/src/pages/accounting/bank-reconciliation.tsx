@@ -879,6 +879,19 @@ interface QrisCandidateAudit {
     problem?: string | null;
     revision?: string | null;
     action?: string | null;
+    amountComparison?: {
+      mutationAmount: number;
+      grossAmount: number;
+      mdrAmount: number;
+      expectedNetAmount: number;
+      difference: number;
+      paymentCount: number;
+      payments?: Array<{
+        id: number;
+        grossAmount: number;
+        mdrAmount: number;
+      }>;
+    };
     technicalDetail?: string | null;
   } | null;
 }
@@ -972,6 +985,50 @@ const idr = (n: number | string) =>
 
 const idrWhole = (n: number | string) =>
   idr(Math.round(Number(n) || 0));
+
+type QrisAmountComparison = NonNullable<
+  NonNullable<QrisCandidateAudit["auto_post_details"]>["amountComparison"]
+>;
+
+function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountComparison }) {
+  const difference = Number(comparison.difference) || 0;
+  return (
+    <div className="mt-2 rounded border border-red-200 bg-white/70 p-2 dark:border-red-800 dark:bg-red-950/40">
+      <p className="font-semibold">Rincian nominal yang dibandingkan:</p>
+      <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+        <span>Total bruto payment ({comparison.paymentCount} payment)</span>
+        <strong className="sm:text-right">{idr(comparison.grossAmount)}</strong>
+        <span>MDR</span>
+        <strong className="sm:text-right">{idr(comparison.mdrAmount)}</strong>
+        <span>Netto seharusnya (bruto − MDR)</span>
+        <strong className="sm:text-right">{idr(comparison.expectedNetAmount)}</strong>
+        <span>Nominal mutasi bank</span>
+        <strong className="sm:text-right">{idr(comparison.mutationAmount)}</strong>
+        <span>Selisih (netto − mutasi)</span>
+        <strong className={`sm:text-right ${difference === 0 ? "text-green-700" : "text-red-700 dark:text-red-300"}`}>
+          {idr(difference)}
+        </strong>
+      </div>
+      {(comparison.payments?.length ?? 0) > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer font-medium">
+            Lihat rincian {comparison.payments?.length} payment
+          </summary>
+          <div className="mt-1 space-y-0.5 border-t border-red-100 pt-1 dark:border-red-900">
+            {comparison.payments?.map((payment) => (
+              <div key={payment.id} className="flex justify-between gap-3">
+                <span>Payment #{payment.id}</span>
+                <span>
+                  bruto {idr(payment.grossAmount)} · MDR {idr(payment.mdrAmount)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
 
 const JAKARTA_TIMEZONE = "Asia/Jakarta";
 
@@ -4485,7 +4542,11 @@ function QrisMutationCard({
                     {audit.auto_post_details?.rootCause && (
                       <p><strong>Kenapa diblokir:</strong> {audit.auto_post_details.rootCause}</p>
                     )}
-                    {audit.auto_post_details?.actualValue != null && (
+                    {audit.auto_post_details?.amountComparison && (
+                      <QrisAmountComparisonDetails comparison={audit.auto_post_details.amountComparison} />
+                    )}
+                    {audit.auto_post_details?.actualValue != null
+                      && !audit.auto_post_details?.amountComparison && (
                       <p>
                         <strong>Data aktual:</strong>{" "}
                         {typeof audit.auto_post_details.actualValue === "string"
@@ -6617,7 +6678,11 @@ function MutationDetailPanel({
                         {qrisAudit.auto_post_details?.rootCause && (
                           <p className="mt-1"><strong>Kenapa diblokir:</strong> {qrisAudit.auto_post_details.rootCause}</p>
                         )}
-                        {qrisAudit.auto_post_details?.actualValue != null && (
+                        {qrisAudit.auto_post_details?.amountComparison && (
+                          <QrisAmountComparisonDetails comparison={qrisAudit.auto_post_details.amountComparison} />
+                        )}
+                        {qrisAudit.auto_post_details?.actualValue != null
+                          && !qrisAudit.auto_post_details?.amountComparison && (
                           <p className="mt-1">
                             <strong>Data aktual:</strong>{" "}
                             {typeof qrisAudit.auto_post_details.actualValue === "string"

@@ -47,11 +47,17 @@ export type CanonicalSettlementBuilderCode =
 
 export class CanonicalSettlementBuilderError extends Error {
   readonly code: CanonicalSettlementBuilderCode;
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: CanonicalSettlementBuilderCode, message: string) {
+  constructor(
+    code: CanonicalSettlementBuilderCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "CanonicalSettlementBuilderError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -1025,6 +1031,9 @@ async function buildInTransaction(
       throw new CanonicalSettlementBuilderError(
         CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
         approvalRule.reason,
+        approvalRule.amountComparison
+          ? { amountComparison: approvalRule.amountComparison }
+          : undefined,
       );
     }
   }

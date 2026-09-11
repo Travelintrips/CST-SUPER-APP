@@ -40,11 +40,17 @@ type CanonicalApprovalCode =
 
 export class CanonicalSettlementApprovalError extends Error {
   readonly code: CanonicalApprovalCode;
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: CanonicalApprovalCode, message: string) {
+  constructor(
+    code: CanonicalApprovalCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "CanonicalSettlementApprovalError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -813,6 +819,9 @@ export async function approveCanonicalSettlementLink(
         throw new CanonicalSettlementApprovalError(
           CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
           coreApproval.reason,
+          coreApproval.amountComparison
+            ? { amountComparison: coreApproval.amountComparison }
+            : undefined,
         );
       }
       if (
@@ -845,6 +854,9 @@ export async function approveCanonicalSettlementLink(
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
         strictApproval.reason,
+        strictApproval.amountComparison
+          ? { amountComparison: strictApproval.amountComparison }
+          : undefined,
       );
     }
 

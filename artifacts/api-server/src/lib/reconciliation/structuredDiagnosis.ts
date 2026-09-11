@@ -33,6 +33,19 @@ export interface StructuredReconciliationDiagnosis {
   retryAllowed: boolean;
   correlationId: string;
   component: string;
+  amountComparison?: {
+    mutationAmount: number;
+    grossAmount: number;
+    mdrAmount: number;
+    expectedNetAmount: number;
+    difference: number;
+    paymentCount: number;
+    payments: Array<{
+      id: number;
+      grossAmount: number;
+      mdrAmount: number;
+    }>;
+  };
 
   // Backward-compatible fields used by the current persisted/UI projection.
   code: string;
@@ -309,14 +322,22 @@ export function buildQrisAutoPostDiagnosis(
   const rawError = error as any;
   const code = normalizeCode(rawError);
   const message = errorMessage(rawError);
+  const rawAmountComparison = rawError?.details?.amountComparison;
+  const hasAmountComparison = rawAmountComparison
+    && typeof rawAmountComparison === "object";
   const profile = PROFILE_BY_CODE[code];
-  const developerAction = profile?.developerAction
+  const developerAction = hasAmountComparison
+    ? false
+    : profile?.developerAction
     ?? (!profile && ![
       "QRIS_CANDIDATE_CONFLICT",
       "QRIS_APPROVAL_CONFLICT",
       "MATCHING_IN_PROGRESS",
     ].includes(code));
-  const title = profile?.title ?? "Perlu perbaikan sistem pada auto-post QRIS";
+  const title = profile?.title
+    ?? (hasAmountComparison
+      ? "Nominal settlement QRIS tidak cocok"
+      : "Perlu perbaikan sistem pada auto-post QRIS");
   const stage = String(rawError?.qrisStage ?? (
     code.includes("ORIGIN") ? "source payment Sport Center" :
       code.includes("CONFIG") ? "konfigurasi MDR" :
@@ -330,7 +351,29 @@ export function buildQrisAutoPostDiagnosis(
   const correlationId = context.correlationId
     ?? String(rawError?.correlationId ?? `qris-${context.mutationId ?? context.candidateId ?? "unknown"}`);
   const expectedValue = profile?.expectedValue
-    ?? "Proses canonical berhasil tanpa melonggarkan safeguard accounting/settlement.";
+    ?? (hasAmountComparison
+      ? "Netto payment setelah MDR harus sama persis dengan nominal mutasi bank."
+      : "Proses canonical berhasil tanpa melonggarkan safeguard accounting/settlement.");
+  const amountComparison = rawAmountComparison
+    && typeof rawAmountComparison === "object"
+    && Number.isFinite(Number(rawAmountComparison.mutationAmount))
+    && Number.isFinite(Number(rawAmountComparison.expectedNetAmount))
+    ? {
+        mutationAmount: Number(rawAmountComparison.mutationAmount),
+        grossAmount: Number(rawAmountComparison.grossAmount ?? 0),
+        mdrAmount: Number(rawAmountComparison.mdrAmount ?? 0),
+        expectedNetAmount: Number(rawAmountComparison.expectedNetAmount),
+        difference: Number(rawAmountComparison.difference ?? 0),
+        paymentCount: Number(rawAmountComparison.paymentCount ?? 0),
+        payments: Array.isArray(rawAmountComparison.payments)
+          ? rawAmountComparison.payments.map((payment: any) => ({
+              id: Number(payment.id),
+              grossAmount: Number(payment.grossAmount ?? 0),
+              mdrAmount: Number(payment.mdrAmount ?? 0),
+            }))
+          : [],
+      }
+    : undefined;
   const actualValue = {
     message,
     code,
@@ -338,12 +381,17 @@ export function buildQrisAutoPostDiagnosis(
     candidateId: context.candidateId ?? null,
     mutationId: context.mutationId ?? null,
     companyId: context.companyId ?? null,
+    ...(amountComparison ? { amountComparison } : {}),
   };
   const adminAction = profile?.adminAction
+    ?? (amountComparison
+      ? "Bandingkan nominal mutasi bank dengan netto payment (bruto dikurangi MDR), lalu perbaiki source yang tidak sesuai dan buat ulang kandidat."
+      : undefined)
     ?? (developerAction
       ? "Jangan mengubah database untuk menutupi error. Eskalasi dengan correlation ID kepada developer."
       : "Periksa source/configuration terkait lalu tekan Retry.");
   const adminLocation = profile?.adminLocation
+    ?? (amountComparison ? "Bank Reconciliation → kandidat QRIS dan Sport Center → Payments" : undefined)
     ?? (developerAction ? "Developer action — log aplikasi dan komponen reconciliation" : "Bank Reconciliation");
   const tableName = profile?.tableName ?? "qris_mutation_batch_candidates";
   const fieldNames = profile?.fieldNames ?? ["status", "auto_post_status", "auto_post_details"];
@@ -359,7 +407,10 @@ export function buildQrisAutoPostDiagnosis(
   return {
     errorCode: code,
     title,
-    rootCause: profile?.rootCause ?? "Error tidak termasuk kategori self-healing yang aman.",
+    rootCause: profile?.rootCause
+      ?? (amountComparison
+        ? "Total bruto payment setelah dikurangi MDR tidak sama dengan nominal mutasi bank."
+        : "Error tidak termasuk kategori self-healing yang aman."),
     affectedRecord: {
       type: "qris_mutation_batch_candidate",
       id: recordId,
@@ -381,8 +432,12 @@ export function buildQrisAutoPostDiagnosis(
     code,
     stage,
     problem: message || "Safeguard canonical menahan auto-post.",
-    revision: profile?.rootCause ?? "Data/configuration canonical pada tahap auto-post",
+    revision: profile?.rootCause
+      ?? (amountComparison
+        ? "Validasi netto settlement terhadap mutasi bank"
+        : "Data/configuration canonical pada tahap auto-post"),
     action,
+    ...(amountComparison ? { amountComparison } : {}),
     technicalDetail: rawError?.detail
       ? String(rawError.detail).slice(0, 500)
       : rawError?.cause?.detail

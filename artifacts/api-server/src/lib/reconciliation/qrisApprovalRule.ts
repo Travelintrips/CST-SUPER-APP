@@ -25,6 +25,20 @@ export interface QrisApprovalRulePayment {
   alreadyReconciled?: boolean;
 }
 
+export interface QrisApprovalAmountComparison {
+  mutationAmount: number;
+  grossAmount: number;
+  mdrAmount: number;
+  expectedNetAmount: number;
+  difference: number;
+  paymentCount: number;
+  payments: Array<{
+    id: number;
+    grossAmount: number;
+    mdrAmount: number;
+  }>;
+}
+
 export interface QrisApprovalRuleInput {
   companyId: number;
   mutationDate: string | Date;
@@ -43,6 +57,7 @@ export type QrisApprovalRuleResult =
       ok: false;
       code: QrisApprovalReasonCode;
       reason: string;
+      amountComparison?: QrisApprovalAmountComparison;
     };
 
 export interface QrisExactNetConfigCandidate {
@@ -169,6 +184,7 @@ export function checkQrisApprovalRule(
 
   let grossCents = 0;
   let mdrCents = 0;
+  const paymentComparisons: QrisApprovalAmountComparison["payments"] = [];
   for (const payment of input.payments) {
     const paymentGrossCents = moneyCents(payment.grossAmount);
     if (paymentGrossCents == null || paymentGrossCents < 0) {
@@ -188,15 +204,30 @@ export function checkQrisApprovalRule(
     }
     grossCents += paymentGrossCents;
     mdrCents += paymentMdr;
+    paymentComparisons.push({
+      id: payment.id,
+      grossAmount: paymentGrossCents / 100,
+      mdrAmount: paymentMdr / 100,
+    });
   }
 
   const expectedNetCents = grossCents - mdrCents;
   const mutationCents = moneyCents(input.mutationAmount);
   if (mutationCents == null || expectedNetCents !== mutationCents) {
+    const safeMutationCents = mutationCents ?? 0;
     return {
       ok: false,
       code: QRIS_APPROVAL_REASON_CODES.NET_AMOUNT_MISMATCH,
       reason: "Nilai netto tidak sama dengan mutasi bank",
+      amountComparison: {
+        mutationAmount: safeMutationCents / 100,
+        grossAmount: grossCents / 100,
+        mdrAmount: mdrCents / 100,
+        expectedNetAmount: expectedNetCents / 100,
+        difference: (expectedNetCents - safeMutationCents) / 100,
+        paymentCount: input.payments.length,
+        payments: paymentComparisons,
+      },
     };
   }
 
