@@ -119,7 +119,10 @@ export function VendorInvoicesListPage() {
   const handleDelete = async (id: number) => {
     setDeletingId(id);
     try {
-      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${id}`, { method: "DELETE" });
+      const r = await apiFetch(
+        `/purchase-workflow/vendor-invoices/${id}?company=${activeCompanyId}`,
+        { method: "DELETE" },
+      );
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         throw new Error((err as Record<string, string>).error ?? "Gagal");
