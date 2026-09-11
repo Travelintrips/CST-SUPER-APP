@@ -3657,6 +3657,128 @@ function CoaReferenceDialog({
 
   if (!mutation) return null;
 
+  // QRIS canonical settlements must never be completed through the generic
+  // manual-COA journal flow. Keep this guard in the dialog itself as well as
+  // on the card actions, because stale detail-panel state can otherwise reopen
+  // the COA picker for a settlement candidate.
+  if (isQris) {
+    const canonicalApprovalReady =
+      !!canonicalCandidate
+      && isCanonicalSettlementApprovalEligible(mutation)
+      && !!onApproveCanonical;
+    const canonicalHistoricalRepairReady =
+      !!canonicalCandidate
+      && isCanonicalHistoricalRepairEligible(mutation, canonicalCandidate)
+      && !!onRecoverCanonical;
+
+    const saveCanonical = async () => {
+      if (!canonicalCandidate) {
+        toast({
+          title: "Settlement QRIS belum siap",
+          description: "Kandidat canonical yang valid belum tersedia.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setSaving(true);
+      try {
+        if (canonicalHistoricalRepairReady && onRecoverCanonical) {
+          await onRecoverCanonical(mutation, canonicalCandidate);
+          toast({
+            title: "Link settlement QRIS selesai",
+            description: "Batch canonical berhasil ditautkan ke mutasi bank.",
+          });
+        } else if (canonicalApprovalReady && onApproveCanonical) {
+          await onApproveCanonical(mutation, canonicalCandidate);
+          toast({
+            title: "Settlement QRIS disetujui",
+            description: "Mutasi ditautkan melalui alur settlement canonical.",
+          });
+        } else {
+          throw new Error(
+            "Settlement QRIS belum memenuhi safeguard canonical. Periksa kandidat, nominal, dan tanggal settlement.",
+          );
+        }
+        approvalKeyRef.current = null;
+        qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+        await onSaved(null);
+        onClose();
+      } catch (error) {
+        toast({
+          title: "Gagal menyelesaikan settlement QRIS",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    return (
+      <Dialog open={open} onOpenChange={value => !value && onClose()}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-indigo-600" />
+              Settlement QRIS
+            </DialogTitle>
+            <DialogDescription>
+              Transaksi QRIS canonical tidak diselesaikan dengan memilih COA
+              manual. Gunakan kandidat settlement yang sudah diverifikasi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+              <p className="font-semibold">Alur Pilih COA tidak berlaku untuk QRIS</p>
+              <p className="mt-1 text-xs">
+                COA pendapatan seperti pada daftar sebelumnya dapat membuat jurnal
+                generic dan melewati ownership settlement. Sistem sekarang hanya
+                mengizinkan link ke batch canonical.
+              </p>
+            </div>
+
+            {canonicalCandidate && (
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
+                <p className="font-medium">
+                  Kandidat: {CANDIDATE_TYPE_LABELS[canonicalCandidate.candidate_type] ?? "QRIS Settlement"} #
+                  {canonicalCandidate.candidate_id}
+                </p>
+                <p className="mt-1 text-muted-foreground">{canonicalCandidate.match_reason}</p>
+              </div>
+            )}
+
+            {!canonicalCandidate && (
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Kandidat settlement canonical belum tersedia. Tutup dialog ini,
+                lalu jalankan pencarian kandidat QRIS atau perbaiki data sumbernya.
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" onClick={onClose}>Batal</Button>
+            {(canonicalHistoricalRepairReady || canonicalApprovalReady) && (
+              <Button
+                className="gap-1.5 bg-green-600 text-white hover:bg-green-700"
+                onClick={saveCanonical}
+                disabled={saving}
+              >
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {saving
+                  ? "Memproses..."
+                  : canonicalHistoricalRepairReady
+                    ? "Selesaikan Link Settlement"
+                    : "Tautkan & Approve Settlement"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
       <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">

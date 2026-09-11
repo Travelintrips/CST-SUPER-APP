@@ -56,3 +56,9 @@ Manual review may resolve provider or metadata ambiguity, but it must never bypa
 **Why:** Allowing a single fallback MDR configuration to approve a non-matching bank amount would turn an evidence mismatch into a posted settlement and break reconciliation integrity.
 
 **How to apply:** Keep exact-net selection mandatory in every QRIS approval route, including manual-override requests; use the dedicated historical link-only workflow only when its full evidence contract passes.
+
+The QRIS canonical detail flow must not reopen the generic COA picker. If stale UI state opens that dialog, show only the canonical link/approval action or a blocked explanation.
+
+**Why:** A generic COA selection can create the wrong bank journal and produces a misleading journal-creation failure instead of completing the settlement ownership bridge.
+
+**How to apply:** Keep the COA dialog guarded by QRIS detection, and route eligible canonical candidates to link-and-approve or historical recovery.
