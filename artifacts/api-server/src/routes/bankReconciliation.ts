@@ -114,6 +114,9 @@ import {
   listCanonicalSettlementQueue,
 } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import {
+  resolveCanonicalCandidatePaymentIds,
+} from "../lib/reconciliation/sportPaymentCanonicalSettlement.js";
+import {
   approveCanonicalSettlementLink,
   reopenCanonicalSettlementLink,
   CanonicalSettlementApprovalError,
@@ -4651,16 +4654,61 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const paymentItems = rawItems.map((item: any) => ({
         paymentId: Number(item?.paymentId ?? item?.payment_id),
         grossAmount: Number(item?.grossAmount ?? item?.gross_amount ?? 0),
+        paymentNumber: item?.paymentNumber ?? item?.payment_number ?? null,
       }));
-      const candidatePaymentIds = paymentItems.map((item) => item.paymentId);
+      const rawCandidatePaymentIds = paymentItems.map((item) => item.paymentId);
       if (
-        candidatePaymentIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
-        || new Set(candidatePaymentIds).size !== candidatePaymentIds.length
+        rawCandidatePaymentIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+        || new Set(rawCandidatePaymentIds).size !== rawCandidatePaymentIds.length
       ) {
         throw Object.assign(new Error("Identitas payment canonical pada kandidat tidak valid"), {
           code: "INVALID_CANDIDATE",
         });
       }
+
+      const { rows: publicMirrorRows } = await tx.execute(sql`
+        SELECT id, payment_number
+        FROM public.sport_payments
+        WHERE id IN (${sql.join(rawCandidatePaymentIds.map((id) => sql`${id}`), sql`, `)})
+        FOR SHARE
+      `);
+      let candidatePaymentIds: number[];
+      try {
+        candidatePaymentIds = resolveCanonicalCandidatePaymentIds(
+          paymentItems,
+          (publicMirrorRows as Array<Record<string, unknown>>).map((mirror) => ({
+            id: Number(mirror.id),
+            paymentNumber: mirror.payment_number,
+          })),
+        );
+      } catch (error: any) {
+        throw Object.assign(new Error(error?.message ?? "Bridge payment canonical tidak valid"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+      const canonicalIdByRawId = new Map(
+        rawCandidatePaymentIds.map((rawId, index) => [rawId, candidatePaymentIds[index]]),
+      );
+      const canonicalIdSet = new Set(candidatePaymentIds);
+      const resolvedRequestedIds = requestedIds == null
+        ? null
+        : requestedIds.map((rawId) =>
+          canonicalIdByRawId.get(rawId) ?? (canonicalIdSet.has(rawId) ? rawId : null),
+        );
+      if (
+        resolvedRequestedIds?.some((id): id is null => id == null)
+        || (resolvedRequestedIds && new Set(resolvedRequestedIds).size !== resolvedRequestedIds.length)
+      ) {
+        throw Object.assign(
+          new Error("Payment yang dipilih tidak memiliki bridge canonical yang unik"),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+      const normalizedRequestedIds: number[] | null = resolvedRequestedIds == null
+        ? null
+        : resolvedRequestedIds.filter(
+          (id): id is number => id !== null,
+        );
 
       const { rows: livePaymentRows } = await tx.execute(sql.raw(`
         SELECT
@@ -4694,7 +4742,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       try {
         selectedIds = selectQrisApprovalPaymentIds({
           candidatePaymentIds,
-          requestedPaymentIds: requestedIds,
+          requestedPaymentIds: normalizedRequestedIds,
           activePostedPaymentIds,
         });
       } catch (error) {

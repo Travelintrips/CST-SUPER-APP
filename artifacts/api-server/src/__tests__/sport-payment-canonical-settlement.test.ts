@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeCanonicalSettlementPredicate,
+  canonicalSportPaymentIdFromPaymentNumber,
   canonicalSportPaymentIdExpression,
   isSportPaymentInActiveCanonicalSettlement,
+  resolveCanonicalCandidatePaymentIds,
   sportPaymentCanonicalSettlementExclusionSql,
   SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT,
 } from "../lib/reconciliation/sportPaymentCanonicalSettlement.js";
@@ -15,6 +17,37 @@ describe("Phase 4C-4 canonical Sport Center payment exclusion", () => {
     expect(canonicalSportPaymentIdExpression("sp")).toContain(
       "'^SCPAY-SC-[0-9]+$'",
     );
+  });
+
+  it("resolves historical mirror IDs through the persisted SCPAY bridge", () => {
+    expect(canonicalSportPaymentIdFromPaymentNumber("SCPAY-SC-22")).toBe(22);
+    expect(
+      resolveCanonicalCandidatePaymentIds([
+        { paymentId: 25, paymentNumber: "SCPAY-SC-21" },
+        { paymentId: 26, paymentNumber: "SCPAY-SC-22" },
+      ]),
+    ).toEqual([21, 22]);
+  });
+
+  it("uses the public mirror only as a compatibility fallback", () => {
+    expect(
+      resolveCanonicalCandidatePaymentIds(
+        [{ paymentId: 26 }],
+        [{ id: 26, paymentNumber: "SCPAY-SC-22" }],
+      ),
+    ).toEqual([22]);
+  });
+
+  it("fails closed for missing or duplicate canonical bridges", () => {
+    expect(() =>
+      resolveCanonicalCandidatePaymentIds([{ paymentId: 26 }]),
+    ).toThrow("bridge is missing");
+    expect(() =>
+      resolveCanonicalCandidatePaymentIds([
+        { paymentId: 25, paymentNumber: "SCPAY-SC-22" },
+        { paymentId: 26, paymentNumber: "SCPAY-SC-22" },
+      ]),
+    ).toThrow("duplicate canonical");
   });
 
   it("freezes the active posted/reconciled settlement predicate", () => {

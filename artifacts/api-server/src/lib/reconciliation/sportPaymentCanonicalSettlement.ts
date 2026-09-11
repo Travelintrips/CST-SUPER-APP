@@ -5,6 +5,72 @@ export const SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT =
   "SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT";
 
 /**
+ * A candidate snapshot may have been written before the canonical source
+ * cutover.  In that case its numeric paymentId is the public mirror ID, while
+ * paymentNumber still carries the stable SCPAY-SC-{canonical id} bridge.
+ */
+export function canonicalSportPaymentIdFromPaymentNumber(
+  paymentNumber: unknown,
+): number | null {
+  const value = String(paymentNumber ?? "").trim();
+  const match = /^SCPAY-SC-([0-9]+)$/.exec(value);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+export type CandidatePaymentIdentity = {
+  paymentId: number;
+  paymentNumber?: unknown;
+};
+
+export type PublicSportPaymentIdentity = {
+  id: number;
+  paymentNumber?: unknown;
+};
+
+/**
+ * Resolve candidate payment identities before any canonical settlement query.
+ *
+ * The bridge in paymentNumber is authoritative. A public mirror lookup is only
+ * a compatibility fallback for older snapshots that did not persist the
+ * payment number. Missing or conflicting bridges fail closed instead of
+ * allowing a mirror ID to select an unrelated canonical payment.
+ */
+export function resolveCanonicalCandidatePaymentIds(
+  items: readonly CandidatePaymentIdentity[],
+  publicMirrorRows: readonly PublicSportPaymentIdentity[] = [],
+): number[] {
+  const publicMirrorById = new Map(
+    publicMirrorRows.map((row) => [row.id, row.paymentNumber]),
+  );
+  const resolved = items.map((item) => {
+    if (!Number.isSafeInteger(item.paymentId) || item.paymentId <= 0) {
+      throw new Error("Candidate payment ID is not a positive safe integer.");
+    }
+
+    const persistedPaymentNumber = String(item.paymentNumber ?? "").trim();
+    const bridgeValue = persistedPaymentNumber || String(
+      publicMirrorById.get(item.paymentId) ?? "",
+    ).trim();
+    const canonicalId = canonicalSportPaymentIdFromPaymentNumber(bridgeValue);
+
+    if (!canonicalId) {
+      throw new Error(
+        `Canonical payment bridge is missing for candidate payment ${item.paymentId}.`,
+      );
+    }
+
+    return canonicalId;
+  });
+
+  if (new Set(resolved).size !== resolved.length) {
+    throw new Error("Candidate payment items resolve to duplicate canonical payments.");
+  }
+  return resolved;
+}
+
+/**
  * The reconciliation candidate table is the trigger-owned public mirror.
  * SCPAY-SC-{id} is the stable bridge back to sport_center.sport_payments.id.
  */
