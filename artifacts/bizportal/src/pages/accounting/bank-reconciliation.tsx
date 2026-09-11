@@ -1545,6 +1545,27 @@ function isExactMatch(m: BankMutation): boolean {
   return Boolean(candidate.amount_match && candidate.date_match);
 }
 
+const REAL_TRANSACTION_CANDIDATE_TYPES = new Set([
+  "accounting_payment",
+  "logistic_order",
+  "invoice",
+  "expense",
+  "sport_payment",
+  "qris_settlement",
+  "tenant_invoice",
+  "internal_transfer",
+]);
+
+function isRealTransactionCandidate(candidate: Candidate): boolean {
+  return REAL_TRANSACTION_CANDIDATE_TYPES.has(
+    String(candidate.candidate_type ?? "").trim().toLowerCase(),
+  );
+}
+
+function requiresRealTransactionCandidate(m: BankMutation): boolean {
+  return m.review_code === "RULE_CANDIDATE_REQUIRED";
+}
+
 function isUiApprovalEligible(m: BankMutation): boolean {
   // This is deliberately stricter than the backend action guard. The server
   // remains the final authority; the UI only avoids offering an unsafe action.
@@ -1552,7 +1573,12 @@ function isUiApprovalEligible(m: BankMutation): boolean {
   // mutation approval creates a normal draft journal and must never be shown
   // for a QRIS mutation, even when its legacy sport_payment candidate happens
   // to look like an exact match.
-  return canApprove(m) && isExactMatch(m) && !isQrisMutation(m);
+  const requiredCandidateAvailable = !requiresRealTransactionCandidate(m)
+    || visibleCandidates(m).some(isRealTransactionCandidate);
+  return canApprove(m)
+    && isExactMatch(m)
+    && !isQrisMutation(m)
+    && requiredCandidateAvailable;
 }
 
 /**
@@ -4945,6 +4971,10 @@ function MutationCard({
       ? candidate.amount_match && candidate.date_match
       : true,
   );
+  const realCandidateRequired = requiresRealTransactionCandidate(m);
+  const selectableMatchingCandidates = realCandidateRequired
+    ? matchingCandidates.filter(isRealTransactionCandidate)
+    : matchingCandidates;
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
@@ -4959,7 +4989,8 @@ function MutationCard({
   const candidateSelectionEnabled =
     !isQris
     && canApprove(m)
-    && onToggleCandidate != null;
+    && onToggleCandidate != null
+    && selectableMatchingCandidates.length > 0;
   const canRematchHistoricalReview = m.status === "manual_review"
     && (
       m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED"
@@ -5123,6 +5154,8 @@ function MutationCard({
                 <div className="mt-1.5 space-y-1.5">
                   {matchingCandidates.map(candidate => {
                     const candidateDetails = candidate.details;
+                     const candidateIsSelectable =
+                       !realCandidateRequired || isRealTransactionCandidate(candidate);
                     const checked = selectedCandidateId === candidate.id;
                     const candidateApproved = String(candidate.status ?? "").toLowerCase() === "approved";
                     const candidateName = candidateDetails?.name ?? candidate.customer_name;
@@ -5141,7 +5174,7 @@ function MutationCard({
                             : "border-border bg-background/70 hover:bg-muted"
                         }`}
                       >
-                        {candidateSelectionEnabled ? (
+                        {candidateSelectionEnabled && candidateIsSelectable ? (
                           <Checkbox
                             checked={checked}
                             onCheckedChange={value => onToggleCandidate?.(m.id, candidate.id, value === true)}
@@ -5179,7 +5212,7 @@ function MutationCard({
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
                            <CandidateDetailsBlock candidate={candidate} compact />
-                           {onApproveCandidate && canApprove(m) && (
+                           {onApproveCandidate && canApprove(m) && candidateIsSelectable && (
                              <Button
                                type="button"
                                size="sm"
@@ -5196,6 +5229,12 @@ function MutationCard({
                                  : <CheckCircle2 className="h-3 w-3" />}
                                {approvePending ? "Menyimpan..." : "Approve kandidat"}
                              </Button>
+                           )}
+                           {realCandidateRequired && !candidateIsSelectable && (
+                             <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+                               Rule AI ini hanya menentukan COA. Approve baru tersedia setelah ditemukan
+                               kandidat transaksi nyata seperti payment, invoice, expense, atau settlement.
+                             </p>
                            )}
                         </div>
                       </div>
@@ -5378,14 +5417,17 @@ function MutationCard({
                 Pilih COA
               </Button>
             )}
-            {!isClosedQrisSettlement && !mappingError && isUiApprovalEligible(m) && (
+            {!isClosedQrisSettlement
+              && !mappingError
+              && isUiApprovalEligible(m)
+              && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                disabled={matchingCandidates.length > 0 && selectedCandidateId == null}
-                title={matchingCandidates.length > 0 && selectedCandidateId == null ? "Pilih kandidat yang cocok terlebih dahulu" : undefined}
+                disabled={selectableMatchingCandidates.length > 0 && selectedCandidateId == null}
+                title={selectableMatchingCandidates.length > 0 && selectedCandidateId == null ? "Pilih kandidat transaksi yang cocok terlebih dahulu" : undefined}
                 onClick={() => {
-                  const selected = matchingCandidates.find(candidate => candidate.id === selectedCandidateId);
+                  const selected = selectableMatchingCandidates.find(candidate => candidate.id === selectedCandidateId);
                   if (selected && onApproveCandidate) {
                     onApproveCandidate(m, selected);
                   } else {
