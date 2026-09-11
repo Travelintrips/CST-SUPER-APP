@@ -461,8 +461,9 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
         FROM accounting_entries voided_journal
         WHERE voided_journal.id = ${alias}.journal_entry_id
           AND (
-            voided_journal.status IN ('voided', 'reversed')
+            voided_journal.status::text IN ('voided', 'reversed')
             OR voided_journal.is_voided = TRUE
+            OR voided_journal.is_reversed = TRUE
           )
       )
     THEN 'void'

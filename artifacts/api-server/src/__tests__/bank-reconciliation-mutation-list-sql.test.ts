@@ -39,8 +39,9 @@ describe("bank reconciliation mutation list SQL", () => {
       "FROM accounting_entries voided_journal",
     );
     expect(routeSource).toContain(
-      "voided_journal.status IN ('voided', 'reversed')",
+      "voided_journal.status::text IN ('voided', 'reversed')",
     );
+    expect(routeSource).toContain("voided_journal.is_reversed = TRUE");
     expect(routeSource).toContain("THEN 'void'");
   });
 });
