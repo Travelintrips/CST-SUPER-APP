@@ -33,6 +33,7 @@ import {
 import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
 import { ObjectStorageService } from "../objectStorage.js";
+import { NotificationService } from "./notificationService.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -814,6 +815,18 @@ export async function submitQuote(
       "[vendorQuoteSubmission] Quote submitted",
     );
 
+    // Persist an admin notification for the Customer Portal admin panel.
+    // This is intentionally emitted only for the final submission, not for
+    // every draft save while the vendor is entering line prices.
+    await notifyAdminQuoteSubmitted({
+      quoteId,
+      rfqId,
+      vendorId,
+      lineCount: lineResult.lines.length,
+      submittedAt,
+      requoteRound: nextRound,
+    });
+
     // Phase 2F: Enqueue requote-submitted notification to admin/buyer (non-fatal)
     if (isRequote) {
       import("./marketplaceNotificationQueueService.js").then(async ({ enqueueNotification }) => {
@@ -855,6 +868,49 @@ export async function submitQuote(
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ err, quoteId }, "[vendorQuoteSubmission] submitQuote error");
     return { ok: false, code: "DB_ERROR", message: msg };
+  }
+}
+
+async function notifyAdminQuoteSubmitted(input: {
+  quoteId: number;
+  rfqId: number;
+  vendorId: number;
+  lineCount: number;
+  submittedAt: Date;
+  requoteRound: number;
+}): Promise<void> {
+  try {
+    const [context] = await db
+      .select({
+        rfqNumber: mktRfqsTable.rfqNumber,
+        buyerCompany: mktRfqsTable.buyerCompany,
+        vendorName: suppliersTable.name,
+      })
+      .from(mktRfqsTable)
+      .leftJoin(suppliersTable, eq(suppliersTable.id, input.vendorId))
+      .where(eq(mktRfqsTable.id, input.rfqId))
+      .limit(1);
+
+    const rfqNumber = context?.rfqNumber ?? `RFQ-${input.rfqId}`;
+    const vendorName = context?.vendorName ?? `Vendor #${input.vendorId}`;
+    const isRequote = input.requoteRound > 1;
+
+    await NotificationService.saveAndBroadcast("admin_notification", {
+      type: isRequote ? "mkt_vendor_requote_submitted" : "mkt_vendor_quote_submitted",
+      orderId: input.rfqId,
+      orderNumber: rfqNumber,
+      customerName: vendorName,
+      companyName: context?.buyerCompany ?? null,
+      title: isRequote ? "Requote Marketplace diterima" : "Penawaran Marketplace diterima",
+      body: `${vendorName} mengirim ${isRequote ? "penawaran revisi" : "penawaran"} untuk ${rfqNumber} (${input.lineCount} item).`,
+      dedupeKey: `mkt_vendor_quote_submitted:${input.quoteId}:${input.requoteRound}`,
+      rfqId: input.rfqId,
+      vendorQuoteId: input.quoteId,
+      vendorId: input.vendorId,
+      submittedAt: input.submittedAt.toISOString(),
+    });
+  } catch (err) {
+    logger.warn({ err, ...input }, "[vendorQuoteSubmission] admin notification failed");
   }
 }
 

@@ -24,6 +24,7 @@ import { logActivity } from "../activityLog.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { rotateVendorToken, findPoByVendorToken, markVendorTokenUsed, type TokenLookupFailure } from "./mktVendorPoTokenService.js";
 import { logger } from "../logger.js";
+import { NotificationService } from "./notificationService.js";
 
 type PoRow = typeof mktPurchaseOrdersTable.$inferSelect;
 type PoStatus = PoRow["status"];
@@ -203,6 +204,7 @@ export async function vendorAcceptPo(token: string): Promise<{ ok: true; po: PoR
     payloadJson: { poNumber: guard.po.poNumber, vendorId: guard.po.vendorId },
     deduplicationKey: `mkt_po_vendor_accepted:${guard.po.id}`,
   }).catch(() => {});
+  await notifyAdminVendorPoAction(guard.po, "accepted");
 
   return { ok: true, po: guard.po };
 }
@@ -234,6 +236,7 @@ export async function vendorRejectPo(token: string, reason?: string | null): Pro
     payloadJson: { poNumber: guard.po.poNumber, vendorId: guard.po.vendorId, reason: reason ?? null },
     deduplicationKey: `mkt_po_vendor_rejected:${guard.po.id}`,
   }).catch(() => {});
+  await notifyAdminVendorPoAction(guard.po, "rejected", { reason: reason ?? null });
 
   return { ok: true, po: guard.po };
 }
@@ -255,8 +258,46 @@ export async function vendorRequestRevision(token: string, notes: string): Promi
     purchaseOrderId: guard.po.id,
     payloadJson: { poNumber: guard.po.poNumber, vendorId: guard.po.vendorId, notes },
   }).catch(() => {});
+  await notifyAdminVendorPoAction(guard.po, "revision_requested", { notes });
 
   return { ok: true, po: guard.po };
+}
+
+async function notifyAdminVendorPoAction(
+  po: PoRow,
+  action: "accepted" | "rejected" | "revision_requested",
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  const labels = {
+    accepted: {
+      type: "mkt_po_vendor_accepted",
+      title: "PO Marketplace dikonfirmasi vendor",
+      verb: "menerima",
+    },
+    rejected: {
+      type: "mkt_po_vendor_rejected",
+      title: "PO Marketplace ditolak vendor",
+      verb: "menolak",
+    },
+    revision_requested: {
+      type: "mkt_po_vendor_revision_requested",
+      title: "Revisi PO Marketplace diminta vendor",
+      verb: "meminta revisi",
+    },
+  }[action];
+
+  await NotificationService.saveAndBroadcast("admin_notification", {
+    type: labels.type,
+    orderId: po.id,
+    orderNumber: po.poNumber,
+    customerName: po.vendorNameSnapshot ?? `Vendor #${po.vendorId}`,
+    title: labels.title,
+    body: `${po.vendorNameSnapshot ?? `Vendor #${po.vendorId}`} ${labels.verb} PO ${po.poNumber}.`,
+    dedupeKey: `mkt_po_vendor_action:${po.id}:${action}`,
+    purchaseOrderId: po.id,
+    vendorId: po.vendorId,
+    ...extra,
+  });
 }
 
 // ── Vendor-facing sanitized view ────────────────────────────────────────────

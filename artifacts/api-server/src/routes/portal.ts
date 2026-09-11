@@ -1243,9 +1243,15 @@ router.post("/vendor/marketplace-quotes/:quoteId/decline", requirePortalAuth, re
   const [quote] = await db
     .select({
       id: mktVendorQuotesTable.id,
+      rfqId: mktVendorQuotesTable.rfqId,
+      vendorId: mktVendorQuotesTable.vendorId,
       status: mktVendorQuotesTable.status,
+      rfqNumber: mktRfqsTable.rfqNumber,
+      vendorName: suppliersTable.name,
     })
     .from(mktVendorQuotesTable)
+    .innerJoin(mktRfqsTable, eq(mktRfqsTable.id, mktVendorQuotesTable.rfqId))
+    .innerJoin(suppliersTable, eq(suppliersTable.id, mktVendorQuotesTable.vendorId))
     .where(and(
       eq(mktVendorQuotesTable.id, quoteId),
       eq(mktVendorQuotesTable.vendorId, supplierId),
@@ -1268,6 +1274,18 @@ router.post("/vendor/marketplace-quotes/:quoteId/decline", requirePortalAuth, re
     .returning({ id: mktVendorQuotesTable.id });
 
   if (!updated) return res.status(409).json({ message: "Status RFQ berubah, silakan muat ulang dashboard" });
+  await NotificationService.saveAndBroadcast("admin_notification", {
+    type: "mkt_vendor_quote_rejected",
+    orderId: quote.rfqId,
+    orderNumber: quote.rfqNumber ?? `RFQ-${quote.rfqId}`,
+    customerName: quote.vendorName ?? `Vendor #${quote.vendorId}`,
+    title: "Undangan RFQ Marketplace ditolak",
+    body: `${quote.vendorName ?? `Vendor #${quote.vendorId}`} menolak undangan ${quote.rfqNumber ?? `RFQ-${quote.rfqId}`}.`,
+    dedupeKey: `mkt_vendor_quote_rejected:${quote.id}`,
+    rfqId: quote.rfqId,
+    vendorQuoteId: quote.id,
+    vendorId: quote.vendorId,
+  });
   return res.json({ ok: true, quoteId: updated.id, status: "rejected" });
 });
 
