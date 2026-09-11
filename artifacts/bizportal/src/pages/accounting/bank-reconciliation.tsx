@@ -3169,6 +3169,14 @@ function VendorInvoicePaymentDialog({
       toast({ title: "Pilih minimal satu invoice vendor", variant: "destructive" });
       return;
     }
+    if (hasApprovedReconciliationMatch(mutation)) {
+      toast({
+        title: "Mutasi sudah dialokasikan",
+        description: "Batalkan approved match sebelumnya melalui Unmatch sebelum memilih invoice vendor lain.",
+        variant: "destructive",
+      });
+      return;
+    }
     if (!selectionFitsMutation) {
       toast({
         title: "Total invoice melebihi nominal mutasi",
@@ -5194,6 +5202,7 @@ function MutationCard({
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  const hasApprovedMatch = hasApprovedReconciliationMatch(m);
   const isClosedQrisSettlement =
     isQris
     && !canonicalHistoricalRepairReady
@@ -5544,6 +5553,7 @@ function MutationCard({
             {!isQris
               && m.direction === "OUT"
               && onMatchVendorInvoice
+              && !hasApprovedMatch
               && !["approved", "posted", "approved_pending_posting"].includes(m.status)
               && (
               <Button
@@ -5556,6 +5566,15 @@ function MutationCard({
                 <ReceiptText className="h-3.5 w-3.5" />
                 Match Invoice Vendor
               </Button>
+            )}
+            {!isQris
+              && m.direction === "OUT"
+              && hasApprovedMatch
+              && !["approved", "posted", "approved_pending_posting"].includes(m.status)
+              && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                Sudah memiliki approved match. Gunakan Unmatch sebelum mengalokasikan ulang.
+              </div>
             )}
             {!isQris && !isClosedQrisSettlement && !isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
               <Button
