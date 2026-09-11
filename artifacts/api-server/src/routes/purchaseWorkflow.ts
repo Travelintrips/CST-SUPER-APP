@@ -17,6 +17,7 @@ import {
   purchaseReturnLinesTable,
   vendorInvoicesTable,
   vendorInvoiceLinesTable,
+  vendorWithholdingRecordsTable,
   vendorInvoiceCoaMappingsTable,
   paymentRequestsTable,
   paymentRequestItemsTable,
@@ -1283,6 +1284,102 @@ router.put("/vendor-invoices/:id", async (req, res) => {
     );
   }
   res.json(vi);
+});
+
+router.delete("/vendor-invoices/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "ID Vendor Invoice tidak valid." });
+  }
+
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+
+  try {
+    const deleted = await db.transaction(async (tx) => {
+      const [invoice] = await tx
+        .select({
+          id: vendorInvoicesTable.id,
+          status: vendorInvoicesTable.status,
+          amountPaid: vendorInvoicesTable.amountPaid,
+          journalEntryId: vendorInvoicesTable.journalEntryId,
+          isLocked: vendorInvoicesTable.isLocked,
+        })
+        .from(vendorInvoicesTable)
+        .where(and(
+          eq(vendorInvoicesTable.id, id),
+          eq(vendorInvoicesTable.companyId, companyId),
+        ))
+        .limit(1);
+
+      if (!invoice) return false;
+      if (invoice.status !== "draft") {
+        throw Object.assign(
+          new Error("Hanya Vendor Invoice berstatus draft yang dapat dihapus."),
+          { httpStatus: 409 },
+        );
+      }
+      if (num(invoice.amountPaid) > 0.01) {
+        throw Object.assign(
+          new Error("Vendor Invoice tidak dapat dihapus karena sudah memiliki pembayaran."),
+          { httpStatus: 409 },
+        );
+      }
+      if (invoice.journalEntryId != null) {
+        throw Object.assign(
+          new Error("Vendor Invoice tidak dapat dihapus karena sudah tertaut ke jurnal."),
+          { httpStatus: 409 },
+        );
+      }
+      if (invoice.isLocked) {
+        throw Object.assign(
+          new Error("Vendor Invoice terkunci dan tidak dapat dihapus."),
+          { httpStatus: 409 },
+        );
+      }
+
+      const [paymentRequestLink] = await tx
+        .select({ id: paymentRequestItemsTable.id })
+        .from(paymentRequestItemsTable)
+        .where(eq(paymentRequestItemsTable.vendorInvoiceId, id))
+        .limit(1);
+      if (paymentRequestLink) {
+        throw Object.assign(
+          new Error("Vendor Invoice masih tertaut ke Payment Request. Lepaskan dari Payment Request terlebih dahulu."),
+          { httpStatus: 409 },
+        );
+      }
+
+      // These records use RESTRICT rather than database-level CASCADE because
+      // posted withholding evidence must never disappear accidentally. Draft
+      // deletion is the one guarded path where they may be removed explicitly.
+      await tx
+        .delete(vendorWithholdingRecordsTable)
+        .where(eq(vendorWithholdingRecordsTable.vendorInvoiceId, id));
+      await tx
+        .delete(vendorInvoiceLinesTable)
+        .where(eq(vendorInvoiceLinesTable.invoiceId, id));
+      await tx
+        .delete(vendorInvoicesTable)
+        .where(and(
+          eq(vendorInvoicesTable.id, id),
+          eq(vendorInvoicesTable.companyId, companyId),
+          eq(vendorInvoicesTable.status, "draft"),
+        ));
+
+      return true;
+    });
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Vendor Invoice tidak ditemukan pada company aktif." });
+    }
+    return res.json({ ok: true, id });
+  } catch (error: any) {
+    const status = Number(error?.httpStatus) || (postgresErrorCode(error) === "23503" ? 409 : 500);
+    console.error("[vendor-invoices] delete failed", { id, companyId, error });
+    return res.status(status).json({
+      error: error?.message ?? "Vendor Invoice gagal dihapus.",
+    });
+  }
 });
 
 router.post("/vendor-invoices/:id/post", async (req, res) => {
