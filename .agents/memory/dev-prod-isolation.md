@@ -65,3 +65,11 @@ An apparently successful RFQ submission from a Replit preview can create a devel
 **Why:** A controlled UI submission returned success for `MCT-260831-76825`, but the exact order and matching development RFQ existed only in the development database; production had no new row.
 
 **How to apply:** Always record the submit URL and independently match the returned identifier against the intended environment's database before declaring a production lifecycle proof.
+
+## Safe connection fingerprinting
+
+Compare a one-way hash of the effective runtime connection binding with the same hash produced by the environment loader, then prove expected sentinel records through a read-only query.
+
+**Why:** Supabase poolers can route separate connections to different backend addresses, so a fingerprint that includes `inet_server_addr()` can differ even when both connections use the same binding.
+
+**How to apply:** Never print connection strings. Hash the effective binding in-process, compare only the shortened hash, and use expected record identities/statuses as the database-content proof. Treat backend address as diagnostic metadata, not stable identity.
