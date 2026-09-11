@@ -103,8 +103,9 @@ function makeCanonicalFragments(available: boolean) {
          )`
     : "NULL::int";
 
-  const alreadyReconciledSql = available
-    ? `EXISTS (
+  const alreadyReconciledSql = `
+      ${available
+        ? `EXISTS (
            SELECT 1
            FROM sport_center.payment_settlement_items psi
            JOIN sport_center.payment_settlement_batches psb
@@ -112,8 +113,17 @@ function makeCanonicalFragments(available: boolean) {
            WHERE psi.payment_id = sp.id
              AND psi.item_status = 'active'
               AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
-         )`
-    : "FALSE";
+           )`
+        : "FALSE"}
+      OR EXISTS (
+        SELECT 1
+        FROM qris_settlement_items legacy_psi
+        JOIN qris_settlements legacy_qs
+          ON legacy_qs.id = legacy_psi.settlement_id
+        WHERE legacy_psi.sport_payment_id = sp.id
+          AND LOWER(COALESCE(legacy_qs.status::text, '')) IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+      )
+    `;
 
   // SUM of net amounts of current canonical settlement batches for these payments
   const currentExpectedAmountSql = available
@@ -925,6 +935,26 @@ export async function listQrisCandidates(options: {
                  ) = bm.transaction_date::date
             )
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) legacy_source_item
+          JOIN qris_settlement_items active_legacy_item
+            ON active_legacy_item.sport_payment_id = CASE
+              WHEN COALESCE(
+                legacy_source_item->>'paymentId',
+                legacy_source_item->>'payment_id'
+              ) ~ '^[0-9]+$'
+                THEN COALESCE(
+                  legacy_source_item->>'paymentId',
+                  legacy_source_item->>'payment_id'
+                )::integer
+              ELSE NULL
+            END
+          JOIN qris_settlements active_legacy_settlement
+            ON active_legacy_settlement.id = active_legacy_item.settlement_id
+          WHERE LOWER(COALESCE(active_legacy_settlement.status::text, ''))
+            IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+        )
       `;
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
 
@@ -941,6 +971,27 @@ export async function listQrisCandidates(options: {
     recoverableSettlementIdSql,
     canonicalSettledUnionSql,
   } = makeCanonicalFragments(canonicalAvailable);
+  const staleCanonicalReferenceFilter = canonicalAvailable
+    ? `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) stale_item
+          WHERE COALESCE(
+              stale_item->>'canonicalSettlementId',
+              stale_item->>'canonical_settlement_id'
+            ) ~ '^[0-9]+$'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_batches stale_batch
+              WHERE stale_batch.id = COALESCE(
+                stale_item->>'canonicalSettlementId',
+                stale_item->>'canonical_settlement_id'
+              )::bigint
+                AND stale_batch.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+            )
+        )
+      `
+    : "";
 
   const { rows } = await db.execute(sql.raw(`
      SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
@@ -1128,6 +1179,7 @@ export async function listQrisCandidates(options: {
          ) IS DISTINCT FROM bm.transaction_date::text
        )
        AND jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb)) > 0
+        ${staleCanonicalReferenceFilter}
        ${companyFilter} ${statusFilter} ${completedFilter}
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}

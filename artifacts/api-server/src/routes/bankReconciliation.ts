@@ -143,7 +143,9 @@ import {
 import {
   ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
   ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_MATCH_STATUS_SQL,
   ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
+  isActiveQrisCandidateStatus,
 } from "../lib/reconciliation/qrisCandidateEligibility.js";
 import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
 import {
@@ -355,7 +357,25 @@ function candidateIdAsBigIntSql(alias = "m"): string {
 function currentReconciliationMatchResultSql(alias = "m"): string {
   return `(
     ${alias}.candidate_type <> 'qris_settlement'
-    OR ${alias}.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+    OR (
+      ${alias}.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+      AND EXISTS (
+        SELECT 1
+        FROM sport_center.payment_settlement_batches current_qris_batch
+        WHERE current_qris_batch.id = ${candidateIdAsBigIntSql(alias)}
+          AND current_qris_batch.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+      )
+    )
+    OR (
+      ${alias}.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}'
+      AND EXISTS (
+        SELECT 1
+        FROM qris_settlements current_legacy_qris
+        WHERE current_legacy_qris.id = ${candidateIdAsBigIntSql(alias)}
+          AND LOWER(COALESCE(current_legacy_qris.status::text, ''))
+            IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+      )
+    )
   )`;
 }
 
@@ -1012,8 +1032,7 @@ async function findAutomaticQrisCandidateIds(
     WHERE company_id = ${companyId}
       AND mutation_id IN (${mutationIds.join(",")})
       AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
-      AND LOWER(COALESCE(status, '')) NOT IN
-        ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+      AND LOWER(COALESCE(status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
       AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
     ORDER BY id
   `));
@@ -4595,6 +4614,15 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           code: "DUPLICATE_APPROVAL",
         });
       }
+      if (!isActiveQrisCandidateStatus(candidateStatus)) {
+        throw Object.assign(
+          new Error(
+            `Kandidat QRIS berstatus ${candidateStatus || "UNKNOWN"} sudah menjadi riwayat `
+              + "dan tidak dapat diproses ulang. Regenerasi kandidat dari payment canonical yang aktif.",
+          ),
+          { code: "INACTIVE_CANDIDATE" },
+        );
+      }
 
       if (
         row.bank_company_id == null
@@ -5298,6 +5326,33 @@ router.get("/mutations", async (req, res) => {
     COALESCE(jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)), 0) > 0
     AND ${qrisCandidateSourcePaymentMethodSql("qc", "item_method")}
   `;
+  // A provisional snapshot may retain the ID of a canonical settlement that
+  // was later reversed/voided. Such a row is audit history, not current
+  // evidence. A fresh generator run will rebuild it from the still-active
+  // payments; the mutation list must not expose the old snapshot in the
+  // meantime.
+  const qrisSnapshotSettlementReferenceSql = (candidateAlias = "qc") => `
+    ${hasCanonicalSettlementSchema ? "NOT EXISTS (" : "TRUE"}
+    ${hasCanonicalSettlementSchema ? `
+      SELECT 1
+      FROM jsonb_array_elements(
+        COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)
+      ) stale_settlement_item
+      WHERE COALESCE(
+          stale_settlement_item->>'canonicalSettlementId',
+          stale_settlement_item->>'canonical_settlement_id'
+        ) ~ '^[0-9]+$'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches active_source_batch
+          WHERE active_source_batch.id = COALESCE(
+            stale_settlement_item->>'canonicalSettlementId',
+            stale_settlement_item->>'canonical_settlement_id'
+          )::bigint
+            AND active_source_batch.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+        )
+    )` : ""}
+  `;
 
   // SQL fragments conditionally included when canonical settlement tables exist.
   // Each fragment is either the real SQL or an empty string so it can be
@@ -5838,8 +5893,8 @@ router.get("/mutations", async (req, res) => {
           ORDER BY m.match_score DESC
         )
        FROM bank_reconciliation_matches m
-       WHERE m.mutation_id = bm.id
-          AND m.status IN ('candidate', 'approved')
+         WHERE m.mutation_id = bm.id
+           AND m.status IN ${ACTIVE_QRIS_MATCH_STATUS_SQL}
            AND ${currentReconciliationMatchResultSql("m")}
             -- Keep regular bank-transfer candidates visible as reviewer
             -- evidence even when the candidate date differs from the bank
@@ -5972,6 +6027,7 @@ router.get("/mutations", async (req, res) => {
               AND ${qrisSnapshotHMinusOneSql}
                AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
                AND ${qrisSnapshotPaymentMethodSql}
+             AND ${qrisSnapshotSettlementReferenceSql("qc")}
                AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
            ORDER BY
             qc.updated_at DESC,
@@ -6076,6 +6132,7 @@ router.get("/mutations", async (req, res) => {
              AND ${qrisSnapshotHMinusOneSql}
              AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
               AND ${qrisSnapshotPaymentMethodSql}
+               AND ${qrisSnapshotSettlementReferenceSql("qc")}
               AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
          ) AS qris_candidate_audits
         ,
@@ -6108,6 +6165,7 @@ router.get("/mutations", async (req, res) => {
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
             AND LOWER(COALESCE(qc.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+            AND ${qrisSnapshotSettlementReferenceSql("qc")}
             AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1

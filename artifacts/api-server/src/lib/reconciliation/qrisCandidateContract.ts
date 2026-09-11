@@ -4,10 +4,13 @@ export {
   ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
   ACTIVE_CANONICAL_SETTLEMENT_STATUSES,
   ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_MATCH_STATUS_SQL,
+  ACTIVE_QRIS_MATCH_STATUSES,
   ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
   ACTIVE_QRIS_CANDIDATE_STATUSES,
   isActiveCanonicalSettlementStatus,
   isActiveLegacyQrisSettlementStatus,
+  isActiveQrisMatchStatus,
   isActiveQrisCandidateStatus,
 } from "./qrisCandidateEligibility.js";
 
