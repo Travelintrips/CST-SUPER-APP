@@ -26,10 +26,13 @@ interface RfqLine {
 interface QuoteLine {
   id: number;
   rfqLineId: number;
+  vendorCatalogItemId: number | null;
   offeredUnitPrice: string;
   offeredQty: string;
   subtotal: string;
   currency: string | null;
+  minimumOrderQty: string | null;
+  validUntil: string | null;
   leadTimeDays: number | null;
   stockStatus: string | null;
   notes: string | null;
@@ -46,6 +49,7 @@ interface VendorQuoteData {
     openedAt: string | null;
     submittedAt: string | null;
     quotationNumber: string | null;
+    quotationDate: string | null;
     paymentTerms: string | null;
     incoterm: string | null;
     deliveryLocation: string | null;
@@ -107,7 +111,19 @@ function fmtDateTime(s: string | null) {
   return new Date(s).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
 }
 
-function buildLines(rfqLines: RfqLine[], quoteLines: QuoteLine[], edits: LineEdits) {
+function dateOnly(value: string | null | undefined): string {
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+}
+
+function buildLines(
+  rfqLines: RfqLine[],
+  quoteLines: QuoteLine[],
+  edits: LineEdits,
+  defaultValidUntil: string,
+) {
   return rfqLines.map((rl) => {
     const e = edits[rl.id];
     const ql = quoteLines.find((l) => l.rfqLineId === rl.id);
@@ -117,8 +133,13 @@ function buildLines(rfqLines: RfqLine[], quoteLines: QuoteLine[], edits: LineEdi
       rfqLineId:        rl.id,
       offeredUnitPrice: price,
       offeredQty:       qty,
+      currency:         ql?.currency || "IDR",
+      minimumOrderQty:  ql?.minimumOrderQty ? Number(ql.minimumOrderQty) : undefined,
+      validUntil:       ql?.validUntil ? dateOnly(ql.validUntil) : defaultValidUntil,
       notes:            e?.notes || ql?.notes || null,
       leadTimeDays:     e?.leadTime ? Number(e.leadTime) : (ql?.leadTimeDays ?? null),
+      stockStatus:      ql?.stockStatus ?? undefined,
+      vendorCatalogItemId: ql?.vendorCatalogItemId ?? null,
     };
   });
 }
@@ -167,16 +188,22 @@ export default function MktVendorQuotePage() {
   const saveMutation = useMutation({
     mutationFn: async () => {
       const vqd = data!.data;
-      const lines = buildLines(vqd.rfqLines, vqd.quoteLines, lineEdits);
-      const body = { notes: headerNotes || null, paymentTerms: paymentTerms || null, lines };
+      const defaultValidUntil = dateOnly(vqd.quote.validUntil) || dateOnly(new Date().toISOString());
+      const lines = buildLines(vqd.rfqLines, vqd.quoteLines, lineEdits, defaultValidUntil);
+      const body = {
+        quotationDate: vqd.quote.quotationDate,
+        notes: headerNotes || null,
+        paymentTerms: paymentTerms || null,
+        lines,
+      };
       const res = await fetch(`/api/vendor-quote/${token}/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? t("mktVendorQuote.saveError", "Gagal menyimpan"));
+        const d = await res.json() as { error?: string; message?: string };
+        throw new Error(d.message ?? d.error ?? t("mktVendorQuote.saveError", "Gagal menyimpan"));
       }
       return res.json();
     },
@@ -190,16 +217,22 @@ export default function MktVendorQuotePage() {
   const submitMutation = useMutation({
     mutationFn: async () => {
       const vqd = data!.data;
-      const lines = buildLines(vqd.rfqLines, vqd.quoteLines, lineEdits);
-      const body = { notes: headerNotes || null, paymentTerms: paymentTerms || null, lines };
+      const defaultValidUntil = dateOnly(vqd.quote.validUntil) || dateOnly(new Date().toISOString());
+      const lines = buildLines(vqd.rfqLines, vqd.quoteLines, lineEdits, defaultValidUntil);
+      const body = {
+        quotationDate: vqd.quote.quotationDate,
+        notes: headerNotes || null,
+        paymentTerms: paymentTerms || null,
+        lines,
+      };
       const res = await fetch(`/api/vendor-quote/${token}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? t("mktVendorQuote.submitError", "Gagal submit penawaran"));
+        const d = await res.json() as { error?: string; message?: string };
+        throw new Error(d.message ?? d.error ?? t("mktVendorQuote.submitError", "Gagal submit penawaran"));
       }
       return res.json();
     },
