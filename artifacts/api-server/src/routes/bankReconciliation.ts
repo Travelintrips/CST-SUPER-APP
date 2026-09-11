@@ -6456,12 +6456,23 @@ router.post(
         }
         const { rows: activeMatches } = await tx.execute(sql`
           SELECT id FROM bank_reconciliation_matches
-          WHERE mutation_id = ${mutationId} AND status IN ('candidate', 'approved')
+          WHERE mutation_id = ${mutationId}
+            AND (
+              status = 'approved'
+              OR (status = 'candidate' AND candidate_type <> 'recon_rule')
+            )
           LIMIT 1
         `);
         if (activeMatches.length > 0) {
           throw Object.assign(new Error("Mutasi sudah memiliki settlement matching aktif"), { httpStatus: 409 });
         }
+        await tx.execute(sql`
+          UPDATE bank_reconciliation_matches
+          SET status = 'superseded'
+          WHERE mutation_id = ${mutationId}
+            AND status = 'candidate'
+            AND candidate_type = 'recon_rule'
+        `);
 
         const { rows: invoiceRows } = await tx.execute(sql`
           SELECT id, invoice_number, supplier_name, grand_total, amount_paid,
@@ -7177,12 +7188,22 @@ router.post(
           SELECT id
           FROM bank_reconciliation_matches
           WHERE mutation_id = ${mutationId}
-            AND status IN ('candidate', 'approved')
+            AND (
+              status = 'approved'
+              OR (status = 'candidate' AND candidate_type <> 'recon_rule')
+            )
           LIMIT 1
         `);
         if (activeMutationMatches.length > 0) {
           throw Object.assign(new Error("Mutasi sudah memiliki settlement matching aktif"), { httpStatus: 409 });
         }
+        await tx.execute(sql`
+          UPDATE bank_reconciliation_matches
+          SET status = 'superseded'
+          WHERE mutation_id = ${mutationId}
+            AND status = 'candidate'
+            AND candidate_type = 'recon_rule'
+        `);
 
         const mutationAmount = Number(mutation.amount);
         const amount = requestedAmount ?? mutationAmount;
