@@ -4936,6 +4936,20 @@ function QrisMutationCard({
                   {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
                 </Button>
               )}
+              {onUnmatch && canUnmatch(m) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUnmatch(m);
+                  }}
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  Unmatch
+                </Button>
+              )}
               {canReject(m) && (
                 <Button
                   size="sm"
