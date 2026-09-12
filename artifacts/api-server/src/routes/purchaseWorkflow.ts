@@ -17,6 +17,7 @@ import {
   purchaseReturnLinesTable,
   vendorInvoicesTable,
   vendorInvoiceLinesTable,
+  vendorInvoiceLineTaxesTable,
   vendorWithholdingRecordsTable,
   vendorInvoiceCoaMappingsTable,
   paymentRequestsTable,
@@ -38,6 +39,10 @@ import {
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, isNull } from "drizzle-orm";
 import { normalizeVendorLineMappingKey } from "../lib/vendorPaymentHardening.js";
+import {
+  ensureVendorWithholdingRecords,
+  recalculateVendorInvoicePaymentStatus,
+} from "../lib/vendorInvoicePaymentStatus.js";
 import { getInCodeTemplate, resolveTemplate, type ProductTemplateOverride } from "@workspace/product-templates";
 
 const router = Router();
@@ -55,6 +60,11 @@ function idr(n: number): string { return n.toFixed(2); }
 function finiteNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function rowsOf<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  return (((result as { rows?: T[] } | undefined)?.rows) ?? []) as T[];
 }
 
 function postgresErrorCode(error: unknown): string | undefined {
@@ -961,12 +971,28 @@ router.get("/vendor-invoices/:id", async (req, res) => {
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ error: "ID vendor invoice tidak valid." });
   }
-  const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
+  let [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
+  if (vi.companyId != null && vi.status !== "draft" && vi.status !== "cancelled") {
+    await ensureVendorWithholdingRecords(db, vi.companyId, id);
+    await recalculateVendorInvoicePaymentStatus(db, vi.companyId, id);
+    [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
+  }
   const lines = await db.select().from(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
+  const lineTaxes = await db
+    .select()
+    .from(vendorInvoiceLineTaxesTable)
+    .where(inArray(
+      vendorInvoiceLineTaxesTable.invoiceLineId,
+      lines.map((line) => line.id),
+    ));
+  const withholdingRecords = await db
+    .select()
+    .from(vendorWithholdingRecordsTable)
+    .where(eq(vendorWithholdingRecordsTable.vendorInvoiceId, id));
   const po = vi.poId ? (await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, vi.poId)))[0] : null;
   const gr = vi.grId ? (await db.select().from(goodsReceiptsTable).where(eq(goodsReceiptsTable.id, vi.grId)))[0] : null;
-  res.json({ ...vi, lines, po, gr });
+  res.json({ ...vi, lines, lineTaxes, withholdingRecords, po, gr });
 });
 
 router.post("/vendor-invoices", async (req, res) => {
@@ -1125,6 +1151,7 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
   const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   const body = req.body as Record<string, unknown>;
   const requestedLines = Array.isArray(body.lines) ? body.lines : [];
+  const requestedTaxes = Array.isArray(body.taxes) ? body.taxes : [];
   const reviewLines = requestedLines.map((value) => {
     const line = value && typeof value === "object" ? value as Record<string, unknown> : {};
     return {
@@ -1132,6 +1159,17 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
       coaAccountId: Number(line.coaAccountId),
       mappingKey: normalizeVendorLineMappingKey(line.mappingKey),
       saveReusableRule: Boolean(line.saveReusableRule),
+    };
+  });
+  const reviewTaxes = requestedTaxes.map((value) => {
+    const tax = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return {
+      invoiceLineId: Number(tax.invoiceLineId),
+      taxType: String(tax.taxType ?? "").trim(),
+      taxObject: String(tax.taxObject ?? "").trim(),
+      baseAmount: num(tax.baseAmount),
+      taxAmount: num(tax.taxAmount),
+      liabilityAccountId: Number(tax.liabilityAccountId),
     };
   });
   if (!Number.isInteger(id) || id <= 0) {
@@ -1146,6 +1184,19 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
   if (new Set(reviewLines.map((line) => line.lineId)).size !== reviewLines.length) {
     return res.status(400).json({ error: "Line Finance Review tidak boleh dikirim lebih dari sekali." });
   }
+  if (reviewTaxes.some((tax) =>
+    !Number.isInteger(tax.invoiceLineId) || tax.invoiceLineId <= 0 ||
+    !tax.taxType || !tax.taxObject || !Number.isFinite(tax.taxAmount) || tax.taxAmount <= 0 ||
+    !Number.isFinite(tax.baseAmount) || tax.baseAmount < 0 ||
+    !Number.isInteger(tax.liabilityAccountId) || tax.liabilityAccountId <= 0
+  )) {
+    return res.status(400).json({
+      error: "Setiap PPh Finance Review harus memiliki line, jenis, tax object, nominal, dan COA liabilitas yang valid.",
+    });
+  }
+  if (new Set(reviewTaxes.map((tax) => `${tax.invoiceLineId}:${tax.taxType}:${tax.taxObject}`)).size !== reviewTaxes.length) {
+    return res.status(400).json({ error: "Tax object Finance Review tidak boleh dikirim lebih dari sekali pada line yang sama." });
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -1155,18 +1206,24 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
         .where(and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId)))
         .limit(1);
       if (!invoice) return { kind: "error" as const, error: "NOT_FOUND" as const };
-      if (invoice.status !== "draft") return { kind: "error" as const, error: "NOT_DRAFT" as const };
+       if (!["draft", "posted", "matched", "paid"].includes(String(invoice.status))) {
+         return { kind: "error" as const, error: "NOT_REVIEWABLE" as const };
+       }
 
-      const invoiceLines = reviewLines.length === 0
+       const allReviewLineIds = [...new Set([
+         ...reviewLines.map((line) => line.lineId),
+         ...reviewTaxes.map((tax) => tax.invoiceLineId),
+       ])];
+       const invoiceLines = allReviewLineIds.length === 0
         ? []
         : await tx
           .select()
           .from(vendorInvoiceLinesTable)
           .where(and(
             eq(vendorInvoiceLinesTable.invoiceId, id),
-            inArray(vendorInvoiceLinesTable.id, reviewLines.map((line) => line.lineId)),
+             inArray(vendorInvoiceLinesTable.id, allReviewLineIds),
           ));
-      if (invoiceLines.length !== reviewLines.length) {
+       if (invoiceLines.length !== allReviewLineIds.length) {
         return { kind: "error" as const, error: "LINE_NOT_FOUND" as const };
       }
 
@@ -1228,23 +1285,194 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
         }
       }
 
-      return { kind: "success" as const, invoice };
+       const reviewedBy = String((req as { user?: { id?: unknown } }).user?.id ?? "ADMIN");
+       for (const tax of reviewTaxes) {
+        const existingTaxRows = rowsOf<{ id: number }>(await tx.execute(sql`
+           SELECT id
+           FROM vendor_invoice_line_taxes
+           WHERE invoice_line_id = ${tax.invoiceLineId}
+             AND company_id = ${companyId}
+             AND tax_type = ${tax.taxType}
+             AND tax_object = ${tax.taxObject}
+           LIMIT 1
+         `));
+         const existingTaxId = Number(existingTaxRows[0]?.id ?? 0);
+         let lineTaxId = existingTaxId;
+         if (existingTaxId) {
+           await tx.execute(sql`
+             UPDATE vendor_invoice_line_taxes
+             SET base_amount = ${String(tax.baseAmount)},
+                 tax_amount = ${String(tax.taxAmount)},
+                 liability_account_id = ${tax.liabilityAccountId},
+                 resolution_status = 'confirmed',
+                 reviewed_by = ${reviewedBy},
+                 reviewed_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = ${existingTaxId} AND company_id = ${companyId}
+           `);
+         } else {
+          const insertedTaxRows = rowsOf<{ id: number }>(await tx.execute(sql`
+             INSERT INTO vendor_invoice_line_taxes
+               (invoice_line_id, company_id, tax_type, tax_object, base_amount, tax_amount,
+                liability_account_id, resolution_status, reviewed_by, reviewed_at)
+             VALUES
+               (${tax.invoiceLineId}, ${companyId}, ${tax.taxType}, ${tax.taxObject},
+                ${String(tax.baseAmount)}, ${String(tax.taxAmount)}, ${tax.liabilityAccountId},
+                'confirmed', ${reviewedBy}, NOW())
+             RETURNING id
+           `));
+           lineTaxId = Number(insertedTaxRows[0]?.id ?? 0);
+         }
+         if (lineTaxId) {
+           await tx.execute(sql`
+             INSERT INTO vendor_withholding_records
+               (company_id, vendor_invoice_id, invoice_line_id, line_tax_id,
+                tax_type, tax_object, base_amount, tax_amount, liability_account_id, status)
+             VALUES
+               (${companyId}, ${id}, ${tax.invoiceLineId}, ${lineTaxId},
+                ${tax.taxType}, ${tax.taxObject}, ${String(tax.baseAmount)},
+                ${String(tax.taxAmount)}, ${tax.liabilityAccountId}, 'proof_pending')
+             ON CONFLICT (line_tax_id)
+             DO UPDATE SET
+               tax_type = EXCLUDED.tax_type,
+               tax_object = EXCLUDED.tax_object,
+               base_amount = EXCLUDED.base_amount,
+               tax_amount = EXCLUDED.tax_amount,
+               liability_account_id = EXCLUDED.liability_account_id,
+               updated_at = NOW()
+           `);
+         }
+       }
+       if (reviewTaxes.length > 0) {
+         const totalWithholding = reviewTaxes.reduce((sum, tax) => sum + tax.taxAmount, 0);
+         await tx.update(vendorInvoicesTable).set({
+           withholdingTaxAmount: String(totalWithholding),
+           withholdingTaxType: reviewTaxes.map((tax) => tax.taxType).filter(Boolean).join(" + "),
+           taxObject: reviewTaxes[0]?.taxObject,
+           withholdingReviewStatus: "required",
+           updatedAt: new Date(),
+         }).where(and(
+           eq(vendorInvoicesTable.id, id),
+           eq(vendorInvoicesTable.companyId, companyId),
+         ));
+       }
+       const paymentStatus = await recalculateVendorInvoicePaymentStatus(tx as unknown as { execute: (query: unknown) => Promise<unknown> }, companyId, id);
+       return { kind: "success" as const, invoice, paymentStatus };
     });
 
     if (result.kind === "error") {
       const responses = {
         NOT_FOUND: [404, "Vendor Invoice tidak ditemukan pada company aktif."],
-        NOT_DRAFT: [409, "Finance Review hanya dapat dilakukan untuk Vendor Invoice draft."],
+         NOT_REVIEWABLE: [409, "Vendor Invoice tidak berada pada status yang dapat direview."],
         LINE_NOT_FOUND: [400, "Satu atau lebih line tidak berasal dari Vendor Invoice ini."],
         ACCOUNT_NOT_FOUND: [400, "Satu atau lebih COA tidak ditemukan."],
       } as const;
       const [status, error] = responses[result.error];
       return res.status(status).json({ error });
     }
-    return res.json({ ok: true, invoiceId: result.invoice.id });
+     return res.json({ ok: true, invoiceId: result.invoice.id, paymentStatus: result.paymentStatus });
   } catch (error) {
     console.error("[vendor-invoices] finance review failed", error);
     return res.status(500).json({ error: "Gagal menyimpan Finance Review Vendor Invoice." });
+  }
+});
+
+// Withholding proof/review is a separate lifecycle from three-way matching.
+// Completing every PPh record automatically re-evaluates the invoice payment
+// status; callers never need to manually set the invoice to paid.
+router.put("/vendor-invoices/:id/withholding-review", async (req, res) => {
+  const id = Number(req.params.id);
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  const requestedRecords = Array.isArray(req.body?.records) ? req.body.records : [];
+  const actor = String((req as { user?: { id?: unknown } }).user?.id ?? "ADMIN");
+  const allowedStatuses = new Set(["proof_pending", "proof_received", "posted"]);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "ID vendor invoice tidak valid." });
+  }
+  if (requestedRecords.some((value: unknown) => {
+    const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    return !allowedStatuses.has(String(record.status))
+      || (!record.id && !record.lineTaxId);
+  })) {
+    return res.status(400).json({
+      error: "Status bukti potong atau identitas record withholding tidak valid.",
+    });
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const invoiceRows = rowsOf<Record<string, unknown>>(await tx.execute(sql`
+        SELECT id, status
+        FROM vendor_invoices
+        WHERE id = ${id} AND company_id = ${companyId} AND cancelled_at IS NULL
+        FOR UPDATE
+      `));
+      if (!invoiceRows[0]) return { kind: "not_found" as const };
+
+      await ensureVendorWithholdingRecords(
+        tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+        companyId,
+        id,
+      );
+
+      for (const value of requestedRecords as Array<Record<string, unknown>>) {
+        const recordId = Number(value.id ?? 0);
+        const lineTaxId = Number(value.lineTaxId ?? 0);
+        const status = String(value.status);
+        const proofReference = value.proofReference == null ? null : String(value.proofReference);
+        const proofObjectPath = value.proofObjectPath == null ? null : String(value.proofObjectPath);
+        const proofContentType = value.proofContentType == null ? null : String(value.proofContentType);
+        const proofIssuedAt = value.proofIssuedAt ? new Date(String(value.proofIssuedAt)) : null;
+        if (proofIssuedAt && Number.isNaN(proofIssuedAt.getTime())) {
+          throw Object.assign(new Error("Tanggal bukti potong tidak valid."), { httpStatus: 400 });
+        }
+        const whereIdentity = recordId > 0
+          ? sql`id = ${recordId}`
+          : sql`line_tax_id = ${lineTaxId}`;
+        const existingRows = rowsOf<Record<string, unknown>>(await tx.execute(sql`
+          SELECT id
+          FROM vendor_withholding_records
+          WHERE company_id = ${companyId}
+            AND vendor_invoice_id = ${id}
+            AND ${whereIdentity}
+          FOR UPDATE
+        `));
+        if (!existingRows[0]) {
+          throw Object.assign(new Error("Record withholding tidak ditemukan untuk invoice ini."), { httpStatus: 404 });
+        }
+        await tx.execute(sql`
+          UPDATE vendor_withholding_records
+          SET status = ${status},
+              proof_reference = COALESCE(${proofReference}, proof_reference),
+              proof_object_path = COALESCE(${proofObjectPath}, proof_object_path),
+              proof_content_type = COALESCE(${proofContentType}, proof_content_type),
+              proof_issued_at = COALESCE(${proofIssuedAt}, proof_issued_at),
+              reviewed_by = ${actor},
+              reviewed_at = NOW(),
+              posted_at = CASE WHEN ${status} = 'posted' THEN COALESCE(posted_at, NOW()) ELSE posted_at END,
+              updated_at = NOW()
+          WHERE id = ${Number(existingRows[0].id)}
+            AND company_id = ${companyId}
+            AND vendor_invoice_id = ${id}
+        `);
+      }
+
+      const paymentStatus = await recalculateVendorInvoicePaymentStatus(
+        tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+        companyId,
+        id,
+      );
+      return { kind: "success" as const, paymentStatus };
+    });
+    if (result.kind === "not_found") {
+      return res.status(404).json({ error: "Vendor Invoice tidak ditemukan pada company aktif." });
+    }
+    return res.json({ ok: true, invoiceId: id, paymentStatus: result.paymentStatus });
+  } catch (error: any) {
+    const status = Number(error?.httpStatus) || 500;
+    console.error("[vendor-invoices] withholding review failed", { id, companyId, error });
+    return res.status(status).json({ error: error?.message ?? "Gagal menyimpan review bukti potong." });
   }
 });
 
@@ -1531,9 +1759,14 @@ router.post("/payment-requests/:id/action", async (req, res) => {
       if (item.vendorInvoiceId) {
         const [vi] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, item.vendorInvoiceId));
         if (vi) {
+          await ensureVendorWithholdingRecords(db, pr.companyId ?? 1, item.vendorInvoiceId);
           const newPaid = num(vi.amountPaid) + num(item.amount);
-          const isPaid = newPaid >= num(vi.grandTotal);
-          await db.update(vendorInvoicesTable).set({ amountPaid: String(newPaid), status: isPaid ? "paid" : vi.status, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, item.vendorInvoiceId));
+          await db.update(vendorInvoicesTable).set({
+            amountPaid: String(newPaid),
+            status: "posted",
+            updatedAt: new Date(),
+          }).where(eq(vendorInvoicesTable.id, item.vendorInvoiceId));
+          await recalculateVendorInvoicePaymentStatus(db, pr.companyId ?? 1, item.vendorInvoiceId);
         }
       }
     }

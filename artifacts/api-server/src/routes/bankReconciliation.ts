@@ -67,6 +67,10 @@ import { ORIGINAL_VOID_UPDATE_FAILED } from "../lib/accounting/reversalFailure.j
 import { postEntryWithClient } from "../lib/accounting.js";
 import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { resolveVendorPayableAccountId } from "../lib/vendorPayableAccount.js";
+import {
+  ensureVendorWithholdingRecords,
+  recalculateVendorInvoicePaymentStatus,
+} from "../lib/vendorInvoicePaymentStatus.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { extractBankProofOcr } from "../lib/bankProofOcr.js";
@@ -6593,6 +6597,13 @@ router.post(
         if (invoiceRows.length !== vendorInvoiceIds.length) {
           throw Object.assign(new Error("Satu atau lebih invoice vendor tidak ditemukan dalam perusahaan aktif"), { httpStatus: 404 });
         }
+         for (const invoiceId of vendorInvoiceIds) {
+           await ensureVendorWithholdingRecords(
+             tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+             companyId,
+             invoiceId,
+           );
+         }
 
         const { rows: withholdingRows } = await tx.execute(sql`
           SELECT
@@ -6790,10 +6801,15 @@ router.post(
           await tx.execute(sql`
             UPDATE vendor_invoices
             SET amount_paid = ${String(newPaid)},
-                status = ${newPaid >= item.financials.grandTotal - 0.01 ? "paid" : "posted"},
+                 status = 'posted',
                 updated_at = NOW()
             WHERE id = ${Number(item.invoice.id)}
           `);
+           await recalculateVendorInvoicePaymentStatus(
+             tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+             companyId,
+             Number(item.invoice.id),
+           );
         }
         const invoiceIdsText = allocations.map((item) => Number(item.invoice.id)).join(",");
         await tx.execute(sql`
@@ -7355,7 +7371,12 @@ router.post(
           Math.round((amount - invoiceAllocation) * 100) / 100,
         );
 
-        const { rows: withholdingRows } = await tx.execute(sql`
+         await ensureVendorWithholdingRecords(
+           tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+           companyId,
+           vendorInvoiceId,
+         );
+         const { rows: withholdingRows } = await tx.execute(sql`
           SELECT vit.tax_type, vit.tax_amount, vit.liability_account_id
           FROM vendor_invoice_line_taxes vit
           INNER JOIN vendor_invoice_lines vil ON vil.id = vit.invoice_line_id
@@ -7484,10 +7505,15 @@ router.post(
         await tx.execute(sql`
           UPDATE vendor_invoices
           SET amount_paid = ${String(newPaid)},
-              status = ${invoiceStatus},
+               status = 'posted',
               updated_at = NOW()
           WHERE id = ${vendorInvoiceId}
         `);
+         const recalculated = await recalculateVendorInvoicePaymentStatus(
+           tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+           companyId,
+           vendorInvoiceId,
+         );
         await tx.execute(sql`
           UPDATE bank_mutations
           SET status = 'approved_pending_posting',
@@ -7542,7 +7568,7 @@ router.post(
           wrongTransferAmount,
           wrongTransferCoaCode: wrongTransferAccount?.code ?? null,
           journalEntryId: entry.id,
-          invoiceStatus,
+           invoiceStatus: recalculated.status,
           amountPaid: newPaid,
           outstanding: Math.max(0, grandTotal - newPaid),
         };

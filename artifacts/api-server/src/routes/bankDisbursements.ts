@@ -64,6 +64,11 @@ import { imagePdfUpload } from "../lib/uploadMiddleware.js";
 import { resolveVendorInvoiceFinancialAmounts } from "../lib/vendorInvoiceFinancials.js";
 import { recalculateVendorInvoiceBreakdown } from "../lib/invoiceWithholdingCalculation.js";
 import { resolveDefaultWithholdingAccountId } from "../lib/vendorWithholdingAccounts.js";
+import {
+  ensureVendorWithholdingRecords,
+  inferVendorInvoiceGrossSettlement,
+  recalculateVendorInvoicePaymentStatus,
+} from "../lib/vendorInvoicePaymentStatus.js";
 import { createRequire as _bdCreateRequire } from "node:module";
 import * as _bdFs from "node:fs/promises";
 import * as _bdOs from "node:os";
@@ -905,7 +910,7 @@ router.get("/summary", async (req, res) => {
             due_date::date AS due_date_parsed
           FROM vendor_invoices
           WHERE company_id = ${companyId}
-            AND status = 'posted'
+                 AND status IN ('posted', 'matched')
             AND cancelled_at IS NULL
             AND grand_total > COALESCE(amount_paid, 0)
             AND due_date IS NOT NULL
@@ -1233,7 +1238,7 @@ router.post("/", async (req, res) => {
           return res.status(400).json({ message: `${itemLabel}: paymentAmount harus > 0` });
         }
 
-        const whtAmt = round2(Number(ip.whtAmount ?? 0));
+         let whtAmt = round2(Number(ip.whtAmount ?? 0));
         if (whtAmt < 0) return res.status(400).json({ message: `${itemLabel}: wht_amount tidak boleh negatif` });
 
         let whtAccountId: number | null = null;
@@ -1284,6 +1289,7 @@ router.post("/", async (req, res) => {
               message: `${itemLabel}: Jumlah bayar (${payAmt}) melebihi sisa hutang invoice (${viOutstanding}).`,
             });
           }
+           await ensureVendorWithholdingRecords(db, companyId, vi.id);
            const taxRows = execRows<{
              id: number;
              invoice_line_id: number;
@@ -1299,6 +1305,13 @@ router.post("/", async (req, res) => {
              )
              ORDER BY id
            `));
+            const inferredSettlement = inferVendorInvoiceGrossSettlement({
+              paymentAmount: payAmt,
+              outstanding: viOutstanding,
+              withholdingAmount: taxRows.reduce((sum, tax) => sum + Number(tax.tax_amount ?? 0), 0),
+              requestedWithholdingAmount: whtAmt,
+            });
+            whtAmt = inferredSettlement.withholdingAmount;
             const effectiveTaxAccountIds = new Map<number, number>();
             for (const tax of taxRows) {
               const accountId = tax.liability_account_id
@@ -1556,23 +1569,15 @@ router.post("/", async (req, res) => {
           .where(eq(vendorInvoicesTable.id, viId));
         if (viRow) {
           const newPaid = round2(Number(viRow.amountPaid) + paid);
-          const isPaid = newPaid >= round2(Number(viRow.grandTotal)) - 0.01;
-          const proofRows = execRows<{ pending_count: number }>(await db.execute(sql`
-            SELECT COUNT(*)::int AS pending_count
-            FROM vendor_withholding_records
-            WHERE vendor_invoice_id = ${viId}
-              AND company_id = ${companyId}
-              AND status <> 'proof_received'
-          `));
-          const withholdingPending = Number(proofRows[0]?.pending_count ?? 0) > 0;
           await db
             .update(vendorInvoicesTable)
             .set({
               amountPaid: String(newPaid),
-              status: isPaid && !withholdingPending ? "paid" : "posted",
+               status: "posted",
               updatedAt: new Date(),
             })
             .where(eq(vendorInvoicesTable.id, viId));
+           await recalculateVendorInvoicePaymentStatus(db, companyId, viId);
         }
       }
 
