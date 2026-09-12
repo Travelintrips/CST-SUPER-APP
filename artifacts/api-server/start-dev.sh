@@ -77,27 +77,23 @@ check_port() {
   node -e "const net=require('net');const s=net.connect($1,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))" 2>/dev/null
 }
 
-# The unified "Start application" workflow owns the primary API on :8080.
-# Artifact workflows start in parallel with it on a fresh Replit session, so
-# give the primary process a short window to bind before doing any work here.
-# This check must happen before the lib/db build and before dev.mjs, otherwise
-# this redundant instance can still enter the migration chain.
-PRIMARY_API_PORT=${PRIMARY_API_PORT:-8080}
-# Artifact-only sessions use this API directly on :18444. Keep a short grace
-# period for a legacy primary workflow on :8080, but do not make every preview
-# restart wait half a minute when that workflow is not configured.
+# The artifact API owns API_PORT in the current multi-artifact preview.
+# Do not yield merely because a stale/legacy process is listening on 8080:
+# the portals proxy to 18444 and a process on 8080 cannot serve them.
+# A primary API can still be selected explicitly by setting PRIMARY_API_PORT.
+PRIMARY_API_PORT=${PRIMARY_API_PORT:-}
 PRIMARY_API_WAIT_SECONDS=${PRIMARY_API_WAIT_SECONDS:-3}
 
-if [ "$API_PORT" != "$PRIMARY_API_PORT" ]; then
-  echo "[start-dev] Checking for primary API on :$PRIMARY_API_PORT before startup..."
+if [ -n "$PRIMARY_API_PORT" ] && [ "$API_PORT" != "$PRIMARY_API_PORT" ]; then
+  echo "[start-dev] Checking explicitly configured primary API on :$PRIMARY_API_PORT before startup..."
   for ((attempt = 0; attempt < PRIMARY_API_WAIT_SECONDS; attempt++)); do
     if check_port "$PRIMARY_API_PORT" 2>/dev/null; then
-      echo "[start-dev] Primary API detected on :$PRIMARY_API_PORT; yielding without migrations"
+      echo "[start-dev] Explicit primary API detected on :$PRIMARY_API_PORT; yielding without migrations"
       exit 0
     fi
     sleep 1
   done
-  echo "[start-dev] Primary API did not bind within ${PRIMARY_API_WAIT_SECONDS}s; starting artifact API on :$API_PORT"
+  echo "[start-dev] Explicit primary API did not bind within ${PRIMARY_API_WAIT_SECONDS}s; starting artifact API on :$API_PORT"
 fi
 
 # Only one API workflow instance may own the forwarder and internal server.
