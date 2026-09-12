@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("wouter", () => ({
@@ -108,5 +108,12 @@ describe("Buku Besar bank payment filters", () => {
     expect(rowAfterFiltering).toBe(rowBeforeFiltering);
     expect(rowAfterFiltering).toContain("100.000");
     expect(rowAfterFiltering).toContain("Rp 900.000");
+
+    fireEvent.click(screen.getAllByRole("row")[1]);
+    const detail = await screen.findByRole("dialog");
+    expect(within(detail).getByText("Metode Pembayaran").parentElement?.textContent).toContain("Transfer Bank");
+    expect(within(detail).getByText("Debit").parentElement?.textContent).toContain("Rp 100.000");
+    expect(within(detail).getByText("Kredit").parentElement?.textContent).toContain("—");
+    expect(within(detail).getByText("Saldo Berjalan").parentElement?.textContent).toContain("Rp 900.000");
   });
 });
