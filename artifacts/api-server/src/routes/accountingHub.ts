@@ -147,6 +147,38 @@ function glPaymentMethodExpr() {
   )`;
 }
 
+function isDatabaseCheckoutTimeout(error: unknown): boolean {
+  let current: any = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    const message = String(current?.message ?? "");
+    if (
+      message.includes("timeout exceeded when trying to connect")
+      || message.includes("Connection terminated due to connection timeout")
+    ) {
+      return true;
+    }
+    current = current?.cause;
+  }
+  return false;
+}
+
+async function executeGeneralLedgerQuery<
+  T extends Record<string, unknown> = Record<string, unknown>,
+>(query: any): Promise<any> {
+  try {
+    return await db.execute<T>(query);
+  } catch (error) {
+    if (!isDatabaseCheckoutTimeout(error)) throw error;
+
+    logger.warn(
+      { route: "/hub/general-ledger" },
+      "Database pool busy while loading General Ledger; retrying once",
+    );
+    await new Promise(resolve => setTimeout(resolve, 250));
+    return db.execute<T>(query);
+  }
+}
+
 // ── GET /api/accounting/hub/overview ─────────────────────────────────────────
 router.get("/hub/overview", async (req, res) => {
   try {
@@ -294,7 +326,7 @@ router.get("/hub/general-ledger", async (req, res) => {
       ?? sql`e.date DESC, e.id DESC`;
 
     // ── Main query: two CTEs + display join ──────────────────────────────────
-    const rows = await db.execute<any>(sql`
+    const rows = await executeGeneralLedgerQuery<any>(sql`
       WITH
       -- CTE 1: opening_bal
       --   Sum of POSTED entries BEFORE dateFrom, grouped by account.
@@ -402,7 +434,7 @@ router.get("/hub/general-ledger", async (req, res) => {
     //
     // When filtering by payment_method we need the LATERAL join in the summary
     // query too.
-    const [displaySummary] = await db.execute<any>(
+    const [displaySummary] = await executeGeneralLedgerQuery<any>(
       f.paymentMethod
         ? sql`
           SELECT
@@ -431,7 +463,7 @@ router.get("/hub/general-ledger", async (req, res) => {
           ${displayWhere}`
     ).then(r => r.rows);
 
-    const [canonicalSummary] = await db.execute<any>(sql`
+    const [canonicalSummary] = await executeGeneralLedgerQuery<any>(sql`
       SELECT
         COUNT(el.id)::int AS canonical_total,
         COALESCE(SUM(el.debit::numeric), 0)  AS total_debit,
@@ -447,7 +479,7 @@ router.get("/hub/general-ledger", async (req, res) => {
     // Sum of ALL posted entries before dateFrom (ignores source_module).
     // When no dateFrom, opening = 0 (nothing precedes an unbounded start).
     const [openingRow] = f.dateFrom
-      ? await db.execute<any>(sql`
+      ? await executeGeneralLedgerQuery<any>(sql`
           SELECT COALESCE(SUM(
             CASE WHEN coa.normal_balance = 'DEBIT'
                  THEN el.debit::numeric - el.credit::numeric
@@ -465,7 +497,7 @@ router.get("/hub/general-ledger", async (req, res) => {
 
     // ── Period net change (for closing balance) ───────────────────────────────
     // All posted entries in date range — ignores source_module (policy A).
-    const [periodRow] = await db.execute<any>(sql`
+    const [periodRow] = await executeGeneralLedgerQuery<any>(sql`
       SELECT COALESCE(SUM(
         CASE WHEN coa.normal_balance = 'DEBIT'
              THEN el.debit::numeric - el.credit::numeric
@@ -505,7 +537,22 @@ router.get("/hub/general-ledger", async (req, res) => {
       totalCredit:    Number(canonicalSummary?.total_credit ?? 0),
     });
   } catch (err: any) {
-    res.status(500).json({ error: err?.message });
+    const poolBusy = isDatabaseCheckoutTimeout(err);
+    logger.error(
+      {
+        err,
+        route: "/hub/general-ledger",
+        companyId: parseFilters(req.query as any).companyId,
+        accountId: parseFilters(req.query as any).accountId,
+      },
+      "Failed to load General Ledger",
+    );
+    if (poolBusy) res.setHeader("Retry-After", "1");
+    res.status(poolBusy ? 503 : 500).json({
+      error: poolBusy
+        ? "Database sedang sibuk. Silakan coba lagi."
+        : "Gagal memuat Buku Besar.",
+    });
   }
 });
 
