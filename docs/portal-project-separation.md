@@ -25,6 +25,17 @@ Run the boundary check with:
 pnpm run verify:portals
 ```
 
+Each package can also be started independently from the workspace root:
+
+```bash
+pnpm run dev:bizportal
+pnpm run dev:customer-portal
+```
+
+The normal preview workflow remains `bash start-dev-all.sh`. It starts the
+shared API and both portal packages behind the Gateway, while each portal's
+package command remains available for an isolated workflow or local debugging.
+
 ## Moving to two physical Replit projects
 
 The next migration can copy each portal package and the shared libraries it
