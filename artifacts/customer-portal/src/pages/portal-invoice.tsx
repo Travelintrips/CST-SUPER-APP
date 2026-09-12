@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { isAuthenticated } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
@@ -17,6 +17,15 @@ interface InvoiceItem {
   orderNumber?: string;
 }
 
+interface InvoiceDetail extends InvoiceItem {
+  documentNumber?: string;
+  amountPaid: number;
+  outstanding: number;
+  canDownload?: boolean;
+  paymentProof?: { uploaded: boolean; uploadedAt: string | null; remarks: string | null };
+  lines?: Array<{ id: number; name: string; quantity: number; subtotal: number }>;
+}
+
 function idr(n: number) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(n);
 }
@@ -32,6 +41,9 @@ export default function PortalInvoice() {
   const [, setLocation] = useLocation();
   const authed = isAuthenticated();
   const { t, locale } = useLanguage();
+  const [selected, setSelected] = useState<InvoiceDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState<number | null>(null);
+  const [detailError, setDetailError] = useState("");
 
   useEffect(() => {
     if (!authed) setLocation("/login");
@@ -54,6 +66,21 @@ export default function PortalInvoice() {
     .reduce((s, i) => s + i.amount, 0);
 
   const dateLocale = locale.startsWith("ar") ? "ar-SA" : locale.startsWith("zh") ? "zh-CN" : locale.startsWith("fr") ? "fr-FR" : "id-ID";
+
+  async function openDetail(id: number) {
+    setDetailLoading(id);
+    setDetailError("");
+    try {
+      const response = await fetch(`/api/portal/me/invoices/${id}`, { credentials: "include", cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Gagal memuat detail invoice");
+      setSelected(body as InvoiceDetail);
+    } catch (cause) {
+      setDetailError(cause instanceof Error ? cause.message : "Gagal memuat detail invoice");
+    } finally {
+      setDetailLoading(null);
+    }
+  }
 
   return (
     <div className="min-h-[calc(100vh-80px)] bg-gray-50 py-8">
