@@ -96,6 +96,13 @@ function parseFilters(query: Record<string, any>) {
 function normModuleExpr(alias = "e") {
   const p = alias ? `${alias}.` : "";   // column prefix — empty when no alias
   return sql.raw(`CASE
+    -- Vendor invoice payments created from bank reconciliation keep their
+    -- accounting origin in source_module, but belong to the selectable
+    -- bank-reconciliation module in the General Ledger. Without this
+    -- normalization, the row is effectively hidden from the module filter.
+    WHEN LOWER(${p}source_module) = 'vendor_invoice_payment'
+     AND LOWER(${p}source::text) = 'bank_reconciliation'
+      THEN 'bank_reconciliation'
     -- Expense postings have existed under several module labels over time.
     -- Keep the UI filter on the canonical "expense" value so legacy rows
     -- (including rows tagged by older approval flows) are not stranded.
@@ -118,6 +125,26 @@ function normModuleExpr(alias = "e") {
          'damage_adjust','other_income','bank_mutation_import') THEN 'manual'
     ELSE COALESCE(${p}source_module, ${p}source::text, 'manual')
   END`);
+}
+
+/**
+ * The reconciliation payment path can create a balanced journal directly
+ * from a bank mutation without inserting accounting_payments. In that case
+ * the bank mutation itself is authoritative evidence that the payment method
+ * was a bank transfer.
+ *
+ * `ap` and `bm` are aliases created by the General Ledger query below.
+ */
+function glPaymentMethodExpr() {
+  return sql`COALESCE(
+    ap.payment_method,
+    CASE
+      WHEN bm.id IS NOT NULL
+       AND ${normModuleExpr()} = 'bank_reconciliation'
+      THEN 'bank'
+      ELSE NULL
+    END
+  )`;
 }
 
 // ── GET /api/accounting/hub/overview ─────────────────────────────────────────
@@ -323,7 +350,8 @@ router.get("/hub/general-ledger", async (req, res) => {
         coa.id AS account_id, coa.code AS account_code, coa.name AS account_name,
         coa.type AS account_type, coa.normal_balance,
         el.debit, el.credit, e.created_at, e.posted_at,
-        ap.partner_name, ap.source_doc_number, ap.payment_method,
+         ap.partner_name, ap.source_doc_number,
+         ${glPaymentMethodExpr()} AS payment_method,
         -- running_balance: null for non-posted rows (they don't affect balance)
         CASE WHEN e.status = 'posted'
              THEN COALESCE(ob.opening_balance, 0) + rb.cum_balance
@@ -345,9 +373,16 @@ router.get("/hub/general-ledger", async (req, res) => {
         ORDER BY id ASC
         LIMIT 1
       ) ap ON true
+      LEFT JOIN LATERAL (
+        SELECT id
+        FROM bank_mutations
+        WHERE journal_entry_id = e.id
+        ORDER BY id ASC
+        LIMIT 1
+      ) bm ON true
       ${(() => {
         const mainConds = f.paymentMethod
-          ? [...displayConds, sql`ap.payment_method = ${f.paymentMethod}`]
+          ? [...displayConds, sql`${glPaymentMethodExpr()} = ${f.paymentMethod}`]
           : displayConds;
         return mainConds.length ? sql`WHERE ${sql.join(mainConds, sql` AND `)}` : sql``;
       })()}
@@ -379,7 +414,14 @@ router.get("/hub/general-ledger", async (req, res) => {
             SELECT payment_method FROM accounting_payments
             WHERE entry_id = e.id ORDER BY id ASC LIMIT 1
           ) ap ON true
-          WHERE ${sql.join([...displayConds, sql`ap.payment_method = ${f.paymentMethod}`], sql` AND `)}`
+           LEFT JOIN LATERAL (
+             SELECT id
+             FROM bank_mutations
+             WHERE journal_entry_id = e.id
+             ORDER BY id ASC
+             LIMIT 1
+           ) bm ON true
+           WHERE ${sql.join([...displayConds, sql`${glPaymentMethodExpr()} = ${f.paymentMethod}`], sql` AND `)}`
         : sql`
           SELECT
              COUNT(el.id)::int AS total
