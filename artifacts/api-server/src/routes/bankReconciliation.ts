@@ -6493,8 +6493,92 @@ router.post(
 
 // ─── POST /api/bank-reconciliation/:mutationId/vendor-invoice-payment ────────
 // A bank mutation that settles a posted vendor invoice must debit AP, not the
-// expense COA used by the invoice journal. This path keeps the bank mutation,
-// payment journal, invoice amount_paid, and reconciliation link atomic.
+// expense COA used by the invoice journal. Approval creates a draft journal;
+// invoice amount_paid is updated only when the separate posting step succeeds.
+// This keeps the invoice payment projection consistent with the posted ledger.
+async function applyPostedVendorInvoiceBatchPayment(
+  tx: { execute: (query: unknown) => Promise<unknown> },
+  mutationId: number,
+  companyId: number,
+): Promise<void> {
+  const auditResult = await tx.execute(sql`
+    SELECT meta
+    FROM bank_reconciliation_audit
+    WHERE mutation_id = ${mutationId}
+      AND action = 'MATCH_APPROVED'
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+  const auditRows = (auditResult as { rows?: Array<{ meta?: unknown }> })?.rows ?? [];
+  const rawMeta = auditRows[0]?.meta;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = typeof rawMeta === "string"
+      ? JSON.parse(rawMeta) as Record<string, unknown>
+      : (rawMeta && typeof rawMeta === "object" ? rawMeta as Record<string, unknown> : {});
+  } catch {
+    return;
+  }
+  if (meta.candidate_type !== "vendor_invoice_batch") return;
+
+  const candidateIds = Array.isArray(meta.candidate_ids)
+    ? meta.candidate_ids.map(Number)
+    : [];
+  const grossAmounts = Array.isArray(meta.gross_amounts)
+    ? meta.gross_amounts.map(Number)
+    : [];
+  const amountPaidBefore = Array.isArray(meta.amount_paid_before)
+    ? meta.amount_paid_before.map(Number)
+    : [];
+  if (
+    candidateIds.length === 0
+    || candidateIds.length !== grossAmounts.length
+    || candidateIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    || grossAmounts.some((amount) => !Number.isFinite(amount) || amount <= 0)
+  ) {
+    return;
+  }
+
+  for (let index = 0; index < candidateIds.length; index += 1) {
+    const invoiceId = candidateIds[index]!;
+    const grossAmount = Math.round(grossAmounts[index]! * 100) / 100;
+    const rowsResult = await tx.execute(sql`
+      SELECT id, amount_paid, grand_total
+      FROM vendor_invoices
+      WHERE id = ${invoiceId}
+        AND company_id = ${companyId}
+      FOR UPDATE
+    `);
+    const invoiceRows = (rowsResult as {
+      rows?: Array<{ id: number; amount_paid?: unknown; grand_total?: unknown }>;
+    })?.rows ?? [];
+    const invoice = invoiceRows[0];
+    if (!invoice) continue;
+
+    const currentAmountPaid = Number(invoice.amount_paid ?? 0);
+    const grandTotal = Number(invoice.grand_total ?? 0);
+    const before = Number(amountPaidBefore[index]);
+    // New audit rows carry the pre-approval amount. Older rows were already
+    // updating amount_paid during approval, so leave them unchanged here.
+    const targetAmountPaid = Number.isFinite(before)
+      ? Math.min(grandTotal, Math.round((before + grossAmount) * 100) / 100)
+      : currentAmountPaid;
+    const nextAmountPaid = Math.max(currentAmountPaid, targetAmountPaid);
+
+    if (nextAmountPaid > currentAmountPaid + 0.001) {
+      await tx.execute(sql`
+        UPDATE vendor_invoices
+        SET amount_paid = ${String(nextAmountPaid)},
+            status = 'posted',
+            updated_at = NOW()
+        WHERE id = ${invoiceId}
+          AND company_id = ${companyId}
+      `);
+    }
+    await recalculateVendorInvoicePaymentStatus(tx, companyId, invoiceId);
+  }
+}
+
 router.post(
   "/:mutationId/vendor-invoice-payment-batch",
   createIdempotencyMiddleware("reconciliation:vendor-invoice-payment-batch"),
@@ -6796,21 +6880,6 @@ router.post(
           "draft",
         );
 
-        for (const item of allocations) {
-          const newPaid = Math.round((item.amountPaid + item.grossAmount) * 100) / 100;
-          await tx.execute(sql`
-            UPDATE vendor_invoices
-            SET amount_paid = ${String(newPaid)},
-                 status = 'posted',
-                updated_at = NOW()
-            WHERE id = ${Number(item.invoice.id)}
-          `);
-           await recalculateVendorInvoicePaymentStatus(
-             tx as unknown as { execute: (query: unknown) => Promise<unknown> },
-             companyId,
-             Number(item.invoice.id),
-           );
-        }
         const invoiceIdsText = allocations.map((item) => Number(item.invoice.id)).join(",");
         await tx.execute(sql`
           UPDATE bank_mutations
@@ -6837,6 +6906,7 @@ router.post(
             ${JSON.stringify({
               candidate_type: "vendor_invoice_batch",
               candidate_ids: allocations.map((item) => Number(item.invoice.id)),
+              amount_paid_before: allocations.map((item) => item.amountPaid),
               amounts: allocations.map((item) => item.amount),
               gross_amounts: allocations.map((item) => item.grossAmount),
               withholding_amounts: allocations.map((item) => item.withholdingCredit),
@@ -8558,6 +8628,15 @@ router.post("/:mutationId/post", async (req, res) => {
             updated_at = NOW()
         WHERE id = ${mutId} AND (status = 'approved_pending_posting' OR status = 'approved')
       `));
+
+       // Vendor-invoice batch approval intentionally leaves invoice payment
+       // totals pending until the linked journal is posted. This is idempotent:
+       // a retry sees the already-applied amount and does not add it again.
+       await applyPostedVendorInvoiceBatchPayment(
+         tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+         mutId,
+         companyId,
+       );
 
       // 9. Audit log inside tx (must succeed or rollback)
       const meta = JSON.stringify({
