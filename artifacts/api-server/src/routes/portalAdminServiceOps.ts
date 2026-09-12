@@ -10,6 +10,12 @@ import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activityLog.js";
 import { setMarketplaceDealPrice } from "../lib/services/mktDealPriceService.js";
 import { inviteVendorToRfq } from "../lib/services/vendorInvitationService.js";
+import { ObjectStorageService } from "../lib/objectStorage.js";
+import {
+  listShipmentTimeline,
+  listShipmentsForPo,
+} from "../lib/services/mktPoShipmentService.js";
+import { listGoodsReceiptsForShipment } from "../lib/services/mktPoGoodsReceiptService.js";
 
 /**
  * Canonical read-only Customer Portal workload.
@@ -555,6 +561,7 @@ async function resolveContactPhone(portalCustomerId: number | null, sourcePhone:
 type AdminServiceProjection = {
   finance: {
     available: boolean;
+    applicable: boolean;
     source: string | null;
     invoice: Record<string, unknown> | null;
     payment: Record<string, unknown> | null;
@@ -564,6 +571,29 @@ type AdminServiceProjection = {
     source: string;
     currentStatus: string | null;
     events: unknown[];
+  };
+  operations: {
+    fulfillment: {
+      status: "available" | "not_applicable";
+      links: number;
+      submissions: number;
+      latestSubmissionAt: string | null;
+    };
+    tracking: {
+      status: "available" | "not_applicable";
+      source: string | null;
+      currentStatus: string | null;
+      events: unknown[];
+    };
+    pod: {
+      status: "available" | "not_applicable";
+      available: boolean;
+      items: unknown[];
+    };
+    receipts: {
+      status: "available" | "not_applicable";
+      count: number;
+    };
   };
 };
 
@@ -636,7 +666,7 @@ async function loadAdminServiceProjection(
         outstanding: Math.max(0, Number(salesDocument.grand_total ?? 0) - Number(salesDocument.amount_paid ?? 0)),
         dueDate: salesDocument.due_date ?? null,
         pdfAvailable: Boolean(salesDocument.invoice_pdf_url),
-        downloadUrl: `/api/portal/me/invoices/${Number(salesDocument.id)}/download`,
+        downloadUrl: `/api/portal/admin/service-operations/invoices/${Number(salesDocument.id)}/download`,
       }
     : null;
   const paymentProof = salesDocument
@@ -666,12 +696,22 @@ async function loadAdminServiceProjection(
   let events: unknown[] = [];
   if (service === "logistic-order") {
     timelineSource = "logistic_order_updates";
-    const result = await db.execute(sql`
+    const [updates, progress] = await Promise.all([
+      db.execute(sql`
       SELECT id, status, notes, actor_type, actor_name, created_at
       FROM order_updates WHERE order_id = ${id}
       ORDER BY created_at ASC, id ASC LIMIT 100
-    `);
-    events = result.rows;
+      `),
+      db.execute(sql`
+        SELECT id, status, notes, updated_by AS actor_name, created_at
+        FROM order_tracking_progress WHERE order_id = ${id}
+        ORDER BY created_at ASC, id ASC LIMIT 100
+      `),
+    ]);
+    events = [...updates.rows, ...progress.rows].sort(
+      (a, b) => new Date(String((a as any).created_at ?? 0)).getTime()
+        - new Date(String((b as any).created_at ?? 0)).getTime(),
+    );
   } else if (service === "marketplace-po") {
     timelineSource = "marketplace_shipment_events";
     const result = await db.execute(sql`
@@ -681,6 +721,15 @@ async function loadAdminServiceProjection(
       JOIN mkt_po_shipments s ON s.id = e.shipment_id
       WHERE s.po_id = ${id}
       ORDER BY e.created_at ASC, e.id ASC LIMIT 100
+    `);
+    events = result.rows;
+  } else if (service === "air-freight") {
+    timelineSource = "air_freight_tracking_events";
+    const result = await db.execute(sql`
+      SELECT id, event_type, note, created_at
+      FROM air_freight_tracking_events
+      WHERE order_id = ${id}
+      ORDER BY created_at ASC, id ASC LIMIT 100
     `);
     events = result.rows;
   } else if (service === "ppjk") {
@@ -693,9 +742,174 @@ async function loadAdminServiceProjection(
     events = result.rows;
   }
 
+  const operations: AdminServiceProjection["operations"] = {
+    fulfillment: {
+      status: "not_applicable",
+      links: 0,
+      submissions: 0,
+      latestSubmissionAt: null,
+    },
+    tracking: {
+      status: "not_applicable",
+      source: null,
+      currentStatus: null,
+      events: [],
+    },
+    pod: {
+      status: "not_applicable",
+      available: false,
+      items: [],
+    },
+    receipts: {
+      status: "not_applicable",
+      count: 0,
+    },
+  };
+
+  if (service === "logistic-order") {
+    const [fulfillment, pods] = await Promise.all([
+      db.execute(sql`
+        SELECT
+          (
+            (SELECT COUNT(*) FROM order_fulfillment_links WHERE order_id = ${id})
+            + (SELECT COUNT(*) FROM vendor_fulfillment_links WHERE order_id = ${id})
+          )::int AS links,
+          (
+            (SELECT COUNT(*) FROM order_fulfillment_submissions WHERE order_id = ${id})
+            + (SELECT COUNT(*) FROM vendor_fulfillment_links WHERE order_id = ${id} AND status = 'submitted')
+          )::int AS submissions,
+          GREATEST(
+            (SELECT MAX(created_at) FROM order_fulfillment_submissions WHERE order_id = ${id}),
+            (SELECT MAX(submitted_at) FROM vendor_fulfillment_links WHERE order_id = ${id} AND status = 'submitted')
+          ) AS latest_submission_at
+      `),
+      db.execute(sql`
+        SELECT id, receiver_name, photo_url, note, submitted_by, created_at
+        FROM order_pod_submissions
+        WHERE order_id = ${id}
+        ORDER BY created_at DESC
+        LIMIT 5
+      `),
+    ]);
+    const fulfillmentRow = fulfillment.rows[0] as Record<string, unknown> | undefined;
+    operations.fulfillment = {
+      status: "available",
+      links: Number(fulfillmentRow?.links ?? 0),
+      submissions: Number(fulfillmentRow?.submissions ?? 0),
+      latestSubmissionAt: fulfillmentRow?.latest_submission_at
+        ? new Date(String(fulfillmentRow.latest_submission_at)).toISOString()
+        : null,
+    };
+    operations.tracking = {
+      status: "available",
+      source: "order_updates + order_tracking_progress",
+      currentStatus: String(record.status ?? "") || null,
+      events,
+    };
+    operations.pod = {
+      status: "available",
+      available: pods.rows.length > 0,
+      items: pods.rows,
+    };
+  } else if (service === "marketplace-po") {
+    const shipments = await listShipmentsForPo(id);
+    const shipmentViews = await Promise.all(shipments.map(async (shipment) => {
+      const [timeline, receipts] = await Promise.all([
+        listShipmentTimeline(shipment.id),
+        listGoodsReceiptsForShipment(shipment.id),
+      ]);
+      const safeTimeline = timeline.map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        note: event.note,
+        location: event.location,
+        actorType: event.actorType,
+        actorName: event.actorName,
+        createdAt: event.createdAt,
+        hasAttachment: Boolean(event.attachmentObjectPath),
+      }));
+      const podEvents = safeTimeline.filter((event) => event.eventType === "pod_uploaded");
+      return {
+        id: shipment.id,
+        shipmentNumber: shipment.shipmentNumber,
+        shipmentStatus: shipment.shipmentStatus,
+        shipmentType: shipment.shipmentType,
+        carrierName: shipment.carrierName,
+        trackingNumber: shipment.trackingNumber,
+        origin: shipment.origin,
+        destination: shipment.destination,
+        plannedDeparture: shipment.plannedDeparture,
+        estimatedArrival: shipment.estimatedArrival,
+        events: safeTimeline,
+        podAvailable: podEvents.some((event) => event.hasAttachment),
+        receipts: receipts.map((receipt) => ({
+          id: receipt.id,
+          receiptNumber: receipt.receiptNumber,
+          receiptType: receipt.receiptType,
+          inspectionStatus: receipt.inspectionStatus,
+          receivedAt: receipt.receivedAt,
+          receivedBy: receipt.receivedBy,
+        })),
+      };
+    }));
+    const shipmentEvents = shipmentViews.flatMap((shipment) => shipment.events);
+    const podItems = shipmentViews
+      .filter((shipment) => shipment.podAvailable)
+      .map((shipment) => ({ shipmentId: shipment.id, shipmentNumber: shipment.shipmentNumber, available: true }));
+    operations.fulfillment = {
+      status: "available",
+      links: shipmentViews.length,
+      submissions: shipmentViews.filter((shipment) => shipment.shipmentStatus !== "planned").length,
+      latestSubmissionAt: null,
+    };
+    operations.tracking = {
+      status: "available",
+      source: "mkt_po_shipments + mkt_po_shipment_events",
+      currentStatus: String(record.status ?? "") || null,
+      events: shipmentEvents,
+    };
+    operations.pod = {
+      status: "available",
+      available: podItems.length > 0,
+      items: podItems,
+    };
+    operations.receipts = {
+      status: "available",
+      count: shipmentViews.reduce((sum, shipment) => sum + shipment.receipts.length, 0),
+    };
+    // Keep the richer shipment/receipt view separate from the generic timeline.
+    events = shipmentViews;
+    timelineSource = "mkt_po_shipments + mkt_po_shipment_events";
+  } else if (service === "air-freight") {
+    operations.tracking = {
+      status: "available",
+      source: "air_freight_tracking_events",
+      currentStatus: String(record.tracking_status ?? record.status ?? "") || null,
+      events,
+    };
+  } else if (service === "product-order") {
+    const trackingAvailable = Boolean(record.tracking_token || record.tracking_number || record.tracking_status);
+    operations.tracking = {
+      status: trackingAvailable ? "available" : "not_applicable",
+      source: trackingAvailable ? "portal_product_orders" : null,
+      currentStatus: String(record.tracking_status ?? record.status ?? "") || null,
+      events: [],
+    };
+  } else if (service === "ocean-freight") {
+    const trackingAvailable = Boolean(record.tracking_status || record.tracking_notes || record.tracking_updated_at);
+    operations.tracking = {
+      status: trackingAvailable ? "available" : "not_applicable",
+      source: trackingAvailable ? "ocean_freight_orders" : null,
+      currentStatus: String(record.tracking_status ?? record.status ?? "") || null,
+      events: [],
+    };
+  }
+
+  const financeApplicable = ["logistic-order", "product-order", "marketplace-po", "freight-forwarding", "custom-clearance"].includes(service);
   return {
     finance: {
       available: Boolean(invoice || payment),
+      applicable: financeApplicable,
       source: salesDocument ? source : null,
       invoice,
       payment,
@@ -706,6 +920,7 @@ async function loadAdminServiceProjection(
       currentStatus: String(record.status ?? "") || null,
       events,
     },
+    operations,
   };
 }
 
