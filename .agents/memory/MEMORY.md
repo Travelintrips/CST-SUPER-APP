@@ -156,3 +156,4 @@
 - [General Ledger pool failures](general-ledger-pool-failures.md) — PROD GL checkout timeouts are transient pool contention; retry narrowly and never expose raw SQL errors to the browser.
 - [Gateway source integrity](gateway-source-integrity.md) — verify the gateway module is not duplicated after sync; repeated module blocks prevent port 5000 from binding.
 - [Stale Gateway workflow lock](workflow-stale-gateway-lock.md) — an old start-dev-all process can hold the Gateway lock and make a new workflow time out.
+- [BizPortal Vitest matcher setup](bizportal-vitest-matchers.md) — UI tests do not globally register jest-dom matchers; use Vitest assertions unless setup is explicit.
