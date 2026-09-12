@@ -1,7 +1,6 @@
 - [Bank statement direction semantics](bank-statement-direction-semantics.md) — bank Debit/Keluar is OUT and Credit/Masuk is IN; share this mapping across every import path.
 - [Marketplace deal price concurrency](marketplace-deal-price-concurrency.md) — optimistic deal-price updates need a locked quote, checked update result, and monotonic millisecond timestamp.
 - [Vendor product approval boundary](vendor-product-approval-boundary.md) — every vendor-originated product, including onboarding products, must enter pending review before marketplace publication.
-- [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
 - [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
@@ -21,12 +20,7 @@
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
-- [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
-- [Portal auth bootstrap recovery](portal-auth-bootstrap-recovery.md) — a valid HttpOnly session without the readable hint must recover through canonical bootstrap, not remain on `/login`.
-- [Portal authenticated query reuse](portal-authenticated-query-reuse.md) — portal list routes should reuse middleware-loaded customer identity; duplicate identity reads amplify pooler latency during parallel dashboard loads.
 - [Quality gate shared project references](quality-gate-shared-project-references.md) — build composite shared declarations before dependent typechecks; parallel large checks can cause TS6305 or Node heap exhaustion.
-- [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
-- [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.
@@ -71,7 +65,6 @@
 - [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
 - [Portal functional recovery boundary](portal-functional-recovery-boundary.md) — SMTP health and controlled auth proof are required; public catalog publication responses must not be cached.
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
-- [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
 - [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
@@ -155,6 +148,3 @@
 - [Sheet sync runtime gates](sheet-sync-runtime-gates.md) — Sheet sync needs Service Account credentials and an active account binding; zero parsed rows can falsely leave status as ok.
 - [Production candidate-only rerun](production-candidate-only-rerun.md) — no-approval reruns must use an explicit candidate-only path; never substitute the general matcher.
 - [General Ledger pool failures](general-ledger-pool-failures.md) — PROD GL checkout timeouts are transient pool contention; retry narrowly and never expose raw SQL errors to the browser.
-- [Gateway source integrity](gateway-source-integrity.md) — verify the gateway module is not duplicated after sync; repeated module blocks prevent port 5000 from binding.
-- [Stale Gateway workflow lock](workflow-stale-gateway-lock.md) — an old start-dev-all process can hold the Gateway lock and make a new workflow time out.
-- [BizPortal Vitest matcher setup](bizportal-vitest-matchers.md) — UI tests do not globally register jest-dom matchers; use Vitest assertions unless setup is explicit.
