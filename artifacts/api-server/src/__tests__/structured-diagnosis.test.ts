@@ -159,6 +159,10 @@ describe("structured QRIS reconciliation diagnosis", () => {
     expect(bankReconciliationRouteSource).toContain('"sql_correction"');
     expect(bankReconciliationRouteSource).toContain('"auto_repair"');
     expect(bankReconciliationRouteSource).toContain('"developer_action_required"');
+    expect(bankReconciliationRouteSource).toContain("QRIS_CANONICAL_EVIDENCE_REQUIRED");
+    expect(bankReconciliationRouteSource).toContain("isQrisSettlementMatch");
+    expect(bankReconciliationRouteSource).toContain("Snapshot atau ID historis yang tidak ditemukan");
+    expect(bankReconciliationRouteSource).toContain("&& !isQrisSettlementMatch");
 
     const helperStart = bankReconciliationRouteSource.indexOf(
       "function buildStaleApprovedMatchRepairSql",

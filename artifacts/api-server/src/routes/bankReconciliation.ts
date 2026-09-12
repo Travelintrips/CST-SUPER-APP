@@ -739,6 +739,12 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
   const matches = matchesResult.rows as Array<Record<string, unknown>>;
   const approvedMatches = matches.filter(row => String(row.status) === "approved");
   const selectedMatch = approvedMatches[0] ?? matches[0] ?? null;
+  // QRIS matches require a live canonical settlement batch and its settlement
+  // journal. A historical/provisional match row alone is never enough to
+  // generate a repair or posting action.
+  const isQrisSettlementMatch =
+    selectedMatch?.candidate_type === "qris_settlement"
+    || selectedMatch?.candidate_source === CANONICAL_SETTLEMENT_SOURCE;
 
   const journalEntryId = mutation.journal_entry_id == null
     ? null
@@ -881,6 +887,15 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     code = canonicalState.code;
     title = "Canonical State Valid";
     reason = canonicalState.reason;
+  } else if (isQrisSettlementMatch) {
+    disposition = "developer_action_required";
+    code = "QRIS_CANONICAL_EVIDENCE_REQUIRED";
+    title = "QRIS Evidence Required";
+    reason =
+      "Perbaikan diblokir: match QRIS harus dapat dibuktikan terhadap settlement batch canonical, " +
+      "payment source, bank mutation, dan settlement journal yang masih live. " +
+      "Snapshot atau ID historis yang tidak ditemukan tidak boleh dipakai untuk rerun, approval, " +
+      "posting, atau SQL correction.";
   } else if (
     mutationStatus === "unmatched"
     && journalEntryId == null
@@ -909,6 +924,7 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     && journalIsBalanced
     && journalCompanyMatches
     && approvedMatches.length === 1
+    && !isQrisSettlementMatch
   ) {
     disposition = "auto_repair";
     code = "BALANCED_DRAFT_READY_TO_POST";
