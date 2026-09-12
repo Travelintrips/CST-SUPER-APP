@@ -275,7 +275,10 @@ export async function recalculateVendorInvoicePaymentStatus(
     );
     const inferredSettlement = inferVendorInvoiceGrossSettlement({
       paymentAmount: amountPaid,
-      outstanding: grandTotal - amountPaid,
+      // amountPaid may be the net cash transferred to the supplier. Compare
+      // that cash with the pre-payment invoice balance so persisted
+      // withholding can close the remaining gross liability.
+      outstanding: grandTotal,
       withholdingAmount: linkage.withholdingAmount,
     });
     if (evidenceRows.length > 0 && inferredSettlement.grossAmount >= grandTotal - 0.01) {
