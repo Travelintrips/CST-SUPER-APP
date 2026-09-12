@@ -93,6 +93,19 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     expect(mirror).not.toContain("PROD-MANDIRI-SC-20260810-v1");
   });
 
+  it("keeps posted-journal metadata repair explicit without allowing financial changes", () => {
+    expect(migrationSource).toContain(
+      "allow_posted_accounting_metadata_correction",
+    );
+    expect(migrationSource).toContain("'updated_at'");
+    expect(migrationSource).toContain(
+      "POSTED_ACCOUNTING_JOURNAL_FINANCIAL_FIELDS_IMMUTABLE",
+    );
+    expect(migrationSource).toContain(
+      "REVERSED_ACCOUNTING_JOURNAL_IS_IMMUTABLE",
+    );
+  });
+
   it("guards the restoration runner against production execution", () => {
     const runner = readFileSync(
       resolve(process.cwd(), "src/run-canonical-contract-migration.ts"),

@@ -84,6 +84,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["sport_center", "Sport Center migration", "schema"],
   ["sport_center_shadow_observer", "Sport Center shadow observer migration", "schema"],
   ["sport_center_canonical_finance_config", "Sport Center canonical finance config refresh", "repair"],
+  ["sport_center_posted_journal_metadata_guard", "Sport Center posted journal metadata guard repair", "repair"],
   ["sport_center_dev_finance_baseline", "Sport Center DEV finance baseline certification", "repair"],
   ["sport_center_payment_mirror_refresh", "Sport Center payment mirror trigger refresh", "repair"],
   ["sport_center_legacy_payment_recovery_owner", "Sport Center legacy payment recovery owner", "repair"],

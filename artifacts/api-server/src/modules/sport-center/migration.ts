@@ -5499,6 +5499,127 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   );
 }
 
+/**
+ * Additive repair for databases whose original Sport Center migration marker
+ * predates the posted-journal metadata correction contract.
+ *
+ * This must remain a separate startup stage: changing the body of the long
+ * canonical-finance stage is not enough when its persistent marker is already
+ * complete in an existing database.
+ */
+export async function ensurePostedJournalMetadataGuard(): Promise<void> {
+  const result = await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'sport_center'
+        AND table_name = 'accounting_journals'
+    ) AS accounting_journals_exists
+  `);
+  if (!(result.rows[0] as { accounting_journals_exists?: boolean } | undefined)?.accounting_journals_exists) {
+    logger.info("Posted-journal metadata guard repair skipped: accounting_journals is not available");
+    return;
+  }
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.guard_posted_accounting_journal()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    BEGIN
+      IF TG_OP = 'DELETE'
+         AND OLD.status IN ('posted', 'reversed') THEN
+        RAISE EXCEPTION
+          'POSTED_ACCOUNTING_JOURNAL_CANNOT_BE_DELETED: %',
+          OLD.id;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND OLD.status = 'posted' THEN
+        IF COALESCE(
+             current_setting(
+               'sport_center.allow_posted_accounting_metadata_correction',
+               true
+             ),
+             'off'
+           ) = 'on' THEN
+          IF (
+            to_jsonb(NEW) - ARRAY[
+              'payment_method',
+              'payment_provider',
+              'company_id',
+              'bank_account_id',
+              'provider_name',
+              'provider_id',
+              'payment_type',
+              'expected_settlement_date',
+              'settlement_status',
+              'mdr_rate',
+              'mdr_amount',
+              'provider_reference',
+              'provider_order_id',
+              'merchant_trade_no',
+              'provider_trade_no',
+              'updated_at'
+            ]::text[]
+          ) IS DISTINCT FROM (
+            to_jsonb(OLD) - ARRAY[
+              'payment_method',
+              'payment_provider',
+              'company_id',
+              'bank_account_id',
+              'provider_name',
+              'provider_id',
+              'payment_type',
+              'expected_settlement_date',
+              'settlement_status',
+              'mdr_rate',
+              'mdr_amount',
+              'provider_reference',
+              'provider_order_id',
+              'merchant_trade_no',
+              'provider_trade_no',
+              'updated_at'
+            ]::text[]
+          ) THEN
+            RAISE EXCEPTION
+              'POSTED_ACCOUNTING_JOURNAL_FINANCIAL_FIELDS_IMMUTABLE: %',
+              OLD.id;
+          END IF;
+        ELSIF (
+          to_jsonb(NEW) - ARRAY[
+            'payment_method',
+            'payment_provider'
+          ]::text[]
+        ) IS DISTINCT FROM (
+          to_jsonb(OLD) - ARRAY[
+            'payment_method',
+            'payment_provider'
+          ]::text[]
+        ) THEN
+          RAISE EXCEPTION
+            'POSTED_ACCOUNTING_JOURNAL_FINANCIAL_FIELDS_IMMUTABLE: %',
+            OLD.id;
+        END IF;
+
+        RETURN NEW;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND OLD.status = 'reversed' THEN
+        RAISE EXCEPTION
+          'REVERSED_ACCOUNTING_JOURNAL_IS_IMMUTABLE: %',
+          OLD.id;
+      END IF;
+
+      RETURN COALESCE(NEW, OLD);
+    END;
+    $function$;
+  `));
+  logger.info("Posted-journal metadata guard repair applied");
+}
+
 const REQUIRED_CANONICAL_SETTLEMENT_ROUTINES = [
   ["resolve_internal_bank_account_id", "integer, text"],
   ["canonical_settlement_group_identity", "integer, text, text, date, text"],
