@@ -15,6 +15,12 @@ The managed secret loader can inject `TEST_DATABASE_URL` into a workflow child p
 
 **How to apply:** use the official loader for the first attempt, keep the URL masked, and only try a same-project pooler when its tenant/region identity is verified without exposing credentials.
 
+The loader requires `APP_ENV=development|production` independently of `NODE_ENV`; in a workspace without `GCP_SECRET_MANAGER_BOOTSTRAP_JSON`, the official DB-backed test command stops before injecting `TEST_DATABASE_URL`.
+
+**Why:** `NODE_ENV=test` selects Vitest behavior but is intentionally not accepted as a secret-bundle selector, and bypassing the managed bundle could route tests to an unverified database.
+
+**How to apply:** run the test with the intended `APP_ENV` through `load-secrets.mjs`; if bootstrap is unavailable, report the DB execution as environment-blocked while keeping the test fail-closed.
+
 The current managed development bundle can still inject `TEST_DATABASE_URL` as a direct `db.<project>.supabase.co:5432` endpoint even when the approved checkpoint expects a regional pooler. The official loader does not rewrite that target, so repeated Node `ENOTFOUND` failures are an environment-provisioning blocker.
 
 **Why:** rerunning the same test or increasing its timeout cannot repair DNS transport, and deriving an unverified pooler URL risks crossing the TEST isolation boundary.

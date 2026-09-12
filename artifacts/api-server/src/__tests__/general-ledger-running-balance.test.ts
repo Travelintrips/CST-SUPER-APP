@@ -29,7 +29,12 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, it, expect } from "vitest";
+import { randomUUID } from "node:crypto";
+import express from "express";
+import pg from "pg";
+import supertest from "supertest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { getIsolatedTestDatabaseUrl } from "../test-setup.js";
 
 // ── Helpers — mirror the SQL CTE arithmetic ───────────────────────────────────
 
@@ -471,3 +476,383 @@ describe("16. Bank-reconciliation vendor payment filter semantics", () => {
     expect(routeSource).toContain("sql`${glPaymentMethodExpr()} = ${f.paymentMethod}`");
   });
 });
+
+// ── Real-ledger regression: source-only vendor payment ────────────────────────
+//
+// This is intentionally separate from the source/fixture tests above. The
+// regression must execute the real General Ledger route against an isolated
+// PostgreSQL target, because a payment without an accounting_payments bridge
+// can disappear only after the query's joins and filters are applied together.
+const hasIsolatedDatabase = Boolean(
+  process.env.TEST_DATABASE_URL || process.env.STAGING_DATABASE_URL,
+);
+
+type GeneralLedgerFixture = {
+  marker: string;
+  companyId: number;
+  journalId: number;
+  entryId: number;
+  mutationId: number;
+  liabilityAccountId: number;
+  bankAccountId: number;
+  withholdingAccountId: number;
+  entryDate: string;
+  grossAmount: number;
+  netAmount: number;
+  withholdingAmount: number;
+};
+
+describe.skipIf(!hasIsolatedDatabase)(
+  "5. General Ledger catches source-only bank-reconciliation vendor payments",
+  () => {
+    const { Pool } = pg;
+    let pool: pg.Pool;
+    let app: express.Express;
+
+    beforeAll(async () => {
+      const dbUrl = getIsolatedTestDatabaseUrl();
+      pool = new Pool({
+        connectionString: dbUrl,
+        ssl: { rejectUnauthorized: false },
+        max: 3,
+        connectionTimeoutMillis: 15_000,
+      });
+
+      // Import after the test target is known. @workspace/db resolves its
+      // Vitest pool from TEST_DATABASE_URL/STAGING_DATABASE_URL.
+      const { default: accountingHubRouter } = await import(
+        "../routes/accountingHub.js"
+      );
+
+      app = express();
+      app.use(express.json());
+      app.use((req: any, _res, next) => {
+        req.user = {
+          id: `gl-regression-${randomUUID()}`,
+          email: "gl-regression@test.invalid",
+          role: "admin",
+          companyId: null,
+        };
+        req.isAuthenticated = () => true;
+        req.isInternalSession = true;
+        next();
+      });
+      app.use("/api/accounting", accountingHubRouter);
+    });
+
+    afterAll(async () => {
+      await pool?.end();
+    });
+
+    async function createFixture(): Promise<GeneralLedgerFixture> {
+      const marker = randomUUID();
+      const grossAmount = 1_011_000;
+      const netAmount = 1_000_000;
+      const withholdingAmount = grossAmount - netAmount;
+      const entryDate = "2026-08-15";
+      const client = await pool.connect();
+
+      try {
+        await client.query("BEGIN");
+
+        const company = await client.query(
+          "SELECT id FROM public.companies ORDER BY id LIMIT 1",
+        );
+        const companyId = Number(company.rows[0]?.id);
+        if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+          throw new Error("General Ledger fixture requires a company row");
+        }
+
+        const journal = await client.query(
+          `INSERT INTO public.accounting_journals
+             (company_id, code, name, type, is_active)
+           VALUES ($1, $2, $3, 'bank', TRUE)
+           RETURNING id`,
+          [companyId, `GL5-${marker}`, `GL regression ${marker}`],
+        );
+        const journalId = Number(journal.rows[0]?.id);
+
+        const accounts = await client.query(
+          `INSERT INTO public.chart_of_accounts
+             (company_id, code, name, type, normal_balance, account_category,
+              is_active, is_postable, is_header, status)
+           VALUES
+             ($1, $2, $3, 'liability', 'CREDIT', 'LIABILITY', TRUE, TRUE, FALSE, 'ACTIVE'),
+             ($1, $4, $5, 'asset', 'DEBIT', 'ASSET', TRUE, TRUE, FALSE, 'ACTIVE'),
+             ($1, $6, $7, 'liability', 'CREDIT', 'LIABILITY', TRUE, TRUE, FALSE, 'ACTIVE')
+           RETURNING id, code`,
+          [
+            companyId,
+            `GL5-LIAB-${marker}`,
+            `GL5 vendor liability ${marker}`,
+            `GL5-BANK-${marker}`,
+            `GL5 bank ${marker}`,
+            `GL5-WHT-${marker}`,
+            `GL5 withholding ${marker}`,
+          ],
+        );
+        const accountByCode = new Map(
+          accounts.rows.map((row) => [row.code, Number(row.id)]),
+        );
+        const liabilityAccountId = accountByCode.get(`GL5-LIAB-${marker}`);
+        const bankAccountId = accountByCode.get(`GL5-BANK-${marker}`);
+        const withholdingAccountId = accountByCode.get(`GL5-WHT-${marker}`);
+        if (
+          !liabilityAccountId ||
+          !bankAccountId ||
+          !withholdingAccountId
+        ) {
+          throw new Error("General Ledger fixture accounts were not created");
+        }
+
+        // The bank mutation is the authoritative payment-method evidence.
+        // There is deliberately no accounting_payments row for this fixture.
+        const mutation = await client.query(
+          `INSERT INTO public.bank_mutations
+             (company_id, transaction_date, description, credit_amount,
+              debit_amount, amount, direction, mutation_key,
+              normalized_description, status, source)
+           VALUES ($1, $2, $3, 0, $4, $4, 'OUT', $5, $6, 'approved',
+                   'bank_reconciliation')
+           RETURNING id`,
+          [
+            companyId,
+            entryDate,
+            `GL5 vendor payment ${marker}`,
+            netAmount,
+            `GL5-MUT-${marker}`,
+            `gl5 vendor payment ${marker}`,
+          ],
+        );
+        const mutationId = Number(mutation.rows[0]?.id);
+
+        const entry = await client.query(
+          `INSERT INTO public.accounting_entries
+             (company_id, entry_number, journal_id, date, ref, description,
+              status, source, source_id, source_module, source_schema,
+              source_table, total_debit, total_credit)
+           VALUES ($1, $2, $3, $4, $5, $6, 'draft',
+                   'bank_reconciliation', $7, 'vendor_invoice_payment',
+                   'public', 'bank_mutations', $8, $8)
+           RETURNING id`,
+          [
+            companyId,
+            `GL5-ENTRY-${marker}`,
+            journalId,
+            entryDate,
+            `GL5-REF-${marker}`,
+            `GL5 vendor payment ${marker}`,
+            mutationId,
+            grossAmount,
+          ],
+        );
+        const entryId = Number(entry.rows[0]?.id);
+
+        await client.query(
+          `INSERT INTO public.accounting_entry_lines
+             (entry_id, account_id, description, debit, credit)
+           VALUES
+             ($1, $2, 'Gross vendor liability settlement', $3, 0),
+             ($1, $4, 'Net bank disbursement', 0, $5),
+             ($1, $6, 'Withholding tax payable', 0, $7)`,
+          [
+            entryId,
+            liabilityAccountId,
+            grossAmount,
+            bankAccountId,
+            netAmount,
+            withholdingAccountId,
+            withholdingAmount,
+          ],
+        );
+
+        // Accounting triggers require the draft-first posting contract.
+        await client.query(
+          `UPDATE public.accounting_entries
+              SET status = 'posted', posted_at = NOW()
+            WHERE id = $1`,
+          [entryId],
+        );
+        await client.query(
+          `UPDATE public.bank_mutations
+              SET journal_entry_id = $1
+            WHERE id = $2`,
+          [entryId, mutationId],
+        );
+
+        await client.query("COMMIT");
+        return {
+          marker,
+          companyId,
+          journalId,
+          entryId,
+          mutationId,
+          liabilityAccountId,
+          bankAccountId,
+          withholdingAccountId,
+          entryDate,
+          grossAmount,
+          netAmount,
+          withholdingAmount,
+        };
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    async function readLedger(
+      scope: Pick<GeneralLedgerFixture, "companyId" | "entryDate">,
+    ): Promise<{
+      data: Array<Record<string, any>>;
+      total: number;
+      canonicalTotal: number;
+      totalDebit: number;
+      totalCredit: number;
+    }> {
+      const response = await supertest(app)
+        .get("/api/accounting/hub/general-ledger")
+        .query({
+          company_id: scope.companyId,
+          date_from: scope.entryDate,
+          date_to: scope.entryDate,
+          source_module: "bank_reconciliation",
+          payment_method: "bank",
+          sort_by: "date",
+          sort_dir: "asc",
+          limit: 500,
+        });
+
+      expect(response.status).toBe(200);
+      return response.body;
+    }
+
+    async function cleanupFixture(fixture: GeneralLedgerFixture) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // Only this fixture is targeted. The replica-role override is limited
+        // to cleanup because posted-ledger protection is not under test here.
+        await client.query("SET LOCAL session_replication_role = replica");
+        await client.query(
+          "DELETE FROM public.bank_mutations WHERE id = $1",
+          [fixture.mutationId],
+        );
+        await client.query(
+          "DELETE FROM public.accounting_entries WHERE id = $1",
+          [fixture.entryId],
+        );
+        await client.query(
+          "DELETE FROM public.accounting_journals WHERE id = $1",
+          [fixture.journalId],
+        );
+        await client.query(
+          `DELETE FROM public.chart_of_accounts
+            WHERE id IN ($1, $2, $3)`,
+          [
+            fixture.liabilityAccountId,
+            fixture.bankAccountId,
+            fixture.withholdingAccountId,
+          ],
+        );
+        await client.query("COMMIT");
+
+        const residual = await client.query(
+          `SELECT
+             (SELECT COUNT(*) FROM public.accounting_entries
+               WHERE entry_number = $1) AS entries,
+             (SELECT COUNT(*) FROM public.accounting_journals
+               WHERE code = $2) AS journals,
+             (SELECT COUNT(*) FROM public.bank_mutations
+               WHERE mutation_key = $3) AS mutations,
+             (SELECT COUNT(*) FROM public.chart_of_accounts
+               WHERE code IN ($4, $5, $6)) AS accounts`,
+          [
+            `GL5-ENTRY-${fixture.marker}`,
+            `GL5-${fixture.marker}`,
+            `GL5-MUT-${fixture.marker}`,
+            `GL5-LIAB-${fixture.marker}`,
+            `GL5-BANK-${fixture.marker}`,
+            `GL5-WHT-${fixture.marker}`,
+          ],
+        );
+        expect(Object.values(residual.rows[0]).map(Number)).toEqual([
+          0,
+          0,
+          0,
+          0,
+        ]);
+      } catch (error) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    it("returns gross liability debit and net bank credit without a payment bridge", async () => {
+      const company = await pool.query(
+        "SELECT id FROM public.companies ORDER BY id LIMIT 1",
+      );
+      const baselineScope = {
+        companyId: Number(company.rows[0]?.id),
+        entryDate: "2026-08-15",
+      };
+      const before = await readLedger(baselineScope);
+      const fixture = await createFixture();
+      try {
+        const after = await readLedger(fixture);
+        const fixtureRows = after.data.filter(
+          (row) => Number(row.entry_id) === fixture.entryId,
+        );
+
+        expect(fixtureRows).toHaveLength(3);
+        const bridge = await pool.query(
+          `SELECT COUNT(*)::int AS count
+             FROM public.accounting_payments
+            WHERE entry_id = $1`,
+          [fixture.entryId],
+        );
+        expect(Number(bridge.rows[0]?.count)).toBe(0);
+        expect(fixtureRows.every((row) => row.source_module === "bank_reconciliation")).toBe(true);
+        expect(fixtureRows.every((row) => row.payment_method === "bank")).toBe(true);
+
+        const liabilityLine = fixtureRows.find(
+          (row) => Number(row.account_id) === fixture.liabilityAccountId,
+        );
+        const bankLine = fixtureRows.find(
+          (row) => Number(row.account_id) === fixture.bankAccountId,
+        );
+        expect(Number(liabilityLine?.entry_id)).toBe(fixture.entryId);
+        expect(Number(liabilityLine?.debit)).toBe(fixture.grossAmount);
+        expect(Number(liabilityLine?.credit)).toBe(0);
+        expect(Number(bankLine?.entry_id)).toBe(fixture.entryId);
+        expect(Number(bankLine?.debit)).toBe(0);
+        expect(Number(bankLine?.credit)).toBe(fixture.netAmount);
+
+        // These are the chronological balances for the two newly-created COAs.
+        // A future query regression must not replace them with null, restart
+        // from zero, or use the filtered payment amount for the liability line.
+        expect(Number(liabilityLine?.running_balance)).toBe(-fixture.grossAmount);
+        expect(Number(bankLine?.running_balance)).toBe(-fixture.netAmount);
+        expect(Number(liabilityLine?.account_opening_balance)).toBe(0);
+        expect(Number(bankLine?.account_opening_balance)).toBe(0);
+
+        // The display summary counts lines, while canonical totals include all
+        // posted lines in the company/date scope. The fixture must be visible
+        // through both scopes even though it has no accounting_payments bridge.
+        expect(after.total).toBe(before.total + 3);
+        expect(after.canonicalTotal).toBe(before.canonicalTotal + 3);
+        expect(after.totalDebit).toBe(before.totalDebit + fixture.grossAmount);
+        expect(after.totalCredit).toBe(before.totalCredit + fixture.grossAmount);
+      } finally {
+        await cleanupFixture(fixture);
+        // Cleanup is part of the regression contract: the isolated target must
+        // be returned to the exact ledger response it had before the fixture.
+        await expect(readLedger(fixture)).resolves.toEqual(before);
+      }
+    });
+  },
+);
