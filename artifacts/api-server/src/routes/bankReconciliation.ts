@@ -5714,6 +5714,41 @@ router.get("/mutations", async (req, res) => {
             ORDER BY CASE WHEN coa.company_id = rr.company_id THEN 0 ELSE 1 END, coa.id
             LIMIT 1
           ),
+           'targetCoaValidationStatus', CASE
+             WHEN NULLIF(BTRIM(rr.target_coa_code::text), '') IS NULL THEN 'missing'
+             WHEN EXISTS (
+               SELECT 1
+               FROM chart_of_accounts coa_valid
+               WHERE (coa_valid.code = BTRIM(rr.target_coa_code::text)
+                 OR coa_valid.code LIKE BTRIM(rr.target_coa_code::text) || '-%')
+                 AND (
+                   (bm.company_id IS NOT NULL AND (coa_valid.company_id = bm.company_id OR coa_valid.company_id IS NULL))
+                   OR (bm.company_id IS NULL AND coa_valid.company_id IS NULL)
+                 )
+                 AND coa_valid.is_active = TRUE
+                 AND coa_valid.is_header = FALSE
+                 AND coa_valid.is_postable = TRUE
+             ) THEN 'valid'
+             ELSE 'invalid'
+           END,
+           'targetCoaValidationMessage', CASE
+             WHEN NULLIF(BTRIM(rr.target_coa_code::text), '') IS NULL
+               THEN 'COA tujuan Rule AI belum dikonfigurasi.'
+             WHEN EXISTS (
+               SELECT 1
+               FROM chart_of_accounts coa_valid
+               WHERE (coa_valid.code = BTRIM(rr.target_coa_code::text)
+                 OR coa_valid.code LIKE BTRIM(rr.target_coa_code::text) || '-%')
+                 AND (
+                   (bm.company_id IS NOT NULL AND (coa_valid.company_id = bm.company_id OR coa_valid.company_id IS NULL))
+                   OR (bm.company_id IS NULL AND coa_valid.company_id IS NULL)
+                 )
+                 AND coa_valid.is_active = TRUE
+                 AND coa_valid.is_header = FALSE
+                 AND coa_valid.is_postable = TRUE
+             ) THEN NULL
+             ELSE 'COA tujuan Rule AI tidak ditemukan, tidak aktif, atau bukan akun postable untuk perusahaan ini.'
+           END,
           'confidenceScore', rr.confidence_score,
           'stopProcessing', rr.stop_processing,
           'requiresDocumentUpload', rr.requires_document_upload,

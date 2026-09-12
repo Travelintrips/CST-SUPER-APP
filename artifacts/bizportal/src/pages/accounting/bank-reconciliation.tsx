@@ -652,6 +652,8 @@ interface CandidateDetails {
   targetType?: string | null;
   targetCoaCode?: string | null;
   targetCoaName?: string | null;
+  targetCoaValidationStatus?: "missing" | "invalid" | "valid" | null;
+  targetCoaValidationMessage?: string | null;
   confidenceScore?: number | null;
   stopProcessing?: boolean | null;
   requiresDocumentUpload?: boolean | null;
@@ -2026,6 +2028,13 @@ function CandidateDetailsBlock({
     { label: "Status", value: d.status },
     { label: "Memo / Catatan", value: d.memo },
     { label: "COA target", value: d.targetCoaCode ? `${d.targetCoaCode}${d.targetCoaName ? ` — ${d.targetCoaName}` : ""}` : null },
+    { label: "Status COA target", value: isRuleCandidate
+      ? d.targetCoaValidationStatus === "valid"
+        ? "Valid dan postable"
+        : d.targetCoaValidationStatus === "invalid"
+          ? "Tidak valid untuk perusahaan ini"
+          : "Belum dikonfigurasi"
+      : null },
     { label: "Deskripsi rule", value: d.ruleDescription },
     { label: "Prioritas rule", value: d.rulePriority },
     { label: "Arah rule", value: d.ruleDirection },
@@ -2072,9 +2081,12 @@ function CandidateDetailsBlock({
         className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
         onClick={event => event.stopPropagation()}
       >
-        {isRuleCandidate && !d.targetCoaCode && (
+        {isRuleCandidate && d.targetCoaValidationStatus !== "valid" && (
           <p className="mb-2 rounded border border-amber-300/60 bg-amber-950/20 px-2 py-1.5 text-[11px] text-amber-200">
-            COA tujuan Rule AI belum dikonfigurasi. Kandidat tidak dapat di-approve sebelum mapping COA dilengkapi.
+            {d.targetCoaValidationMessage
+              ?? (d.targetCoaCode
+                ? "COA tujuan Rule AI tidak valid untuk perusahaan ini. Pastikan akun aktif dan postable."
+                : "COA tujuan Rule AI belum dikonfigurasi. Kandidat tidak dapat di-approve sebelum mapping COA dilengkapi.")}
           </p>
         )}
         {d.settlementPartial && (
@@ -2223,8 +2235,13 @@ function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[]
 function candidateApprovalBlockReason(candidate: Candidate): string | null {
   if (candidate.candidate_type !== "recon_rule") return null;
   const targetCoaCode = String(candidate.details?.targetCoaCode ?? "").trim();
-  if (!targetCoaCode) {
+  const validationStatus = candidate.details?.targetCoaValidationStatus;
+  if (!targetCoaCode || validationStatus === "missing") {
     return "Rule AI ini belum memiliki COA tujuan. Lengkapi COA tujuan pada Recon Rule sebelum approve.";
+  }
+  if (validationStatus !== "valid") {
+    return candidate.details?.targetCoaValidationMessage
+      ?? `COA tujuan Rule AI "${targetCoaCode}" tidak valid untuk perusahaan ini. Pastikan akun aktif dan postable.`;
   }
   return null;
 }
@@ -5227,6 +5244,12 @@ function MutationCard({
   const selectableMatchingCandidates = realCandidateRequired
     ? matchingCandidates.filter(isRealTransactionCandidate)
     : matchingCandidates;
+  const selectedCandidate = selectableMatchingCandidates.find(
+    candidate => candidate.id === selectedCandidateId,
+  );
+  const selectedCandidateApprovalBlockedReason = selectedCandidate
+    ? candidateApprovalBlockReason(selectedCandidate)
+    : null;
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
@@ -5696,8 +5719,16 @@ function MutationCard({
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                disabled={selectableMatchingCandidates.length > 0 && selectedCandidateId == null}
-                title={selectableMatchingCandidates.length > 0 && selectedCandidateId == null ? "Pilih kandidat transaksi yang cocok terlebih dahulu" : undefined}
+                 disabled={
+                   (selectableMatchingCandidates.length > 0 && selectedCandidateId == null)
+                   || !!selectedCandidateApprovalBlockedReason
+                 }
+                 title={
+                   selectedCandidateApprovalBlockedReason
+                     ?? (selectableMatchingCandidates.length > 0 && selectedCandidateId == null
+                       ? "Pilih kandidat transaksi yang cocok terlebih dahulu"
+                       : undefined)
+                 }
                 onClick={() => {
                   const selected = selectableMatchingCandidates.find(candidate => candidate.id === selectedCandidateId);
                   if (selected && onApproveCandidate) {
@@ -9341,6 +9372,11 @@ export default function BankReconciliationPage() {
     // mutation payload can still contain a historical H+1 candidate from a
     // previous matching run, which must never be approved accidentally.
     const chosen = approveDialogCands.find(c => c.id === selectedCandidateId);
+    const blockedReason = chosen ? candidateApprovalBlockReason(chosen) : null;
+    if (blockedReason) {
+      toast({ title: "Approve diblokir", description: blockedReason, variant: "destructive" });
+      return;
+    }
     approveMut.mutate({
       mutId: m.id,
       matchId: chosen?.id,
@@ -10828,15 +10864,24 @@ export default function BankReconciliationPage() {
               {approveDialogCands.length > 0 ? (
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Pilih kandidat yang cocok:</p>
-                  {approveDialogCands.map(c => (
+                  {approveDialogCands.map(c => {
+                    const blockedReason = candidateApprovalBlockReason(c);
+                    return (
                     <div
                       key={c.id}
-                      className={`border rounded-lg p-3 cursor-pointer transition-all ${selectedCandidateId === c.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
-                      onClick={() => setSelectedCandidateId(c.id)}
+                      className={`border rounded-lg p-3 transition-all ${
+                        blockedReason ? "cursor-not-allowed opacity-80" : "cursor-pointer"
+                      } ${selectedCandidateId === c.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
+                      onClick={() => !blockedReason && setSelectedCandidateId(c.id)}
                       role="radio"
                       aria-checked={selectedCandidateId === c.id}
+                      aria-disabled={!!blockedReason}
                       tabIndex={0}
-                      onKeyDown={e => (e.key === "Enter" || e.key === " ") && setSelectedCandidateId(c.id)}
+                      onKeyDown={e => {
+                        if (!blockedReason && (e.key === "Enter" || e.key === " ")) {
+                          setSelectedCandidateId(c.id);
+                        }
+                      }}
                     >
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-medium">
@@ -10857,7 +10902,12 @@ export default function BankReconciliationPage() {
                           </div>
                         </div>
                       )}
-                      <p className="text-xs text-muted-foreground">{c.match_reason}</p>
+                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
+                       {blockedReason && (
+                         <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                           {blockedReason}
+                         </p>
+                       )}
                       <div className="flex gap-1.5 mt-1 flex-wrap">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nominal</span>}
                         {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
@@ -10867,7 +10917,8 @@ export default function BankReconciliationPage() {
                       </div>
                        <CandidateDetailsBlock candidate={c} compact />
                     </div>
-                  ))}
+                    );
+                  })}
                   <div
                     className={`border rounded-lg p-3 cursor-pointer transition-all ${selectedCandidateId === -1 ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
                     onClick={() => setSelectedCandidateId(-1)}
@@ -10978,6 +11029,7 @@ export default function BankReconciliationPage() {
               disabled={
                 approveMut.isPending ||
                 (approveDialogCands.length > 0 && selectedCandidateId === null) ||
+                !!(approveSelectedCand && candidateApprovalBlockReason(approveSelectedCand)) ||
                 // Resolve manual-review errors through the COA picker.
                 !!manualReviewWarning
               }

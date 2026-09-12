@@ -41,6 +41,10 @@ const bankReconciliationRouteSource = readFileSync(
   new URL("../routes/bankReconciliation.ts", import.meta.url),
   "utf8",
 );
+const unifiedMatchingEngineSource = readFileSync(
+  new URL("../lib/reconciliation/unifiedMatchingEngine.ts", import.meta.url),
+  "utf8",
+);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +82,31 @@ describe("directionFromBankColumns — bank statement semantics", () => {
 
   it("classifies Credit/Masuk receipts as IN", () => {
     expect(directionFromBankColumns(0, 12_480_000)).toBe("IN");
+  });
+});
+
+describe("Rule AI approval COA guard", () => {
+  it("exposes company-scoped COA validation status to the reviewer", () => {
+    expect(bankReconciliationRouteSource).toContain("'targetCoaValidationStatus'");
+    expect(bankReconciliationRouteSource).toContain("THEN 'missing'");
+    expect(bankReconciliationRouteSource).toContain("THEN 'valid'");
+    expect(bankReconciliationRouteSource).toContain("ELSE 'invalid'");
+    expect(bankReconciliationRouteSource).toContain("is_active = TRUE");
+    expect(bankReconciliationRouteSource).toContain("is_postable = TRUE");
+    expect(bankReconciliationRouteSource).toContain("coa_valid.company_id = bm.company_id");
+  });
+
+  it("uses RECON_COA_MISSING for empty, stale, or invalid Rule AI targets", () => {
+    const approvalStart = unifiedMatchingEngineSource.indexOf(
+      "export async function approveAndCreateJournal",
+    );
+    const approvalSource = unifiedMatchingEngineSource.slice(approvalStart);
+
+    expect(approvalStart).toBeGreaterThanOrEqual(0);
+    expect(approvalSource).toContain('"RECON_COA_MISSING"');
+    expect(approvalSource).toContain("Rule AI tidak ditemukan atau sudah tidak aktif");
+    expect(approvalSource).toContain("belum dikonfigurasi");
+    expect(approvalSource).toContain("tidak ditemukan atau tidak aktif untuk perusahaan ini");
   });
 });
 
@@ -979,7 +1008,7 @@ describe("Void-journal partial reversal — fail-closed endpoint contract", () =
     expect(voidJournalStart).toBeGreaterThanOrEqual(0);
     expect(reopenStart).toBeGreaterThan(voidJournalStart);
     expect(failureStart).toBeGreaterThanOrEqual(0);
-    expect(failurePath).toContain("SET status = 'posted'");
+    expect(failurePath).toContain("SET status = '${String(preMut.status)");
     expect(failurePath).toContain("mutation_status: \"posted\"");
     expect(failurePath).toContain("return res.status(partialReversal ? 409 : 400)");
     expect(failurePath).not.toContain('auditLog(mutId, "JOURNAL_VOIDED"');

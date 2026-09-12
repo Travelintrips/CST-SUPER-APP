@@ -846,7 +846,8 @@ export async function resolveContraAccount(
   // A Rule AI match is an explicit COA decision. Resolve it before the
   // description normalizer so a "kas besar" rule cannot fall through to an
   // arbitrary second bank account or an expense fallback.
-  if (type === "recon_rule" && candidateId != null && companyId != null) {
+  if (type === "recon_rule" && candidateId != null) {
+    if (companyId == null) return null;
     const ruleTarget = await loadReconRuleTarget(client, companyId, candidateId);
     if (!ruleTarget?.targetCoaCode) return null;
     const accountId = await findCompanyCoa(client, companyId, ruleTarget.targetCoaCode);
@@ -2737,15 +2738,22 @@ export async function approveAndCreateJournal(
              companyId,
              selectedCandidateId,
            );
-           if (!ruleTarget?.targetCoaCode) {
+          if (!ruleTarget) {
+            throw new JournalMappingError(
+              "RECON_COA_MISSING",
+              "Rule AI tidak ditemukan atau sudah tidak aktif untuk perusahaan ini. Jalankan ulang matching sebelum approve.",
+              { mutationId, ruleId: selectedCandidateId },
+            );
+          }
+          if (!ruleTarget.targetCoaCode) {
              throw new JournalMappingError(
                "RECON_COA_MISSING",
                "Rule AI cocok, tetapi COA tujuan belum dikonfigurasi. Lengkapi COA tujuan pada Recon Rule lalu jalankan ulang matching.",
                { mutationId, ruleId: selectedCandidateId },
              );
            }
-           throw new JournalMappingError(
-             "COA_NOT_FOUND",
+            throw new JournalMappingError(
+              "RECON_COA_MISSING",
              `COA tujuan Rule AI "${ruleTarget.targetCoaCode}" tidak ditemukan atau tidak aktif untuk perusahaan ini.`,
              { mutationId, ruleId: selectedCandidateId, targetCoaCode: ruleTarget.targetCoaCode },
            );
