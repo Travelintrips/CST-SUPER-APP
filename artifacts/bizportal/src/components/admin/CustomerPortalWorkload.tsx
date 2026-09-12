@@ -34,6 +34,21 @@ type Payload = {
   summary: Summary[];
 };
 
+type Detail = {
+  service: string;
+  id: number;
+  record: Record<string, unknown>;
+  projection?: {
+    finance?: {
+      source: string | null;
+      invoice: { number: string | null; paymentStatus: string; total: number; amountPaid: number; outstanding: number; dueDate: string | null } | null;
+      payment: { status: string; fulfillmentGate: string } | null;
+      paymentProof: { status: string; remarks: string | null; fileUrl: string | null } | null;
+    };
+    timeline?: { source: string; currentStatus: string | null; events: Array<Record<string, unknown>> };
+  };
+};
+
 const statusClass = (status: string) => {
   if (["completed", "closed", "paid", "delivered"].includes(status.toLowerCase())) {
     return "bg-emerald-50 text-emerald-700 border-emerald-200";
@@ -55,6 +70,8 @@ export function CustomerPortalWorkload() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionBusy, setActionBusy] = useState("");
+  const [selected, setSelected] = useState<Detail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +127,24 @@ export function CustomerPortalWorkload() {
     }
   }
 
+  async function openDetail(row: WorkloadRow) {
+    setDetailLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/portal/admin/service-operations/${row.service_key}/${row.id}`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Gagal memuat detail canonical");
+      setSelected(body as Detail);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Gagal memuat detail canonical");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   useEffect(() => {
     void load();
     const interval = window.setInterval(() => void load(), 30_000);
@@ -160,7 +195,7 @@ export function CustomerPortalWorkload() {
           <CardContent className="p-0">
             <div className="divide-y">
               {payload.data.map((row) => (
-                <div key={`${row.service_key}-${row.id}`} className="flex flex-col gap-2 px-4 py-3 hover:bg-muted/40">
+                <button type="button" key={`${row.service_key}-${row.id}`} onClick={() => void openDetail(row)} className="flex w-full flex-col gap-2 px-4 py-3 text-left hover:bg-muted/40">
                   <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{row.service_label} · <span className="font-mono text-xs">{row.reference}</span></p>
@@ -196,12 +231,63 @@ export function CustomerPortalWorkload() {
                       </Button>
                     )}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label="Detail canonical Customer Portal">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-background p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b pb-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-600">{selected.service}</p>
+                <h3 className="mt-1 text-lg font-bold">Detail transaksi #{selected.id}</h3>
+                <p className="text-xs text-muted-foreground">Projection read-only dari sumber canonical.</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setSelected(null)} aria-label="Tutup detail"><X className="h-4 w-4" /></Button>
+            </div>
+            <div className="space-y-5 pt-5">
+              <div className="rounded-lg border bg-sky-50/50 p-4">
+                <h4 className="mb-3 text-sm font-semibold">Invoice & Payment</h4>
+                {selected.projection?.finance?.invoice ? (
+                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div><p className="text-xs text-muted-foreground">Invoice</p><p className="font-medium">{selected.projection.finance.invoice.number ?? "—"}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Total</p><p className="font-medium">Rp {selected.projection.finance.invoice.total.toLocaleString("id-ID")}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Dibayar</p><p className="font-medium">Rp {selected.projection.finance.invoice.amountPaid.toLocaleString("id-ID")}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Outstanding</p><p className="font-medium">Rp {selected.projection.finance.invoice.outstanding.toLocaleString("id-ID")}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Payment</p><p className="font-medium">{formatStatus(selected.projection.finance.invoice.paymentStatus)}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Proof</p><p className="font-medium">{formatStatus(selected.projection.finance.paymentProof?.status ?? "not_uploaded")}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Gate</p><p className="font-medium">{formatStatus(selected.projection.finance.payment?.fulfillmentGate ?? "payment_required")}</p></div>
+                    <div><p className="text-xs text-muted-foreground">Jatuh tempo</p><p className="font-medium">{selected.projection.finance.invoice.dueDate ? formatDate(selected.projection.finance.invoice.dueDate) : "—"}</p></div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Belum ada invoice canonical yang terhubung.</p>
+                )}
+                {selected.projection?.finance?.paymentProof?.remarks && <p className="mt-3 text-xs text-muted-foreground">Catatan proof: {selected.projection.finance.paymentProof.remarks}</p>}
+                {selected.projection?.finance?.paymentProof?.fileUrl && <a className="mt-3 inline-flex text-xs font-semibold text-sky-700 hover:underline" href={selected.projection.finance.paymentProof.fileUrl} target="_blank" rel="noopener noreferrer">Buka bukti pembayaran</a>}
+              </div>
+              <div>
+                <h4 className="mb-3 text-sm font-semibold">Timeline canonical</h4>
+                {selected.projection?.timeline?.events?.length ? (
+                  <div className="space-y-2">
+                    {selected.projection.timeline.events.map((event, index) => (
+                      <div key={`${String(event.id ?? index)}`} className="rounded-lg border p-3">
+                        <p className="text-sm font-medium">{formatStatus(String(event.status ?? event.event_type ?? event.new_status ?? "event"))}</p>
+                        <p className="text-xs text-muted-foreground">{String(event.notes ?? event.note ?? event.location ?? "")} {event.created_at ? `· ${formatDate(String(event.created_at))}` : ""}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Status canonical: {formatStatus(selected.projection?.timeline?.currentStatus ?? String(selected.record.status ?? "unknown"))}. Tidak ada event tambahan.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {detailLoading && <div className="fixed bottom-5 right-5 z-[60] rounded-lg bg-slate-900 px-3 py-2 text-xs text-white shadow-lg"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Memuat detail</div>}
     </div>
   );
 }

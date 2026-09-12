@@ -552,6 +552,163 @@ async function resolveContactPhone(portalCustomerId: number | null, sourcePhone:
   return sourcePhone?.trim() || null;
 }
 
+type AdminServiceProjection = {
+  finance: {
+    available: boolean;
+    source: string | null;
+    invoice: Record<string, unknown> | null;
+    payment: Record<string, unknown> | null;
+    paymentProof: Record<string, unknown> | null;
+  };
+  timeline: {
+    source: string;
+    currentStatus: string | null;
+    events: unknown[];
+  };
+};
+
+/**
+ * Read-only projection of the existing invoice/payment/proof/timeline
+ * contracts. The admin portal must not create a parallel lifecycle.
+ */
+async function loadAdminServiceProjection(
+  service: string,
+  id: number,
+  record: Record<string, unknown>,
+): Promise<AdminServiceProjection> {
+  let salesDocument: Record<string, unknown> | null = null;
+  let source: string | null = null;
+
+  if (service === "logistic-order") {
+    source = "logistic_order";
+    const result = await db.execute(sql`
+      SELECT id, doc_number, invoice_number, invoice_date, due_date,
+             invoice_status, payment_status, grand_total, amount_paid,
+             invoice_pdf_url, proof_url, proof_uploaded_at, proof_remarks
+      FROM sales_documents
+      WHERE logistic_order_id = ${id}
+      ORDER BY id DESC LIMIT 1
+    `);
+    salesDocument = (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+  } else if (service === "product-order") {
+    source = "product_order";
+    const result = await db.execute(sql`
+      SELECT sd.id, sd.doc_number, sd.invoice_number, sd.invoice_date, sd.due_date,
+             sd.invoice_status, sd.payment_status, sd.grand_total, sd.amount_paid,
+             sd.invoice_pdf_url, sd.proof_url, sd.proof_uploaded_at, sd.proof_remarks
+      FROM portal_product_orders po
+      LEFT JOIN sales_documents sd ON sd.id = po.sales_doc_id
+      WHERE po.id = ${id}
+      LIMIT 1
+    `);
+    salesDocument = (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+  } else if (service === "marketplace-po") {
+    source = "marketplace_purchase_order";
+    const result = await db.execute(sql`
+      SELECT sd.id, sd.doc_number, sd.invoice_number, sd.invoice_date, sd.due_date,
+             sd.invoice_status, sd.payment_status, sd.grand_total, sd.amount_paid,
+             sd.invoice_pdf_url, sd.proof_url, sd.proof_uploaded_at, sd.proof_remarks
+      FROM mkt_purchase_orders po
+      LEFT JOIN sales_documents sd ON sd.id = po.sales_document_id
+      WHERE po.id = ${id}
+      LIMIT 1
+    `);
+    salesDocument = (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+  } else if (service === "freight-forwarding" || service === "custom-clearance") {
+    source = "sales_document";
+    const result = await db.execute(sql`
+      SELECT id, doc_number, invoice_number, invoice_date, due_date,
+             invoice_status, payment_status, grand_total, amount_paid,
+             invoice_pdf_url, proof_url, proof_uploaded_at, proof_remarks
+      FROM sales_documents WHERE id = ${id} LIMIT 1
+    `);
+    salesDocument = (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+  }
+
+  const invoice = salesDocument
+    ? {
+        id: Number(salesDocument.id),
+        number: salesDocument.invoice_number ?? salesDocument.doc_number ?? null,
+        status: salesDocument.invoice_status ?? "none",
+        paymentStatus: salesDocument.payment_status ?? "unpaid",
+        total: Number(salesDocument.grand_total ?? 0),
+        amountPaid: Number(salesDocument.amount_paid ?? 0),
+        outstanding: Math.max(0, Number(salesDocument.grand_total ?? 0) - Number(salesDocument.amount_paid ?? 0)),
+        dueDate: salesDocument.due_date ?? null,
+        pdfAvailable: Boolean(salesDocument.invoice_pdf_url),
+        downloadUrl: `/api/portal/me/invoices/${Number(salesDocument.id)}/download`,
+      }
+    : null;
+  const paymentProof = salesDocument
+    ? {
+        status: salesDocument.proof_url ? "uploaded_pending_review" : "not_uploaded",
+        uploadedAt: salesDocument.proof_uploaded_at ?? null,
+        remarks: salesDocument.proof_remarks ?? null,
+        fileUrl: salesDocument.proof_url ? `/api/payment-proof/file/${Number(salesDocument.id)}` : null,
+      }
+    : null;
+  let payment: Record<string, unknown> | null = null;
+  if (salesDocument) {
+    payment = {
+      status: salesDocument.payment_status ?? "unpaid",
+      amountPaid: Number(salesDocument.amount_paid ?? 0),
+      fulfillmentGate: salesDocument.payment_status === "paid" ? "payment_verified" : "payment_required",
+    };
+  } else if (service === "product-order") {
+    payment = {
+      status: record.payment_status ?? "unpaid",
+      amountPaid: record.payment_status === "paid" ? Number(record.grand_total ?? 0) : 0,
+      fulfillmentGate: record.payment_status === "paid" ? "payment_verified" : "payment_required",
+    };
+  }
+
+  let timelineSource = "status_only";
+  let events: unknown[] = [];
+  if (service === "logistic-order") {
+    timelineSource = "logistic_order_updates";
+    const result = await db.execute(sql`
+      SELECT id, status, notes, actor_type, actor_name, created_at
+      FROM order_updates WHERE order_id = ${id}
+      ORDER BY created_at ASC, id ASC LIMIT 100
+    `);
+    events = result.rows;
+  } else if (service === "marketplace-po") {
+    timelineSource = "marketplace_shipment_events";
+    const result = await db.execute(sql`
+      SELECT e.id, e.event_type, e.note, e.location, e.actor_type, e.created_at,
+             s.shipment_number
+      FROM mkt_po_shipment_events e
+      JOIN mkt_po_shipments s ON s.id = e.shipment_id
+      WHERE s.po_id = ${id}
+      ORDER BY e.created_at ASC, e.id ASC LIMIT 100
+    `);
+    events = result.rows;
+  } else if (service === "ppjk") {
+    timelineSource = "ppjk_status_logs";
+    const result = await db.execute(sql`
+      SELECT id, old_status, new_status, changed_at AS created_at, changed_by
+      FROM ppjk_status_logs WHERE ppjk_order_id = ${id}
+      ORDER BY changed_at ASC, id ASC LIMIT 100
+    `);
+    events = result.rows;
+  }
+
+  return {
+    finance: {
+      available: Boolean(invoice || payment),
+      source: salesDocument ? source : null,
+      invoice,
+      payment,
+      paymentProof,
+    },
+    timeline: {
+      source: timelineSource,
+      currentStatus: String(record.status ?? "") || null,
+      events,
+    },
+  };
+}
+
 async function sendLifecycleWhatsApp(
   service: string,
   id: number,
@@ -1007,7 +1164,8 @@ router.get("/:service/:id", async (req: Request, res: Response) => {
       ORDER BY created_at ASC, id ASC
     `);
     history = [...history, ...lifecycleHistory.rows];
-    return res.json({ service, id, record: record.record, history });
+    const projection = await loadAdminServiceProjection(service, id, record.record ?? {});
+    return res.json({ service, id, record: record.record, history, projection });
   } catch (error) {
     console.error("[portal-admin-service-ops] detail failed", { service, id, error });
     return res.status(500).json({ error: "Gagal memuat detail transaksi canonical" });

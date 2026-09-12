@@ -61,6 +61,40 @@ type Detail = {
   id: number;
   record: Record<string, unknown>;
   history: Array<Record<string, unknown>>;
+  projection?: {
+    finance?: {
+      available: boolean;
+      source: string | null;
+      invoice: {
+        id: number;
+        number: string | null;
+        status: string;
+        paymentStatus: string;
+        total: number;
+        amountPaid: number;
+        outstanding: number;
+        dueDate: string | null;
+        pdfAvailable: boolean;
+        downloadUrl: string;
+      } | null;
+      payment: {
+        status: string;
+        amountPaid: number;
+        fulfillmentGate: string;
+      } | null;
+      paymentProof: {
+        status: string;
+        uploadedAt: string | null;
+        remarks: string | null;
+        fileUrl: string | null;
+      } | null;
+    };
+    timeline?: {
+      source: string;
+      currentStatus: string | null;
+      events: Array<Record<string, unknown>>;
+    };
+  };
 };
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -428,6 +462,81 @@ export function ServiceOperationsTab() {
                   </div>
                 ))}
               </div>
+              {selected.projection?.finance && (
+                <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <h4 className="text-sm font-semibold text-slate-800">Invoice & Payment</h4>
+                    <span className="text-[11px] text-slate-500">
+                      {selected.projection.finance.source ? `Sumber: ${selected.projection.finance.source}` : "Belum terhubung"}
+                    </span>
+                  </div>
+                  {selected.projection.finance.invoice ? (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        ["Invoice", selected.projection.finance.invoice.number ?? "—"],
+                        ["Total", `Rp ${selected.projection.finance.invoice.total.toLocaleString("id-ID")}`],
+                        ["Dibayar", `Rp ${selected.projection.finance.invoice.amountPaid.toLocaleString("id-ID")}`],
+                        ["Outstanding", `Rp ${selected.projection.finance.invoice.outstanding.toLocaleString("id-ID")}`],
+                        ["Payment", statusLabel(selected.projection.finance.invoice.paymentStatus)],
+                        ["Proof", statusLabel(selected.projection.finance.paymentProof?.status ?? "not_uploaded")],
+                        ["Jatuh tempo", formatDate(selected.projection.finance.invoice.dueDate)],
+                        ["Fulfillment gate", statusLabel(selected.projection.finance.payment?.fulfillmentGate ?? "payment_required")],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="rounded-lg bg-white/80 p-3">
+                          <p className="text-[11px] uppercase tracking-wide text-slate-400">{String(label)}</p>
+                          <p className="mt-1 text-sm font-medium text-slate-800 break-words">{String(value)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-600">Belum ada invoice canonical yang terhubung.</p>
+                  )}
+                  {selected.projection.finance.paymentProof?.remarks && (
+                    <p className="mt-3 text-xs text-slate-600">Catatan proof: {selected.projection.finance.paymentProof.remarks}</p>
+                  )}
+                  {selected.projection.finance.paymentProof?.fileUrl && (
+                    <a
+                      href={selected.projection.finance.paymentProof.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-flex text-xs font-semibold text-sky-700 hover:underline"
+                    >
+                      Buka bukti pembayaran
+                    </a>
+                  )}
+                </div>
+              )}
+              {selected.projection?.timeline && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Clock3 className="h-4 w-4 text-indigo-500" />
+                    <h4 className="text-sm font-semibold">Timeline canonical</h4>
+                    <span className="text-[11px] text-slate-400">({selected.projection.timeline.source})</span>
+                  </div>
+                  {selected.projection.timeline.events.length === 0 ? (
+                    <p className="text-sm text-slate-500">
+                      Belum ada event timeline. Status saat ini: {statusLabel(selected.projection.timeline.currentStatus ?? "unknown")}.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {selected.projection.timeline.events.map((event, index) => (
+                        <div key={`${String(event.id ?? index)}`} className="flex items-start gap-3 rounded-lg border p-3">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-indigo-500" />
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">
+                              {statusLabel(String(event.status ?? event.event_type ?? event.new_status ?? "event"))}
+                            </p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {String(event.notes ?? event.note ?? event.location ?? "")}{" "}
+                              {event.created_at ? `· ${formatDate(String(event.created_at))}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
                 <div className="flex items-center gap-2 mb-2"><Clock3 className="h-4 w-4 text-indigo-500" /><h4 className="text-sm font-semibold">History</h4></div>
                 <div className="space-y-2">
