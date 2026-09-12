@@ -132,6 +132,10 @@ const CustomerApproveBodySchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+const ShipmentSelectionBodySchema = z.object({
+  shipmentType: z.enum(["pickup_self", "trucking", "air_freight", "sea_freight", "door_to_door"]),
+}).strict();
+
 // ── All routes require portal buyer/approver auth ─────────────────────────────
 router.use(requirePortalAuth);
 
@@ -590,6 +594,86 @@ router.get("/purchase-orders/:id/shipments", async (req: Request, res: Response)
     return res.status(500).json({ ok: false, error: "Gagal memuat shipments" });
   }
 });
+
+// ── POST /api/mkt/portal/purchase-orders/:id/shipment-selection ───────────────
+// Customer memilih mode pengiriman. Ini membuat planned mkt_po_shipments
+// canonical agar vendor melanjutkan shipment yang sama, bukan membuat lifecycle
+// portal-product baru.
+router.post(
+  "/purchase-orders/:id/shipment-selection",
+  writeLimiter,
+  validateBody(ShipmentSelectionBodySchema),
+  async (req: Request, res: Response) => {
+    const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+    const poId = Number(req.params["id"]);
+    if (!Number.isInteger(poId) || poId <= 0) {
+      return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+    }
+
+    try {
+      const { db, mktPurchaseOrdersTable, mktRfqsTable, mktPurchaseOrderLinesTable } = await import("@workspace/db");
+      const { and, eq, asc, sql } = await import("drizzle-orm");
+      const { createShipmentForCustomer, listShipmentsForPo } = await import("../lib/services/mktPoShipmentService.js");
+
+      const [po] = await db
+        .select({ id: mktPurchaseOrdersTable.id, status: mktPurchaseOrdersTable.status })
+        .from(mktPurchaseOrdersTable)
+        .innerJoin(mktRfqsTable, and(
+          eq(mktPurchaseOrdersTable.rfqId, mktRfqsTable.id),
+          eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+        ))
+        .where(eq(mktPurchaseOrdersTable.id, poId))
+        .limit(1);
+      if (!po) return res.status(404).json({ ok: false, error: "Purchase order tidak ditemukan" });
+
+      const existing = (await listShipmentsForPo(poId)).find((shipment) => shipment.shipmentStatus !== "cancelled");
+      if (existing) {
+        if (existing.shipmentType === req.body.shipmentType) {
+          return res.json({ ok: true, alreadySelected: true, data: existing });
+        }
+        return res.status(409).json({ ok: false, error: "SHIPMENT_SELECTION_EXISTS", message: "Mode pengiriman sudah dipilih untuk PO ini" });
+      }
+
+      const lines = await db
+        .select({
+          id: mktPurchaseOrderLinesTable.id,
+          qty: mktPurchaseOrderLinesTable.qty,
+          unit: mktPurchaseOrderLinesTable.unit,
+          lineNumber: sql<number>`row_number() over (order by ${mktPurchaseOrderLinesTable.id})`,
+        })
+        .from(mktPurchaseOrderLinesTable)
+        .where(eq(mktPurchaseOrderLinesTable.poId, poId))
+        .orderBy(asc(mktPurchaseOrderLinesTable.id));
+      if (lines.length === 0) return res.status(422).json({ ok: false, error: "PO belum memiliki line item" });
+
+      const result = await createShipmentForCustomer(
+        {
+          poId,
+          shipmentType: req.body.shipmentType,
+          idempotencyKey: `customer-selection:${poId}:${req.body.shipmentType}`,
+          notes: "Mode pengiriman dipilih customer",
+          items: lines.map((line) => ({
+            poLineId: line.id,
+            lineNumber: Number(line.lineNumber),
+            qty: Number(line.qty),
+            uom: line.unit,
+          })),
+        },
+        { actorType: "customer", actorId: `portal:${portalCustomerId}`, actorName: "Customer Portal" },
+      );
+
+      if (!result.ok) return res.status(422).json({ ok: false, error: result.code, message: result.message });
+      return res.status(result.alreadyExists ? 200 : 201).json({
+        ok: true,
+        alreadySelected: result.alreadyExists === true,
+        data: result.shipment,
+      });
+    } catch (err: unknown) {
+      logger.error({ err, portalCustomerId, poId }, "[mktPortal] shipment selection error");
+      return res.status(500).json({ ok: false, error: "Gagal menyimpan pilihan pengiriman" });
+    }
+  },
+);
 
 // ── GET /api/mkt/portal/shipments/:shipmentId/timeline ───────────────────────
 router.get("/shipments/:shipmentId/timeline", async (req: Request, res: Response) => {

@@ -468,6 +468,24 @@ export async function createShipment(input: CreateShipmentInput, actor: ActorInf
   return createShipmentInternal(input, actor);
 }
 
+/** Customer shipment-mode selection creates only a planned canonical shipment. */
+export async function createShipmentForCustomer(
+  input: CreateShipmentInput,
+  actor: ActorInfo,
+): Promise<CreateShipmentResult> {
+  return createShipmentInternal(input, actor, {
+    eligiblePoStatuses: [
+      "pending",
+      "confirmed",
+      "vendor_accepted",
+      "production",
+      "ready_to_ship",
+      "in_progress",
+      "in_transit",
+    ],
+  });
+}
+
 export type VendorCreateShipmentResult =
   | ({ ok: true; shipment: ShipmentRow; items: (typeof mktPoShipmentItemsTable.$inferSelect)[]; alreadyExists?: boolean })
   | ({ ok: false; code: TokenLookupFailure } & Partial<Pick<Extract<CreateShipmentResult, { ok: false }>, "message">>)

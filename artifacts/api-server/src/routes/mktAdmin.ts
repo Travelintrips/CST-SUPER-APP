@@ -37,6 +37,7 @@ import {
   inviteVendorToRfq,
   getVendorQuotesForRfq,
 } from "../lib/services/vendorInvitationService.js";
+import { approveRfqForAdmin } from "../lib/services/rfqApprovalService.js";
 import {
   getQuoteComparisonData,
   selectVendorAndCreatePo,
@@ -137,6 +138,10 @@ const fulfillmentWriteLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan fulfillment." },
 });
 const podUpload = imagePdfUpload(20);
+const AdminApproveAndInviteBodySchema = z.object({
+  vendorIds: z.array(z.number().int().positive()).min(1).max(50),
+  notes: z.string().trim().max(1000).optional(),
+}).strict();
 const CreateShipmentBodySchema = z.object({
   shipmentType: z.string().trim().max(100).optional().nullable(),
   carrierName: z.string().trim().max(200).optional().nullable(),
@@ -416,6 +421,44 @@ router.get("/rfqs/:rfqId", async (req, res) => {
     return res.status(500).json({ ok: false, error: "Gagal mengambil detail RFQ" });
   }
 });
+
+// ── POST /api/mkt/admin/rfqs/:rfqId/approve-and-invite ─────────────────────────
+// Admin menyetujui RFQ lalu mengundang vendor melalui mkt_vendor_quotes.
+// Pengulangan aman: quote vendor yang sudah ada dikembalikan sebagai alreadyInvited.
+router.post(
+  "/rfqs/:rfqId/approve-and-invite",
+  fulfillmentWriteLimiter,
+  validateBody(AdminApproveAndInviteBodySchema),
+  async (req, res) => {
+    const ok = await requireAdmin(req, res);
+    if (!ok) return;
+
+    const rfqId = Number(req.params["rfqId"]);
+    if (!Number.isInteger(rfqId) || rfqId <= 0) {
+      return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+    }
+
+    const admin = req.user as { id?: string; name?: string } | undefined;
+    const result = await approveRfqForAdmin({
+      rfqId,
+      vendorIds: req.body.vendorIds,
+      notes: req.body.notes,
+      adminId: admin?.id ?? "admin",
+      adminName: admin?.name ?? admin?.id ?? "Admin Marketplace",
+    });
+
+    if (!result.ok) {
+      const status =
+        result.code === "RFQ_NOT_FOUND" ? 404 :
+        result.code === "VENDOR_NOT_FOUND" ? 404 :
+        result.code === "VENDOR_INACTIVE" || result.code === "NO_VENDORS" || result.code === "WRONG_STATUS" ? 422 :
+        result.code === "INVITE_FAILED" ? 409 : 500;
+      return res.status(status).json({ ok: false, error: result.code, message: result.message });
+    }
+
+    return res.json({ ok: true, data: result });
+  },
+);
 
 // ── POST /api/mkt/admin/rfqs/:rfqId/invite-vendor ─────────────────────────────
 // Phase 2C: Undang vendor ke RFQ — membuat satu mkt_vendor_quotes row (status: invited).

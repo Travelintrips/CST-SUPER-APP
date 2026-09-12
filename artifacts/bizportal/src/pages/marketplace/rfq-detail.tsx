@@ -12,9 +12,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { RfqStatusBadge, ApprovalStatusBadge, QuoteStatusBadge } from "@/components/marketplace/MktStatusBadge";
 import { RequoteDialog } from "@/components/marketplace/RequoteDialog";
 import { DealPriceDialog } from "@/components/marketplace/DealPriceDialog";
+import { useVendors } from "@/hooks/useVendors";
 import { toast } from "sonner";
 import {
   ArrowLeft, Scale, Users, UserCheck, Building2, Calendar, Send,
@@ -100,6 +102,8 @@ export default function MktRfqDetailPage() {
   const [requoteTarget, setRequoteTarget] = useState<VendorQuote | null>(null);
   const [dealTarget, setDealTarget] = useState<VendorQuote | null>(null);
   const [inviteForm, setInviteForm] = useState({ open: false, vendorId: "", notes: "" });
+  const [approvalForm, setApprovalForm] = useState({ open: false, vendorIds: [] as number[], notes: "" });
+  const { data: vendors = [], isLoading: vendorsLoading } = useVendors();
 
   const { data: rfqData } = useQuery<{ ok: boolean; data: RfqDetail }>({
     queryKey: ["mkt-rfq-detail", rfqIdNum],
@@ -145,6 +149,50 @@ export default function MktRfqDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const approveMutation = useMutation({
+    mutationFn: async () => {
+      if (approvalForm.vendorIds.length === 0) throw new Error("Pilih minimal satu vendor");
+      const res = await fetch(`/api/mkt/admin/rfqs/${rfqIdNum}/approve-and-invite`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendorIds: approvalForm.vendorIds, notes: approvalForm.notes || undefined }),
+      });
+      const body = await res.json() as { error?: string; message?: string };
+      if (!res.ok) throw new Error(body.message ?? body.error ?? "Gagal menyetujui RFQ");
+      return body;
+    },
+    onSuccess: () => {
+      toast.success("RFQ disetujui dan undangan vendor dikirim");
+      setApprovalForm({ open: false, vendorIds: [], notes: "" });
+      void qc.invalidateQueries({ queryKey: ["mkt-rfq-detail", rfqIdNum] });
+      void qc.invalidateQueries({ queryKey: ["mkt-vendor-quotes", rfqIdNum] });
+      void qc.invalidateQueries({ queryKey: ["mkt-admin-rfqs"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const sendCustomerMutation = useMutation({
+    mutationFn: async (quoteId: number) => {
+      const res = await fetch(`/api/mkt/admin/rfqs/${rfqIdNum}/send-to-customer`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quoteId }),
+      });
+      const body = await res.json() as { error?: string; message?: string };
+      if (!res.ok) throw new Error(body.message ?? body.error ?? "Gagal mengirim quotation");
+      return body;
+    },
+    onSuccess: () => {
+      toast.success("Quotation dikirim ke customer untuk approval");
+      void qc.invalidateQueries({ queryKey: ["mkt-rfq-detail", rfqIdNum] });
+      void qc.invalidateQueries({ queryKey: ["mkt-vendor-quotes", rfqIdNum] });
+      void qc.invalidateQueries({ queryKey: ["mkt-admin-rfqs"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const quotes = quotesData?.data ?? [];
   const submittedQuotes = quotes.filter((q) => ["submitted", "selected"].includes(q.status));
 
@@ -176,6 +224,16 @@ export default function MktRfqDetailPage() {
               <Users className="w-4 h-4 mr-1" />
               Undang Vendor
             </Button>
+            {rfqData?.data.approvalStatus === "pending" && rfqData.data.rfqStatus === "draft" && (
+              <Button
+                size="sm"
+                className="bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => setApprovalForm({ open: true, vendorIds: [], notes: "" })}
+              >
+                <CheckCircle2 className="w-4 h-4 mr-1" />
+                Setujui & Undang
+              </Button>
+            )}
           </div>
         </div>
 
@@ -303,6 +361,18 @@ export default function MktRfqDetailPage() {
                                 Requote
                               </Button>
                             )}
+                            {["submitted", "selected"].includes(q.status) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-blue-600 hover:bg-blue-50 h-7 text-xs"
+                                onClick={() => sendCustomerMutation.mutate(q.id)}
+                                disabled={sendCustomerMutation.isPending || ["customer_review", "awarded"].includes(rfqData?.data.rfqStatus ?? "")}
+                              >
+                                <Mail className="w-3.5 h-3.5 mr-1" />
+                                Kirim ke Customer
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -396,6 +466,70 @@ export default function MktRfqDetailPage() {
               disabled={inviteMutation.isPending || !inviteForm.vendorId}
             >
               {inviteMutation.isPending ? "Mengundang…" : "Kirim Undangan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={approvalForm.open} onOpenChange={(v) => { if (!v) setApprovalForm({ open: false, vendorIds: [], notes: "" }); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              Setujui RFQ & Undang Vendor
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Approval ini mengubah RFQ menjadi submitted dan membuat undangan canonical di mkt_vendor_quotes.
+            </p>
+            <div>
+              <Label>Vendor yang menerima RFQ <span className="text-red-500">*</span></Label>
+              <div className="mt-2 max-h-56 overflow-y-auto rounded-md border divide-y">
+                {vendorsLoading && <p className="p-3 text-sm text-muted-foreground">Memuat vendor…</p>}
+                {!vendorsLoading && vendors.length === 0 && <p className="p-3 text-sm text-muted-foreground">Tidak ada vendor aktif.</p>}
+                {vendors.map((vendor) => {
+                  const vendorId = Number(vendor.id);
+                  const checked = approvalForm.vendorIds.includes(vendorId);
+                  return (
+                    <label key={vendorId} className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/40">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(value) => setApprovalForm((current) => ({
+                          ...current,
+                          vendorIds: value
+                            ? [...new Set([...current.vendorIds, vendorId])]
+                            : current.vendorIds.filter((id) => id !== vendorId),
+                        }))}
+                      />
+                      <span className="text-sm">
+                        <span className="font-medium">{vendor.name}</span>
+                        {"phone" in vendor && vendor.phone ? <span className="block text-xs text-muted-foreground">{vendor.phone}</span> : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">{approvalForm.vendorIds.length} vendor dipilih</p>
+            </div>
+            <div>
+              <Label>Catatan approval (opsional)</Label>
+              <Textarea
+                value={approvalForm.notes}
+                onChange={(e) => setApprovalForm((current) => ({ ...current, notes: e.target.value }))}
+                rows={2}
+                className="resize-none mt-1"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApprovalForm({ open: false, vendorIds: [], notes: "" })}>Batal</Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              onClick={() => approveMutation.mutate()}
+              disabled={approveMutation.isPending || approvalForm.vendorIds.length === 0}
+            >
+              {approveMutation.isPending ? "Menyimpan…" : "Setujui & Kirim RFQ"}
             </Button>
           </DialogFooter>
         </DialogContent>

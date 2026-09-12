@@ -33,6 +33,7 @@ import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
+import { inviteVendorToRfq } from "./vendorInvitationService.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -334,6 +335,171 @@ export async function approveRfq(
     logger.warn({ err, rfqId }, "[rfqApproval] approveRfq DB error");
     return { ok: false, code: "DB_ERROR", message: msg };
   }
+}
+
+// ── Admin approval bridge ──────────────────────────────────────────────────────
+//
+// The buyer-company approver remains the normal approval authority. This bridge
+// is for the Marketplace operator surface: one authenticated admin action may
+// resolve a pending RFQ and invite the selected vendors through the same
+// canonical mkt_vendor_quotes service used by the standalone invite endpoint.
+export type AdminApprovalResult =
+  | ApprovalSuccess<{
+      rfqNumber: string;
+      invited: Array<{ vendorId: number; quoteId: number; alreadyInvited: boolean }>;
+      alreadyApproved: boolean;
+    }>
+  | {
+      ok: false;
+      code:
+        | "RFQ_NOT_FOUND"
+        | "WRONG_STATUS"
+        | "NO_VENDORS"
+        | "VENDOR_NOT_FOUND"
+        | "VENDOR_INACTIVE"
+        | "INVITE_FAILED"
+        | "DB_ERROR";
+      message: string;
+    };
+
+export async function approveRfqForAdmin(opts: {
+  rfqId: number;
+  vendorIds: number[];
+  adminId: string;
+  adminName: string;
+  notes?: string;
+}): Promise<AdminApprovalResult> {
+  const vendorIds = [...new Set(opts.vendorIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (vendorIds.length === 0) {
+    return { ok: false, code: "NO_VENDORS", message: "Pilih minimal satu vendor sebelum RFQ disetujui" };
+  }
+
+  let rfq: { id: number; rfqNumber: string; status: string; approvalStatus: string };
+  let alreadyApproved = false;
+
+  try {
+    const [row] = await db
+      .select({
+        id: mktRfqsTable.id,
+        rfqNumber: mktRfqsTable.rfqNumber,
+        status: mktRfqsTable.status,
+        approvalStatus: mktRfqsTable.approvalStatus,
+      })
+      .from(mktRfqsTable)
+      .where(eq(mktRfqsTable.id, opts.rfqId))
+      .limit(1);
+
+    if (!row) return { ok: false, code: "RFQ_NOT_FOUND", message: "RFQ tidak ditemukan" };
+    if (row.status === "cancelled" || row.status === "expired" || row.status === "awarded") {
+      return { ok: false, code: "WRONG_STATUS", message: `RFQ tidak dapat disetujui pada status ${row.status}` };
+    }
+
+    alreadyApproved = row.approvalStatus === "approved" && row.status !== "draft";
+    if (!alreadyApproved && !(row.status === "draft" && ["pending", "rejected", "none"].includes(row.approvalStatus))) {
+      return {
+        ok: false,
+        code: "WRONG_STATUS",
+        message: `RFQ tidak menunggu approval (status=${row.status}, approval=${row.approvalStatus})`,
+      };
+    }
+    rfq = row;
+  } catch (err) {
+    logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin RFQ lookup failed");
+    return { ok: false, code: "DB_ERROR", message: "Gagal memuat RFQ" };
+  }
+
+  if (!alreadyApproved) {
+    try {
+      await db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(mktRfqsTable)
+          .set({
+            status: "submitted",
+            approvalStatus: "approved",
+            approvalResolvedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(mktRfqsTable.id, opts.rfqId), eq(mktRfqsTable.status, "draft")))
+          .returning({ id: mktRfqsTable.id });
+
+        if (!updated) {
+          throw Object.assign(new Error("RFQ approval race"), { code: "WRONG_STATUS" });
+        }
+
+        await tx
+          .update(mktRfqApprovalsTable)
+          .set({
+            status: "approved",
+            respondedAt: new Date(),
+            responseNotes: opts.notes?.trim() || `Disetujui admin ${opts.adminName}`,
+          })
+          .where(and(eq(mktRfqApprovalsTable.rfqId, opts.rfqId), eq(mktRfqApprovalsTable.status, "pending")));
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "WRONG_STATUS") {
+        return { ok: false, code: "WRONG_STATUS", message: "RFQ sudah berubah status oleh proses lain" };
+      }
+      logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin approval failed");
+      return { ok: false, code: "DB_ERROR", message: "Gagal menyimpan approval RFQ" };
+    }
+  }
+
+  const invited: Array<{ vendorId: number; quoteId: number; alreadyInvited: boolean }> = [];
+  for (const vendorId of vendorIds) {
+    const result = await inviteVendorToRfq({
+      rfqId: opts.rfqId,
+      vendorId,
+      adminId: opts.adminId,
+      adminName: opts.adminName,
+    });
+
+    if (result.ok) {
+      invited.push({ vendorId, quoteId: result.quoteId, alreadyInvited: false });
+      continue;
+    }
+    if (result.code === "DUPLICATE_INVITE") {
+      invited.push({ vendorId, quoteId: result.existingQuoteId, alreadyInvited: true });
+      continue;
+    }
+    if (result.code === "VENDOR_NOT_FOUND" || result.code === "VENDOR_INACTIVE") {
+      return { ok: false, code: result.code, message: result.message };
+    }
+    logger.warn({ rfqId: opts.rfqId, vendorId, code: result.code }, "[rfqApproval] admin invite failed");
+    return { ok: false, code: "INVITE_FAILED", message: result.message };
+  }
+
+  await logActivity({
+    mktRfqId: opts.rfqId,
+    actorType: "admin",
+    actorId: opts.adminId,
+    actorName: opts.adminName,
+    action: "mkt_rfq_admin_approved_and_invited",
+    description: `Admin menyetujui RFQ ${rfq.rfqNumber} dan mengundang ${invited.length} vendor`,
+    newValue: {
+      rfqId: opts.rfqId,
+      rfqNumber: rfq.rfqNumber,
+      vendorIds: invited.map((item) => item.vendorId),
+      quoteIds: invited.map((item) => item.quoteId),
+      alreadyApproved,
+    },
+  }).catch(() => {});
+
+  enqueueNotification({
+    eventType: "mkt_rfq_approved",
+    recipientType: "buyer",
+    rfqId: opts.rfqId,
+    payloadJson: {
+      rfqId: opts.rfqId,
+      rfqNumber: rfq.rfqNumber,
+      approvedBy: opts.adminId,
+      invitedVendorCount: invited.length,
+    },
+  }).catch((err: unknown) => {
+    logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin approval notification failed");
+  });
+
+  return { ok: true, rfqNumber: rfq.rfqNumber, invited, alreadyApproved };
 }
 
 // ── Reject RFQ ────────────────────────────────────────────────────────────────
