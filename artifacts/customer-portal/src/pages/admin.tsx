@@ -33,6 +33,7 @@ import { VendorMarketplaceTab, VendorInvitationsTab, VendorCatalogTab } from "@/
 import { FixJasaNamesTool, ProdukUnggulanTab }           from "@/pages/admin/PromoManagement";
 import { MasterPriceManagement }                         from "@/pages/admin/MasterPriceManagement";
 import { ServiceOperationsTab }                           from "@/pages/admin/ServiceOperationsTab";
+import { MarketplaceOperationsTab }                       from "@/pages/admin/MarketplaceOperations";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ErpStats = {
@@ -239,6 +240,7 @@ export default function AdminPage() {
                 <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionMarketplace", "Marketplace")}</p>
                 {[
                   { value: "vendor-catalog",    icon: Package,      label: t("adminPage.nav.vendorCatalog", "Katalog Vendor") },
+                  { value: "marketplace-operations", icon: PackageCheck, label: "Marketplace Operations" },
                   { value: "produk-unggulan",   icon: Store,        label: t("adminPage.nav.featuredProducts", "Produk Unggulan") },
                   { value: "mini-forms",        icon: Link2,        label: t("adminPage.nav.miniForms", "Mini Form") },
                   { value: "product-templates", icon: Layers,       label: t("adminPage.nav.productTemplates", "Product Templates") },
@@ -330,6 +332,7 @@ export default function AdminPage() {
 
                   <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionMarketplace", "Marketplace")}</p>
                   <TabsTrigger value="vendor-catalog"     className={TABS_TRIGGER_CLS}><Package      className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.vendorCatalog", "Katalog Vendor")}</TabsTrigger>
+                  <TabsTrigger value="marketplace-operations" className={TABS_TRIGGER_CLS}><PackageCheck className="h-4 w-4 shrink-0" strokeWidth={2} />Marketplace Operations</TabsTrigger>
                   <TabsTrigger value="produk-unggulan"    className={TABS_TRIGGER_CLS}><Store        className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.featuredProducts", "Produk Unggulan")}</TabsTrigger>
                   <TabsTrigger value="mini-forms"         className={TABS_TRIGGER_CLS}><Link2        className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.miniForms", "Mini Form")}</TabsTrigger>
                   <TabsTrigger value="product-templates"  className={TABS_TRIGGER_CLS}><Layers       className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.productTemplates", "Product Templates")}</TabsTrigger>
@@ -600,6 +603,9 @@ export default function AdminPage() {
 
                   <TabsContent value="vendor-catalog">
                     <VendorCatalogTab />
+                  </TabsContent>
+                  <TabsContent value="marketplace-operations">
+                    <MarketplaceOperationsTab />
                   </TabsContent>
 
                   <TabsContent value="vendor-marketplace">

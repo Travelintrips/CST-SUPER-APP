@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { requirePortalAdmin, type PortalAuthReq } from "./supabaseAuth.js";
 
 /**
  * Marketplace authority is deliberately narrower than BizPortal administration.
@@ -55,7 +56,20 @@ function hasMarketplacePermission(rawPermissions: unknown, action: MarketplaceAc
  * and `owner` roles do not bypass this check.
  */
 export async function requireMarketplaceOperator(req: Request, res: Response): Promise<boolean> {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !(req as any).isInternalSession) {
+  // Customer Portal admins are an approved operator surface as well.  Run the
+  // canonical portal-admin guard here instead of trusting a role/profile sent
+  // by the browser.  Internal BizPortal sessions continue through the stricter
+  // company + permission path below.
+  if (!(req as any).isInternalSession) {
+    let portalAdminAuthorized = false;
+    await requirePortalAdmin(req, res, () => {
+      portalAdminAuthorized = (req as PortalAuthReq).portalRole === "admin";
+    });
+    if (!portalAdminAuthorized) return false;
+    return true;
+  }
+
+  if (!req.isAuthenticated || !req.isAuthenticated()) {
     res.status(401).json({ message: "Unauthorized" });
     return false;
   }
