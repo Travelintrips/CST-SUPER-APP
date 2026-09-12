@@ -908,7 +908,7 @@ async function loadAdminServiceProjection(
         note: event.note,
         location: event.location,
         actorType: event.actorType,
-        actorName: event.actorName,
+        actorName: event.actorId,
         createdAt: event.createdAt,
         hasAttachment: Boolean(event.attachmentObjectPath),
       }));
