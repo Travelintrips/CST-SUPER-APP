@@ -506,7 +506,7 @@ export default function AccountingHubGLPage() {
             <DatePicker value={filters.date_from} onChange={v => { setMonth(""); setFilters(f => ({...f, date_from: v})); }} className="w-40" />
             <DatePicker value={filters.date_to} onChange={v => { setMonth(""); setFilters(f => ({...f, date_to: v})); }} className="w-40" />
             <Select value={filters.source_module || "__all"} onValueChange={v => setFilters(f => ({...f, source_module: v === "__all" ? "" : v}))}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="Modul" /></SelectTrigger>
+              <SelectTrigger className="w-44" data-testid="select-gl-source-module"><SelectValue placeholder="Modul" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">Semua Modul</SelectItem>
                 {MODULES.map(m => <SelectItem key={m} value={m}>{moduleLabel(m)}</SelectItem>)}
@@ -519,7 +519,7 @@ export default function AccountingHubGLPage() {
               className="w-32"
             />
             <Select value={filters.payment_method || "__all"} onValueChange={v => setFilters(f => ({...f, payment_method: v === "__all" ? "" : v}))}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="Metode Pembayaran" /></SelectTrigger>
+              <SelectTrigger className="w-44" data-testid="select-gl-payment-method"><SelectValue placeholder="Metode Pembayaran" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all">Semua Metode</SelectItem>
                 {PAYMENT_METHODS.map(pm => <SelectItem key={pm.value} value={pm.value}>{pm.label}</SelectItem>)}
