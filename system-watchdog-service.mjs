@@ -52,6 +52,12 @@ const SIMULATE_FAILURES  = new Set(
     .map(s => s.trim().toLowerCase()).filter(Boolean)
 );
 
+// Logistic Order is now implemented inside Customer Portal. Keep an explicit
+// opt-in for deployments that still run a standalone legacy service, but do
+// not monitor the removed artifact by default.
+const STANDALONE_LOGISTIC_ORDER_ENABLED =
+  process.env.LOGISTIC_ORDER_SERVICE_ENABLED === "true";
+
 try { fs.mkdirSync(SIGNAL_DIR, { recursive: true }); } catch (_) {}
 
 // ── DB pool ───────────────────────────────────────────────────────────────────
@@ -142,16 +148,6 @@ const DEFAULT_SERVICES = [
     sort_order:   3,
   },
   {
-    service_name: "logistic-order",
-    display_name: "Logistic Order",
-    url:          `http://127.0.0.1:${process.env.LOGISTIC_ORDER_PORT ?? 19368}`,
-    health_path:  "/logistic-order/",
-    weight:       10,
-    is_frontend:  true,
-    dependencies: ["api-server"],
-    sort_order:   4,
-  },
-  {
     service_name: "gateway",
     display_name: "Gateway",
     url:          `http://127.0.0.1:${process.env.GATEWAY_PORT ?? 5000}`,
@@ -159,7 +155,7 @@ const DEFAULT_SERVICES = [
     weight:       10,
     is_frontend:  true,
     dependencies: [],
-    sort_order:   5,
+    sort_order:   4,
   },
 ];
 
@@ -189,7 +185,6 @@ const PROD_SERVICE_PORT_ENV = {
   "api-server":      "API_PORT",
   "bizportal":       "BIZPORTAL_PORT",
   "customer-portal": "CUSTOMER_PORT",
-  "logistic-order":  "LOGISTIC_ORDER_PORT",
   "gateway":         "PORT",
 };
 
@@ -315,8 +310,11 @@ async function loadServiceRegistry() {
   const { rows } = await dbQuery(
     "SELECT * FROM service_registry WHERE is_active = true ORDER BY sort_order ASC"
   );
-  if (!rows.length) return DEFAULT_SERVICES;
-  return rows.map(r => ({
+  const activeRows = rows.filter((row) =>
+    STANDALONE_LOGISTIC_ORDER_ENABLED || row.service_name !== "logistic-order"
+  );
+  if (!activeRows.length) return DEFAULT_SERVICES;
+  return activeRows.map(r => ({
     service_name: r.service_name,
     display_name: r.display_name,
     url:          r.url,

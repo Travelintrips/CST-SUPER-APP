@@ -64,10 +64,6 @@ assert(
   "customer-portal dengan CUSTOMER_PORT=23434"
 );
 assert(
-  _buildProdUrlFromEnv("logistic-order", { LOGISTIC_ORDER_PORT: "19368" }) === "http://127.0.0.1:19368",
-  "logistic-order dengan LOGISTIC_ORDER_PORT=19368"
-);
-assert(
   _buildProdUrlFromEnv("gateway", { PORT: "5000" }) === "http://127.0.0.1:5000",
   "gateway dengan PORT=5000"
 );
@@ -121,7 +117,6 @@ const PROD_ENV = {
   API_PORT:            "18444",
   BIZPORTAL_PORT:      "18442",
   CUSTOMER_PORT:       "23434",
-  LOGISTIC_ORDER_PORT: "19368",
   PORT:                "5000",
 };
 
@@ -149,7 +144,6 @@ console.log("\n▶ B. Skenario 2 — Production + URL localhost/dev → diganti 
     { service_name: "api-server",      url: "http://127.0.0.1:8080"  }, // salah port (dev default)
     { service_name: "bizportal",       url: "http://127.0.0.1:6800"  }, // salah port
     { service_name: "customer-portal", url: "http://127.0.0.1:23435" }, // salah port
-    { service_name: "logistic-order",  url: "http://127.0.0.1:19368" }, // sudah benar
     { service_name: "gateway",         url: "http://localhost:5000"   }, // localhost → stale
   ];
   const query = makeMockQuery();
@@ -160,10 +154,6 @@ console.log("\n▶ B. Skenario 2 — Production + URL localhost/dev → diganti 
   assert(result.updated.includes("bizportal"),       "bizportal di-update (port salah)");
   assert(result.updated.includes("customer-portal"), "customer-portal di-update (port salah)");
   assert(result.updated.includes("gateway"),         "gateway di-update (localhost → 127.0.0.1)");
-
-  // logistic-order sudah benar → tidak di-update
-  assert(result.already_correct.includes("logistic-order"), "logistic-order tidak diubah (sudah benar)");
-  assert(!result.updated.includes("logistic-order"),        "logistic-order tidak masuk updated list");
 
   // Verifikasi nilai yang di-UPDATE ke DB
   const updateCalls = query.calls.filter(c => c.sql.startsWith("UPDATE"));
@@ -182,14 +172,13 @@ console.log("\n▶ B. Skenario 3 — Production + URL sudah benar → tidak diub
     { service_name: "api-server",      url: "http://127.0.0.1:18444" },
     { service_name: "bizportal",       url: "http://127.0.0.1:18442" },
     { service_name: "customer-portal", url: "http://127.0.0.1:23434" },
-    { service_name: "logistic-order",  url: "http://127.0.0.1:19368" },
     { service_name: "gateway",         url: "http://127.0.0.1:5000"  },
   ];
   const query = makeMockQuery();
   const result = await _doReconcile(rows, query, PROD_ENV, noLog);
 
   assert(result.updated.length === 0,        "Tidak ada update — semua URL sudah benar");
-  assert(result.already_correct.length === 5, "Semua 5 service masuk already_correct");
+  assert(result.already_correct.length === 4, "Semua 4 service masuk already_correct");
   assert(query.calls.filter(c => c.sql.startsWith("UPDATE")).length === 0,
     "Tidak ada query UPDATE ke DB");
 }
@@ -206,7 +195,6 @@ console.log("\n▶ B. Skenario 4 — Development mode → URL dev tidak diubah")
     API_PORT:            "18444",
     BIZPORTAL_PORT:      "18442",
     CUSTOMER_PORT:       "23434",
-    LOGISTIC_ORDER_PORT: "19368",
     PORT:                "5000",
   };
   const rows = [
@@ -246,7 +234,6 @@ console.log("\n▶ B. Skenario 6 — Re-run startup → idempotent");
   const rows = [
     { service_name: "api-server",      url: "http://127.0.0.1:8080"  },
     { service_name: "customer-portal", url: "http://127.0.0.1:23435" },
-    { service_name: "logistic-order",  url: "http://127.0.0.1:19368" },
   ];
   const query1 = makeMockQuery();
   const result1 = await _doReconcile(rows, query1, PROD_ENV, noLog);
@@ -256,12 +243,11 @@ console.log("\n▶ B. Skenario 6 — Re-run startup → idempotent");
   const rowsAfterFix = [
     { service_name: "api-server",      url: "http://127.0.0.1:18444" }, // sudah benar
     { service_name: "customer-portal", url: "http://127.0.0.1:23434" }, // sudah benar
-    { service_name: "logistic-order",  url: "http://127.0.0.1:19368" }, // selalu benar
   ];
   const query2 = makeMockQuery();
   const result2 = await _doReconcile(rowsAfterFix, query2, PROD_ENV, noLog);
   assert(result2.updated.length === 0,           "Run kedua: tidak ada update (idempotent)");
-  assert(result2.already_correct.length === 3,   "Run kedua: semua 3 row sudah benar");
+  assert(result2.already_correct.length === 2,   "Run kedua: semua 2 row sudah benar");
   assert(query2.calls.filter(c => c.sql.startsWith("UPDATE")).length === 0,
     "Run kedua: tidak ada query UPDATE ke DB");
 }
@@ -279,10 +265,10 @@ console.log("\n▶ B. Skenario 7 (bonus) — URL custom non-localhost tidak diub
   assert(result.updated.length === 0, "URL custom tidak diubah");
 }
 
-// ─── Verifikasi PROD_SERVICE_PORT_ENV mencakup semua 5 service ───────────────
+// ─── Verifikasi PROD_SERVICE_PORT_ENV mencakup service yang dipantau ──────────
 
 console.log("\n▶ C. Kelengkapan PROD_SERVICE_PORT_ENV");
-const requiredServices = ["api-server", "bizportal", "customer-portal", "logistic-order", "gateway"];
+const requiredServices = ["api-server", "bizportal", "customer-portal", "gateway"];
 for (const svc of requiredServices) {
   assert(PROD_SERVICE_PORT_ENV[svc] !== undefined, `${svc} terdaftar di PROD_SERVICE_PORT_ENV`);
 }
