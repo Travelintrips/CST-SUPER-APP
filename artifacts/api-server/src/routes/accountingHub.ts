@@ -288,7 +288,26 @@ router.get("/hub/general-ledger", async (req, res) => {
     if (f.companyId)  baseConds.push(sql`e.company_id = ${f.companyId}`);
     if (f.branchId)   baseConds.push(sql`e.branch_id = ${f.branchId}`);
     if (f.divisionId) baseConds.push(sql`e.division_id = ${f.divisionId}`);
-    if (f.accountId)  baseConds.push(sql`el.account_id = ${f.accountId}`);
+    if (f.accountId) {
+      // Account selectors may point at a COA header/parent while postings are
+      // correctly written to a postable vendor-payable child. Keep the
+      // selected account itself and include every descendant in the same
+      // ledger scope so parent-account drilldowns do not hide valid postings.
+      baseConds.push(sql`
+        el.account_id IN (
+          WITH RECURSIVE account_scope(id) AS (
+            SELECT id
+            FROM chart_of_accounts
+            WHERE id = ${f.accountId}
+            UNION
+            SELECT child.id
+            FROM chart_of_accounts child
+            JOIN account_scope parent ON parent.id = child.parent_id
+          )
+          SELECT id FROM account_scope
+        )
+      `);
+    }
 
     // balance: base + date range — used by running_bal CTE (no source_module)
     const balanceConds = [...baseConds];
@@ -329,11 +348,12 @@ router.get("/hub/general-ledger", async (req, res) => {
     const rows = await executeGeneralLedgerQuery<any>(sql`
       WITH
       -- CTE 1: opening_bal
-      --   Sum of POSTED entries BEFORE dateFrom, grouped by account.
+      --   Sum of POSTED entries BEFORE dateFrom. When an account is selected,
+      --   the selected account and its descendants form one reporting scope.
       --   Skipped (returns no rows) when dateFrom is not set → opening = 0.
       opening_bal AS (
         SELECT
-          el.account_id,
+          ${f.accountId ? sql`` : sql`el.account_id,`}
           COALESCE(SUM(
             CASE WHEN coa.normal_balance = 'DEBIT'
                  THEN el.debit::numeric - el.credit::numeric
@@ -346,23 +366,25 @@ router.get("/hub/general-ledger", async (req, res) => {
         WHERE e.status = 'posted'
           ${baseAnd}
           ${f.dateFrom ? sql`AND e.date < ${f.dateFrom}` : sql`AND FALSE`}
-        GROUP BY el.account_id
+        ${f.accountId ? sql`` : sql`GROUP BY el.account_id`}
       ),
       -- CTE 2: running_bal
-      --   Cumulative balance per account, chronological order.
+      --   Cumulative balance in chronological order. A selected parent
+      --   aggregates its descendants; without an account filter it remains
+      --   per-account as before.
       --   Includes ALL source_modules (balance policy A).
       --   Only POSTED entries (draft/voided excluded from balance).
       running_bal AS (
         SELECT
           el.id AS line_id,
-          el.account_id,
+          ${f.accountId ? sql`` : sql`el.account_id,`}
           SUM(
             CASE WHEN coa.normal_balance = 'DEBIT'
                  THEN el.debit::numeric - el.credit::numeric
                  ELSE el.credit::numeric - el.debit::numeric
             END
           ) OVER (
-            PARTITION BY el.account_id
+            ${f.accountId ? sql`` : sql`PARTITION BY el.account_id`}
             ORDER BY e.date ASC, e.id ASC, el.id ASC
             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
           ) AS cum_balance
@@ -395,7 +417,7 @@ router.get("/hub/general-ledger", async (req, res) => {
       JOIN accounting_journals j  ON j.id = e.journal_id
       JOIN chart_of_accounts coa  ON coa.id = el.account_id
       LEFT JOIN running_bal rb    ON rb.line_id = el.id
-      LEFT JOIN opening_bal ob    ON ob.account_id = el.account_id
+      LEFT JOIN opening_bal ob    ${f.accountId ? sql`ON TRUE` : sql`ON ob.account_id = el.account_id`}
       LEFT JOIN LATERAL (
         SELECT partner_name,
                COALESCE(ref, source_module) AS source_doc_number,
