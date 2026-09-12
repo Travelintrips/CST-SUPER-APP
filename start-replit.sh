@@ -12,6 +12,7 @@
 
 set -uo pipefail
 cd "$(dirname "$0")"
+node scripts/verify-gateway-source.mjs
 
 # Replit service workflows may expose a minimal PATH. Resolve Node 20 from
 # Nix explicitly so the API loader, gateway, and pnpm-based Vite previews work.

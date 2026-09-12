@@ -7,6 +7,8 @@ BACKOFF=2
 MAX_BACKOFF=30
 STABLE_THRESHOLD=60
 
+node scripts/verify-gateway-source.mjs || exit 1
+
 while true; do
   echo "[watchdog] Starting Gateway on port ${PORT:-5000}…"
   START_TIME=$(date +%s)

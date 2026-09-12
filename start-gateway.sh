@@ -1,6 +1,7 @@
 #!/bin/bash
 # Gateway startup wrapper — matches the PORT CHECK pattern used by artifact workflows
 # so Replit's platform correctly detects port 5000.
+node scripts/verify-gateway-source.mjs
 
 check_port() {
   node -e "const net=require('net');const s=net.connect($1,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))" 2>/dev/null

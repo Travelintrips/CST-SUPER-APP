@@ -1,6 +1,7 @@
 #!/bin/bash
 # Gateway only — artifact workflows (API Server, BizPortal, Customer Portal, etc.)
 # dijalankan terpisah oleh Replit artifact runner.
+node scripts/verify-gateway-source.mjs
 node artifacts/api-server/kill-port.mjs 5000 2>/dev/null || true
 sleep 0.3
 export API_PORT=18444

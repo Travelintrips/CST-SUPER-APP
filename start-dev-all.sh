@@ -8,6 +8,7 @@
 # Runs fast (< 1s) when deps are present; only triggers pnpm install on a
 # fresh import or after Replit cleans the workspace.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+node "$SCRIPT_DIR/scripts/verify-gateway-source.mjs"
 if [[ -f "$SCRIPT_DIR/scripts/ensure-deps.sh" ]]; then
   bash "$SCRIPT_DIR/scripts/ensure-deps.sh" || echo "[start] ensure-deps warning (non-fatal)"
 fi
