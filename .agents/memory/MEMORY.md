@@ -51,12 +51,9 @@
 - [Payment accounting outbox gap](payment-accounting-outbox-gap.md) — failed payment_confirmed outbox events can leave canonical payments/journals without public mirrors or settlement cohort membership.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
-- [QRIS batch approval UI](qris-batch-approval-ui.md) — pilih dan approve kandidat QRIS sebagai batch utuh; payment-level approval memerlukan kontrak partial-settlement backend.
-- [Marketplace DB connection routing](marketplace-db-connection-routing.md) — pooler dev dapat timeout checkout walau SQL cepat; bandingkan migration/direct URL sebelum optimasi query.
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS stale settlement reset](qris-stale-settlement-reset.md) — reset status stale hanya pada sumber canonical, wajib audit reason, dan fail-closed bila ada item settlement aktif.
 - [QRIS provider mirror unique key](qris-provider-rule-mirror-unique-key.md) — legacy mirror unik tanpa effective_until; repair boundary harus mendahului insert-if-missing.
-- [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
 - [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.
 - [Live schema diff discipline](live-schema-diff-discipline.md) — raw catalog inequality is not automatically canonical drift; preserve PROD security hardening and classify legacy objects first.
@@ -96,7 +93,6 @@
 - [QRIS unmatched audit visibility](qris-unmatched-audit-visibility.md) — retain unmatched bank evidence as non-approvable audit; distinguish audit rows from reviewable candidates.
 - [QRIS H-1 candidate cohort](qris-h-minus-one-candidate.md) — production candidates require exact expected settlement date = bank mutation date; legacy review windows remain isolated.
 - [QRIS partial settlement contract](qris-partial-settlement-contract.md) — selected payments may settle independently; bank mutation remains pending until full reconciliation.
-- [QRIS audit rate precision](qris-audit-rate-precision.md) — unmatched QRIS evidence can have a rate beyond ±10; persist it as audit-only instead of overflowing.
 - [Historical QRIS settlement config](historical-qris-settlement-config.md) — owner-approved rules must cover legacy settlement dates with contiguous effective windows.
 - [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
 - [Atomic Rule AI approval](atomic-rule-ai-approval.md) — manual COA approval must persist Rule AI, its runtime mirror, and the draft journal in one idempotent transaction.
@@ -106,7 +102,6 @@
 - [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
 - [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
-- [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs and bank evidence resolve incomplete metadata; canonical_group/source group cannot block exact-net approval.
 - [Canonical repair diagnosis refresh](canonical-repair-diagnosis-refresh.md) — after admin repair, derive diagnostic state from live canonical ownership/journal tables, not persisted error snapshots.
