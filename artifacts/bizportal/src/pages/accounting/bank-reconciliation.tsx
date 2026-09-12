@@ -2673,7 +2673,7 @@ function SummaryCards({
       bg: "hover:bg-yellow-50 dark:hover:bg-yellow-950/20",
     },
     {
-      key: "posted",
+      key: "completed",
       icon: CheckCircle2,
       label: "Selesai",
       count: (summaryMap.posted?.count ?? 0) + (summaryMap.approved?.count ?? 0),

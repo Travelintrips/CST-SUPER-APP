@@ -5563,7 +5563,13 @@ router.get("/mutations", async (req, res) => {
   // Filters untuk sumber bank_mutations (bm)
   const bmFilters: string[] = [];
   if (status && status !== "all") {
-    if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
+    if (status === "completed") {
+      // The UI's "Selesai" card intentionally combines both states:
+      // approved reconciliation and already-posted accounting journals.
+      // Use the same effective status projection as the summary endpoint so
+      // clicking the card cannot exclude approved rows.
+      bmFilters.push(`${effectiveBankMutationStatusSql("bm")} IN ('posted', 'approved')`);
+    } else if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
       // Use the same derived status as the summary endpoint. In particular,
       // QRIS rows with an already-approved match are surfaced as
       // duplicate_need_review even when bank_mutations.status is still matched.
@@ -5609,6 +5615,7 @@ router.get("/mutations", async (req, res) => {
     bmiFilters.push(`(bmi.description ILIKE '%${s}%' OR bmi.unique_key ILIKE '%${s}%')`);
   }
   if (status === "approved")                   bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
+  else if (status === "completed")             bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
   else if (status === "rejected")              bmiFilters.push(`bmi.status IN ('REJECTED','DUPLICATE')`);
   else if (status === "unmatched")             bmiFilters.push(`bmi.status IN ('READY','NEED_REVIEW','DRAFT')`);
   else if (status === "duplicate_need_review") bmiFilters.push(`bmi.status = 'NEED_REVIEW'`);
