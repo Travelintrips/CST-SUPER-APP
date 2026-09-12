@@ -4399,6 +4399,37 @@ function QrisMutationCard({
       : hasLiveSettlementProposal
         ? auditObservedDeduction
         : null;
+  const storedAmountComparison = audit.auto_post_details?.amountComparison;
+  // The persisted auto-post diagnosis can describe an older candidate
+  // snapshot. When the API has a complete live payment scope, render the
+  // same gross/net figures used by the summary cards instead of mixing old
+  // aggregate metadata into the current payment list.
+  const liveAmountComparison = !isReadOnlyEvidence
+    && hasLiveScope
+    && allItems.length > 0
+    && expectedNet != null
+    ? {
+        mutationAmount: bankAmount,
+        grossAmount: candidateGross,
+        mdrAmount: mdr ?? Math.max(0, candidateGross - expectedNet),
+        expectedNetAmount: expectedNet,
+        difference: expectedNet - bankAmount,
+        paymentCount: availablePaymentIds.length,
+      }
+    : null;
+  const amountComparisonIsStale = Boolean(
+    storedAmountComparison
+    && liveAmountComparison
+    && (
+      Math.abs(Number(storedAmountComparison.grossAmount) - liveAmountComparison.grossAmount) > 0.01
+      || Math.abs(Number(storedAmountComparison.mdrAmount) - liveAmountComparison.mdrAmount) > 0.01
+      || Math.abs(Number(storedAmountComparison.expectedNetAmount) - liveAmountComparison.expectedNetAmount) > 0.01
+      || Number(storedAmountComparison.paymentCount) !== liveAmountComparison.paymentCount
+    ),
+  );
+  const displayedAmountComparison = liveAmountComparison ?? storedAmountComparison;
+  const liveAmountMatchesBank = liveAmountComparison != null
+    && Math.abs(liveAmountComparison.difference) < 0.5;
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
   const differenceExplanation = differenceAbs != null && differenceAbs < 0.5
@@ -4570,21 +4601,33 @@ function QrisMutationCard({
             )}
             {audit.auto_post_status === "failed" && !canonicalStateResolved && (
               <div
-                className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                className={`mt-3 rounded-md border px-3 py-2.5 text-xs ${
+                  liveAmountMatchesBank && amountComparisonIsStale
+                    ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
+                    : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                }`}
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-start gap-2">
-                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
+                  <ShieldAlert className={`mt-0.5 h-4 w-4 shrink-0 ${
+                    liveAmountMatchesBank && amountComparisonIsStale
+                      ? "text-amber-600 dark:text-amber-300"
+                      : "text-red-600 dark:text-red-300"
+                  }`} />
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <p className="font-semibold">
-                      {audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                      {liveAmountMatchesBank && amountComparisonIsStale
+                        ? "Diagnosis snapshot lama — perlu refresh kandidat"
+                        : audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
                     </p>
-                    <p><strong>Apa yang salah:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    <p><strong>Apa yang salah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                      ? "Diagnosis tersimpan masih memakai agregat candidate lama. Perhitungan payment live sekarang sudah sama dengan nominal mutasi bank."
+                      : audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
                     {audit.auto_post_details?.rootCause && (
                       <p><strong>Kenapa diblokir:</strong> {audit.auto_post_details.rootCause}</p>
                     )}
-                    {audit.auto_post_details?.amountComparison && (
-                      <QrisAmountComparisonDetails comparison={audit.auto_post_details.amountComparison} />
+                    {displayedAmountComparison && (
+                      <QrisAmountComparisonDetails comparison={displayedAmountComparison} />
                     )}
                     {audit.auto_post_details?.actualValue != null
                       && !audit.auto_post_details?.amountComparison && (
@@ -4613,7 +4656,9 @@ function QrisMutationCard({
                     {(audit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
                       <p><strong>Field:</strong> {audit.auto_post_details?.fieldNames?.join(", ")}</p>
                     )}
-                    <p><strong>Langkah:</strong> {audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    <p><strong>Langkah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                      ? "Refresh snapshot candidate dari source payment canonical. Jangan mengubah payment atau journal posted."
+                      : audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
                     {(audit.auto_post_details?.errorCode ?? audit.auto_post_details?.code) && (
                       <p className="text-[10px] opacity-75">
                         Kode: {audit.auto_post_details.errorCode ?? audit.auto_post_details.code}
