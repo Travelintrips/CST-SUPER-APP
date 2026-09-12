@@ -2731,6 +2731,25 @@ export async function approveAndCreateJournal(
         );
       }
       if (!contraCoaId) {
+         if (selectedCandidateType === "recon_rule" && selectedCandidateId != null) {
+           const ruleTarget = await loadReconRuleTarget(
+             tx as unknown as DbClient,
+             companyId,
+             selectedCandidateId,
+           );
+           if (!ruleTarget?.targetCoaCode) {
+             throw new JournalMappingError(
+               "RECON_COA_MISSING",
+               "Rule AI cocok, tetapi COA tujuan belum dikonfigurasi. Lengkapi COA tujuan pada Recon Rule lalu jalankan ulang matching.",
+               { mutationId, ruleId: selectedCandidateId },
+             );
+           }
+           throw new JournalMappingError(
+             "COA_NOT_FOUND",
+             `COA tujuan Rule AI "${ruleTarget.targetCoaCode}" tidak ditemukan atau tidak aktif untuk perusahaan ini.`,
+             { mutationId, ruleId: selectedCandidateId, targetCoaCode: ruleTarget.targetCoaCode },
+           );
+         }
         throw new JournalMappingError(
           "JOURNAL_MAPPING_REQUIRED",
            direction === "IN"

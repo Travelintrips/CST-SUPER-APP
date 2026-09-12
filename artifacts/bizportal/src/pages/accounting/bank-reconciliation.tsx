@@ -2072,6 +2072,11 @@ function CandidateDetailsBlock({
         className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
         onClick={event => event.stopPropagation()}
       >
+        {isRuleCandidate && !d.targetCoaCode && (
+          <p className="mb-2 rounded border border-amber-300/60 bg-amber-950/20 px-2 py-1.5 text-[11px] text-amber-200">
+            COA tujuan Rule AI belum dikonfigurasi. Kandidat tidak dapat di-approve sebelum mapping COA dilengkapi.
+          </p>
+        )}
         {d.settlementPartial && (
           <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
             Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
@@ -2213,6 +2218,15 @@ function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[]
     reasons.push("Kandidat belum memenuhi seluruh safeguard untuk diproses otomatis.");
   }
   return reasons;
+}
+
+function candidateApprovalBlockReason(candidate: Candidate): string | null {
+  if (candidate.candidate_type !== "recon_rule") return null;
+  const targetCoaCode = String(candidate.details?.targetCoaCode ?? "").trim();
+  if (!targetCoaCode) {
+    return "Rule AI ini belum memiliki COA tujuan. Lengkapi COA tujuan pada Recon Rule sebelum approve.";
+  }
+  return null;
 }
 
 function MatchingReviewReasonBlock({
@@ -5395,6 +5409,7 @@ function MutationCard({
                     const candidateDetails = candidate.details;
                      const candidateIsSelectable =
                        !realCandidateRequired || isRealTransactionCandidate(candidate);
+                    const candidateApprovalBlockedReason = candidateApprovalBlockReason(candidate);
                     const checked = selectedCandidateId === candidate.id;
                     const candidateApproved = String(candidate.status ?? "").toLowerCase() === "approved";
                     const candidateName = candidateDetails?.name ?? candidate.customer_name;
@@ -5451,7 +5466,11 @@ function MutationCard({
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
                            <CandidateDetailsBlock candidate={candidate} compact />
-                           {onApproveCandidate && canApprove(m) && candidateIsSelectable && (
+                           {candidateApprovalBlockedReason ? (
+                             <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+                               {candidateApprovalBlockedReason}
+                             </p>
+                           ) : onApproveCandidate && canApprove(m) && candidateIsSelectable && (
                              <Button
                                type="button"
                                size="sm"
@@ -9009,6 +9028,7 @@ export default function BankReconciliationPage() {
       if (d?.__manualReview) {
         // Show warning in-dialog; do NOT close or invalidate — mapping not done.
         setManualReviewWarning({ error: d.error, code: d.code, mutId: d.mutId });
+        toast({ title: "Approve diblokir", description: d.error, variant: "destructive" });
         return;
       }
       setManualReviewWarning(null);
@@ -9338,6 +9358,11 @@ export default function BankReconciliationPage() {
   };
 
   const handleDirectApproveCandidate = (m: BankMutation, candidate: Candidate) => {
+    const blockedReason = candidateApprovalBlockReason(candidate);
+    if (blockedReason) {
+      toast({ title: "Approve diblokir", description: blockedReason, variant: "destructive" });
+      return;
+    }
     approveMut.mutate({
       mutId: m.id,
       matchId: candidate.id,
