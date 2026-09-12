@@ -34,13 +34,14 @@ interface UseUploadOptions {
 }
 
 /**
- * React hook for handling file uploads with presigned URLs.
+ * React hook for handling file uploads through the API's Supabase-backed
+ * server-proxied upload path.
  *
  * Flow:
  * 1. Compress image client-side (WebP for photos, JPEG for OCR docs)
  * 2. Generate a local preview URL (revoke when done via clearPreview)
- * 3. Request a presigned PUT URL from the backend
- * 4. PUT the compressed file directly to storage
+ * 3. Request a one-time upload path from the backend
+ * 4. PUT the compressed file through the API to Supabase Storage
  *
  * @example
  * ```tsx

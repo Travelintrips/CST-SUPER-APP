@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Trash2, Search, ChevronDown, ChevronRight, FlaskConical, X } from "lucide-react";
+import { BackButton } from "@/components/ui/back-button";
 
 const UNITS = ["gram", "kg", "ml", "liter", "pcs", "sachet", "sdm", "sdt", "kaleng", "botol", "bungkus", "cup", "porsi"];
 
@@ -298,6 +299,7 @@ export default function ProductRecipesPage() {
 
   return (
     <AppShell>
+      <BackButton href="/products" />
       <div className="p-6 space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">

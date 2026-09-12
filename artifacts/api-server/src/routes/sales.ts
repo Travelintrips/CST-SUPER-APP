@@ -9,20 +9,36 @@ import {
   suppliersTable,
   emailCorrespondencesTable,
   waAiIntakeLogTable,
+  customerInvoiceLinksTable,
 } from "@workspace/db";
-import { eq, sql, desc, and, count, inArray, or, ilike, type SQL } from "drizzle-orm";
+import { eq, sql, desc, and, count, inArray, or, ilike, isNotNull, asc, type SQL } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
+import { auditFromReq, writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
 import { streamInvoicePdf, buildInvoicePdfBuffer } from "../lib/pdfInvoice.js";
-import { postSalesInvoice, postSalesCogs, postSalesCogsReturn } from "../lib/accounting.js";
+import { loadDocTemplate } from "../lib/docTemplateLoader.js";
+import { postSalesInvoice, postSalesCogs, postSalesCogsReturn, postSalesInvoiceReversal, postSalesReturn } from "../lib/accounting.js";
 import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
+import { markSalesReadyToInvoice } from "../lib/services/invoiceStatusService.js";
 import { getAdminWa } from "../lib/adminWa.js";
+import {
+  sendSalesOrderCreatedNotification,
+  sendQuotationSentNotification,
+  sendSalesOrderConfirmedNotification,
+  sendSalesOrderDeliveredNotification,
+  sendInvoiceIssuedNotification,
+} from "../lib/orderNotification.js";
+import { notifyPaymentReminder } from "../lib/enterpriseWorkflowNotify.js";
+import { wasRecentlyNotified } from "../lib/notificationLog.js";
 import { saveAndBroadcast } from "../lib/notificationStore.js";
 import { getVendorFilterMode } from "../lib/aiOrderIntake.js";
 import { StockShortageError, postStockOut, postStockIn } from "../lib/inventoryStock.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
 import { convertQty } from "../lib/uomEngine.js";
+import { markSalesInvoiced } from "../lib/services/index.js";
+import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 
 async function computeTax(subtotal: number, taxRateId: number | null | undefined): Promise<{ taxAmount: number; grandTotal: number }> {
   if (!taxRateId) return { taxAmount: 0, grandTotal: subtotal };
@@ -62,7 +78,8 @@ async function resolveBaseQty(line: LineInput): Promise<number | null> {
     const baseUomId = prodRow?.base_uom_id ?? null;
     if (!baseUomId || baseUomId === line.salesUomId) return Number(line.quantity);
     return await convertQty(Number(line.quantity), line.salesUomId, baseUomId);
-  } catch {
+  } catch (err) {
+    console.warn("[resolveBaseQty] Failed to resolve base qty for product=%s uom=%s:", line.productId, line.salesUomId, err);
     return null;
   }
 }
@@ -142,6 +159,70 @@ router.get("/summary", async (req, res) => {
   return res.json({ quotationsCount, ordersCount, toInvoiceCount, totalRevenue, topCustomer });
 });
 
+// GET /api/sales/dashboard-widget
+router.get("/dashboard-widget", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const docs = await db
+    .select()
+    .from(salesDocumentsTable)
+    .where(eq(salesDocumentsTable.companyId, companyId));
+
+  // SO aktif: kind=order, belum selesai/batal
+  const activeSoCount = docs.filter(
+    (d) => d.kind === "order" && d.status !== "done" && d.status !== "cancelled",
+  ).length;
+
+  // Invoice outstanding: sudah diinvoice tapi belum lunas
+  const outstandingDocs = docs.filter(
+    (d) =>
+      d.kind === "order" &&
+      d.invoiceStatus === "invoiced" &&
+      (d.paymentStatus === "unpaid" || d.paymentStatus === "partial" || d.paymentStatus === "overdue"),
+  );
+  const outstandingInvoicesCount = outstandingDocs.length;
+  const outstandingAmount = outstandingDocs.reduce(
+    (sum, d) => sum + Math.max(0, Number(d.grandTotal) - Number(d.amountPaid ?? 0)),
+    0,
+  );
+
+  // Revenue pipeline bulan ini: SO confirmed/done yang dibuat bulan ini
+  const pipelineDocs = docs.filter(
+    (d) =>
+      d.kind === "order" &&
+      (d.status === "confirmed" || d.status === "done") &&
+      new Date(d.createdAt) >= monthStart,
+  );
+  const revenuePipelineThisMonth = pipelineDocs.reduce((sum, d) => sum + Number(d.grandTotal), 0);
+  const revenuePipelineSoCount = pipelineDocs.length;
+
+  // Top 3 pelanggan bulan ini berdasarkan revenue pipeline
+  const customerMap = new Map<string, { revenue: number; orderCount: number }>();
+  for (const d of pipelineDocs) {
+    const name = d.customerName || "Tanpa Nama";
+    const cur = customerMap.get(name) ?? { revenue: 0, orderCount: 0 };
+    customerMap.set(name, {
+      revenue: cur.revenue + Number(d.grandTotal),
+      orderCount: cur.orderCount + 1,
+    });
+  }
+  const top3Customers = [...customerMap.entries()]
+    .sort((a, b) => b[1].revenue - a[1].revenue)
+    .slice(0, 3)
+    .map(([name, stats]) => ({ name, ...stats }));
+
+  return res.json({
+    activeSoCount,
+    outstandingInvoicesCount,
+    outstandingAmount,
+    revenuePipelineThisMonth,
+    revenuePipelineSoCount,
+    top3Customers,
+  });
+});
+
 // CUSTOMERS
 router.get("/customers", async (req, res) => {
   const companyId = resolveCompanyId(req);
@@ -167,6 +248,11 @@ router.post("/customers", async (req, res) => {
 router.put("/customers/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+  const [existing] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
+  if (!existing) return res.status(404).json({ message: "Customer not found" });
+  // IDOR guard: verify company ownership
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(existing.companyId, companyId, req, res, { resourceType: "sales_customer", resourceId: id })) return;
   const { name, email, phone, taxId, address, notes, defaultSalesTaxId } = req.body ?? {};
   const patch: Record<string, unknown> = {};
   if (typeof name === "string") patch["name"] = name;
@@ -188,6 +274,11 @@ router.put("/customers/:id", async (req, res) => {
 router.delete("/customers/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+  const [existing] = await db.select().from(customersTable).where(eq(customersTable.id, id)).limit(1);
+  if (!existing) return res.status(404).json({ message: "Customer not found" });
+  // IDOR guard: verify company ownership
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(existing.companyId, companyId, req, res, { resourceType: "sales_customer", resourceId: id })) return;
   const [deleted] = await db
     .delete(customersTable)
     .where(eq(customersTable.id, id))
@@ -196,13 +287,82 @@ router.delete("/customers/:id", async (req, res) => {
   return res.json({ message: "Deleted", id });
 });
 
+// POST /api/sales/customers/bulk-assign-company — bulk update company_id on multiple customers
+router.post("/customers/bulk-assign-company", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const { customerIds, companyId } = req.body as { customerIds: unknown; companyId: unknown };
+  if (!Array.isArray(customerIds)) return res.status(400).json({ message: "customerIds must be an array" });
+  const ids = (customerIds as unknown[]).map(Number).filter(n => !Number.isNaN(n) && n > 0);
+  if (ids.length === 0) return res.status(400).json({ message: "No valid customerIds" });
+
+  const resolvedCid = resolveCompanyId(req);
+  const isSuperAdmin = (req as any).user?.role === "super_admin";
+  const meta = extractRequestMeta(req);
+
+  // ── Ownership: verify ALL customerIds belong to resolvedCompanyId ──────────
+  const ownedCustomers = await db
+    .select({ id: customersTable.id, companyId: customersTable.companyId })
+    .from(customersTable)
+    .where(inArray(customersTable.id, ids));
+  const missingIds = ids.filter(id => !ownedCustomers.find(c => c.id === id));
+  if (missingIds.length > 0)
+    return res.status(404).json({ message: `Customer tidak ditemukan: ${missingIds.join(", ")}` });
+  const unauthorizedCustomers = isSuperAdmin ? [] : ownedCustomers.filter(
+    c => c.companyId !== null && c.companyId !== resolvedCid
+  );
+  if (unauthorizedCustomers.length > 0) {
+    writeAuditLog({
+      ...meta, companyId: resolvedCid, action: "BULK_OPERATION_DENIED", module: "sales",
+      newData: {
+        operationType: "bulk-assign-company", resourceType: "customer",
+        unauthorizedIds: unauthorizedCustomers.map(c => c.id),
+        timestamp: new Date().toISOString(),
+      },
+    });
+    return res.status(403).json({
+      message: "Akses ditolak: beberapa customer bukan milik perusahaan ini",
+      unauthorizedIds: unauthorizedCustomers.map(c => c.id),
+    });
+  }
+
+  const cid = companyId != null && companyId !== "" ? Number(companyId) : null;
+
+  writeAuditLog({
+    ...meta, companyId: resolvedCid, action: "BULK_OPERATION_VERIFIED", module: "sales",
+    newData: {
+      operationType: "bulk-assign-company", resourceType: "customer",
+      recordCount: ids.length, targetCompanyId: cid, timestamp: new Date().toISOString(),
+    },
+  });
+
+  await db.update(customersTable).set({ companyId: cid }).where(inArray(customersTable.id, ids));
+  return res.json({ updated: ids.length, companyId: cid });
+});
+
 // DOCUMENTS
+router.get("/documents/template-categories", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const kind = req.query["kind"] as "quote" | "order" | undefined;
+  const conds: SQL[] = [
+    eq(salesDocumentsTable.companyId, companyId),
+    isNotNull(salesDocumentsTable.categoryKey),
+  ];
+  if (kind === "quote" || kind === "order") conds.push(eq(salesDocumentsTable.kind, kind));
+  const rows = await db
+    .selectDistinct({ categoryKey: salesDocumentsTable.categoryKey })
+    .from(salesDocumentsTable)
+    .where(and(...conds))
+    .orderBy(asc(salesDocumentsTable.categoryKey));
+  return res.json(rows.map((r) => r.categoryKey).filter(Boolean));
+});
+
 router.get("/documents", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const kind = req.query["kind"] as SalesDocKind | undefined;
   const invoiceStatus = req.query["invoiceStatus"] as SalesInvoiceStatus | undefined;
   const paymentStatus = req.query["paymentStatus"] as "unpaid" | "partial" | "paid" | undefined;
   const statusFilter = req.query["status"] as string | undefined;
+  const categoryKey = typeof req.query["categoryKey"] === "string" ? req.query["categoryKey"].trim() : undefined;
   const search = typeof req.query["search"] === "string" ? req.query["search"].trim() : undefined;
   const conds: SQL[] = [eq(salesDocumentsTable.companyId, companyId)];
   if (kind === "quote" || kind === "order") conds.push(eq(salesDocumentsTable.kind, kind));
@@ -210,8 +370,9 @@ router.get("/documents", async (req, res) => {
     conds.push(eq(salesDocumentsTable.status, statusFilter as "draft" | "sent" | "confirmed" | "done" | "cancelled"));
   if (invoiceStatus === "none" || invoiceStatus === "to_invoice" || invoiceStatus === "invoiced")
     conds.push(eq(salesDocumentsTable.invoiceStatus, invoiceStatus));
-  if (paymentStatus === "unpaid" || paymentStatus === "partial" || paymentStatus === "paid")
+  if (paymentStatus === "unpaid" || paymentStatus === "partial" || paymentStatus === "paid" || paymentStatus === "overdue")
     conds.push(eq(salesDocumentsTable.paymentStatus, paymentStatus));
+  if (categoryKey) conds.push(eq(salesDocumentsTable.categoryKey, categoryKey));
   if (search) {
     conds.push(or(
       ilike(salesDocumentsTable.docNumber, `%${search}%`),
@@ -219,7 +380,13 @@ router.get("/documents", async (req, res) => {
     )!);
   }
   const where = conds.length === 1 ? conds[0] : and(...conds);
-  const rows = await db.select().from(salesDocumentsTable).where(where).orderBy(desc(salesDocumentsTable.createdAt));
+
+  const page = Math.max(1, parseInt(String(req.query["page"] ?? "1"), 10) || 1);
+  const limit = Math.min(500, Math.max(1, parseInt(String(req.query["limit"] ?? "50"), 10) || 50));
+  const offset = (page - 1) * limit;
+
+  const [{ total }] = await db.select({ total: count() }).from(salesDocumentsTable).where(where);
+  const rows = await db.select().from(salesDocumentsTable).where(where).orderBy(desc(salesDocumentsTable.createdAt)).limit(limit).offset(offset);
 
   const customerIds = [...new Set(rows.map((r) => r.customerId).filter((id): id is number => id != null))];
   const customerMap = new Map<number, string | null>();
@@ -228,7 +395,10 @@ router.get("/documents", async (req, res) => {
     for (const c of customers) customerMap.set(c.id, c.address ?? null);
   }
 
-  return res.json(rows.map((r) => ({ ...serializeDoc(r), customerAddress: r.customerId != null ? (customerMap.get(r.customerId) ?? null) : null })));
+  return res.json({
+    data: rows.map((r) => ({ ...serializeDoc(r), customerAddress: r.customerId != null ? (customerMap.get(r.customerId) ?? null) : null })),
+    pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+  });
 });
 
 async function loadDocWithLines(id: number) {
@@ -252,13 +422,17 @@ router.get("/documents/:id", async (req, res) => {
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
   const doc = await loadDocWithLines(id);
   if (!doc) return res.status(404).json({ message: "Document not found" });
+  // IDOR guard: ensure document belongs to the requesting user's company
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(doc.companyId, companyId, req, res, { resourceType: "sales_document", resourceId: id })) return;
   return res.json(doc);
 });
 
 router.post("/documents", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const { kind, customerId, customerName, validUntil, expectedDate, notes, lines, taxRateId,
-    origin, destination, transportMode, etd, eta, logisticOrderId } = req.body ?? {};
+    origin, destination, transportMode, etd, eta, logisticOrderId,
+    categoryKey, templateId, templateVersion, templateSnapshot } = req.body ?? {};
   if (typeof customerName !== "string" || !customerName.trim())
     return res.status(400).json({ message: "customerName required" });
   if (!Array.isArray(lines) || lines.length === 0)
@@ -317,6 +491,10 @@ router.post("/documents", async (req, res) => {
           etd: etd ?? null,
           eta: eta ?? null,
           logisticOrderId: (logisticOrderId != null && !Number.isNaN(Number(logisticOrderId))) ? Number(logisticOrderId) : null,
+          categoryKey: categoryKey ? String(categoryKey) : null,
+          templateId: templateId ? String(templateId) : null,
+          templateVersion: templateVersion ? String(templateVersion) : null,
+          templateSnapshot: templateSnapshot ?? null,
         })
         .returning();
       doc = inserted;
@@ -344,21 +522,29 @@ router.post("/documents", async (req, res) => {
   );
   await db.insert(salesDocumentLinesTable).values(lineValues);
 
+  auditFromReq(req, {
+    action: "create",
+    module: "sales",
+    referenceId: String(doc.id),
+    newData: { docNumber, customerName, kind: docKind, grandTotal: String(grandTotal) },
+  });
+
   const detail = await loadDocWithLines(doc.id);
 
   // Notify admin via WhatsApp (fire-and-forget)
-  getAdminWa().then((adminWa) => {
-    if (!adminWa) return;
-    const docLabel = docKind === "quote" ? "Sales Quotation" : "Sales Order";
-    const tanggal = doc.createdAt.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
-    const msg =
-      `📋 *${docLabel} Baru*\n` +
-      `No: ${docNumber}\n` +
-      `Customer: ${customerName}\n` +
-      `Total: Rp ${grandTotal.toLocaleString("id-ID")}\n` +
-      `Tanggal: ${tanggal}`;
-    return sendWhatsApp(adminWa, msg);
-  }).catch(() => undefined);
+  getAdminWa().then((adminWa) =>
+    sendSalesOrderCreatedNotification(docNumber, customerName, docKind, grandTotal, adminWa)
+  ).catch(() => undefined);
+
+  saveAndBroadcast("sales_doc_created", {
+    type: "sales_new",
+    orderId: doc.id,
+    orderNumber: docNumber,
+    customerName,
+    companyName: null,
+    grandTotal,
+    docKind,
+  } as Parameters<typeof saveAndBroadcast>[1] & { docKind: string }).catch(() => {});
 
   return res.status(201).json(detail);
 });
@@ -368,9 +554,13 @@ router.put("/documents/:id", async (req, res) => {
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
   const existing = await loadDocWithLines(id);
   if (!existing) return res.status(404).json({ message: "Document not found" });
+  // IDOR guard
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(existing.companyId, companyId, req, res, { resourceType: "sales_document", resourceId: id })) return;
 
   const { customerId, customerName, validUntil, expectedDate, notes, lines, kind, taxRateId,
-    origin, destination, transportMode, etd, eta } = req.body ?? {};
+    origin, destination, transportMode, etd, eta,
+    categoryKey: patchCategoryKey, templateId: patchTemplateId, templateVersion: patchTemplateVersion, templateSnapshot: patchTemplateSnapshot } = req.body ?? {};
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   if (typeof customerName === "string") patch["customerName"] = customerName;
   if (customerId !== undefined) patch["customerId"] = customerId;
@@ -384,6 +574,10 @@ router.put("/documents/:id", async (req, res) => {
   if (transportMode !== undefined) patch["transportMode"] = transportMode || null;
   if (etd !== undefined) patch["etd"] = etd || null;
   if (eta !== undefined) patch["eta"] = eta || null;
+  if (patchCategoryKey !== undefined) patch["categoryKey"] = patchCategoryKey ? String(patchCategoryKey) : null;
+  if (patchTemplateId !== undefined) patch["templateId"] = patchTemplateId ? String(patchTemplateId) : null;
+  if (patchTemplateVersion !== undefined) patch["templateVersion"] = patchTemplateVersion ? String(patchTemplateVersion) : null;
+  if (patchTemplateSnapshot !== undefined) patch["templateSnapshot"] = patchTemplateSnapshot ?? null;
 
   if (Array.isArray(lines)) {
     const total = (lines as LineInput[]).reduce(
@@ -427,20 +621,35 @@ router.put("/documents/:id", async (req, res) => {
 router.delete("/documents/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+  // IDOR guard: fetch first, verify ownership before deleting
+  const existing = await loadDocWithLines(id);
+  if (!existing) return res.status(404).json({ message: "Document not found" });
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(existing.companyId, companyId, req, res, { resourceType: "sales_document", resourceId: id })) return;
   const [deleted] = await db
     .delete(salesDocumentsTable)
     .where(eq(salesDocumentsTable.id, id))
     .returning();
   if (!deleted) return res.status(404).json({ message: "Document not found" });
+  auditFromReq(req, {
+    action: "delete",
+    module: "sales",
+    referenceId: String(id),
+    oldData: { docNumber: deleted.docNumber, customerName: deleted.customerName, kind: deleted.kind },
+  });
   return res.json({ message: "Deleted", id });
 });
 
 router.post("/documents/:id/action", async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
-  const { action } = req.body ?? {};
+  const { action, cancelReason, editReason, reversalReason } = req.body ?? {};
+  const actorId = (req.user as { id: string } | undefined)?.id ?? null;
   const [doc] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, id));
   if (!doc) return res.status(404).json({ message: "Document not found" });
+  // IDOR guard
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(doc.companyId, companyId, req, res, { resourceType: "sales_document", resourceId: id })) return;
 
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   switch (action) {
@@ -451,16 +660,48 @@ router.post("/documents/:id/action", async (req, res) => {
       patch["status"] = "confirmed" satisfies SalesDocStatus;
       patch["kind"] = "order";
       patch["confirmedAt"] = new Date();
-      patch["invoiceStatus"] = "to_invoice" satisfies SalesInvoiceStatus;
+      patch["approvedBy"] = actorId;
+      patch["approvedAt"] = new Date();
       patch["deliveryStatus"] = "to_deliver";
       break;
     case "cancel":
       patch["status"] = "cancelled" satisfies SalesDocStatus;
+      patch["cancelledAt"] = new Date();
+      patch["cancelledBy"] = actorId;
+      patch["cancelReason"] = cancelReason ?? null;
       break;
     case "draft":
       patch["status"] = "draft" satisfies SalesDocStatus;
+      if (editReason) patch["editReason"] = editReason;
       break;
     case "mark_invoiced": {
+      // Do not change invoice status until the revenue/tax journal exists.
+      // postEntry is source-idempotent, so this also remains safe when the
+      // confirm action already created the same sales_invoice entry.
+      if (doc.invoiceStatus === "invoiced") {
+        return res.status(409).json({ message: "Invoice sudah diterbitkan untuk dokumen ini" });
+      }
+      const salesPosted = await postSalesInvoice({
+        salesDocId: doc.id,
+        docNumber: doc.docNumber,
+        customerName: doc.customerName,
+        netAmount: Number(doc.totalAmount ?? 0),
+        taxAmount: Number(doc.taxAmount ?? 0),
+        taxAccountId: null,
+        createdById: actorId,
+        companyId: doc.companyId ?? null,
+      });
+      if (!salesPosted) {
+        return res.status(422).json({
+          message: "Invoice penjualan tetap draft karena jurnal pendapatan/PPN Keluaran gagal dibuat.",
+        });
+      }
+      const invResult = await markSalesInvoiced(id, "manual");
+      if (!invResult.ok || invResult.alreadySet) {
+        return res.status(invResult.alreadySet ? 409 : 500).json({
+          message: invResult.error ?? "Invoice sudah diterbitkan untuk dokumen ini",
+        });
+      }
       // Auto-numbering: INV/YYYY/NNNN
       const invYear = new Date().getFullYear();
       const [{ invCount }] = await db
@@ -473,7 +714,7 @@ router.post("/documents/:id/action", async (req, res) => {
       // Auto due date: invoiceDate + paymentTermDays (default 30)
       const termDays = Number((doc as Record<string, unknown>)["paymentTermDays"] ?? 30);
       const dueDate = new Date(Date.now() + termDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0]!;
-      patch["invoiceStatus"] = "invoiced" satisfies SalesInvoiceStatus;
+      // invoiceStatus already set by markSalesInvoiced() above
       patch["invoiceNumber"] = invoiceNumber;
       patch["invoiceDate"] = invoiceDate;
       patch["dueDate"] = dueDate;
@@ -485,8 +726,14 @@ router.post("/documents/:id/action", async (req, res) => {
         return res.status(400).json({ message: "Hanya invoice yang sudah diposting yang bisa dibatalkan" });
       }
       patch["cancelledAt"] = new Date();
+      patch["cancelledBy"] = actorId;
+      patch["cancelReason"] = cancelReason ?? null;
+      if (reversalReason) patch["reversalReason"] = reversalReason;
       break;
     }
+    case "send_reminder":
+      // Fire-and-forget: no status changes, only notifications
+      break;
     case "mark_delivered":
       patch["deliveryStatus"] = "delivered";
       if (doc.invoiceStatus === "invoiced") patch["status"] = "done" satisfies SalesDocStatus;
@@ -534,7 +781,60 @@ router.post("/documents/:id/action", async (req, res) => {
     }
   }
 
-  await db.update(salesDocumentsTable).set(patch).where(eq(salesDocumentsTable.id, id));
+  // B2 FIX: Jika SO dibatalkan dan membutuhkan reversal jurnal, lakukan keduanya
+  // secara atomik. Jika reversal gagal, db.transaction() rollback sehingga
+  // status SO TIDAK berubah — tidak ada kondisi "SO cancelled + jurnal masih posted".
+  // Untuk semua action lain, update langsung seperti sebelumnya.
+  const needsJournalReversal =
+    action === "cancel" &&
+    (doc.status === "confirmed" ||
+      doc.invoiceStatus === "invoiced" ||
+      doc.invoiceStatus === "to_invoice");
+
+  if (needsJournalReversal) {
+    // B2 FIX (true atomicity): tx diteruskan ke postSalesInvoiceReversal sehingga
+    // tx.update(SO) + client.select(lookup) + _postEntryCore(client, insert entry+lines)
+    // semua berjalan dalam SATU PostgreSQL transaction.
+    // Jika salah satu gagal → ROLLBACK semua — tidak ada SO cancelled tanpa reversal.
+    await db.transaction(async (tx) => {
+      await tx.update(salesDocumentsTable).set(patch).where(eq(salesDocumentsTable.id, id));
+      // PgTransaction dan NodePgDatabase berbagi interface yang sama untuk select/insert/execute.
+      // Cast diperlukan karena DbClient = typeof db yang menyertakan $client: Pool,
+      // sedangkan PgTransaction adalah sub-type tanpa property tersebut.
+      await postSalesInvoiceReversal(tx as unknown as import("../lib/accounting.js").DbClient, {
+        salesDocId: doc.id,
+        docNumber: doc.docNumber,
+        customerName: doc.customerName,
+        companyId: doc.companyId ?? null,
+      });
+    });
+  } else {
+    await db.update(salesDocumentsTable).set(patch).where(eq(salesDocumentsTable.id, id));
+  }
+
+  if (action === "confirm") {
+    await markSalesReadyToInvoice(id, "system");
+  }
+
+  // ── Sync status ke Logistic Order terkait (jika ada) ─────────────────────
+  if (doc.logisticOrderId != null) {
+    const logisticSyncMap: Record<string, string> = {
+      confirm:        "In Progress",
+      mark_delivered: "Delivered",
+      mark_invoiced:  "Invoice Issued",
+      cancel:         "Cancelled",
+    };
+    const targetLogisticStatus = logisticSyncMap[action];
+    if (targetLogisticStatus) {
+      void transitionLogisticOrderStatus(doc.logisticOrderId, targetLogisticStatus, {
+        actorType: "system",
+        source:    "sales.action",
+        notes:     `Auto-sync dari Sales Document #${doc.docNumber} — action: ${action}`,
+      }).catch((e: unknown) =>
+        console.error(`[sales] gagal sync logistic order #${doc.logisticOrderId} → ${targetLogisticStatus}:`, e),
+      );
+    }
+  }
 
   // T005: When SO is delivered, deduct stock (awaited — pre-flight already passed)
   if (action === "mark_delivered" && doc.deliveryStatus !== "delivered") {
@@ -545,8 +845,8 @@ router.post("/documents/:id/action", async (req, res) => {
         // nothing to deduct, fall through
       } else {
         // ── wh_stock deduction (gudang ERP — sistem tunggal) ─────────────────
-        const [defaultWh] = await db.execute(sql`SELECT id FROM warehouses WHERE is_active = TRUE ORDER BY id LIMIT 1`);
-        const wh = (defaultWh as any)?.rows?.[0] ?? (defaultWh as any);
+        const defaultWhResult = await db.execute(sql`SELECT id FROM warehouses WHERE is_active = TRUE ORDER BY id LIMIT 1`);
+        const wh = defaultWhResult.rows[0] as any;
         const legacyWhId: number | undefined = wh?.id;
         const cogsLines: Array<{ name: string; qty: number; costPrice: number }> = [];
         if (legacyWhId) {
@@ -647,22 +947,123 @@ router.post("/documents/:id/action", async (req, res) => {
     }
   }
 
-  // Notify admin via WhatsApp when quotation is confirmed as Sales Order (fire-and-forget)
-  // Guard: only send if status was not already "confirmed" to prevent duplicate notifications on retries
-  if (action === "confirm" && doc.status !== "confirmed") {
-    getAdminWa().then((adminWa) => {
-      if (!adminWa) return;
-      const soTotal = Number(doc.totalAmount ?? 0) + Number(doc.taxAmount ?? 0);
-      const tanggal = doc.createdAt.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
-      const msg =
-        `📋 *Sales Order Baru (Dikonfirmasi)*\n` +
-        `No: ${doc.docNumber}\n` +
-        `Customer: ${doc.customerName}\n` +
-        `Total: Rp ${soTotal.toLocaleString("id-ID")}\n` +
-        `Tanggal: ${tanggal}`;
-      return sendWhatsApp(adminWa, msg);
-    }).catch(() => undefined);
-  }
+  // ── WA Notifications for sales milestones ─────────────────────────────────
+  // Fetch customer phone (fire-and-forget block)
+  void (async () => {
+    try {
+      let customerPhone: string | null = null;
+      if (doc.customerId != null) {
+        const [cust] = await db
+          .select({ phone: customersTable.phone, email: customersTable.email })
+          .from(customersTable)
+          .where(eq(customersTable.id, doc.customerId))
+          .limit(1);
+        customerPhone = cust?.phone ?? null;
+      }
+
+      const grandTotal = Number(doc.totalAmount ?? 0) + Number(doc.taxAmount ?? 0);
+      const adminWa = await getAdminWa();
+
+      if (action === "send" && doc.status !== "sent") {
+        const validStr = doc.validUntil
+          ? new Date(doc.validUntil).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })
+          : "—";
+        await sendQuotationSentNotification(doc.docNumber, doc.customerName, grandTotal, validStr, customerPhone, adminWa);
+      }
+
+      if (action === "confirm" && doc.status !== "confirmed") {
+        const tanggal = doc.createdAt.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+        const expStr = doc.expectedDate
+          ? new Date(doc.expectedDate).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })
+          : "—";
+        await sendSalesOrderConfirmedNotification(doc.docNumber, doc.customerName, grandTotal, expStr, tanggal, customerPhone, adminWa);
+      }
+
+      if (action === "mark_delivered" && doc.deliveryStatus !== "delivered") {
+        await sendSalesOrderDeliveredNotification(doc.docNumber, doc.customerName, grandTotal, customerPhone, adminWa);
+      }
+
+      if (action === "mark_invoiced" && doc.invoiceStatus !== "invoiced") {
+        const invNumber = (patch["invoiceNumber"] as string | undefined) ?? doc.docNumber;
+        const dueStr = patch["dueDate"]
+          ? new Date(patch["dueDate"] as string).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })
+          : "—";
+        const subtotal = Number(doc.totalAmount ?? 0);
+        const taxAmount = Number((doc as Record<string, unknown>).taxAmount ?? 0);
+        const orderId = doc.logisticOrderId ?? undefined;
+        let invoiceUrl: string | undefined;
+        if (id) {
+          try {
+            const { getPreferredDomain } = await import("../lib/domain.js");
+            const { gt } = await import("drizzle-orm");
+            const [invLink] = await db
+              .select({ token: customerInvoiceLinksTable.token })
+              .from(customerInvoiceLinksTable)
+              .where(
+                and(
+                  eq(customerInvoiceLinksTable.salesDocId, id),
+                  gt(customerInvoiceLinksTable.expiresAt, new Date()),
+                ),
+              )
+              .limit(1);
+            if (invLink?.token) {
+              const domain = getPreferredDomain();
+              if (domain) invoiceUrl = `https://${domain}/customer-invoice/${invLink.token}`;
+            }
+          } catch { /* non-fatal */ }
+        }
+        const skipCustWa = orderId != null
+          ? await wasRecentlyNotified("customer-invoice-wa", `order:${orderId}`, 30 * 60 * 1000)
+          : false;
+        await sendInvoiceIssuedNotification(
+          doc.docNumber, invNumber, doc.customerName, grandTotal, dueStr,
+          skipCustWa ? null : customerPhone,
+          adminWa,
+          { subtotal, taxAmount, invoiceUrl, orderId },
+        );
+      }
+
+      if (action === "send_reminder") {
+        const invoiceRef = doc.invoiceNumber ?? doc.docNumber;
+        const dueStr = doc.dueDate
+          ? new Date(doc.dueDate).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })
+          : "—";
+        const reminderTotal = Number(doc.grandTotal ?? doc.totalAmount ?? 0);
+        const today = new Date();
+        const dueDate = doc.dueDate ? new Date(doc.dueDate) : null;
+        const daysOverdue = dueDate ? Math.floor((today.getTime() - dueDate.getTime()) / 86_400_000) : 0;
+        const custEmail = (doc.customerId != null
+          ? (await db.select({ email: customersTable.email }).from(customersTable).where(eq(customersTable.id, doc.customerId)).limit(1))[0]?.email
+          : null) ?? null;
+
+        await notifyPaymentReminder({
+          invoiceNumber: invoiceRef,
+          customerName: doc.customerName,
+          customerPhone: customerPhone ?? undefined,
+          dueDate: dueStr,
+          totalAmount: reminderTotal,
+          daysUntilDue: -daysOverdue,
+        });
+
+        if (custEmail && isSmtpConfigured()) {
+          const amountStr = `Rp ${Math.round(reminderTotal).toLocaleString("id-ID")}`;
+          sendMail({
+            to: custEmail,
+            subject: daysOverdue > 0
+              ? `Pengingat Pembayaran — Invoice ${invoiceRef} (${daysOverdue} hari jatuh tempo)`
+              : `Pengingat Pembayaran — Invoice ${invoiceRef}`,
+            text: `Kepada Yth. ${doc.customerName},\n\nIni adalah pengingat untuk pembayaran Invoice ${invoiceRef}.\nJumlah: ${amountStr}\nJatuh Tempo: ${dueStr}\n\nMohon segera melakukan pembayaran. Hubungi kami jika ada pertanyaan.\n\nTerima kasih,\nTim Finance`,
+            html: `<p>Kepada Yth. <strong>${doc.customerName}</strong>,</p><p>Ini adalah pengingat untuk pembayaran Invoice <strong>${invoiceRef}</strong>.</p><ul><li>Jumlah: <strong>${amountStr}</strong></li><li>Jatuh Tempo: ${dueStr}</li></ul><p>Mohon segera melakukan pembayaran. Hubungi kami jika ada pertanyaan.</p><p>Terima kasih,<br>Tim Finance</p>`,
+            context: `reminder_manual_${invoiceRef}`,
+            refType: "invoice",
+            refId: invoiceRef,
+          }).catch(() => {});
+        }
+      }
+    } catch (_e) {
+      // fire-and-forget — jangan sampai gagal notif membatalkan response
+    }
+  })();
 
   // Auto-post journal entry when order is newly confirmed (Debit AR / Credit Revenue)
   if (
@@ -680,6 +1081,19 @@ router.post("/documents/:id/action", async (req, res) => {
       taxAccountId: null,
       companyId: doc.companyId ?? null,
     });
+    if (taxAmount > 0 && doc.companyId != null) {
+      const { recordTransactionTax } = await import("../lib/taxAutoService.js");
+      void recordTransactionTax({
+        companyId: doc.companyId,
+        transactionType: "sales_order",
+        transactionId: doc.id,
+        transactionRef: doc.docNumber,
+        baseAmount: net,
+        taxAmount,
+      });
+    } else if (taxAmount > 0) {
+      console.warn(`[sales] tax capture skipped for ${doc.docNumber}: company context is missing`);
+    }
   }
 
   const detail = await loadDocWithLines(id);
@@ -693,6 +1107,7 @@ router.post("/documents/:id/action", async (req, res) => {
     mark_invoiced: "Invoice Dibuat",
     cancel_invoice: "Invoice Dibatalkan",
     mark_delivered: "Tandai Terkirim",
+    send_reminder: "Reminder Pembayaran Dikirim",
   };
   saveAndBroadcast("sales_order_update", {
     type: "sales_update",
@@ -706,6 +1121,19 @@ router.post("/documents/:id/action", async (req, res) => {
     grandTotal: Number(doc.totalAmount ?? 0) + Number(doc.taxAmount ?? 0),
     updatedAt: new Date().toISOString(),
   }).catch(() => {});
+
+  auditFromReq(req, {
+    action,
+    module: "sales",
+    referenceId: String(id),
+    newData: {
+      docNumber: doc.docNumber,
+      customerName: doc.customerName,
+      fromStatus: doc.status,
+      toStatus: (patch["status"] as string | undefined) ?? doc.status,
+      ...(patch["invoiceNumber"] ? { invoiceNumber: patch["invoiceNumber"] } : {}),
+    },
+  });
 
   return res.json(detail);
 });
@@ -721,6 +1149,9 @@ router.post("/documents/:id/return", async (req, res) => {
 
   const [doc] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, id));
   if (!doc) return res.status(404).json({ message: "Document tidak ditemukan" });
+  // IDOR guard
+  const companyIdReturn = resolveCompanyId(req);
+  if (!await assertCompanyAccess(doc.companyId, companyIdReturn, req, res, { resourceType: "sales_document", resourceId: id })) return;
   if (doc.deliveryStatus !== "delivered") {
     return res.status(400).json({ message: "Hanya SO yang sudah terkirim yang bisa diretur" });
   }
@@ -840,6 +1271,52 @@ router.post("/documents/:id/return", async (req, res) => {
     }).catch((e) => console.error("[accounting] postSalesCogsReturn error:", e));
   }
 
+  // ── Credit Note: DR Pendapatan (+ DR PPN Keluaran) / CR Piutang ───────────
+  // Hanya jika SO sudah diinvoice
+  if (doc.invoiceStatus === "invoiced" && returnedLines.length > 0) {
+    // Hitung nilai retur berdasarkan harga jual dari baris yang diretur
+    let returnNetAmount = 0;
+    for (const l of productLines) {
+      const rQty = returnQtyMap.get(l.productId!) ?? 0;
+      if (rQty > 0) {
+        // Fallback: jika unitPrice null/0, hitung dari subtotal/qty
+        const qty = Math.max(Number(l.quantity ?? 1), 1);
+        const unitPriceN =
+          Number(l.unitPrice ?? 0) ||
+          (Number((l as any).subtotal ?? 0) / qty);
+        returnNetAmount += rQty * unitPriceN;
+      }
+    }
+    // Hitung PPN proporsional
+    const docNet = Number(doc.totalAmount ?? 0);
+    const docTax = Number(doc.taxAmount ?? 0);
+    const returnTaxAmount =
+      docNet > 0 && docTax > 0 && returnNetAmount > 0
+        ? Math.round((returnNetAmount * docTax / docNet) * 100) / 100
+        : 0;
+
+    if (returnNetAmount > 0) {
+      void postSalesReturn({
+        returnId: id,
+        returnNumber: returnNo,
+        customerName: String(doc.customerName ?? ""),
+        netAmount: returnNetAmount,
+        taxAmount: returnTaxAmount,
+        companyId: doc.companyId ?? null,
+      }).catch((e) => console.error("[accounting] postSalesReturn error:", e));
+
+      // ── FASE 4 C3: Auto-reverse transaction tax untuk credit note ────────────
+      if (returnTaxAmount > 0 && doc.companyId) {
+        const { reverseTransactionTax } = await import("../lib/taxAutoService.js");
+        void reverseTransactionTax({
+          companyId: doc.companyId,
+          transactionType: "sales_order",
+          transactionId: id,
+        });
+      }
+    }
+  }
+
   return res.json({
     message: "Retur berhasil diproses",
     returnNumber: returnNo,
@@ -855,16 +1332,23 @@ router.get("/documents/:id/pdf", async (req, res): Promise<void> => {
   if (Number.isNaN(id)) { res.status(400).json({ message: "Invalid id" }); return; }
   const detail = await loadDocWithLines(id);
   if (!detail) { res.status(404).json({ message: "Document not found" }); return; }
+  // IDOR guard
+  const companyIdPdf = resolveCompanyId(req);
+  if (!await assertCompanyAccess(detail.companyId, companyIdPdf, req, res, { resourceType: "sales_document", resourceId: id })) return;
   let customer: typeof customersTable.$inferSelect | null = null;
   if (detail.customerId) {
     const rows = await db.select().from(customersTable).where(eq(customersTable.id, detail.customerId)).limit(1);
     customer = rows[0] ?? null;
   }
-  const acctSettings = await ensureAccountingSettings();
   const titleMap: Record<string, string> = {
     quote: "QUOTATION",
     order: "SALES ORDER",
   };
+  const tplType = detail.kind === "quote" ? "quotation" : "invoice";
+  const [acctSettings, template] = await Promise.all([
+    ensureAccountingSettings(),
+    loadDocTemplate(tplType),
+  ]);
   streamInvoicePdf(res, {
     title: titleMap[detail.kind] ?? "DOKUMEN PENJUALAN",
     docNumber: detail.docNumber,
@@ -892,8 +1376,14 @@ router.get("/documents/:id/pdf", async (req, res): Promise<void> => {
       subtotal: Number(l.subtotal),
     })),
     totalAmount: Number(detail.totalAmount),
+    taxAmount: detail.taxAmount > 0 ? detail.taxAmount : null,
+    grandTotal: detail.taxAmount > 0 ? detail.grandTotal : null,
+    taxRate: detail.taxAmount > 0 && detail.totalAmount > 0
+      ? Math.round(detail.taxAmount / detail.totalAmount * 100)
+      : null,
     invoiceStatus: detail.invoiceStatus,
     deliveryStatus: detail.deliveryStatus,
+    template,
   });
 });
 
@@ -914,6 +1404,9 @@ router.post("/documents/:id/email", async (req, res): Promise<void> => {
 
   const detail = await loadDocWithLines(id);
   if (!detail) { res.status(404).json({ message: "Document not found" }); return; }
+  // IDOR guard
+  const companyIdEmail = resolveCompanyId(req);
+  if (!await assertCompanyAccess(detail.companyId, companyIdEmail, req, res, { resourceType: "sales_document", resourceId: id })) return;
 
   let customer: typeof customersTable.$inferSelect | null = null;
   if (detail.customerId) {
@@ -921,7 +1414,11 @@ router.post("/documents/:id/email", async (req, res): Promise<void> => {
     customer = rows[0] ?? null;
   }
 
-  const acctSettings = await ensureAccountingSettings();
+  const tplType2 = detail.kind === "quote" ? "quotation" : "invoice";
+  const [acctSettings, template2] = await Promise.all([
+    ensureAccountingSettings(),
+    loadDocTemplate(tplType2),
+  ]);
   const titleMap: Record<string, string> = { quote: "QUOTATION", order: "SALES ORDER" };
   const pdfData = {
     title: titleMap[detail.kind] ?? "DOKUMEN PENJUALAN",
@@ -950,8 +1447,14 @@ router.post("/documents/:id/email", async (req, res): Promise<void> => {
       subtotal: Number(l.subtotal),
     })),
     totalAmount: Number(detail.totalAmount),
+    taxAmount: detail.taxAmount > 0 ? detail.taxAmount : null,
+    grandTotal: detail.taxAmount > 0 ? detail.grandTotal : null,
+    taxRate: detail.taxAmount > 0 && detail.totalAmount > 0
+      ? Math.round(detail.taxAmount / detail.totalAmount * 100)
+      : null,
     invoiceStatus: detail.invoiceStatus,
     deliveryStatus: detail.deliveryStatus,
+    template: template2,
   };
 
   const pdfBuffer = await buildInvoicePdfBuffer(pdfData);
@@ -968,6 +1471,30 @@ router.post("/documents/:id/email", async (req, res): Promise<void> => {
   });
 
   res.json({ message: "Email berhasil dikirim", to, filename });
+});
+
+// GET /api/sales/documents/:id/audit-log — riwayat aktivitas dokumen
+router.get("/documents/:id/audit-log", async (req, res) => {
+  const id = Number(req.params.id);
+  if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+  // IDOR guard: ensure document belongs to requesting company
+  const [docForAudit] = await db.select({ companyId: salesDocumentsTable.companyId }).from(salesDocumentsTable).where(eq(salesDocumentsTable.id, id)).limit(1);
+  if (!docForAudit) return res.status(404).json({ message: "Document not found" });
+  const companyIdAudit = resolveCompanyId(req);
+  if (!await assertCompanyAccess(docForAudit.companyId, companyIdAudit, req, res, { resourceType: "sales_document_audit", resourceId: id })) return;
+  const rows = await db.execute(sql`
+    SELECT
+      id, user_id, user_email,
+      action, module, reference_id,
+      new_data, old_data,
+      created_at
+    FROM erp_audit_logs
+    WHERE module = 'sales'
+      AND reference_id = ${String(id)}
+    ORDER BY created_at DESC
+    LIMIT 200
+  `);
+  return res.json(rows.rows);
 });
 
 // GET /api/sales/ai-drafts — list AI-generated draft quotations
@@ -1106,6 +1633,9 @@ router.get("/documents/:id/eligible-vendors", async (req, res) => {
 
   const [doc] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, id));
   if (!doc) return res.status(404).json({ message: "Document not found" });
+  // IDOR guard
+  const companyIdVendors = resolveCompanyId(req);
+  if (!await assertCompanyAccess(doc.companyId, companyIdVendors, req, res, { resourceType: "sales_document", resourceId: id })) return;
 
   const allActive = await db.select().from(suppliersTable).where(eq(suppliersTable.isActive, true));
   const eligible = await filterEligibleVendors(allActive, doc.transportMode);
@@ -1128,6 +1658,9 @@ router.post("/documents/:id/forward-to-vendors", async (req, res) => {
 
   const detail = await loadDocWithLines(id);
   if (!detail) return res.status(404).json({ message: "Document not found" });
+  // IDOR guard
+  const companyIdFwd = resolveCompanyId(req);
+  if (!await assertCompanyAccess(detail.companyId, companyIdFwd, req, res, { resourceType: "sales_document", resourceId: id })) return;
   const { lines, ...doc } = detail;
 
   const body = req.body as { vendorIds?: number[]; channels?: string[] };
@@ -1188,7 +1721,8 @@ router.post("/documents/:id/forward-to-vendors", async (req, res) => {
           await sendWhatsApp(vendor.phone, msg);
           result.waStatus = "sent";
           waCount++;
-        } catch {
+        } catch (err) {
+          console.warn("[sales] WhatsApp send failed for vendor=%s:", vendor.id, err);
           result.waStatus = "failed";
         }
       } else {
@@ -1212,7 +1746,7 @@ router.post("/documents/:id/forward-to-vendors", async (req, res) => {
               (doc.notes ? `\nCatatan:\n${doc.notes}\n` : "") +
               `\nDaftar Barang/Kargo:\n` +
               itemSummaryText +
-              `\n\nTerima kasih,\nCST Logistics`,
+              `\n\nTerima kasih,\nB2B Marketplace and Logistic`,
             html:
               `<p>Kepada <strong>${vendor.name}</strong>,</p>` +
               `<p>Mohon berikan penawaran untuk:</p>` +
@@ -1225,11 +1759,12 @@ router.post("/documents/:id/forward-to-vendors", async (req, res) => {
               (doc.notes ? `<p>Catatan:<br>${String(doc.notes).replace(/\n/g, "<br>")}</p>` : "") +
               `<p><strong>Daftar Barang/Kargo:</strong></p>` +
               itemSummaryHtml +
-              `<p>Terima kasih,<br>CST Logistics</p>`,
+              `<p>Terima kasih,<br>B2B Marketplace and Logistic</p>`,
           });
           result.emailStatus = "sent";
           emailCount++;
-        } catch {
+        } catch (err) {
+          console.warn("[sales] Email send failed for vendor=%s:", vendor.id, err);
           result.emailStatus = "failed";
         }
       } else {

@@ -48,7 +48,6 @@ export default defineConfig({
         path.resolve(import.meta.dirname, "../api-server/**"),
         path.resolve(import.meta.dirname, "../bizportal/**"),
         path.resolve(import.meta.dirname, "../customer-portal/**"),
-        path.resolve(import.meta.dirname, "../cst-driver/**"),
         path.resolve(import.meta.dirname, "../logistic-order/**"),
         path.resolve(import.meta.dirname, "../sport-center/**"),
       ],

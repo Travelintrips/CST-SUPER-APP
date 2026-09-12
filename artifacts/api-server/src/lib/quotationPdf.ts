@@ -42,7 +42,7 @@ export function buildQuotationPdf(data: QuotationPdfData): Buffer {
     margin: 50,
     info: {
       Title: `Quotation ${data.quotationNumber}`,
-      Author: "CST Logistics",
+      Author: "B2B Marketplace and Logistic",
     },
   });
 
@@ -54,13 +54,13 @@ export function buildQuotationPdf(data: QuotationPdfData): Buffer {
   doc.fillColor("white")
     .font("Helvetica-Bold")
     .fontSize(22)
-    .text("CST LOGISTICS", 50, 22);
+    .text("B2B MARKETPLACE AND LOGISTIC", 50, 22);
 
   doc.font("Helvetica")
     .fontSize(10)
     .fillColor("#bfdbfe")
-    .text("PT. CST Logistik Internasional", 50, 48)
-    .text("Jakarta, Indonesia | www.cstlogistic.co.id", 50, 62);
+    .text("PT. B2B Marketplace and Logistic", 50, 48)
+    .text("Jakarta, Indonesia | www.b2bmarketplace.co.id", 50, 62);
 
   // Quotation label - top right
   doc.fillColor("white")
@@ -159,7 +159,7 @@ export function buildQuotationPdf(data: QuotationPdfData): Buffer {
   doc.fillColor(GRAY).font("Helvetica").fontSize(9)
     .text("Jakarta, " + fmtDate(today), 50, sigY)
     .text("Hormat kami,", 50, sigY + 14)
-    .text("CST Logistics", 50, sigY + 28);
+    .text("B2B Marketplace and Logistic", 50, sigY + 28);
 
   doc.rect(50, sigY + 40, 150, 55).stroke(GRAY);
   doc.fillColor(GRAY).fontSize(8).text("(tanda tangan & stempel)", 55, sigY + 60);
@@ -174,8 +174,8 @@ export function buildQuotationPdf(data: QuotationPdfData): Buffer {
   const footerY = doc.page.height - 60;
   doc.rect(0, footerY, doc.page.width, 60).fill(BRAND_BLUE);
   doc.fillColor("white").font("Helvetica").fontSize(8)
-    .text("CST Logistics | Solusi Logistik Terpercaya Indonesia", 50, footerY + 14, { align: "center", width: doc.page.width - 100 })
-    .text("Dokumen ini dibuat secara otomatis oleh sistem BizPortal CST Logistics.", 50, footerY + 28, { align: "center", width: doc.page.width - 100 })
+    .text("B2B Marketplace and Logistic | Solusi Logistik Terpercaya Indonesia", 50, footerY + 14, { align: "center", width: doc.page.width - 100 })
+    .text("Dokumen ini dibuat secara otomatis oleh sistem BizPortal B2B Marketplace and Logistic.", 50, footerY + 28, { align: "center", width: doc.page.width - 100 })
     .text(`Dicetak: ${new Date().toLocaleString("id-ID")}`, 50, footerY + 42, { align: "center", width: doc.page.width - 100 });
 
   doc.end();

@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 router.use(async (req: Request, res: Response, next) => {
@@ -35,7 +36,7 @@ async function runApprovalMigration() {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_approval_requests_company ON approval_requests(company_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_approval_requests_module ON approval_requests(module, doc_type)`);
 }
-runApprovalMigration().catch((e) => console.error("[approval migration]", e));
+deferStartupTask("approval-requests", runApprovalMigration);
 
 // GET /api/approvals — list approval requests
 router.get("/", async (req: Request, res: Response) => {
@@ -106,15 +107,23 @@ router.post("/", async (req: Request, res: Response) => {
 // PATCH /api/approvals/:id/approve
 router.patch("/:id/approve", async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const { approvedBy, note } = req.body as { approvedBy?: string; note?: string };
+  const actorEmail = req.user?.email ?? null;
+  const { note } = req.body as { note?: string };
+
   const existing = await db.execute(sql`SELECT * FROM approval_requests WHERE id = ${id}`);
   if (!existing.rows[0]) return res.status(404).json({ message: "Permintaan tidak ditemukan" });
-  if ((existing.rows[0] as any).status !== "pending") {
+  const row = existing.rows[0] as any;
+  if (row.status !== "pending") {
     return res.status(400).json({ message: "Hanya permintaan berstatus pending yang bisa disetujui" });
   }
+  // Self-approval guard: requester cannot approve their own request
+  if (actorEmail && row.requested_by && actorEmail === row.requested_by) {
+    return res.status(403).json({ message: "Anda tidak bisa menyetujui permintaan yang Anda buat sendiri" });
+  }
+
   const result = await db.execute(sql`
     UPDATE approval_requests
-    SET status = 'approved', approved_by = ${approvedBy ?? null},
+    SET status = 'approved', approved_by = ${actorEmail},
         approved_at = NOW(), note = COALESCE(${note ?? null}, note)
     WHERE id = ${id}
     RETURNING *
@@ -125,15 +134,19 @@ router.patch("/:id/approve", async (req: Request, res: Response) => {
 // PATCH /api/approvals/:id/reject
 router.patch("/:id/reject", async (req: Request, res: Response) => {
   const id = Number(req.params.id);
-  const { rejectedBy, note } = req.body as { rejectedBy?: string; note?: string };
+  const actorEmail = req.user?.email ?? null;
+  const { note } = req.body as { note?: string };
+
   const existing = await db.execute(sql`SELECT * FROM approval_requests WHERE id = ${id}`);
   if (!existing.rows[0]) return res.status(404).json({ message: "Permintaan tidak ditemukan" });
-  if ((existing.rows[0] as any).status !== "pending") {
+  const row = existing.rows[0] as any;
+  if (row.status !== "pending") {
     return res.status(400).json({ message: "Hanya permintaan berstatus pending yang bisa ditolak" });
   }
+
   const result = await db.execute(sql`
     UPDATE approval_requests
-    SET status = 'rejected', rejected_by = ${rejectedBy ?? null},
+    SET status = 'rejected', rejected_by = ${actorEmail},
         rejected_at = NOW(), note = COALESCE(${note ?? null}, note)
     WHERE id = ${id}
     RETURNING *

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   MessageCircle,
   X,
@@ -21,9 +22,12 @@ import {
   Paperclip,
   FileText,
   ImageIcon,
+  RotateCcw,
 } from "lucide-react";
 import { Link } from "wouter";
 import { LocationCombobox } from "@/components/LocationCombobox";
+import { COMPANY_CONFIG } from "@/config/company";
+import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 
 interface ChatMessage {
   id: string;
@@ -126,7 +130,7 @@ const GREETING: ChatMessage = {
   id: "greeting",
   role: "assistant",
   content:
-    "Halo! 👋 Selamat datang di CST Logistics.\n\n" +
+    `Halo! 👋 Selamat datang di ${COMPANY_CONFIG.brandName}.\n\n` +
     "Saya siap membantu Anda:\n" +
     "• Informasi layanan (Sea/Air/Trucking/Customs)\n" +
     "• **Buat order cepat** — ketik 'mau kirim' atau 'trucking', form langsung muncul!\n" +
@@ -155,6 +159,7 @@ function OrderForm({
   onSuccess,
   onDismiss,
 }: OrderFormProps) {
+  const { t } = useLanguage();
   const [form, setForm] = useState({
     customerName: "",
     phone: "",
@@ -191,7 +196,7 @@ function OrderForm({
       !form.origin.trim() ||
       !form.destination.trim()
     ) {
-      setError("Isi semua field bertanda *");
+      setError(t("chatWidget.formFillRequired", "Isi semua field bertanda *"));
       return;
     }
     setSubmitting(true);
@@ -210,7 +215,7 @@ function OrderForm({
         error?: string;
       };
       if (!res.ok || !data.success) {
-        setError(data.error ?? "Gagal membuat order, coba lagi.");
+        setError(data.error ?? t("chatWidget.formCreateOrderFail", "Gagal membuat order, coba lagi."));
         return;
       }
       onSuccess(
@@ -219,7 +224,7 @@ function OrderForm({
         data.sessionToken ?? sessionToken ?? "",
       );
     } catch {
-      setError("Gagal koneksi, coba lagi.");
+      setError(t("chatWidget.formConnectFail", "Gagal koneksi, coba lagi."));
     } finally {
       setSubmitting(false);
     }
@@ -238,7 +243,7 @@ function OrderForm({
       <div className="flex items-center gap-2 px-3 py-2 bg-sky-50 border-b border-sky-100 rounded-t-2xl">
         <ClipboardList className="h-4 w-4 text-sky-600 shrink-0" />
         <p className="text-xs font-semibold text-sky-800 flex-1">
-          Form Order Cepat
+          {t("chatWidget.formOrderTitle", "Form Order Cepat")}
         </p>
         <button
           type="button"
@@ -251,7 +256,7 @@ function OrderForm({
 
       <div className="px-3 py-2.5 space-y-2">
         <div>
-          <label className={lbl}>Nama Lengkap *</label>
+          <label className={lbl}>{t("chatWidget.fullName", "Nama Lengkap")} *</label>
           <input
             className={inp}
             placeholder="Budi Santoso"
@@ -261,7 +266,7 @@ function OrderForm({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className={lbl}>No. WhatsApp *</label>
+            <label className={lbl}>{t("chatWidget.whatsapp", "No. WhatsApp")} *</label>
             <input
               className={inp}
               placeholder="081234..."
@@ -270,7 +275,7 @@ function OrderForm({
             />
           </div>
           <div>
-            <label className={lbl}>Email</label>
+            <label className={lbl}>{t("chatWidget.email", "Email")}</label>
             <input
               className={inp}
               placeholder="email@..."
@@ -281,7 +286,7 @@ function OrderForm({
         </div>
 
         <div>
-          <label className={lbl}>Nama Perusahaan</label>
+          <label className={lbl}>{t("chatWidget.companyName", "Nama Perusahaan")}</label>
           <input
             className={inp}
             placeholder="PT Contoh / individu"
@@ -290,7 +295,7 @@ function OrderForm({
         </div>
 
         <div>
-          <label className={lbl}>Jenis Pengiriman *</label>
+          <label className={lbl}>{t("chatWidget.shipmentType", "Jenis Pengiriman")} *</label>
           <select className={inp} {...field("shipmentType")}>
             {SERVICE_OPTIONS.map((s) => (
               <option key={s} value={s}>
@@ -302,7 +307,7 @@ function OrderForm({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className={lbl}>Kota Asal *</label>
+            <label className={lbl}>{t("chatWidget.originCity", "Kota Asal")} *</label>
             <LocationCombobox
               value={form.origin}
               onChange={(label) => setForm((p) => ({ ...p, origin: label }))}
@@ -311,7 +316,7 @@ function OrderForm({
             />
           </div>
           <div>
-            <label className={lbl}>Kota Tujuan *</label>
+            <label className={lbl}>{t("chatWidget.destCity", "Kota Tujuan")} *</label>
             <LocationCombobox
               value={form.destination}
               onChange={(label) => setForm((p) => ({ ...p, destination: label }))}
@@ -322,17 +327,17 @@ function OrderForm({
         </div>
 
         <div>
-          <label className={lbl}>Komoditi / Jenis Barang</label>
+          <label className={lbl}>{t("chatWidget.commodity", "Komoditi / Jenis Barang")}</label>
           <input
             className={inp}
-            placeholder="Elektronik, Tekstil, dll"
+            placeholder={t("chatWidget.commodityPh", "Elektronik, Tekstil, dll")}
             {...field("commodity")}
           />
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className={lbl}>Berat (kg)</label>
+            <label className={lbl}>{t("chatWidget.weightKg", "Berat (kg)")}</label>
             <input
               className={inp}
               placeholder="500"
@@ -342,7 +347,7 @@ function OrderForm({
             />
           </div>
           <div>
-            <label className={lbl}>Volume (CBM)</label>
+            <label className={lbl}>{t("chatWidget.volumeCbm", "Volume (CBM)")}</label>
             <input
               className={inp}
               placeholder="2.5"
@@ -355,16 +360,16 @@ function OrderForm({
         </div>
 
         <div>
-          <label className={lbl}>Tanggal Pengiriman</label>
+          <label className={lbl}>{t("chatWidget.shipmentDate", "Tanggal Pengiriman")}</label>
           <input className={inp} type="date" {...field("requiredDate")} />
         </div>
 
         <div>
-          <label className={lbl}>Catatan</label>
+          <label className={lbl}>{t("chatWidget.notes", "Catatan")}</label>
           <textarea
             className={`${inp} resize-none`}
             rows={2}
-            placeholder="Info tambahan..."
+            placeholder={t("chatWidget.notesPh", "Info tambahan...")}
             value={form.notes}
             onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
           />
@@ -382,14 +387,14 @@ function OrderForm({
             onClick={onDismiss}
             className="flex-1 text-xs py-2 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
           >
-            Tutup
+            {t("chatWidget.close", "Tutup")}
           </button>
           <button
             type="submit"
             disabled={submitting}
             className="flex-1 text-xs py-2 rounded-xl bg-sky-600 text-white font-semibold hover:bg-sky-500 disabled:opacity-50 transition-colors"
           >
-            {submitting ? "Mengirim…" : "Buat Order →"}
+            {submitting ? t("chatWidget.sending", "Mengirim…") : t("chatWidget.createOrder", "Buat Order →")}
           </button>
         </div>
       </div>
@@ -416,6 +421,7 @@ function ProductOrderForm({
   onSuccess,
   onDismiss,
 }: ProductOrderFormProps) {
+  const { t } = useLanguage();
   const [form, setForm] = useState({
     customerName: "",
     phone: "",
@@ -452,7 +458,7 @@ function ProductOrderForm({
       !qtyNum ||
       qtyNum <= 0
     ) {
-      setError("Isi semua field bertanda *");
+      setError(t("chatWidget.formFillRequired", "Isi semua field bertanda *"));
       return;
     }
     setSubmitting(true);
@@ -481,7 +487,7 @@ function ProductOrderForm({
         error?: string;
       };
       if (!res.ok || !data.success) {
-        setError(data.error ?? "Gagal membuat order, coba lagi.");
+        setError(data.error ?? t("chatWidget.formCreateOrderFail", "Gagal membuat order, coba lagi."));
         return;
       }
       onSuccess(
@@ -490,7 +496,7 @@ function ProductOrderForm({
         data.sessionToken ?? sessionToken ?? "",
       );
     } catch {
-      setError("Gagal koneksi, coba lagi.");
+      setError(t("chatWidget.formConnectFail", "Gagal koneksi, coba lagi."));
     } finally {
       setSubmitting(false);
     }
@@ -509,7 +515,7 @@ function ProductOrderForm({
       <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border-b border-emerald-100">
         <Package className="h-4 w-4 text-emerald-600 shrink-0" />
         <p className="text-xs font-semibold text-emerald-800 flex-1">
-          Pesan Produk
+          {t("chatWidget.orderProduct", "Pesan Produk")}
         </p>
         <button
           type="button"
@@ -531,7 +537,7 @@ function ProductOrderForm({
 
       <div className="px-3 py-2.5 space-y-2">
         <div>
-          <label className={lbl}>Nama Lengkap *</label>
+          <label className={lbl}>{t("chatWidget.fullName", "Nama Lengkap")} *</label>
           <input
             className={inp}
             placeholder="Budi Santoso"
@@ -541,7 +547,7 @@ function ProductOrderForm({
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className={lbl}>No. WhatsApp *</label>
+            <label className={lbl}>{t("chatWidget.whatsapp", "No. WhatsApp")} *</label>
             <input
               className={inp}
               placeholder="081234..."
@@ -550,7 +556,7 @@ function ProductOrderForm({
             />
           </div>
           <div>
-            <label className={lbl}>Email</label>
+            <label className={lbl}>{t("chatWidget.email", "Email")}</label>
             <input
               className={inp}
               placeholder="email@..."
@@ -561,7 +567,7 @@ function ProductOrderForm({
         </div>
 
         <div>
-          <label className={lbl}>Jumlah ({unit}) *</label>
+          <label className={lbl}>{t("chatWidget.quantity", "Jumlah")} ({unit}) *</label>
           <input
             className={inp}
             type="number"
@@ -573,16 +579,16 @@ function ProductOrderForm({
 
         {totalPrice > 0 && (
           <div className="text-[11px] text-emerald-700 font-semibold bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-1.5">
-            Total: {fmtPrice(totalPrice)}
+            {t("chatWidget.total", "Total")}: {fmtPrice(totalPrice)}
           </div>
         )}
 
         <div>
-          <label className={lbl}>Catatan</label>
+          <label className={lbl}>{t("chatWidget.notes", "Catatan")}</label>
           <textarea
             className={`${inp} resize-none`}
             rows={2}
-            placeholder="Alamat pengiriman, catatan khusus..."
+            placeholder={t("chatWidget.productNotesPh", "Alamat pengiriman, catatan khusus...")}
             value={form.notes}
             onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
           />
@@ -600,14 +606,14 @@ function ProductOrderForm({
             onClick={onDismiss}
             className="flex-1 text-xs py-2 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
           >
-            Tutup
+            {t("chatWidget.close", "Tutup")}
           </button>
           <button
             type="submit"
             disabled={submitting}
             className="flex-1 text-xs py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-500 disabled:opacity-50 transition-colors"
           >
-            {submitting ? "Mengirim…" : "Pesan Sekarang →"}
+            {submitting ? t("chatWidget.sending", "Mengirim…") : t("chatWidget.orderNow", "Pesan Sekarang →")}
           </button>
         </div>
       </div>
@@ -616,6 +622,7 @@ function ProductOrderForm({
 }
 
 export function ChatWidget() {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -703,6 +710,15 @@ export function ChatWidget() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** In-session image previews: message id → data URL (not persisted to localStorage) */
   const imgPreviewsRef = useRef<Map<string, string>>(new Map());
+  /**
+   * Shared AudioContext — created once on first user gesture and reused for all
+   * subsequent sounds. Mobile browsers (iOS/Android) block audio from async
+   * callbacks unless the AudioContext was created AND resumed inside a user
+   * gesture. By unlocking it on the first tap and keeping the instance alive,
+   * sounds triggered from SSE callbacks (received, notification) also play.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const audioCtxRef = useRef<any>(null);
 
   const isStreaming = streamingContent !== null;
 
@@ -904,8 +920,41 @@ export function ChatWidget() {
         /* empty */
       }
       if (!next) stopSpeaking();
+      // Unlock audio on the same user gesture that enables voice output
+      unlockAudio();
       return next;
     });
+  }
+
+  /**
+   * Must be called inside a user gesture (click/touchstart).
+   * Creates the shared AudioContext (if not yet created) and resumes it so that
+   * subsequent async sound calls (received, notification) work on mobile browsers.
+   * Also primes speechSynthesis on iOS which otherwise refuses to speak from async.
+   */
+  function unlockAudio() {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AC = (window as any).AudioContext ?? (window as any).webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AC();
+      }
+      const ctx = audioCtxRef.current;
+      // Resume if suspended — this is the key step for mobile
+      if (ctx.state === "suspended") {
+        void (ctx as AudioContext).resume();
+      }
+      // Prime speechSynthesis on iOS: speak an empty utterance to unlock it
+      if (window.speechSynthesis) {
+        const primer = new SpeechSynthesisUtterance("");
+        window.speechSynthesis.speak(primer);
+        // Cancel immediately — we only need the unlock side-effect
+        setTimeout(() => window.speechSynthesis.cancel(), 50);
+      }
+    } catch {
+      /* silently ignore — non-fatal */
+    }
   }
 
   /** Synthesize a short UI sound via Web Audio API — no external files, iOS/Android safe */
@@ -913,10 +962,17 @@ export function ChatWidget() {
     if (!sfxEnabled) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const AC: (new () => AudioContext) | undefined =
-        (window as any).AudioContext ?? (window as any).webkitAudioContext;
+      const AC = (window as any).AudioContext ?? (window as any).webkitAudioContext;
       if (!AC) return;
-      const ctx = new AC();
+      // Reuse the shared context (pre-unlocked by user gesture).
+      // If not yet created, create it — but it may be suspended on mobile until
+      // the next user gesture calls unlockAudio().
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AC();
+      }
+      const ctx: AudioContext = audioCtxRef.current as AudioContext;
+      // If still suspended (user hasn't tapped yet), skip rather than fail silently
+      if (ctx.state === "suspended") return;
       const g = ctx.createGain();
       g.connect(ctx.destination);
 
@@ -973,7 +1029,8 @@ export function ChatWidget() {
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + c.duration);
       osc.onended = () => {
-        void ctx.close();
+        // Do NOT close the shared AudioContext — it must stay open for future sounds
+        g.disconnect();
       };
     } catch {
       /* audio blocked or unsupported — silently ignore */
@@ -1184,6 +1241,9 @@ export function ChatWidget() {
   /** Add a user text message to chat and stream AI response */
   async function doSend(text: string) {
     if (!text.trim() || isStreaming) return;
+    // Unlock audio on every send gesture so async sounds (received/notification)
+    // work immediately after on mobile — no-op if already unlocked.
+    unlockAudio();
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -1206,6 +1266,7 @@ export function ChatWidget() {
     if (isStreaming || uploadingFile) return;
     const text = input.trim();
     if (!text && !attachedFile) return;
+    unlockAudio(); // ensure AudioContext is running before async sounds
     setInput("");
 
     if (attachedFile) {
@@ -1341,6 +1402,7 @@ export function ChatWidget() {
   /** Push-to-talk: call on mousedown/touchstart */
   function startListening() {
     if (isStreaming || isListening) return;
+    unlockAudio(); // mic tap is a user gesture — unlock audio for subsequent async sounds
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -1480,104 +1542,103 @@ export function ChatWidget() {
         >
           {/* Header */}
           <div
-            className="flex items-center gap-2 px-4 py-3.5 sm:px-5 sm:py-4 shrink-0"
+            className="flex items-center gap-3 px-4 py-3 shrink-0"
             style={{
               background: "linear-gradient(135deg, #0052D4 0%, #4364F7 100%)",
-              backdropFilter: "blur(10px)",
-              WebkitBackdropFilter: "blur(10px)",
             }}
           >
-            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-              <img src="/images/logo-baru.png" className="h-7 w-7 object-contain" alt="logo" />
+            {/* Avatar */}
+            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center shrink-0 ring-2 ring-white/30">
+              <img src={CUSTOMER_ASSETS.logoBrand} className="h-6 w-6 object-contain" alt="logo" />
             </div>
-            <div className="flex-1 min-w-0 pr-2">
+
+            {/* Title + status — left-aligned, truncates before reaching buttons */}
+            <div className="flex-1 min-w-0">
               <p
-                className="font-semibold text-white leading-snug text-center sm:text-right text-[11px] sm:text-sm whitespace-nowrap"
-                style={{
-                  letterSpacing: "0.3px",
-                  textShadow: "0 1px 3px rgba(0,0,0,0.18)",
-                  lineHeight: 1.2,
-                }}
+                className="font-semibold text-white text-sm leading-tight truncate"
+                style={{ letterSpacing: "0.2px" }}
               >
-                <span className="sm:hidden">CST Logistics Assistant</span>
-                <span className="hidden sm:inline">
-                  CST Logistics Assistant
-                </span>
+                {COMPANY_CONFIG.brandName}
               </p>
-              <p className="text-xs text-sky-200 flex items-center justify-end gap-1 mt-0.5">
+              <p className="flex items-center gap-1.5 mt-0.5">
                 {isSpeaking ? (
                   <>
-                    <span className="w-1.5 h-1.5 rounded-full inline-block bg-purple-300 animate-pulse" />
-                    <span className="animate-pulse">Berbicara…</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-300 animate-pulse shrink-0" />
+                    {t("chatWidget.speaking", "Berbicara…")}
                   </>
                 ) : (
                   <>
                     <span
-                      className={`w-1.5 h-1.5 rounded-full inline-block ${isStreaming ? "bg-yellow-400 animate-pulse" : "bg-green-400"}`}
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${isStreaming ? "bg-yellow-400 animate-pulse" : "bg-green-400"}`}
                     />
-                    {isStreaming ? "Mengetik…" : "Online"}
+                    <span className="text-[11px] text-sky-200">
+                      {isStreaming ? t("chatWidget.typing", "Mengetik…") : t("chatWidget.online", "Online")}
+                    </span>
                   </>
                 )}
               </p>
             </div>
-            {/* Icon button group — right-aligned */}
-            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0 ml-auto">
+
+            {/* Icon button group — all uniform w-8 h-8 */}
+            <div className="flex items-center gap-0.5 shrink-0">
               {/* Sound effects toggle */}
               <button
                 onClick={toggleSfx}
-                title={
-                  sfxEnabled ? "Matikan suara efek" : "Aktifkan suara efek"
-                }
-                className={`w-7 h-7 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center transition-all duration-300 ${
+                title={sfxEnabled ? t("chatWidget.muteSfx", "Matikan suara efek") : t("chatWidget.enableSfx", "Aktifkan suara efek")}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-200 ${
                   sfxEnabled
-                    ? "bg-white/25 text-white"
-                    : "bg-white/10 text-white/55 hover:text-white hover:bg-white/20"
+                    ? "bg-white/20 text-white"
+                    : "text-white/50 hover:text-white hover:bg-white/15"
                 }`}
-                style={{ transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)" }}
               >
                 {sfxEnabled ? (
-                  <Bell className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" />
+                  <Bell className="h-[15px] w-[15px]" />
                 ) : (
-                  <BellOff className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" />
+                  <BellOff className="h-[15px] w-[15px]" />
                 )}
               </button>
+
               {/* Voice output toggle */}
               <button
                 onClick={isSpeaking ? stopSpeaking : toggleVoiceOutput}
                 title={
                   isSpeaking
-                    ? "Berhenti bicara"
+                    ? t("chatWidget.stopSpeaking", "Berhenti bicara")
                     : voiceOutput
-                      ? "Matikan suara AI"
-                      : "Aktifkan suara AI"
+                      ? t("chatWidget.muteAiVoice", "Matikan suara AI")
+                      : t("chatWidget.enableAiVoice", "Aktifkan suara AI")
                 }
-                className={`w-7 h-7 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center transition-all duration-300 ${
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-200 ${
                   voiceOutput || isSpeaking
-                    ? "bg-white/25 text-white"
-                    : "bg-white/10 text-white/55 hover:text-white hover:bg-white/20"
+                    ? "bg-white/20 text-white"
+                    : "text-white/50 hover:text-white hover:bg-white/15"
                 }`}
-                style={{ transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)" }}
               >
                 {voiceOutput || isSpeaking ? (
-                  <Volume2 className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" />
+                  <Volume2 className="h-[15px] w-[15px]" />
                 ) : (
-                  <VolumeX className="h-3.5 w-3.5 sm:h-[18px] sm:w-[18px]" />
+                  <VolumeX className="h-[15px] w-[15px]" />
                 )}
               </button>
+
+              {/* Divider */}
+              <span className="w-px h-4 bg-white/20 mx-1 shrink-0" />
+
+              {/* Reset — icon only */}
               <button
                 onClick={resetChat}
-                className="h-11 sm:h-9 px-2.5 text-white/65 hover:text-white text-[11px] font-semibold tracking-wide transition-all duration-300 rounded-xl hover:bg-white/15"
-                title="Reset percakapan"
-                style={{ transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)" }}
+                title={t("chatWidget.resetConversation", "Reset percakapan")}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/15 transition-colors duration-200"
               >
-                Reset
+                <RotateCcw className="h-[15px] w-[15px]" />
               </button>
+
+              {/* Close */}
               <button
                 onClick={() => setOpen(false)}
-                className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center text-white/75 hover:text-white hover:bg-white/15 rounded-xl transition-all duration-300"
-                style={{ transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)" }}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/15 transition-colors duration-200"
               >
-                <X className="h-5 w-5" />
+                <X className="h-[15px] w-[15px]" />
               </button>
             </div>
           </div>
@@ -1602,7 +1663,7 @@ export function ChatWidget() {
                       {msg.role === "admin" ? (
                         <User className="h-4 w-4 text-sky-700" />
                       ) : (
-                        <img src="/images/logo-baru.png" className="h-5 w-5 object-contain" alt="logo" />
+                        <img src={CUSTOMER_ASSETS.logoBrand} className="h-5 w-5 object-contain" alt="logo" />
                       )}
                     </div>
                   )}
@@ -1627,7 +1688,7 @@ export function ChatWidget() {
                     >
                       {msg.role === "admin" && (
                         <p className="text-[10px] font-semibold text-amber-600 mb-1">
-                          Admin CST
+                          {t("chatWidget.adminLabel", "Admin CST")}
                         </p>
                       )}
                       {msg.attachment && (
@@ -1669,7 +1730,7 @@ export function ChatWidget() {
             {isStreaming && (
               <div className="flex gap-2 flex-row">
                 <div className="w-8 h-8 rounded-full bg-sky-100 flex items-center justify-center shrink-0 mt-0.5">
-                  <img src="/images/logo-baru.png" className="h-5 w-5 object-contain" alt="logo" />
+                  <img src={CUSTOMER_ASSETS.logoBrand} className="h-5 w-5 object-contain" alt="logo" />
                 </div>
                 <div
                   className="max-w-[85%] bg-white border border-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"
@@ -1700,17 +1761,17 @@ export function ChatWidget() {
                 <Package className="h-5 w-5 text-green-600 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-green-800">
-                    Order Berhasil Dibuat!
+                    {t("chatWidget.orderCreated", "Order Berhasil Dibuat!")}
                   </p>
                   <p className="text-xs text-green-700 mt-0.5">
-                    No. Order: {orderCreated.orderNumber}
+                    {t("chatWidget.orderNumber", "No. Order")}: {orderCreated.orderNumber}
                   </p>
                   <Link
                     href="/track"
                     className="text-xs text-green-700 underline font-medium mt-1 inline-block"
                     onClick={() => setOpen(false)}
                   >
-                    Lacak status order →
+                    {t("chatWidget.trackOrder", "Lacak status order →")}
                   </Link>
                 </div>
               </div>
@@ -1813,7 +1874,7 @@ export function ChatWidget() {
                         className="text-[11px] text-sky-600 underline font-medium mt-1.5 inline-block"
                         onClick={() => setOpen(false)}
                       >
-                        Lihat detail →
+                        {t("chatWidget.viewDetail", "Lihat detail →")}
                       </Link>
                     </div>
                   );
@@ -1894,7 +1955,7 @@ export function ChatWidget() {
               <div className="flex items-center gap-2 mb-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                 <div className="h-4 w-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin shrink-0" />
                 <p className="text-xs text-amber-700 font-medium">
-                  Menganalisis file dengan AI…
+                  {t("chatWidget.analyzingFile", "Menganalisis file dengan AI…")}
                 </p>
               </div>
             )}
@@ -1913,7 +1974,7 @@ export function ChatWidget() {
                     />
                   ))}
                 </span>
-                Merekam… lepas tombol untuk kirim
+                {t("chatWidget.recording", "Merekam… lepas tombol untuk kirim")}
               </div>
             )}
             <div className="flex gap-2 items-center min-w-0">
@@ -1922,7 +1983,7 @@ export function ChatWidget() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isStreaming || uploadingFile}
-                title="Upload gambar atau PDF"
+                title={t("chatWidget.uploadFileTitle", "Upload gambar atau PDF")}
                 className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all duration-200 shrink-0 disabled:opacity-40 ${
                   attachedFile
                     ? "bg-sky-100 text-sky-600"
@@ -1942,7 +2003,7 @@ export function ChatWidget() {
                   startListening();
                 }}
                 disabled={isStreaming || uploadingFile}
-                title="Tahan untuk merekam suara, lepas untuk kirim"
+                title={t("chatWidget.holdToRecord", "Tahan untuk merekam suara, lepas untuk kirim")}
                 className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all duration-200 shrink-0 disabled:opacity-40 select-none ${
                   isListening
                     ? "bg-red-500 text-white scale-110 shadow-lg"
@@ -1963,10 +2024,10 @@ export function ChatWidget() {
                 onKeyDown={handleKey}
                 placeholder={
                   isStreaming
-                    ? "Menunggu balasan…"
+                    ? t("chatWidget.waitingReply", "Menunggu balasan…")
                     : isListening
-                      ? "Bicara sekarang…"
-                      : "Ketik atau bicara…"
+                      ? t("chatWidget.speakNow", "Bicara sekarang…")
+                      : t("chatWidget.typeOrSpeak", "Ketik atau bicara…")
                 }
                 className="flex-1 min-w-0 rounded-full border outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
                 style={{
@@ -1982,7 +2043,7 @@ export function ChatWidget() {
               <button
                 onClick={() => void sendMessage()}
                 disabled={isStreaming || uploadingFile || (!input.trim() && !attachedFile)}
-                aria-label="Kirim pesan"
+                aria-label={t("chatWidget.sendMessage", "Kirim pesan")}
                 className="w-10 h-10 rounded-full flex items-center justify-center transition-all duration-200 shrink-0"
                 style={{
                   background:
@@ -2002,7 +2063,7 @@ export function ChatWidget() {
               className="w-full mt-2 text-[11px] text-sky-600 hover:text-sky-700 flex items-center justify-center gap-1 py-1.5 rounded-xl hover:bg-sky-50 transition-all duration-200 min-h-[36px]"
             >
               <ClipboardList className="h-3.5 w-3.5" />
-              Buka form order langsung
+              {t("chatWidget.openOrderForm", "Buka form order langsung")}
             </button>
           </div>
         </div>
@@ -2010,7 +2071,7 @@ export function ChatWidget() {
 
       {/* Bubble button — fixed at bottom-right; hidden on mobile when panel is open */}
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { unlockAudio(); setOpen((v) => !v); }}
         className="fixed z-[9999] rounded-full text-white flex items-center justify-center transition-all duration-300 hover:-translate-y-1 active:scale-95"
         style={{
           bottom: 24,
@@ -2031,7 +2092,7 @@ export function ChatWidget() {
           (e.currentTarget as HTMLElement).style.boxShadow =
             "0 4px 20px rgba(14,165,233,0.5), 0 2px 8px rgba(0,0,0,0.15)";
         }}
-        aria-label="Chat dengan AI assistant"
+        aria-label={t("chatWidget.openChat", "Chat dengan AI assistant")}
       >
         {open ? (
           <X className="h-6 w-6" />

@@ -1,0 +1,618 @@
+/**
+ * System Watchdog — Production Reliability Layer
+ *
+ * Features:
+ *   1. Service health monitoring (ping every 5–10s)
+ *   2. Circuit breaker per service (CLOSED → OPEN → HALF_OPEN → CLOSED)
+ *   3. Auto-recovery via file-based signal (safe — no child_process spawn)
+ *   4. Service dependency graph (cascade failure detection)
+ *   5. Global health score (0–100)
+ *   6. Failure simulation mode (SYSTEM_SIMULATE_FAILURE=<service-name>,...)
+ *
+ * Auto-restart design note:
+ *   We do NOT spawn child processes directly from the gateway because spawned
+ *   children inherit open file descriptors (server sockets) and their lifecycle
+ *   is intertwined with the parent in ways that cause the gateway to crash.
+ *   Instead, when a circuit opens, we write a signal file to /tmp/watchdog/
+ *   that an external supervisor can act on. The watchdog itself just monitors.
+ *   Set WATCHDOG_AUTO_RESTART=true to enable a safe fork-exec approach.
+ */
+
+import http             from "node:http";
+import fs               from "node:fs";
+import { spawn }        from "node:child_process";
+import { EventEmitter } from "node:events";
+
+const SIGNAL_DIR = "/tmp/watchdog";
+try { fs.mkdirSync(SIGNAL_DIR, { recursive: true }); } catch (_) {}
+
+// ── Config ──────────────────────────────────────────────────────────────────
+
+const PING_INTERVAL_MS      = Number(process.env.WATCHDOG_PING_MS      ?? 7000);
+const FAILURE_THRESHOLD     = Number(process.env.WATCHDOG_FAIL_THRESH  ?? 3);
+const COOLDOWN_MS           = Number(process.env.WATCHDOG_COOLDOWN_MS  ?? 45_000);
+const SLOW_THRESHOLD_MS     = Number(process.env.WATCHDOG_SLOW_MS      ?? 3000);
+const PING_TIMEOUT_MS       = Number(process.env.WATCHDOG_PING_TIMEOUT ?? 5000);
+const MAX_RESTARTS_WINDOW   = Number(process.env.WATCHDOG_MAX_RESTARTS ?? 3);
+const RESTART_WINDOW_MS     = 10 * 60 * 1000; // 10 minutes
+const HISTORY_SIZE          = 20;             // rolling latency samples per service
+
+const SIMULATE_FAILURES = new Set(
+  (process.env.SYSTEM_SIMULATE_FAILURE ?? "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+
+// ── Service registry ─────────────────────────────────────────────────────────
+
+/**
+ * Each service entry:
+ *   port        — TCP port to probe
+ *   path        — HTTP path to GET
+ *   name        — Human-readable name
+ *   weight      — Contribution to global health score (weights sum to 100)
+ *   restartCmd  — [cmd, ...args] to respawn the service
+ *   restartCwd  — working directory for restart
+ *   restartEnv  — additional env vars for restart
+ *   isFrontend  — if true, any 2xx/3xx/4xx counts as alive (frontend Vite devserver)
+ */
+const SERVICE_DEFINITIONS = [
+  {
+    id:         "api-server",
+    name:       "API Server",
+    port:       Number(process.env.API_PORT ?? 8080),
+    path:       "/",
+    weight:     40,
+    isFrontend: false,
+    restartCmd: ["node", "artifacts/api-server/dev.mjs"],
+    restartCwd: process.cwd(),
+    restartEnv: { PORT: "8080" },
+  },
+  {
+    id:         "bizportal",
+    name:       "BizPortal",
+    port:       Number(process.env.BIZPORTAL_PORT ?? 6800),
+    path:       "/bizportal/",
+    weight:     20,
+    isFrontend: true,
+    restartCmd: ["pnpm", "--filter", "@workspace/bizportal", "run", "dev"],
+    restartCwd: process.cwd(),
+    restartEnv: { BIZPORTAL_PORT: "6800" },
+  },
+  {
+    id:         "customer-portal",
+    name:       "Customer Portal",
+    port:       Number(process.env.CUSTOMER_PORT ?? 23434),
+    path:       "/",
+    weight:     20,
+    isFrontend: true,
+    restartCmd: ["pnpm", "--filter", "@workspace/customer-portal", "run", "dev"],
+    restartCwd: process.cwd(),
+    restartEnv: { CUSTOMER_PORT: "23434" },
+  },
+  {
+    id:         "logistic-order",
+    name:       "Logistic Order",
+    port:       Number(process.env.LOGISTIC_ORDER_PORT ?? 19368),
+    path:       "/logistic-order/",
+    weight:     10,
+    isFrontend: true,
+    restartCmd: ["pnpm", "--filter", "@workspace/logistic-order", "run", "dev"],
+    restartCwd: process.cwd(),
+    restartEnv: {},
+  },
+  {
+    id:         "gateway",
+    name:       "Gateway",
+    port:       Number(process.env.PORT ?? 5000),
+    path:       "/system/health",
+    weight:     10,
+    isFrontend: true, // any HTTP response (including 503) = gateway is alive
+    restartCmd: null, // gateway monitors itself — never self-restart
+    restartEnv: {},
+  },
+];
+
+// ── Dependency graph ──────────────────────────────────────────────────────────
+
+// dependsOn[serviceId] = [serviceId, ...] — services it requires
+const DEPENDENCY_MAP = {
+  "bizportal":      ["api-server"],
+  "customer-portal":["api-server"],
+  "logistic-order": ["api-server"],
+  "gateway":        ["api-server", "bizportal", "customer-portal", "logistic-order"],
+  "api-server":     [],
+};
+
+// ── Circuit Breaker ───────────────────────────────────────────────────────────
+
+const CB_CLOSED    = "CLOSED";
+const CB_OPEN      = "OPEN";
+const CB_HALF_OPEN = "HALF_OPEN";
+
+class CircuitBreaker {
+  constructor(serviceId) {
+    this.serviceId       = serviceId;
+    this.state           = CB_CLOSED;
+    this.failureCount    = 0;
+    this.successCount    = 0;
+    this.openedAt        = null;
+    this.lastStateChange = Date.now();
+  }
+
+  recordSuccess() {
+    if (this.state === CB_HALF_OPEN) {
+      this.state           = CB_CLOSED;
+      this.failureCount    = 0;
+      this.successCount    = 0;
+      this.lastStateChange = Date.now();
+      return { transitioned: true, from: CB_HALF_OPEN, to: CB_CLOSED };
+    }
+    this.failureCount = Math.max(0, this.failureCount - 1);
+    return { transitioned: false };
+  }
+
+  recordFailure() {
+    this.failureCount++;
+    if (this.state === CB_HALF_OPEN || (this.state === CB_CLOSED && this.failureCount >= FAILURE_THRESHOLD)) {
+      const prev = this.state;
+      this.state           = CB_OPEN;
+      this.openedAt        = Date.now();
+      this.lastStateChange = Date.now();
+      return { transitioned: true, from: prev, to: CB_OPEN };
+    }
+    return { transitioned: false };
+  }
+
+  /** Check if cooldown elapsed and transition OPEN → HALF_OPEN */
+  tick() {
+    if (this.state === CB_OPEN && this.openedAt && Date.now() - this.openedAt >= COOLDOWN_MS) {
+      this.state           = CB_HALF_OPEN;
+      this.lastStateChange = Date.now();
+      return { transitioned: true, from: CB_OPEN, to: CB_HALF_OPEN };
+    }
+    return { transitioned: false };
+  }
+
+  isOpen()     { return this.state === CB_OPEN; }
+  isClosed()   { return this.state === CB_CLOSED; }
+  isHalfOpen() { return this.state === CB_HALF_OPEN; }
+
+  cooldownRemaining() {
+    if (this.state !== CB_OPEN || !this.openedAt) return 0;
+    return Math.max(0, COOLDOWN_MS - (Date.now() - this.openedAt));
+  }
+}
+
+// ── Auto-recovery anti-loop guard ─────────────────────────────────────────────
+
+class RestartGuard {
+  constructor() {
+    // serviceId → [{ts}]
+    this._log = {};
+  }
+
+  canRestart(serviceId) {
+    const now    = Date.now();
+    const window = (this._log[serviceId] ?? []).filter(e => now - e.ts < RESTART_WINDOW_MS);
+    this._log[serviceId] = window;
+    return window.length < MAX_RESTARTS_WINDOW;
+  }
+
+  record(serviceId) {
+    (this._log[serviceId] = this._log[serviceId] ?? []).push({ ts: Date.now() });
+  }
+
+  attemptsInWindow(serviceId) {
+    const now = Date.now();
+    return (this._log[serviceId] ?? []).filter(e => now - e.ts < RESTART_WINDOW_MS).length;
+  }
+}
+
+// ── Service state ─────────────────────────────────────────────────────────────
+
+class ServiceState {
+  constructor(def) {
+    this.def            = def;
+    this.cb             = new CircuitBreaker(def.id);
+    this.status         = "unknown";   // "up" | "down" | "slow" | "unknown"
+    this.lastCheck      = null;
+    this.lastUp         = null;
+    this.lastDown       = null;
+    this.latencyMs      = null;
+    this.latencyHistory = [];          // rolling window
+    this.uptimeSince    = null;
+    this.downtime       = 0;           // cumulative ms
+    this._downtimeStart = null;
+    this.startedAt      = Date.now();
+    this.statusCode     = null;
+    this.simulated      = false;
+  }
+
+  /** Record a successful ping */
+  onSuccess(latencyMs, statusCode) {
+    const prev = this.status;
+    this.latencyMs  = latencyMs;
+    this.statusCode = statusCode;
+    this.lastCheck  = Date.now();
+    this.lastUp     = Date.now();
+    this.simulated  = false;
+
+    this.latencyHistory.push(latencyMs);
+    if (this.latencyHistory.length > HISTORY_SIZE) this.latencyHistory.shift();
+
+    if (prev !== "up" && prev !== "slow") {
+      if (this._downtimeStart) {
+        this.downtime    += Date.now() - this._downtimeStart;
+        this._downtimeStart = null;
+      }
+      this.uptimeSince = Date.now();
+    }
+
+    this.status = latencyMs > SLOW_THRESHOLD_MS ? "slow" : "up";
+    const cbResult = this.cb.recordSuccess();
+    return { prev, cbResult };
+  }
+
+  /** Record a failed ping */
+  onFailure(reason) {
+    const prev = this.status;
+    this.lastCheck  = Date.now();
+    this.lastDown   = Date.now();
+    this.latencyMs  = null;
+    this.statusCode = null;
+
+    if (prev === "up" || prev === "slow" || prev === "unknown") {
+      this._downtimeStart = Date.now();
+      this.uptimeSince    = null;
+    }
+
+    this.status = "down";
+    const cbResult = this.cb.recordFailure();
+    return { prev, cbResult, reason };
+  }
+
+  /** Returns uptime ratio 0–1 */
+  uptimeRatio() {
+    const totalMs = Date.now() - this.startedAt;
+    if (totalMs <= 0) return 1;
+    const downMs = this.downtime + (this._downtimeStart ? Date.now() - this._downtimeStart : 0);
+    return Math.max(0, Math.min(1, 1 - downMs / totalMs));
+  }
+
+  avgLatency() {
+    if (!this.latencyHistory.length) return null;
+    return Math.round(this.latencyHistory.reduce((a, b) => a + b, 0) / this.latencyHistory.length);
+  }
+
+  p95Latency() {
+    if (!this.latencyHistory.length) return null;
+    const sorted = [...this.latencyHistory].sort((a, b) => a - b);
+    const idx    = Math.ceil(sorted.length * 0.95) - 1;
+    return sorted[Math.max(0, idx)];
+  }
+}
+
+// ── Watchdog core ─────────────────────────────────────────────────────────────
+
+export class Watchdog extends EventEmitter {
+  constructor() {
+    super();
+    this._services    = new Map(); // id → ServiceState
+    this._restartGuard = new RestartGuard();
+    this._running     = false;
+
+    for (const def of SERVICE_DEFINITIONS) {
+      this._services.set(def.id, new ServiceState(def));
+    }
+  }
+
+  /** Start the ping loop */
+  start() {
+    if (this._running) return;
+    this._running = true;
+    console.log(`[watchdog] Starting — ping every ${PING_INTERVAL_MS}ms, CB threshold=${FAILURE_THRESHOLD}, cooldown=${COOLDOWN_MS}ms`);
+    if (SIMULATE_FAILURES.size) {
+      console.warn(`[watchdog] ⚠ SIMULATION MODE — faking failures for: ${[...SIMULATE_FAILURES].join(", ")}`);
+    }
+
+    this._loop().catch(err => console.error("[watchdog] loop crash:", err));
+    // Stagger initial pings so they don't all fire at once
+    let offset = 0;
+    for (const [id] of this._services) {
+      setTimeout(() => this._pingService(id), offset);
+      offset += Math.floor(PING_INTERVAL_MS / this._services.size);
+    }
+  }
+
+  async _loop() {
+    while (this._running) {
+      await new Promise(r => setTimeout(r, PING_INTERVAL_MS));
+      for (const [id] of this._services) {
+        this._pingService(id).catch(err => console.error(`[watchdog] ping error [${id}]:`, err));
+      }
+    }
+  }
+
+  async _pingService(id) {
+    const svc = this._services.get(id);
+    if (!svc) return;
+
+    // Tick circuit breaker (OPEN → HALF_OPEN after cooldown)
+    const tickResult = svc.cb.tick();
+    if (tickResult.transitioned) {
+      this._emit("cb:half-open", svc, `Circuit breaker transitioning ${tickResult.from} → ${tickResult.to}`);
+    }
+
+    // Skip ping if circuit breaker is OPEN (not yet in HALF_OPEN)
+    if (svc.cb.isOpen()) return;
+
+    // ── Failure simulation mode ──────────────────────────────────────────────
+    if (SIMULATE_FAILURES.has(id)) {
+      svc.simulated = true;
+      const { prev, cbResult } = svc.onFailure("simulated_failure");
+      if (prev !== "down") {
+        this._emit("status:down", svc, "SIMULATION: service marked down");
+      }
+      if (cbResult.transitioned) {
+        this._emit(`cb:${cbResult.to.toLowerCase()}`, svc, `[SIM] CB ${cbResult.from} → ${cbResult.to}`);
+      }
+      return;
+    }
+
+    // ── Real ping ────────────────────────────────────────────────────────────
+    const start = Date.now();
+    let ok = false, latency = 0, statusCode = 0;
+
+    try {
+      const result = await this._httpPing(svc.def.port, svc.def.path, PING_TIMEOUT_MS);
+      latency     = Date.now() - start;
+      statusCode  = result.statusCode;
+
+      // For frontend services (Vite dev): any HTTP response counts as alive
+      // For API: 2xx/3xx counts, 5xx = fail
+      const alive = svc.def.isFrontend
+        ? statusCode > 0
+        : (statusCode >= 200 && statusCode < 500);
+
+      if (alive) {
+        ok = true;
+        const { prev, cbResult } = svc.onSuccess(latency, statusCode);
+        if (prev === "down" || prev === "unknown") {
+          this._emit("status:up", svc, `Service recovered — ${latency}ms (was: ${prev})`);
+        } else if (prev !== "slow" && latency > SLOW_THRESHOLD_MS) {
+          this._emit("status:slow", svc, `Slow response: ${latency}ms`);
+        } else if (prev === "slow" && latency <= SLOW_THRESHOLD_MS) {
+          this._emit("status:up", svc, `Response normalised — ${latency}ms`);
+        }
+        if (cbResult.transitioned) {
+          this._emit(`cb:${cbResult.to.toLowerCase()}`, svc, `CB ${cbResult.from} → ${cbResult.to}`);
+        }
+      } else {
+        throw new Error(`HTTP ${statusCode}`);
+      }
+    } catch (err) {
+      latency = Date.now() - start;
+      const reason = err.message ?? String(err);
+      const { prev, cbResult } = svc.onFailure(reason);
+      if (prev !== "down") {
+        this._emit("status:down", svc, `Service down: ${reason}`);
+      }
+      if (cbResult.transitioned) {
+        this._emit(`cb:${cbResult.to.toLowerCase()}`, svc, `CB ${cbResult.from} → ${cbResult.to}`);
+        if (cbResult.to === CB_OPEN) {
+          this._tryAutoRecover(id);
+        }
+      }
+    }
+  }
+
+  /** Simple HTTP ping returning { statusCode } */
+  _httpPing(port, path, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error(`timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      const req = http.get({ hostname: "127.0.0.1", port, path, headers: { "x-watchdog": "1" } }, res => {
+        clearTimeout(timer);
+        res.resume(); // drain body
+        res.on("end", () => resolve({ statusCode: res.statusCode }));
+        res.on("error", reject);
+      });
+      req.on("error", err => { clearTimeout(timer); reject(err); });
+    });
+  }
+
+  /**
+   * Auto-recovery: write a signal file to /tmp/watchdog/<id>.restart
+   * and optionally spawn via a double-fork shell script (safe, no FD leak).
+   * Direct spawn from gateway is intentionally avoided — spawned children
+   * inherit server sockets and can destabilise the gateway process.
+   */
+  _tryAutoRecover(id) {
+    const svc = this._services.get(id);
+    if (!svc || !svc.def.restartCmd) return;
+    if (!this._restartGuard.canRestart(id)) {
+      console.error(`[watchdog] ⛔ ${svc.def.name}: restart limit reached (${MAX_RESTARTS_WINDOW}x in ${RESTART_WINDOW_MS / 60000}min) — not restarting to prevent loop`);
+      this._emit("recovery:blocked", svc, `Restart blocked — anti-loop guard (${this._restartGuard.attemptsInWindow(id)}/${MAX_RESTARTS_WINDOW})`);
+      return;
+    }
+
+    this._restartGuard.record(id);
+    const attempts = this._restartGuard.attemptsInWindow(id);
+    console.log(`[watchdog] 🔄 ${svc.def.name}: recovery signal #${attempts}`);
+    this._emit("recovery:attempt", svc, `Recovery attempt #${attempts}`);
+
+    // Step 1: write signal file (external supervisors can poll this)
+    try {
+      const signal = {
+        service:   id,
+        name:      svc.def.name,
+        attempt:   attempts,
+        ts:        new Date().toISOString(),
+        restartCmd: svc.def.restartCmd,
+        restartEnv: svc.def.restartEnv,
+      };
+      fs.writeFileSync(`${SIGNAL_DIR}/${id}.restart`, JSON.stringify(signal, null, 2));
+    } catch (_) {}
+
+    // Step 2: safe double-fork via sh -c "nohup ... &" — sh exits immediately,
+    // the grandchild is fully detached and owns no FDs from the gateway.
+    if (process.env.WATCHDOG_AUTO_RESTART !== "true") {
+      console.log(`[watchdog] ℹ ${svc.def.name}: signal written (set WATCHDOG_AUTO_RESTART=true to enable spawn)`);
+      this._emit("recovery:signal", svc, `Signal file written — WATCHDOG_AUTO_RESTART not enabled`);
+      return;
+    }
+
+    try {
+      const [cmd, ...args] = svc.def.restartCmd;
+      const envPairs = Object.entries({ ...svc.def.restartEnv })
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ");
+      const fullCmd = [envPairs, cmd, ...args.map(a => `'${a}'`)]
+        .filter(Boolean).join(" ");
+      const shell = spawn("sh", ["-c", `nohup ${fullCmd} </dev/null >/tmp/watchdog/${id}.log 2>&1 &`], {
+        detached: true,
+        stdio:    "ignore",
+        cwd:      svc.def.restartCwd ?? process.cwd(),
+      });
+      shell.on("error", (err) => {
+        console.error(`[watchdog] ❌ ${svc.def.name}: shell spawn error — ${err.message}`);
+      });
+      shell.on("close", () => {}); // drain event, prevent listener leak
+      shell.unref();
+      console.log(`[watchdog] ✅ ${svc.def.name}: double-fork shell invoked`);
+      this._emit("recovery:spawned", svc, `Double-fork shell invoked — attempt #${attempts}`);
+    } catch (err) {
+      console.error(`[watchdog] ❌ ${svc.def.name}: spawn failed — ${err.message}`);
+      this._emit("recovery:failed", svc, `Spawn failed: ${err.message}`);
+    }
+  }
+
+  _emit(event, svc, message) {
+    const ts   = new Date().toISOString();
+    const line = `[watchdog] [${ts}] [${event.toUpperCase().padEnd(20)}] ${svc.def.name}: ${message}`;
+    if (event.startsWith("status:down") || event.startsWith("cb:open") || event.startsWith("recovery:blocked")) {
+      console.error(line);
+    } else if (event.startsWith("status:slow") || event.startsWith("cb:half")) {
+      console.warn(line);
+    } else {
+      console.log(line);
+    }
+    this.emit(event, { service: svc.def.id, name: svc.def.name, message, ts });
+  }
+
+  // ── Public API ──────────────────────────────────────────────────────────────
+
+  /** Get raw state for a single service */
+  getServiceState(id) {
+    return this._services.get(id) ?? null;
+  }
+
+  /** Get all service states */
+  getAllStates() {
+    return [...this._services.values()];
+  }
+
+  /** Detect cascade failure risks from the dependency map */
+  getCascadeRisks() {
+    const risks = [];
+    for (const [id, deps] of Object.entries(DEPENDENCY_MAP)) {
+      const svc = this._services.get(id);
+      if (!svc) continue;
+      for (const dep of deps) {
+        const depSvc = this._services.get(dep);
+        if (!depSvc) continue;
+        if (depSvc.status === "down" || depSvc.cb.isOpen()) {
+          risks.push({
+            affected:   svc.def.name,
+            dependency: depSvc.def.name,
+            reason:     depSvc.cb.isOpen() ? "circuit_open" : "service_down",
+          });
+        }
+      }
+    }
+    return risks;
+  }
+
+  /** Calculate global health score 0–100 */
+  getHealthScore() {
+    let score = 0;
+    let totalWeight = 0;
+    for (const svc of this._services.values()) {
+      const w = svc.def.weight;
+      totalWeight += w;
+      if (svc.status === "up")          score += w * 1.0;
+      else if (svc.status === "slow")   score += w * 0.65;
+      else if (svc.status === "unknown") score += w * 0.5;
+      else                               score += 0; // down
+    }
+    // Penalise for cascade risks
+    const cascadeRisks = this.getCascadeRisks().length;
+    const raw = totalWeight > 0 ? (score / totalWeight) * 100 : 0;
+    return Math.max(0, Math.round(raw - cascadeRisks * 3));
+  }
+
+  /** Build the full global-health response payload */
+  buildHealthPayload() {
+    const services = {};
+    for (const svc of this._services.values()) {
+      const uptime = svc.uptimeRatio();
+      services[svc.def.id] = {
+        name:             svc.def.name,
+        status:           svc.status,
+        port:             svc.def.port,
+        latency_ms:       svc.latencyMs,
+        avg_latency_ms:   svc.avgLatency(),
+        p95_latency_ms:   svc.p95Latency(),
+        status_code:      svc.statusCode,
+        last_check:       svc.lastCheck ? new Date(svc.lastCheck).toISOString() : null,
+        last_up:          svc.lastUp    ? new Date(svc.lastUp).toISOString()    : null,
+        last_down:        svc.lastDown  ? new Date(svc.lastDown).toISOString()  : null,
+        uptime_pct:       Math.round(uptime * 10000) / 100,
+        circuit_breaker: {
+          state:               svc.cb.state,
+          failure_count:       svc.cb.failureCount,
+          cooldown_remaining:  svc.cb.cooldownRemaining(),
+        },
+        dependencies:     DEPENDENCY_MAP[svc.def.id] ?? [],
+        weight:           svc.def.weight,
+        simulated:        svc.simulated,
+        restart_attempts: this._restartGuard.attemptsInWindow(svc.def.id),
+      };
+    }
+
+    const cascadeRisks  = this.getCascadeRisks();
+    const healthScore   = this.getHealthScore();
+    const anyDown       = [...this._services.values()].some(s => s.status === "down");
+    const anyOpen       = [...this._services.values()].some(s => s.cb.isOpen());
+    const overallStatus = healthScore >= 90 ? "healthy"
+                        : healthScore >= 60 ? "degraded"
+                        : "critical";
+
+    return {
+      overall_status:    overallStatus,
+      health_score:      healthScore,
+      timestamp:         new Date().toISOString(),
+      simulation_mode:   SIMULATE_FAILURES.size > 0,
+      simulated_failures: [...SIMULATE_FAILURES],
+      services,
+      dependency_map:    DEPENDENCY_MAP,
+      cascade_risks:     cascadeRisks,
+      config: {
+        ping_interval_ms:    PING_INTERVAL_MS,
+        failure_threshold:   FAILURE_THRESHOLD,
+        cooldown_ms:         COOLDOWN_MS,
+        slow_threshold_ms:   SLOW_THRESHOLD_MS,
+        max_restarts_window: MAX_RESTARTS_WINDOW,
+        restart_window_min:  RESTART_WINDOW_MS / 60000,
+      },
+    };
+  }
+
+  stop() {
+    this._running = false;
+  }
+}
+
+export const watchdog = new Watchdog();

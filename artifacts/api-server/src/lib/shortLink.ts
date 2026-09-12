@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@workspace/db";
-import { shortLinksTable } from "@workspace/db/schema";
+import { shortLinksTable, type ShortLink } from "@workspace/db/schema";
 import { getPreferredDomain } from "./domain.js";
 import { logger } from "./logger.js";
 
@@ -66,4 +66,13 @@ export async function resolveShortLink(code: string): Promise<string | null> {
     .where(eq(shortLinksTable.id, row.id))
     .catch((err) => logger.warn({ err }, "shortLink: hit count update failed"));
   return row.targetUrl;
+}
+
+/**
+ * Look up a short link row regardless of expiry status.
+ * Returns null only if the code doesn't exist at all.
+ */
+export async function lookupShortLinkRow(code: string): Promise<ShortLink | null> {
+  const [row] = await db.select().from(shortLinksTable).where(eq(shortLinksTable.code, code));
+  return row ?? null;
 }

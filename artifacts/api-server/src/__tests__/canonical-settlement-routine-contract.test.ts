@@ -1,0 +1,157 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const migrationSource = readFileSync(
+  resolve(process.cwd(), "src/modules/sport-center/migration.ts"),
+  "utf8",
+);
+const bankReconciliationSource = readFileSync(
+  resolve(process.cwd(), "src/routes/bankReconciliation.ts"),
+  "utf8",
+);
+
+describe("canonical Sport Center owner routine restoration contract", () => {
+  it("defines all six required owner signatures", () => {
+    for (const signature of [
+      "resolve_internal_bank_account_id(",
+      "canonical_settlement_group_identity(",
+      "mark_settlement_payments_settled(",
+      "create_payment_settlement_batch(",
+      "finalize_payment_settlement(",
+      "recover_posted_settlement_from_bank_mutation(",
+      "find_settlement_bank_candidates(",
+    ]) {
+      expect(migrationSource).toContain(
+        `CREATE OR REPLACE FUNCTION sport_center.${signature}`,
+      );
+    }
+  });
+
+  it("keeps candidate evidence read-only and fail-closed", () => {
+    const start = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.find_settlement_bank_candidates(",
+    );
+    const end = migrationSource.indexOf(
+      "Phase 4C-7N: public bank-mutation",
+      start,
+    );
+    const finder = migrationSource.slice(start, end);
+
+    expect(finder).toContain("STABLE");
+    expect(finder).toContain("SECURITY DEFINER");
+    expect(finder).toContain("DATE_TOLERANCE_MUST_BE_NON_NEGATIVE");
+    expect(finder).toContain("candidate_eligible");
+    expect(finder).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+  });
+
+  it("exposes a post-migration exact-signature verification", () => {
+    expect(migrationSource).toContain(
+      "verifyCanonicalSettlementOwnerRoutines",
+    );
+    expect(migrationSource).toContain(
+      "CANONICAL_SETTLEMENT_OWNER_ROUTINES_INCOMPLETE",
+    );
+    expect(migrationSource).toContain("format_type(argument.oid, NULL)");
+  });
+
+  it("never reinterprets public link IDs as legacy IDs on a later pass", () => {
+    expect(migrationSource).toContain(
+      "v_translate_legacy_bank_link boolean",
+    );
+    expect(migrationSource).toContain(
+      "v_translate_legacy_canonical_link boolean",
+    );
+    expect(migrationSource).toContain(
+      "con.confrelid = 'sport_center.bank_mutations'::regclass",
+    );
+    expect(migrationSource).toContain(
+      "IF v_translate_legacy_bank_link THEN",
+    );
+    expect(migrationSource).toContain(
+      "IF v_translate_legacy_canonical_link THEN",
+    );
+  });
+
+  it("resolves the active owner-approved rule by its effective window", () => {
+    const resolverStart = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.resolve_and_persist_payment_metadata(",
+    );
+    const mirrorStart = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.mirror_confirmed_payment_to_public(",
+    );
+    const resolver = migrationSource.slice(resolverStart, mirrorStart);
+    const mirror = migrationSource.slice(mirrorStart);
+
+    expect(resolver).toContain("psc.source = 'OWNER_APPROVED'");
+    expect(resolver).toContain("psc.effective_from <= v_payment_date");
+    expect(resolver).toContain("v_payment_date < psc.effective_until");
+    expect(resolver).not.toContain("PROD-MANDIRI-SC-20260810-v1");
+    expect(mirror).toContain("psc.source = 'OWNER_APPROVED'");
+    expect(mirror).toContain("psc.effective_from <= v_payment_date");
+    expect(mirror).toContain("v_payment_date < psc.effective_until");
+    expect(mirror).not.toContain("PROD-MANDIRI-SC-20260810-v1");
+  });
+
+  it("guards the restoration runner against production execution", () => {
+    const runner = readFileSync(
+      resolve(process.cwd(), "src/run-canonical-contract-migration.ts"),
+      "utf8",
+    );
+    expect(runner).toContain('process.env.APP_ENV !== "development"');
+    expect(runner).toContain("process.env.REPLIT_DEPLOYMENT");
+    expect(runner).toContain("refusing to write outside the development database");
+  });
+
+  it("keeps supplemental creation strict after manual metadata is canonicalized", () => {
+    const start = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.create_payment_settlement_supplemental_batch(",
+    );
+    const end = migrationSource.indexOf(
+      "Phase 4C-7H: append-only reversal",
+      start,
+    );
+    const supplemental = migrationSource.slice(start, end);
+
+    expect(supplemental).toContain(
+      "lower(p.payment_provider::text) = lower(btrim(p_provider_code))",
+    );
+    expect(supplemental).toContain(
+      "p.bank_account_id = btrim(p_bank_account_id)",
+    );
+    expect(supplemental).toContain(
+      "p.settlement_rule_version = p_base_rule_version",
+    );
+    expect(supplemental).toContain(
+      "CANONICAL_SETTLEMENT_ITEM_ALREADY_ACTIVE",
+    );
+  });
+
+  it("deduplicates late-arrival batches by mutation and canonical root", () => {
+    const start = migrationSource.lastIndexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.find_settlement_bank_candidates(",
+    );
+    const end = migrationSource.indexOf(
+      "Public-only replacement for the historical recovery owner",
+      start,
+    );
+    const finder = migrationSource.slice(start, end);
+
+    expect(finder).toContain("correlation_root");
+    expect(finder).toContain("DISTINCT ON (mutation_id, correlation_root)");
+    expect(finder).toContain("regexp_replace(s.correlation_id, ':supp:[0-9]+$', '')");
+    expect(finder).toContain("WHEN s.correlation_id LIKE '%:supp:%' THEN NULL");
+  });
+
+  it("installs an atomic database guard for canonical match roots", () => {
+    expect(bankReconciliationSource).toContain(
+      "guard_canonical_settlement_match_root",
+    );
+    expect(bankReconciliationSource).toContain(
+      "CANONICAL_SETTLEMENT_MATCH_ROOT_CONFLICT",
+    );
+    expect(bankReconciliationSource).toContain(
+      "trg_guard_canonical_settlement_match_root",
+    );
+  });
+});

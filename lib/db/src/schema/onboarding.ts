@@ -58,11 +58,48 @@ export const ocrResultsTable = pgTable("ocr_results", {
 export const vendorProfilesTable = pgTable("vendor_profiles", {
   id: serial("id").primaryKey(),
   customerId: integer("customer_id").notNull().unique().references(() => portalCustomersTable.id, { onDelete: "cascade" }),
+
+  // ── Company ────────────────────────────────────────────────────────────────
   companyName: text("company_name"),
+  businessType: text("business_type"),
+  companyLogo: text("company_logo"),
+  companyDescription: text("company_description"),
+
+  // ── Legal ──────────────────────────────────────────────────────────────────
   nib: text("nib"),
   npwp: text("npwp"),
-  serviceType: text("service_type"),
+  siup: text("siup"),
+  tdp: text("tdp"),
   legalityDocUrl: text("legality_doc_url"),
+
+  // ── Contact ────────────────────────────────────────────────────────────────
+  picName: text("pic_name"),
+  picPosition: text("pic_position"),
+  phone: text("phone"),
+  whatsapp: text("whatsapp"),
+  email: text("email"),
+
+  // ── Address ────────────────────────────────────────────────────────────────
+  province: text("province"),
+  city: text("city"),
+  district: text("district"),
+  postalCode: text("postal_code"),
+  fullAddress: text("full_address"),
+
+  // ── Finance ────────────────────────────────────────────────────────────────
+  bankName: text("bank_name"),
+  bankAccountName: text("bank_account_name"),
+  bankAccountNumber: text("bank_account_number"),
+
+  // ── Service type (existing) ────────────────────────────────────────────────
+  serviceType: text("service_type"),
+
+  // ── Marketplace bridge ─────────────────────────────────────────────────────
+  supplierId: integer("supplier_id"),
+  catalogSubmissionLinkId: integer("catalog_submission_link_id"),
+  verificationStatus: text("verification_status").notNull().default("unverified"),
+  approvedAt: timestamp("approved_at"),
+
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

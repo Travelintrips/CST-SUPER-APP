@@ -1,0 +1,30 @@
+---
+name: Canonical settlement legacy FK repair
+description: Safe handling of invalid historical canonical-bank-mutation links during startup contract installation.
+---
+
+When installing the canonical settlement foreign key, first inspect the live
+`confrelid` target and schema-qualify it. A numeric link absent from the
+legacy `sport_center.bank_mutations` table may still be a valid
+`public.bank_mutations` link after the public-identity cutover; never classify
+those rows as missing until both identities are checked. Clear only links whose
+target is absent from the authoritative table, then rebuild only posted
+settlements with exactly one active payment through the canonical owner
+routine. A historical batch without enough evidence remains unlinked for
+governed follow-up; it must never receive an invented bank mutation.
+
+**Why:** A stale legacy integer link can make PostgreSQL reject the new FK and leave the whole API readiness gate permanently in `starting`, even though the affected batch is not safely reconstructable.
+
+**How to apply:** Keep the migration versioned so prior completion markers do not skip the repair. Treat an unsuccessful legacy reconstruction as a warning after the invalid link is removed, while preserving posted journals and enforcing the FK for all future writes.
+
+An active payment item in an unlinked `posted` settlement remains unavailable to candidate generation even when its payment date, method, status, and expected settlement date are otherwise valid.
+
+**Why:** Reusing it as a fresh candidate could double-settle a payment whose financial batch already exists, while silently deleting it could corrupt posted-ledger evidence.
+
+**How to apply:** Diagnose the owning batch first. Either link the complete batch through governed owner recovery when its mutation identity is provable, or perform an explicit posted-settlement repair; regeneration alone must not release the payment.
+
+Do not link an orphaned historical batch merely because its net equals one bank mutation. Revalidate every active item's payment date against the current cohort rule; a legacy batch may mix valid H-1 payments with a same-day payment that only makes the total balance.
+
+**Why:** Exact batch net can conceal invalid membership. Linking such a batch would restore the bank foreign key while violating the current settlement contract.
+
+**How to apply:** Compare the full active item set—not only the rows visible in the UI—against the mutation date. If any item is outside H-1, stop owner recovery and require a governed repair or a verified missing H-1 payment.

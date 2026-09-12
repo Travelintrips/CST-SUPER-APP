@@ -1,0 +1,1233 @@
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
+import {
+  generateQrisMutationBatchCandidates,
+  type QrisMutationBatchCandidate,
+  type QrisMutationCandidateInput,
+  type QrisPaymentCandidateInput,
+} from "./qrisCandidateEngine.js";
+import {
+  accountProviderRuleCatalogFromRows,
+  normalizeQrisProvider,
+  providerRuleCatalogFromRows,
+  providerRulesByBankAccountFromRows,
+  providerRulesFromRows,
+} from "./providerSettlementRules.js";
+import {
+  resolveActiveBankAccountId,
+  type ActiveBankAccount,
+} from "./bankAccountIdentity.js";
+import {
+  ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL,
+  ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL,
+  ACTIVE_QRIS_CANDIDATE_STATUS_SQL,
+  isActiveQrisCandidateStatus,
+} from "./qrisCandidateEligibility.js";
+
+function esc(value: unknown): string {
+  return String(value ?? "").replace(/'/g, "''");
+}
+
+// ── Canonical settlement schema availability ──────────────────────────────────
+// sport_center.payment_settlement_batches / _items may not exist on all DBs
+// (they are created by runSportCenterMigration which runs asynchronously).
+// We cache the result to avoid repeated to_regclass() calls.
+let _canonicalSchemaKnown = false;
+let _canonicalSchemaAvailable = false;
+
+async function hasCanonicalSettlementSchema(): Promise<boolean> {
+  if (_canonicalSchemaKnown) return _canonicalSchemaAvailable;
+  try {
+    const { rows } = await db.execute(sql.raw(
+      `SELECT to_regclass('sport_center.payment_settlement_items') AS s`,
+    ));
+    _canonicalSchemaAvailable = (rows[0] as Record<string, unknown>)?.s != null;
+  } catch {
+    _canonicalSchemaAvailable = false;
+  }
+  _canonicalSchemaKnown = true;
+  return _canonicalSchemaAvailable;
+}
+
+// ── Phase 4C column availability for sport_center.sport_payments ──────────────
+// Columns added in Phase 4C (settlement_rule_version, payment_provider,
+// expected_settlement_date, bank_account_id) may be absent on older DB snapshots.
+// Check once and cache; fallback to NULL literals when absent.
+let _phase4ColsKnown = false;
+let _phase4ColsAvailable = false;
+
+async function hasQrisPaymentPhase4Columns(): Promise<boolean> {
+  if (_phase4ColsKnown) return _phase4ColsAvailable;
+  try {
+    const { rows } = await db.execute(sql.raw(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'sport_center'
+        AND table_name   = 'sport_payments'
+        AND column_name  = 'settlement_rule_version'
+      LIMIT 1
+    `));
+    _phase4ColsAvailable = (rows as unknown[]).length > 0;
+  } catch {
+    _phase4ColsAvailable = false;
+  }
+  _phase4ColsKnown = true;
+  return _phase4ColsAvailable;
+}
+
+// SQL fragments for Phase 4C columns — degrade to NULLs when columns are absent.
+function makePhase4PaymentFragments(available: boolean) {
+  return {
+    providerCodeSql:        available ? `LOWER(BTRIM(sp.payment_provider::text))` : `NULL::text`,
+    settlementDateSql:      available ? `sp.expected_settlement_date`              : `NULL::date`,
+    settlementRuleVerSql:   available ? `sp.settlement_rule_version`               : `NULL::text`,
+    paymentBankAccountSql:  available ? `sp.bank_account_id`                       : `NULL::text`,
+  };
+}
+
+// SQL fragments used when canonical settlement tables exist.
+// If the tables are absent these fragments evaluate to empty strings,
+// leaving the surrounding SQL structurally valid but without canonical data.
+function makeCanonicalFragments(available: boolean) {
+  const canonicalSettlementIdSql = available
+    ? `(
+           SELECT psi.settlement_id
+           FROM sport_center.payment_settlement_items psi
+           JOIN sport_center.payment_settlement_batches psb
+             ON psb.id = psi.settlement_id
+           WHERE psi.payment_id = sp.id
+             AND psi.item_status = 'active'
+              AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+            ORDER BY CASE WHEN psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL} THEN 0 ELSE 1 END,
+                    psi.settlement_id DESC
+           LIMIT 1
+         )`
+    : "NULL::int";
+
+  const alreadyReconciledSql = `
+      ${available
+        ? `EXISTS (
+           SELECT 1
+           FROM sport_center.payment_settlement_items psi
+           JOIN sport_center.payment_settlement_batches psb
+             ON psb.id = psi.settlement_id
+           WHERE psi.payment_id = sp.id
+             AND psi.item_status = 'active'
+              AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+           )`
+        : "FALSE"}
+      OR EXISTS (
+        SELECT 1
+        FROM qris_settlement_items legacy_psi
+        JOIN qris_settlements legacy_qs
+          ON legacy_qs.id = legacy_psi.settlement_id
+        WHERE legacy_psi.sport_payment_id = sp.id
+          AND LOWER(COALESCE(legacy_qs.status::text, '')) IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+      )
+    `;
+
+  // SUM of net amounts of current canonical settlement batches for these payments
+  const currentExpectedAmountSql = available
+    ? `COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                 WHERE psi.item_status = 'active'
+                   AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount)`
+    : "bm.amount";
+
+  // NOT EXISTS for canonical settlement (used in current_payment_ids / current_gross_amount)
+  const canonicalSettledExcludeSql = available
+    ? `AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = (item->>'paymentId')::int
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+                  )`
+    : "";
+
+  const canonicalSettledExcludeByIdSql = available
+    ? `AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = sp.id
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+                  )`
+    : "";
+
+  // Current evidence valid: does the canonical settlement total match bm.amount?
+  const currentEvidenceValidSql = available
+    ? `ABS(COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount) - bm.amount) <= 0.01`
+    : "TRUE";
+
+  // A failed approval can leave an exact payment batch posted without its
+  // bank link. Expose that state separately so the UI can offer the guarded
+  // owner-recovery path instead of treating it as a normal empty candidate.
+  const recoverableSettlementIdSql = available
+    ? `(
+        SELECT CASE WHEN COUNT(*) = 1 THEN MAX(recoverable.settlement_id) END
+        FROM (
+          SELECT psb.id AS settlement_id
+          FROM sport_center.payment_settlement_batches psb
+          WHERE psb.company_id = c.company_id
+            AND psb.status = 'posted'
+            AND psb.bank_mutation_id IS NULL
+            AND (
+              SELECT COUNT(*)
+              FROM sport_center.payment_settlement_items psi_count
+              WHERE psi_count.settlement_id = psb.id
+                AND psi_count.item_status = 'active'
+            ) = jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_items psi_extra
+              WHERE psi_extra.settlement_id = psb.id
+                AND psi_extra.item_status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                  WHERE (item->>'paymentId')::int = psi_extra.payment_id
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM sport_center.payment_settlement_items psi_missing
+                WHERE psi_missing.settlement_id = psb.id
+                  AND psi_missing.item_status = 'active'
+                  AND psi_missing.payment_id = (item->>'paymentId')::int
+              )
+            )
+        ) recoverable
+      )`
+    : "NULL::bigint";
+
+  // UNION with canonical settlement items in settled_payment_ids
+  const canonicalSettledUnionSql = available
+    ? `UNION
+                SELECT psi.payment_id
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                 WHERE psi.item_status = 'active'
+                   AND psb.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )`
+    : "";
+
+  return {
+    canonicalSettlementIdSql,
+    alreadyReconciledSql,
+    currentExpectedAmountSql,
+    canonicalSettledExcludeSql,
+    canonicalSettledExcludeByIdSql,
+    currentEvidenceValidSql,
+    recoverableSettlementIdSql,
+    canonicalSettledUnionSql,
+  };
+}
+
+function asDate(value: unknown): string | null {
+  const result = String(value ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(result) ? result : null;
+}
+
+export interface QrisCandidateGenerationResult {
+  dryRun: boolean;
+  generated: number;
+  persisted: number;
+  reviewable: number;
+  candidates: QrisMutationBatchCandidate[];
+}
+
+export async function generateQrisCandidates(options: {
+  companyId?: number | null;
+  mutationId?: number | null;
+  from?: string | null;
+  to?: string | null;
+  dryRun?: boolean;
+} = {}): Promise<QrisCandidateGenerationResult> {
+  if (
+    options.mutationId != null
+    && (!Number.isInteger(options.mutationId) || Number(options.mutationId) <= 0)
+  ) {
+    throw new Error("mutationId kandidat QRIS tidak valid");
+  }
+  const mutationId = options.mutationId == null ? null : Number(options.mutationId);
+  const companyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND sp.company_id = ${Number(options.companyId)}`
+    : "";
+  const mutationCompanyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND bm.company_id = ${Number(options.companyId)}`
+    : "";
+  const mutationFilter = mutationId == null ? "" : `AND bm.id = ${mutationId}`;
+  const existingMutationFilter = mutationId == null ? "" : `WHERE mutation_id = ${mutationId}`;
+  const dateFilter = options.from ? `AND bm.transaction_date >= '${esc(options.from)}'` : "";
+  const toFilter = options.to ? `AND bm.transaction_date <= '${esc(options.to)}'` : "";
+  const ruleCompanyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND (company_id IS NULL OR company_id = ${Number(options.companyId)})`
+    // Account IDs are globally unique, so unscoped generation can safely load
+    // every account-specific rule. Company-specific rules without an account
+    // are excluded here to prevent them leaking into another company.
+    : "AND (company_id IS NULL OR bank_account_id IS NOT NULL)";
+
+  const [canonicalAvailable, phase4Available] = await Promise.all([
+    hasCanonicalSettlementSchema(),
+    hasQrisPaymentPhase4Columns(),
+  ]);
+  const {
+    canonicalSettlementIdSql,
+    alreadyReconciledSql,
+  } = makeCanonicalFragments(canonicalAvailable);
+  // A canonical batch can be reconciled even when a legacy public mutation
+  // header was not transitioned by an older approval attempt. The additive
+  // settlement bank_mutation_id stores public.bank_mutations.id, so it is the
+  // authoritative completion signal without a cross-schema mutation bridge.
+  const canonicalCompletedMutationFilter = canonicalAvailable
+    ? `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches psb
+          WHERE psb.status = 'reconciled'
+            AND psb.bank_mutation_id = bm.id
+        )
+      `
+    : "";
+  const {
+    providerCodeSql,
+    settlementDateSql,
+    settlementRuleVerSql,
+    paymentBankAccountSql,
+  } = makePhase4PaymentFragments(phase4Available);
+
+  const [paymentRows, mutationRows, holidayRows, ruleRows, existingRows, accountRows] = await Promise.all([
+    db.execute(sql.raw(`
+      SELECT
+        sp.id, sp.company_id, sp.amount, sp.payment_method AS method,
+        -- The strict generator below accepts confirmed only. Keep this
+        -- source status explicit so pending rows cannot become auto-matchable.
+        CASE WHEN LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
+          THEN 'confirmed' ELSE sp.status::text END AS status,
+        -- paid_at is the only accepted payment timeline for H-1.
+        sp.paid_at AS paid_at,
+         -- Payment rows imported before the owner-approved MDR config may have
+         -- mdr_amount=0. Prefer a positive stored amount, otherwise use the
+         -- canonical settlement calculator for the active provider/account
+         -- config; this keeps candidate matching aligned with approval.
+         COALESCE(
+           NULLIF(sp.mdr_amount, 0),
+           settlement_calculation.total_deduction,
+           0
+         ) AS canonical_mdr_amount,
+        NULL::numeric AS canonical_mdr_rate,
+        'SCPAY-SC-' || sp.id::text AS payment_number,
+        sp.booking_id, sb.order_number AS booking_number,
+        sb.customer_name,
+        COALESCE(sf.name, '') AS facility_name,
+         CASE
+           WHEN NULLIF(BTRIM(COALESCE(sf.name, '')), '') IS NULL
+             THEN 'Pendapatan Booking Sport Center'
+           ELSE 'Pendapatan Sewa Lapangan — ' || BTRIM(sf.name)
+         END AS revenue_description,
+        sb.booking_date,
+        sb.start_time::text AS start_time,
+        sb.end_time::text AS end_time,
+        ${providerCodeSql} AS provider_code,
+        ${settlementDateSql} AS settlement_date,
+        ${settlementRuleVerSql} AS settlement_rule_version,
+        NULL::text AS settlement_reference,
+         COALESCE(sp.settlement_status::text, 'unsettled') AS settlement_status,
+        ${paymentBankAccountSql} AS bank_account_id,
+        ${canonicalSettlementIdSql} AS canonical_settlement_id,
+        ${alreadyReconciledSql} AS already_reconciled
+      FROM (
+        SELECT
+          source_payment.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(
+              NULLIF(BTRIM(source_payment.provider_order_id::text), ''),
+              'payment:' || source_payment.id::text
+            )
+            ORDER BY source_payment.id
+          ) AS provider_payment_rank
+        FROM sport_center.sport_payments source_payment
+        WHERE LOWER(COALESCE(source_payment.payment_method::text, '')) LIKE '%qris%'
+          AND LOWER(COALESCE(source_payment.status::text, '')) = 'confirmed'
+          ${companyFilter.replaceAll("sp.", "source_payment.")}
+      ) sp
+      LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+      LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
+       LEFT JOIN LATERAL (
+         SELECT
+           psc.id,
+           psc.mdr_rate,
+           psc.fixed_provider_fee,
+           psc.fee_tax_rate,
+           psc.fee_tax_inclusive,
+           psc.calculation_method,
+           psc.rounding_scale,
+           psc.rounding_method
+         FROM sport_center.payment_settlement_configs psc
+         WHERE psc.company_id = sp.company_id
+           AND LOWER(BTRIM(psc.provider_code::text)) =
+             LOWER(BTRIM(COALESCE(sp.payment_provider::text, sp.provider_name::text, '')))
+            AND (
+              -- Legacy Sport Center rows may store either the internal
+              -- company_bank_accounts.id or the external account number.
+              -- Settlement configs are owner-approved and commonly use the
+              -- external number, so compare both representations through the
+              -- active company account identity before treating the config as
+              -- unavailable.
+              BTRIM(psc.bank_account_id::text) =
+                BTRIM(COALESCE(sp.bank_account_id::text, ''))
+              OR EXISTS (
+                SELECT 1
+                FROM company_bank_accounts payment_account
+                WHERE payment_account.company_id = sp.company_id
+                  AND payment_account.is_active = TRUE
+                  AND (
+                    BTRIM(payment_account.id::text) =
+                      BTRIM(COALESCE(sp.bank_account_id::text, ''))
+                    OR BTRIM(payment_account.account_number::text) =
+                      BTRIM(COALESCE(sp.bank_account_id::text, ''))
+                  )
+                  AND (
+                    BTRIM(psc.bank_account_id::text) =
+                      BTRIM(payment_account.id::text)
+                    OR BTRIM(psc.bank_account_id::text) =
+                      BTRIM(payment_account.account_number::text)
+                  )
+              )
+            )
+           AND psc.is_active = TRUE
+           AND psc.source = 'OWNER_APPROVED'
+           AND psc.effective_from <= COALESCE(
+             (
+               COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+               AT TIME ZONE 'Asia/Jakarta'
+             )::date + 1,
+             sp.expected_settlement_date::date
+           )
+           AND (
+             psc.effective_until IS NULL
+             OR COALESCE(
+               (
+                 COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                 AT TIME ZONE 'Asia/Jakarta'
+               )::date + 1,
+               sp.expected_settlement_date::date
+             ) < psc.effective_until
+           )
+         ORDER BY psc.id DESC
+         LIMIT 1
+       ) settlement_config ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT total_deduction
+         FROM sport_center.calculate_settlement_mdr(
+           sp.amount,
+           CASE
+             WHEN settlement_config.calculation_method = 'fixed_fee' THEN 0
+             ELSE COALESCE(settlement_config.mdr_rate, 0)
+           END,
+           CASE
+             WHEN settlement_config.calculation_method = 'percentage_of_gross' THEN 0
+             ELSE COALESCE(settlement_config.fixed_provider_fee, 0)
+           END,
+           COALESCE(settlement_config.fee_tax_rate, 0),
+           COALESCE(settlement_config.fee_tax_inclusive, FALSE),
+           COALESCE(settlement_config.rounding_scale, 2),
+           COALESCE(settlement_config.rounding_method, 'round_half_up')
+         )
+       ) settlement_calculation ON settlement_config.id IS NOT NULL
+      WHERE sp.provider_payment_rank = 1
+    `)),
+    db.execute(sql.raw(`
+      SELECT
+        bm.id, bm.company_id,
+         bm.mutation_key,
+        bm.bank_account_id AS raw_bank_account_id,
+        bm.transaction_date, bm.amount, bm.source_account,
+        bm.direction, bm.source, bm.source_classification, bm.provider_name,
+        bm.provider_order_id, bm.description, bm.status
+      FROM public.bank_mutations bm
+      WHERE bm.direction = 'IN'
+        AND COALESCE(bm.source_classification, 'unknown') <> 'synthetic'
+        AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
+          ('posted', 'approved', 'approved_pending_posting', 'void')
+         ${canonicalCompletedMutationFilter}
+        ${mutationCompanyFilter}
+        ${mutationFilter}
+        ${dateFilter}
+        ${toFilter}
+      ORDER BY bm.transaction_date, bm.id
+    `)),
+    db.execute(sql.raw(`
+      SELECT holiday_date
+      FROM qris_business_calendar_holidays
+      WHERE is_active = TRUE
+        AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
+    `)).catch(() => ({ rows: [] as unknown[] })),
+    db.execute(sql.raw(`
+      SELECT company_id, bank_account_id, provider_code, rule_version,
+             effective_from, effective_until,
+             settlement_delay_business_days, match_window_business_days,
+             max_effective_deduction_rate, absolute_variance_tolerance,
+             percentage_variance_tolerance
+      FROM qris_provider_settlement_rules
+      WHERE is_active = TRUE
+        ${ruleCompanyFilter}
+      ORDER BY effective_from, id
+    `)).catch(() => ({ rows: [] as unknown[] })),
+    db.execute(sql.raw(`
+       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items,
+              estimated_settlement_date, settlement_rule_version
+      FROM qris_mutation_batch_candidates
+      ${existingMutationFilter}
+       ORDER BY id DESC
+    `)).catch(() => ({ rows: [] as unknown[] })),
+    db.execute(sql.raw(`
+      SELECT id, company_id, account_number
+      FROM company_bank_accounts
+      WHERE is_active = TRUE
+    `)).catch(() => ({ rows: [] as unknown[] })),
+  ]);
+
+  const holidays = (holidayRows.rows as Array<Record<string, unknown>>)
+    .map((row) => asDate(row.holiday_date))
+    .filter((value): value is string => Boolean(value));
+  const rules = providerRulesFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+    // Include DEFAULT_QRIS_PROVIDER_RULES as a base; DB rows override them.
+    // This allows gpn_qris (and other defaults) to match even when no explicit
+    // DB rule exists for this environment.
+    { includeDefaults: true },
+  );
+  const accountRules = providerRulesByBankAccountFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const providerRuleCatalog = providerRuleCatalogFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+
+  const activeBankAccounts: ActiveBankAccount[] =
+    (accountRows.rows as Array<Record<string, unknown>>)
+      .map((row) => ({
+        id: Number(row.id),
+        companyId: row.company_id == null ? null : Number(row.company_id),
+        accountNumber: row.account_number == null ? null : String(row.account_number),
+      }))
+      .filter((account) => Number.isInteger(account.id) && account.id > 0);
+
+  const payments: QrisPaymentCandidateInput[] = (paymentRows.rows as Array<Record<string, unknown>>).map((row) => {
+    const providerCode = normalizeQrisProvider(String(row.provider_code ?? "unknown"));
+    const companyId = row.company_id == null ? null : Number(row.company_id);
+    return {
+      id: Number(row.id),
+      companyId,
+      bankAccountId: resolveActiveBankAccountId({
+        companyId,
+        bankAccountId: row.bank_account_id,
+      }, activeBankAccounts),
+      amount: Number(row.amount ?? 0),
+      method: String(row.method ?? ""),
+       // The live query is confirmed-only. Normalizing the legacy fixture
+       // value "paid" here keeps older callers compatible without reopening
+       // pending payments in the strict generator.
+       status: String(row.status ?? "").toLowerCase() === "paid"
+         ? "confirmed"
+         : String(row.status ?? ""),
+      paidAt: row.paid_at as string | null,
+      canonicalMdrAmount: row.canonical_mdr_amount == null
+        ? null
+        : Number(row.canonical_mdr_amount),
+      canonicalMdrRate: row.canonical_mdr_rate == null
+        ? null
+        : Number(row.canonical_mdr_rate),
+      expectedSettlementDate: asDate(row.settlement_date),
+      settlementRuleVersion: row.settlement_rule_version == null
+        ? null
+        : String(row.settlement_rule_version).trim() || null,
+      providerName: providerCode,
+      providerReference: row.settlement_reference == null ? null : String(row.settlement_reference),
+      paymentNumber: row.payment_number == null ? null : String(row.payment_number),
+      bookingId: row.booking_id == null ? null : Number(row.booking_id),
+      bookingNumber: row.booking_number == null ? null : String(row.booking_number),
+      customerName: row.customer_name == null ? null : String(row.customer_name),
+      facilityName: row.facility_name == null ? null : String(row.facility_name),
+      revenueDescription: row.revenue_description == null ? null : String(row.revenue_description),
+      bookingDate: row.booking_date == null ? null : String(row.booking_date).slice(0, 10),
+      startTime: row.start_time == null ? null : String(row.start_time),
+      endTime: row.end_time == null ? null : String(row.end_time),
+      paymentDate: row.paid_at == null
+        ? null
+        : String(row.paid_at),
+      alreadyReconciled: Boolean(row.already_reconciled),
+       canonicalSettlementId: row.canonical_settlement_id == null
+         ? null
+         : Number(row.canonical_settlement_id),
+    };
+  });
+  const mutations: QrisMutationCandidateInput[] = (mutationRows.rows as Array<Record<string, unknown>>).map((row) => {
+    const companyId = row.company_id == null ? null : Number(row.company_id);
+    return {
+      id: Number(row.id),
+      companyId,
+      bankAccountId: resolveActiveBankAccountId({
+        companyId,
+        bankAccountId: row.raw_bank_account_id,
+        sourceAccount: row.source_account,
+        description: row.description,
+      }, activeBankAccounts),
+      transactionDate: asDate(row.transaction_date) ?? "",
+      amount: Number(row.amount ?? 0),
+      direction: String(row.direction ?? ""),
+      source: row.source == null ? null : String(row.source),
+      sourceClassification: row.source_classification == null ? null : String(row.source_classification),
+      providerName: row.provider_name == null ? null : String(row.provider_name),
+      providerOrderId: row.provider_order_id == null ? null : String(row.provider_order_id),
+      description: row.description == null ? null : String(row.description),
+      status: row.status == null ? null : String(row.status),
+    };
+  }).filter((row) => row.transactionDate);
+
+  // Approval and completion are final audit states. Keep their historical
+  // snapshots intact and do not generate a new provisional candidate for the
+  // same bank mutation, even if the mutation header was not yet transitioned.
+  const finalMutationIds = new Set(
+    (existingRows.rows as Array<Record<string, unknown>>)
+      .filter((row) => ["approved", "completed"].includes(String(row.status ?? "").toLowerCase()))
+      .map((row) => Number(row.mutation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  );
+  // Recompute existing provisional rows as well. A bank mutation can be
+  // imported before the Sport Center payment sync finishes; skipping an
+  // existing mutation would permanently preserve an empty/stale candidate.
+  // This table is provisional only, so refreshing it does not approve, post,
+  // or consume any bank evidence.
+  const candidates = generateQrisMutationBatchCandidates({
+    payments,
+    mutations,
+    holidays,
+    providerRules: rules,
+    accountProviderRules: accountRules,
+    providerRuleCatalog,
+    accountProviderRuleCatalog,
+    existingMutationIds: finalMutationIds,
+    candidateRule: "strict_h_minus_one_auto",
+  });
+  const reviewableCandidates = candidates.filter((candidate) =>
+    candidate.paymentItems.length > 0
+      && Boolean(candidate.estimatedSettlementDate)
+      && Boolean(candidate.settlementRuleVersion),
+  );
+  const auditedMutationIds = new Set(
+    candidates.map((candidate) => candidate.mutationId),
+  );
+
+  if (!options.dryRun) {
+    await db.transaction(async (tx) => {
+      let persistenceStage = "candidate snapshot persistence";
+      try {
+        for (const candidate of candidates) {
+          persistenceStage = "candidate snapshot persistence";
+      const itemJson = JSON.stringify(candidate.paymentItems);
+      const estimatedSettlementDateSql = candidate.estimatedSettlementDate
+        ? `'${esc(candidate.estimatedSettlementDate)}'`
+        : "NULL";
+       // Persist both exact matches and H-1 review evidence. Only the former
+       // is allowed to create a bank reconciliation match below.
+       const candidateStatus = candidate.status === "MATCHED"
+         ? "candidate_auto_matched"
+         : "candidate_review";
+      const settlementRuleVersion = candidate.settlementRuleVersion || "unavailable-v1";
+      let persistedCandidateId: number | null = null;
+      const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
+        Number(row.mutation_id) === candidate.mutationId
+         && isActiveQrisCandidateStatus(row.status),
+      );
+      const existingItems = existing?.payment_items == null
+        ? []
+        : typeof existing.payment_items === "string"
+          ? JSON.parse(existing.payment_items)
+          : existing.payment_items;
+      const normalizeItems = (items: unknown) => JSON.stringify(
+        Array.isArray(items)
+          ? items.map((item: Record<string, unknown>) => ({
+            paymentId: Number(item.paymentId ?? item.payment_id),
+            grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+            expectedSettlementDate: asDate(
+              item.expectedSettlementDate ?? item.expected_settlement_date,
+            ),
+             settlementStatus: String(
+               item.settlementStatus ?? item.settlement_status ?? "unsettled",
+             ).trim() || "unsettled",
+            settlementRuleVersion: String(
+              item.settlementRuleVersion ?? item.settlement_rule_version ?? "",
+            ).trim() || null,
+            canonicalSettlementId: item.canonicalSettlementId == null
+              ? item.canonical_settlement_id == null
+                ? null
+                : Number(item.canonical_settlement_id)
+              : Number(item.canonicalSettlementId),
+          })).sort((a, b) => a.paymentId - b.paymentId)
+          : [],
+      );
+      const evidenceChanged = existing != null && (
+        Math.abs(Number(existing.gross_amount ?? 0) - candidate.grossAmount) > 0.01
+        || Math.abs(Number(existing.net_amount ?? 0) - candidate.netAmount) > 0.01
+        || asDate(existing.estimated_settlement_date) !== candidate.estimatedSettlementDate
+        || (String(existing.settlement_rule_version ?? "").trim() || null)
+          !== (candidate.settlementRuleVersion || null)
+        || normalizeItems(existingItems) !== normalizeItems(candidate.paymentItems)
+      );
+      if (evidenceChanged) {
+        const supersedeResult = await tx.execute(sql.raw(`
+          UPDATE qris_mutation_batch_candidates
+          SET status = 'superseded',
+              reconciliation_status = 'UNMATCHED',
+              review_reason = 'Kandidat superseded: canonical payment membership/amount/settlement evidence berubah.',
+              updated_at = NOW()
+          WHERE id = ${Number(existing!.id)}
+            AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+        `));
+        // A reviewer may have approved the snapshot after the initial read.
+        // Do not insert a replacement when that conditional transition loses:
+        // the approved/completed audit record is the authoritative final state.
+        if ((supersedeResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
+      }
+      if (existing && !evidenceChanged) {
+        const refreshResult = await tx.execute(sql.raw(`
+          UPDATE qris_mutation_batch_candidates
+          SET candidate_source = 'sport_center.sport_payments',
+              mutation_key = (SELECT mutation_key FROM public.bank_mutations WHERE id = ${candidate.mutationId}),
+              payment_items = '${esc(itemJson)}'::jsonb,
+              status = '${candidateStatus}',
+              reconciliation_status = '${esc(candidate.status)}',
+              estimated_settlement_date = ${estimatedSettlementDateSql},
+              bank_account_id = ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
+              provider_code = '${esc(candidate.providerCode)}',
+              provider_detection_source = '${esc(candidate.providerDetectionSource)}',
+              settlement_rule_version = '${esc(settlementRuleVersion)}',
+              mutation_source_classification = '${esc(candidate.mutationSourceClassification)}',
+              gross_amount = ${candidate.grossAmount},
+              mdr_amount = ${candidate.observedDeduction},
+              net_amount = ${candidate.netAmount},
+              observed_deduction = ${candidate.observedDeduction},
+              effective_deduction_rate = ${candidate.effectiveDeductionRate == null ? "NULL" : candidate.effectiveDeductionRate},
+              review_reason = '${esc(candidate.reason)}',
+              generated_at = NOW(),
+              updated_at = NOW()
+          WHERE id = ${Number(existing.id)}
+            AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+        `));
+        // A zero-row refresh means a concurrent finalization (or another
+        // regeneration) won. Never reopen or replace its snapshot.
+        if ((refreshResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
+        persistedCandidateId = Number(existing.id);
+      } else {
+        const insertResult = await tx.execute(sql.raw(`
+        INSERT INTO qris_mutation_batch_candidates (
+          mutation_id, company_id, candidate_source, mutation_key,
+          source_date, estimated_settlement_date,
+          bank_account_id, provider_code, provider_detection_source,
+          settlement_rule_version, mutation_source_classification, gross_amount,
+          mdr_amount, other_fee_amount, net_amount, payment_items, status,
+          reconciliation_status, confidence, observed_deduction,
+          effective_deduction_rate, review_reason, generated_at, updated_at
+        ) VALUES (
+          ${candidate.mutationId},
+          ${candidate.companyId == null ? "NULL" : candidate.companyId},
+          'sport_center.sport_payments',
+          (SELECT mutation_key FROM public.bank_mutations WHERE id = ${candidate.mutationId}),
+          '${esc(candidate.sourceDate)}',
+          ${estimatedSettlementDateSql},
+          ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
+          '${esc(candidate.providerCode)}',
+          '${esc(candidate.providerDetectionSource)}',
+          '${esc(settlementRuleVersion)}',
+          '${esc(candidate.mutationSourceClassification)}',
+          ${candidate.grossAmount},
+          ${candidate.observedDeduction},
+          0,
+          ${candidate.netAmount},
+          '${esc(itemJson)}'::jsonb,
+          '${candidateStatus}',
+          '${candidate.status}',
+          ${candidate.confidence},
+          ${candidate.observedDeduction},
+          ${candidate.effectiveDeductionRate == null ? "NULL" : candidate.effectiveDeductionRate},
+          '${esc(candidate.reason)}',
+          NOW(),
+          NOW()
+        )
+          RETURNING id
+        `));
+        persistedCandidateId = Number(
+          (insertResult.rows?.[0] as Record<string, unknown> | undefined)?.id,
+        );
+      }
+
+       /*
+        * An exact candidate is an actual automatic bank match, not just a
+        * label in the QRIS audit table. Review evidence must never change the
+        * bank mutation status or create an approved reconciliation match.
+        */
+       if (
+         candidate.status === "MATCHED"
+         && persistedCandidateId != null
+         && Number.isSafeInteger(persistedCandidateId)
+       ) {
+        persistenceStage = "automatic bank match projection";
+        await tx.execute(sql.raw(`
+            INSERT INTO public.bank_reconciliation_matches (
+              mutation_id, candidate_type, candidate_id, candidate_source,
+              match_score, match_reason, amount_match, date_match,
+              name_match, order_id_match, proof_match, status
+            ) VALUES (
+              ${candidate.mutationId}, 'qris_settlement', ${persistedCandidateId},
+              'sport_center.sport_payments', 100,
+              '${esc(candidate.reason)}', TRUE, TRUE, FALSE, FALSE, FALSE, 'approved'
+            )
+            ON CONFLICT DO NOTHING
+          `));
+        await tx.execute(sql.raw(`
+            UPDATE public.bank_mutations
+            SET status = 'matched',
+                updated_at = NOW()
+            WHERE id = ${candidate.mutationId}
+              AND ${candidate.companyId == null ? "company_id IS NULL" : `company_id = ${candidate.companyId}`}
+              AND LOWER(COALESCE(status, 'unmatched')) NOT IN
+                ('posted', 'approved', 'approved_pending_posting', 'void')
+          `));
+      }
+    }
+
+        // A previously generated candidate may contain metadata that was
+        // synthesized by the old fallback path. Once the strict regeneration
+        // cannot reproduce it, retire that provisional snapshot so it cannot
+        // remain approvable merely because the source payment is now unresolved.
+        persistenceStage = "stale snapshot cleanup";
+        const currentMutationIds = new Set(mutations.map((mutation) => mutation.id));
+        for (const existing of existingRows.rows as Array<Record<string, unknown>>) {
+          const mutationId = Number(existing.mutation_id);
+          const existingStatus = String(existing.status ?? "").toLowerCase();
+          if (
+            auditedMutationIds.has(mutationId)
+            || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
+          ) {
+            continue;
+          }
+          await tx.execute(sql.raw(`
+            UPDATE qris_mutation_batch_candidates
+            SET status = 'stale',
+                reconciliation_status = 'UNMATCHED',
+                review_reason = 'Kandidat ditutup: metadata QRIS canonical tidak lagi lengkap atau tidak unik; tidak ada fallback sintetis.',
+                updated_at = NOW()
+            WHERE id = ${Number(existing.id)}
+              AND status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+          `));
+        }
+      } catch (error) {
+        const stagedError = new Error(
+          `QRIS candidate generation failed during ${persistenceStage}`,
+          { cause: error },
+        ) as Error & { qrisStage?: string };
+        stagedError.qrisStage = persistenceStage;
+        throw stagedError;
+      }
+    });
+  }
+
+  return {
+    dryRun: options.dryRun !== false,
+    generated: candidates.length,
+    persisted: options.dryRun === false ? candidates.length : 0,
+    reviewable: reviewableCandidates.length,
+    candidates,
+  };
+}
+
+export async function listQrisCandidates(options: {
+  companyId?: number | null;
+  status?: string | null;
+  limit?: number;
+  includeCompleted?: boolean;
+} = {}) {
+  const companyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND c.company_id = ${Number(options.companyId)}`
+    : "";
+  const requestedStatus = String(options.status ?? "").trim().toUpperCase();
+  const statusFilter = requestedStatus === "ALL"
+    ? ""
+    : ["MATCHED", "REVIEW", "UNMATCHED"].includes(requestedStatus)
+      ? `AND c.reconciliation_status = '${requestedStatus}'`
+      : "AND c.reconciliation_status = 'MATCHED'";
+  const completedFilter = options.includeCompleted
+    ? ""
+    : `
+        AND LOWER(COALESCE(c.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+        AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
+          ('posted', 'approved', 'approved_pending_posting', 'void')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) qris_source_item
+          WHERE qris_source_item->>'paymentId' IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM sport_center.sport_payments qris_source_payment
+              WHERE qris_source_payment.id = CASE
+                  WHEN COALESCE(
+                    qris_source_item->>'paymentId',
+                    qris_source_item->>'payment_id'
+                  ) ~ '^[0-9]+$'
+                    THEN COALESCE(
+                      qris_source_item->>'paymentId',
+                      qris_source_item->>'payment_id'
+                    )::integer
+                  ELSE NULL
+                END
+                AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
+                 AND LOWER(COALESCE(qris_source_payment.status::text, '')) = 'confirmed'
+                 AND qris_source_payment.paid_at IS NOT NULL
+                 AND (
+                   (qris_source_payment.paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1
+                 ) = bm.transaction_date::date
+            )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) legacy_source_item
+          JOIN qris_settlement_items active_legacy_item
+            ON active_legacy_item.sport_payment_id = CASE
+              WHEN COALESCE(
+                legacy_source_item->>'paymentId',
+                legacy_source_item->>'payment_id'
+              ) ~ '^[0-9]+$'
+                THEN COALESCE(
+                  legacy_source_item->>'paymentId',
+                  legacy_source_item->>'payment_id'
+                )::integer
+              ELSE NULL
+            END
+          JOIN qris_settlements active_legacy_settlement
+            ON active_legacy_settlement.id = active_legacy_item.settlement_id
+          WHERE LOWER(COALESCE(active_legacy_settlement.status::text, ''))
+            IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+        )
+      `;
+  const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
+
+  const canonicalAvailable = await hasCanonicalSettlementSchema();
+  const phase4ColumnsAvailable = await hasQrisPaymentPhase4Columns();
+  const livePaymentProviderSql = phase4ColumnsAvailable
+    ? "NULLIF(BTRIM(live_provider_payment.payment_provider::text), '')"
+    : "NULL::text";
+  const {
+    currentExpectedAmountSql,
+    canonicalSettledExcludeSql,
+    canonicalSettledExcludeByIdSql,
+    currentEvidenceValidSql,
+    recoverableSettlementIdSql,
+    canonicalSettledUnionSql,
+  } = makeCanonicalFragments(canonicalAvailable);
+  const staleCanonicalReferenceFilter = canonicalAvailable
+    ? `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) stale_item
+          WHERE COALESCE(
+              stale_item->>'canonicalSettlementId',
+              stale_item->>'canonical_settlement_id'
+            ) ~ '^[0-9]+$'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_batches stale_batch
+              WHERE stale_batch.id = COALESCE(
+                stale_item->>'canonicalSettlementId',
+                stale_item->>'canonical_settlement_id'
+              )::bigint
+                AND stale_batch.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+            )
+        )
+      `
+    : "";
+
+  const { rows } = await db.execute(sql.raw(`
+     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
+            bm.mutation_key,
+           bm.bank_account_id,
+           bm.source, bm.provider_name AS bank_provider_name,
+            COALESCE(c.candidate_source, 'sport_center.sport_payments') AS candidate_source,
+             COALESCE((
+               SELECT jsonb_object_agg(
+                 payment_id::text,
+                 provider_name
+               )
+               FROM (
+                 SELECT
+                   CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END AS payment_id,
+                   COALESCE(
+                     ${livePaymentProviderSql},
+                     'unknown'
+                   ) AS provider_name
+                 FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                 LEFT JOIN sport_center.sport_payments live_provider_payment
+                   ON live_provider_payment.id = CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END
+                 WHERE COALESCE(
+                   item->>'paymentId',
+                   item->>'payment_id'
+                 ) ~ '^[0-9]+$'
+               ) live_payment_provider
+             ), '{}'::jsonb) AS payment_provider_by_id,
+             COALESCE((
+               SELECT jsonb_object_agg(
+                 payment_id::text,
+                 settlement_status
+               )
+               FROM (
+                 SELECT
+                   CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END AS payment_id,
+                   COALESCE(
+                     NULLIF(BTRIM(live_settlement_payment.settlement_status::text), ''),
+                     'unsettled'
+                   ) AS settlement_status
+                 FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                 LEFT JOIN sport_center.sport_payments live_settlement_payment
+                   ON live_settlement_payment.id = CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END
+                 WHERE COALESCE(
+                   item->>'paymentId',
+                   item->>'payment_id'
+                 ) ~ '^[0-9]+$'
+               ) live_payment_settlement
+             ), '{}'::jsonb) AS payment_settlement_status_by_id,
+            ${currentExpectedAmountSql} AS current_expected_amount,
+            COALESCE((
+              SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
+              FROM (
+                SELECT (item->>'paymentId')::int AS payment_id
+                FROM jsonb_array_elements(c.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    JOIN qris_settlements qsettled
+                      ON qsettled.id = qsi.settlement_id
+                    WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                      AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+                  )
+                  ${canonicalSettledExcludeSql}
+              ) current_payment
+            ), '[]'::jsonb) AS current_payment_ids,
+             COALESCE((
+               SELECT jsonb_agg(unconfirmed.payment_id ORDER BY unconfirmed.payment_id)
+               FROM (
+                 SELECT (item->>'paymentId')::int AS payment_id
+                 FROM jsonb_array_elements(c.payment_items) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM sport_center.sport_payments live_payment
+                     WHERE live_payment.id = (item->>'paymentId')::int
+                       AND LOWER(COALESCE(live_payment.status::text, '')) = 'confirmed'
+                   )
+               ) unconfirmed
+             ), '[]'::jsonb) AS unconfirmed_payment_ids,
+            COALESCE((
+              SELECT SUM(sp.amount)
+              FROM sport_center.sport_payments sp
+              WHERE sp.id IN (
+                SELECT (item->>'paymentId')::int
+                FROM jsonb_array_elements(c.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    JOIN qris_settlements qsettled
+                      ON qsettled.id = qsi.settlement_id
+                    WHERE qsi.sport_payment_id = sp.id
+                      AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+                  )
+                  ${canonicalSettledExcludeByIdSql}
+              )
+            ), 0) AS current_gross_amount,
+            ${currentEvidenceValidSql} AS current_evidence_valid,
+            COALESCE((
+              SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
+              FROM (
+                SELECT qsi.sport_payment_id AS payment_id
+                 FROM qris_settlement_items qsi
+                 JOIN qris_settlements qsettled
+                   ON qsettled.id = qsi.settlement_id
+                 WHERE qsi.sport_payment_id IN (
+                  SELECT (item->>'paymentId')::int
+                  FROM jsonb_array_elements(c.payment_items) item
+                  WHERE item->>'paymentId' IS NOT NULL
+                 )
+                   AND qsettled.status IN ${ACTIVE_LEGACY_QRIS_SETTLEMENT_STATUS_SQL}
+                 ${canonicalSettledUnionSql}
+              ) settled
+             ), '[]'::jsonb) AS settled_payment_ids,
+             COALESCE((
+               SELECT jsonb_agg(active.payment_id ORDER BY active.payment_id)
+               FROM (
+                 SELECT i.payment_id
+                  FROM sport_center.payment_settlement_items i
+                  JOIN sport_center.payment_settlement_batches b
+                    ON b.id = i.settlement_id
+                  WHERE i.payment_id IN (
+                   SELECT (item->>'paymentId')::int
+                   FROM jsonb_array_elements(c.payment_items) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                 )
+                    AND i.item_status = 'active'
+                    AND b.status IN ${ACTIVE_CANONICAL_SETTLEMENT_STATUS_SQL}
+               ) active
+             ), '[]'::jsonb) AS active_settlement_payment_ids,
+             ${recoverableSettlementIdSql} AS recoverable_settlement_id
+    FROM qris_mutation_batch_candidates c
+    LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
+     WHERE c.status IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
+       AND c.reconciliation_status IN ('MATCHED', 'REVIEW', 'UNMATCHED')
+       AND c.estimated_settlement_date::text = bm.transaction_date::text
+       AND NOT EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item_h1
+         WHERE COALESCE(
+           item_h1->>'expectedSettlementDate',
+           item_h1->>'expected_settlement_date'
+         ) IS DISTINCT FROM bm.transaction_date::text
+       )
+       AND jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb)) > 0
+        ${staleCanonicalReferenceFilter}
+       ${companyFilter} ${statusFilter} ${completedFilter}
+    ORDER BY c.source_date DESC, c.id DESC
+    LIMIT ${limit}
+  `));
+   return rows.map((row) => {
+     const providerById = row.payment_provider_by_id as Record<string, unknown> | null | undefined;
+      const settlementStatusById =
+        row.payment_settlement_status_by_id as Record<string, unknown> | null | undefined;
+      const {
+        payment_provider_by_id: _providerById,
+        payment_settlement_status_by_id: _settlementStatusById,
+        ...candidate
+      } = row;
+     const rawItems = candidate.payment_items;
+     const paymentItems = Array.isArray(rawItems)
+       ? rawItems
+       : typeof rawItems === "string"
+         ? JSON.parse(rawItems)
+         : [];
+     if (!Array.isArray(paymentItems)) return candidate;
+
+     return {
+       ...candidate,
+       payment_items: paymentItems.map((item) => {
+         if (item == null || typeof item !== "object") return item;
+         const paymentItem = item as Record<string, unknown>;
+         const paymentId = paymentItem.paymentId ?? paymentItem.payment_id;
+         const provider =
+           paymentItem.providerName
+           ?? paymentItem.provider_name
+           ?? (paymentId != null ? providerById?.[String(paymentId)] : null)
+           ?? candidate.provider_code
+           ?? "unknown";
+          const settlementStatus =
+            paymentId != null
+              ? settlementStatusById?.[String(paymentId)]
+              : null;
+          return {
+            ...paymentItem,
+            providerName: String(provider),
+            settlementStatus: String(
+              settlementStatus
+              ?? paymentItem.settlementStatus
+              ?? paymentItem.settlement_status
+              ?? "unsettled",
+            ),
+          };
+       }),
+     };
+   });
+}

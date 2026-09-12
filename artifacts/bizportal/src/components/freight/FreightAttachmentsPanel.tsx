@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -330,7 +331,7 @@ function DocumentUploadForm({
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Tanggal</Label>
-          <Input className="h-8 text-xs" type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} />
+          <DatePicker value={docDate} onChange={(v) => setDocDate(v)} className="h-8 text-xs" />
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Status</Label>
@@ -433,7 +434,7 @@ function DocumentRow({
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Tanggal</Label>
-            <Input className="h-7 text-xs" type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)} />
+            <DatePicker value={docDate} onChange={(v) => setDocDate(v)} className="h-7 text-xs" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Status</Label>

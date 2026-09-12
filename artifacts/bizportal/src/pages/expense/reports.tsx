@@ -1,6 +1,8 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useMemo } from "react";
 import { useGetExpenseSummary } from "@workspace/api-client-react";
 import { AppShell } from "@/components/layout/AppShell";
+import { QueryState } from "@/components/ui/query-state";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -201,21 +203,11 @@ export default function ExpenseReportsPage() {
             <div className="flex flex-wrap gap-4 items-end">
               <div className="space-y-1">
                 <Label className="text-xs">Dari</Label>
-                <Input
-                  type="date"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                  className="w-40"
-                />
+                <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-40" />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Sampai</Label>
-                <Input
-                  type="date"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  className="w-40"
-                />
+                <DatePicker value={to} onChange={(v) => setTo(v)} className="w-40" />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Status</Label>
@@ -298,11 +290,7 @@ export default function ExpenseReportsPage() {
               <CardTitle className="text-sm">Pengeluaran per Kategori (Bar)</CardTitle>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Memuat...</div>
-              ) : categoryData.length === 0 ? (
-                <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Tidak ada data</div>
-              ) : (
+              <QueryState loading={isLoading} empty={!isLoading && categoryData.length === 0} emptyMessage="Tidak ada data">
                 <ChartContainer config={barChartConfig} className="h-64 w-full">
                   <BarChart
                     data={categoryData}
@@ -340,7 +328,7 @@ export default function ExpenseReportsPage() {
                     <Bar dataKey="total" fill="hsl(var(--chart-1))" radius={[0, 4, 4, 0]} cursor="pointer" />
                   </BarChart>
                 </ChartContainer>
-              )}
+              </QueryState>
             </CardContent>
           </Card>
 
@@ -350,11 +338,7 @@ export default function ExpenseReportsPage() {
               <CardTitle className="text-sm">Komposisi per Kategori (Pie)</CardTitle>
             </CardHeader>
             <CardContent>
-              {isLoading ? (
-                <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Memuat...</div>
-              ) : categoryData.length === 0 ? (
-                <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Tidak ada data</div>
-              ) : (
+              <QueryState loading={isLoading} empty={!isLoading && categoryData.length === 0} emptyMessage="Tidak ada data">
                 <div className="h-64 w-full">
                   <PieChart width={300} height={256} style={{ margin: "0 auto" }}>
                     <Pie
@@ -383,7 +367,7 @@ export default function ExpenseReportsPage() {
                     />
                   </PieChart>
                 </div>
-              )}
+              </QueryState>
             </CardContent>
           </Card>
         </div>
@@ -394,11 +378,7 @@ export default function ExpenseReportsPage() {
             <CardTitle className="text-sm">Tren Pengeluaran per Bulan</CardTitle>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
-              <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Memuat...</div>
-            ) : monthData.length === 0 ? (
-              <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">Tidak ada data</div>
-            ) : (
+            <QueryState loading={isLoading} empty={!isLoading && monthData.length === 0} emptyMessage="Tidak ada data">
               <ChartContainer config={lineChartConfig} className="h-56 w-full">
                 <LineChart
                   data={monthData}
@@ -433,7 +413,7 @@ export default function ExpenseReportsPage() {
                   />
                 </LineChart>
               </ChartContainer>
-            )}
+            </QueryState>
           </CardContent>
         </Card>
 
@@ -446,11 +426,7 @@ export default function ExpenseReportsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {isLoading ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">Memuat...</div>
-            ) : (data?.topVendors ?? []).length === 0 ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">Tidak ada data</div>
-            ) : (
+            <QueryState loading={isLoading} empty={!isLoading && (data?.topVendors ?? []).length === 0} emptyMessage="Tidak ada data">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -502,7 +478,7 @@ export default function ExpenseReportsPage() {
                   </tbody>
                 </table>
               </div>
-            )}
+            </QueryState>
           </CardContent>
         </Card>
       </div>

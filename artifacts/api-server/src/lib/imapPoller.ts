@@ -10,7 +10,7 @@ import { eq, inArray } from "drizzle-orm";
 import { ObjectStorageService } from "./objectStorage.js";
 import { logger } from "./logger.js";
 import { processEmailForAiIntake } from "./aiOrderIntake.js";
-import { sendWhatsApp } from "./fonnte.js";
+import { sendViaService as sendWhatsApp } from "./waTransport.js";
 import { getAdminWa, getAdminGroupWa } from "./adminWa.js";
 import { getPreferredDomain } from "./domain.js";
 

@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronRight, Shield, Search, Download } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Shield, Search, Download } from "lucide-react";
+import { Link } from "wouter";
 
 const BASE = "/api";
 
@@ -121,6 +123,8 @@ export default function AuditLogPage() {
     <div className="space-y-4 p-4">
       <div className="flex items-center gap-2">
         <Shield className="text-red-600" size={22} />
+        <Link href="/reports"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
         <h1 className="text-xl font-bold">Audit Log Keamanan</h1>
         <span className="text-sm text-gray-500 ml-2">Semua aktivitas penting tercatat</span>
       </div>
@@ -143,8 +147,8 @@ export default function AuditLogPage() {
         <CardHeader className="pb-3"><CardTitle className="text-sm">Filter</CardTitle></CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div><Label className="text-xs">Dari</Label><Input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setPage(0); }} className="h-8 text-sm" /></div>
-            <div><Label className="text-xs">Sampai</Label><Input type="date" value={to} onChange={(e) => { setTo(e.target.value); setPage(0); }} className="h-8 text-sm" /></div>
+            <div><Label className="text-xs">Dari</Label><DatePicker value={from} onChange={(v) => { setFrom(v); setPage(0); }} className="h-8 text-sm" /></div>
+            <div><Label className="text-xs">Sampai</Label><DatePicker value={to} onChange={(v) => { setTo(v); setPage(0); }} className="h-8 text-sm" /></div>
             <div><Label className="text-xs">Modul</Label>
               <Select value={mod} onValueChange={(v) => { setMod(v === "_all" ? "" : v); setPage(0); }}>
                 <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Semua modul" /></SelectTrigger>

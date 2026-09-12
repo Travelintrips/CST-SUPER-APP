@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, CheckCircle2, MapPin, Navigation, X } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, MapPin, Navigation, X, CheckCheck, Loader2 } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 
 export interface GeofenceAlert {
   id: string;
@@ -34,6 +34,15 @@ async function apiFetch(url: string) {
   return res.json();
 }
 
+async function resolveAlertApi(id: string) {
+  const res = await fetch(`/api/drivers/geofence-alerts/${encodeURIComponent(id)}/resolve`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("resolve failed");
+  return res.json();
+}
+
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (diff < 60) return `${diff}d lalu`;
@@ -48,6 +57,10 @@ interface Props {
 export default function GeofenceAlertPanel({ onAlertCountChange }: Props) {
   const [alerts, setAlerts] = useState<Map<string, GeofenceAlert>>(new Map());
   const [resolved, setResolved] = useState<ResolvedNotice[]>([]);
+
+  const resolveMutation = useMutation({
+    mutationFn: (id: string) => resolveAlertApi(id),
+  });
 
   const { data: initialAlerts = [] } = useQuery<GeofenceAlert[]>({
     queryKey: ["geofence-alerts"],
@@ -135,7 +148,23 @@ export default function GeofenceAlertPanel({ onAlertCountChange }: Props) {
                   </p>
                 </div>
               </div>
-              <span className="text-xs text-muted-foreground shrink-0">{timeAgo(alert.triggeredAt)}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs text-muted-foreground">{timeAgo(alert.triggeredAt)}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-400"
+                  disabled={resolveMutation.isPending}
+                  onClick={() => resolveMutation.mutate(alert.id)}
+                >
+                  {resolveMutation.isPending && resolveMutation.variables === alert.id ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <CheckCheck className="w-3 h-3" />
+                  )}
+                  Tandai Selesai
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
               <div className="flex items-start gap-1">

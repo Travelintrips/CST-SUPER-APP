@@ -14,7 +14,7 @@ import { companiesTable } from "./companies";
 export const whMovementTypeEnum = pgEnum("wh_movement_type", [
   "po_receipt",
   "so_delivery",
-  "pos_sale",
+
   "transfer_in",
   "transfer_out",
   "opname_adjust",

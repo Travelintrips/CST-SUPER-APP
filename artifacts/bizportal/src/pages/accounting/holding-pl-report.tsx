@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -23,7 +24,9 @@ import {
   Printer,
   FileBarChart2,
   Layers,
+  ArrowLeft,
 } from "lucide-react";
+import { Link } from "wouter";
 
 function fmt(n: number) {
   return new Intl.NumberFormat("id-ID", {
@@ -188,6 +191,8 @@ export default function HoldingPLReportPage() {
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
+                <Link href="/accounting"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
                 <h1 className="text-2xl font-bold tracking-tight">Laporan Laba Rugi</h1>
                 <Badge className="bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 text-xs font-mono">
                   <Layers className="h-3 w-3 mr-1" /> {holdingName}
@@ -238,11 +243,11 @@ export default function HoldingPLReportPage() {
           {isCustom && (<>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Dari</Label>
-              <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-8 text-sm w-40" />
+              <DatePicker value={customFrom} onChange={(v) => setCustomFrom(v)} className="h-8 text-sm w-40" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Sampai</Label>
-              <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-8 text-sm w-40" />
+              <DatePicker value={customTo} onChange={(v) => setCustomTo(v)} className="h-8 text-sm w-40" />
             </div>
           </>)}
           <Button size="sm" className="h-8" onClick={applyFilter}>Terapkan</Button>

@@ -27,6 +27,9 @@ export async function runCompaniesMigration(): Promise<void> {
       )
     `);
 
+    // 2. Ensure name column is nullable (legacy schema compat)
+    await db.execute(sql.raw(`ALTER TABLE companies ALTER COLUMN name DROP NOT NULL`)).catch(() => {});
+
     // 2. Seed 4 companies (idempotent)
     for (const c of FOUR_COMPANIES) {
       await db.execute(sql`
@@ -38,6 +41,55 @@ export async function runCompaniesMigration(): Promise<void> {
       `);
     }
     await db.execute(sql`SELECT setval('companies_id_seq', (SELECT MAX(id) FROM companies))`);
+
+    // 2b. Add missing columns to companies table (idempotent)
+    await db.execute(sql.raw(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_holding BOOLEAN NOT NULL DEFAULT FALSE`));
+    await db.execute(sql.raw(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS parent_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL`));
+
+    // 2c. Tambah kolom data perusahaan lengkap (idempotent)
+    const newCols: string[] = [
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS city TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS province TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS postal_code TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS kode_wilayah TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS fax TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS npwp_status TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS kegiatan_utama TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS jenis_wajib_pajak TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS bentuk_badan_hukum TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS tanggal_terdaftar TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS tanggal_aktivasi TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS status_pkp BOOLEAN`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS tanggal_pkp TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS kanwil_djp TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS kpp_terdaftar TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS seksi_pengawasan TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS tanggal_pembaruan_profil TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS kode_klu TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS deskripsi_klu TEXT`,
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS nib TEXT`,
+    ];
+    for (const stmt of newCols) {
+      await db.execute(sql.raw(stmt)).catch(() => {});
+    }
+
+    // 2d. Buat tabel dokumen legal perusahaan (idempotent)
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS company_legal_documents (
+        id          SERIAL PRIMARY KEY,
+        company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        doc_type    TEXT NOT NULL,
+        doc_name    TEXT NOT NULL,
+        file_url    TEXT NOT NULL,
+        file_size   INTEGER,
+        mime_type   TEXT,
+        notes       TEXT,
+        uploaded_by INTEGER,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS cld_company_idx ON company_legal_documents (company_id)`));
 
     // 3. Add company_id to accounting tables (idempotent)
     for (const tbl of ["accounting_entries", "accounting_payments", "accounting_settings", "expenses"]) {

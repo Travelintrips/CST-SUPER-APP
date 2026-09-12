@@ -1,11 +1,12 @@
-import { pgTable, text, timestamp, pgEnum, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, pgEnum, integer, serial } from "drizzle-orm/pg-core";
+import { uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { companiesTable } from "./companies";
 import { branchesTable, divisionsTable, departmentsTable, sectionsTable } from "./orgStructure";
 import { customRolesTable } from "./customRoles";
 
-export const userRoleEnum = pgEnum("user_role", ["admin", "ecommerce", "trading", "logistics", "pos", "pos-kasir", "pos-inventory"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "ecommerce", "trading", "logistics"]);
 
 export const usersTable = pgTable("users", {
   id: text("id").primaryKey(),
@@ -24,6 +25,9 @@ export const usersTable = pgTable("users", {
   sectionId: integer("section_id").references(() => sectionsTable.id, { onDelete: "set null" }),
   customRoleId: integer("custom_role_id").references(() => customRolesTable.id, { onDelete: "set null" }),
   defaultBranchId: integer("default_branch_id").references(() => branchesTable.id, { onDelete: "set null" }),
+  systemRole: text("system_role"),
+  whatsapp: text("whatsapp"),
+  passwordHash: text("password_hash"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -31,3 +35,16 @@ export const usersTable = pgTable("users", {
 export const insertUserSchema = createInsertSchema(usersTable).omit({ createdAt: true, updatedAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof usersTable.$inferSelect;
+
+/**
+ * Allowed-company access list for admin users.
+ * Empty = all companies permitted. Non-empty = restricted to listed companies only.
+ */
+export const userAllowedCompaniesTable = pgTable("user_allowed_companies", {
+  id: serial("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  companyId: integer("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uac_user_company_idx").on(t.userId, t.companyId),
+]);

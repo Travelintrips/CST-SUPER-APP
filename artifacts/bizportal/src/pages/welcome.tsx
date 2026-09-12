@@ -43,7 +43,7 @@ export default function WelcomePage() {
 
           <Card className="bg-card border-border shadow-sm hover:shadow-md transition-shadow">
             <CardHeader className="pb-2">
-              <img src="/images/logo.png" alt="CST" className="h-8 w-auto object-contain mb-2" />
+              <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="CST" className="h-8 w-auto object-contain mb-2" />
               <CardTitle>{t.welcome.trading}</CardTitle>
               <CardDescription className="text-muted-foreground">{t.welcome.tradingDesc}</CardDescription>
             </CardHeader>

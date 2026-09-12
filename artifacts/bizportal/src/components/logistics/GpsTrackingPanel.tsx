@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -7,12 +7,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MapPin, RefreshCw, Navigation, AlertTriangle } from "lucide-react";
 
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
+// Guard: only run once (DriverMap.tsx may have already done this)
+if (!(L.Icon.Default as unknown as Record<string, unknown>).__patched__) {
+  delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  });
+  (L.Icon.Default as unknown as Record<string, unknown>).__patched__ = true;
+}
 
 type GpsPoint = {
   id: number;
@@ -103,7 +107,7 @@ export default function GpsTrackingPanel({ orderId, orderNumber }: GpsTrackingPa
     staleTime: 25_000,
   });
 
-  const locations = data?.locations ?? [];
+  const locations = useMemo(() => data?.locations ?? [], [data?.locations]);
   const alerts = alertsData?.alerts ?? [];
   const hasAlerts = alerts.length > 0;
 

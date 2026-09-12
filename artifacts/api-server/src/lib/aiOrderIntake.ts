@@ -19,6 +19,17 @@ const require_ = createRequire(import.meta.url);
 type PdfParseFn = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
 const pdfParse = require_("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
 
+/** Escape user-controlled strings before inserting into HTML email bodies. */
+function esc(s: string | null | undefined): string {
+  if (!s) return "";
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 const AI_INTAKE_KEY = "ai_intake_enabled";
 const AI_INTAKE_REPLY_WA_KEY = "ai_intake_reply_wa";
 const AI_INTAKE_REPLY_EMAIL_KEY = "ai_intake_reply_email";
@@ -29,7 +40,7 @@ const DEFAULT_VENDOR_FILTER: VendorFilterMode = "by-service-type";
 
 const DEFAULT_REPLY_WA = `✅ *Terima kasih!*\nPesan Anda telah kami terima dan sedang diproses oleh tim kami.\nDraft penawaran telah dibuat dan akan segera kami konfirmasi.\nNomor Draft: *{docNumber}*`;
 const DEFAULT_REPLY_EMAIL_SUBJECT = `[Draft Diterima] {docNumber} — Terima kasih`;
-const DEFAULT_REPLY_EMAIL_BODY = `Terima kasih telah menghubungi kami.\n\nPesan Anda telah kami terima dan sedang diproses oleh tim kami. Draft penawaran *{docNumber}* untuk kebutuhan Anda telah dibuat.\n\nTim kami akan segera menghubungi Anda untuk konfirmasi lebih lanjut.\n\nSalam,\nCST Logistics`;
+const DEFAULT_REPLY_EMAIL_BODY = `Terima kasih telah menghubungi kami.\n\nPesan Anda telah kami terima dan sedang diproses oleh tim kami. Draft penawaran *{docNumber}* untuk kebutuhan Anda telah dibuat.\n\nTim kami akan segera menghubungi Anda untuk konfirmasi lebih lanjut.\n\nSalam,\nB2B Marketplace and Logistic`;
 
 const VALID_TRANSPORT_MODES = ["sea", "air", "land", "multimodal"] as const;
 type ValidTransportMode = (typeof VALID_TRANSPORT_MODES)[number];
@@ -42,16 +53,17 @@ function toTransportMode(v: string | null | undefined): ValidTransportMode | nul
 }
 
 function buildOpenAi(): OpenAI {
-  if (!process.env.AI_INTEGRATIONS_OPENAI_API_KEY && !process.env.OPENAI_API_KEY) {
-    throw new Error("OpenAI API key not configured.");
-  }
+  const directKey = process.env.OPENAI_API_KEY;
+  const intKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+  if (!directKey && !intKey) throw new Error("OpenAI API key tidak dikonfigurasi.");
   return new OpenAI({
-    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
-    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+    apiKey: directKey || intKey,
+    baseURL: directKey ? undefined : baseURL,
   });
 }
 
-const AI_INTAKE_PROMPT = `You are an order intake assistant for CST Logistics, a freight forwarding company.
+const AI_INTAKE_PROMPT = `You are an order intake assistant for B2B Marketplace and Logistic, a freight forwarding company.
 Your job is to read an email or WhatsApp message and extract order/freight inquiry data.
 Always respond ONLY with valid JSON — no markdown, no code blocks, no explanation.
 
@@ -171,7 +183,7 @@ async function nextDocNumber(offset = 0): Promise<string> {
 }
 
 // ── Vendor Reply Prompt ────────────────────────────────────────────────────
-const AI_VENDOR_REPLY_PROMPT = `You are an assistant for CST Logistics, a freight forwarding company.
+const AI_VENDOR_REPLY_PROMPT = `You are an assistant for B2B Marketplace and Logistic, a freight forwarding company.
 Your job is to read a vendor's reply email and extract their pricing/quotation data.
 Always respond ONLY with valid JSON — no markdown, no code blocks, no explanation.
 
@@ -224,7 +236,7 @@ interface ExtractedVendorQuote {
 }
 
 // ── Customer Approval Prompt ───────────────────────────────────────────────
-const AI_APPROVAL_PROMPT = `You are an assistant for CST Logistics, a freight forwarding company.
+const AI_APPROVAL_PROMPT = `You are an assistant for B2B Marketplace and Logistic, a freight forwarding company.
 Your job is to read a customer's reply email and determine if it is an approval, rejection, or counter-offer for a quotation.
 Always respond ONLY with valid JSON — no markdown, no code blocks, no explanation.
 
@@ -396,7 +408,7 @@ async function processVendorReply(opts: {
       to: process.env.ADMIN_EMAIL ?? process.env.SMTP_FROM ?? "",
       subject: `[Penawaran Vendor] ${opts.vendorName} — ${opts.docNumber}`,
       text: `Vendor ${opts.vendorName} telah membalas penawaran untuk quotation ${opts.docNumber}.\n${notesAppend}\n\nSilakan buka sistem untuk meninjau dan mengonfirmasi.`,
-      html: `<p>Vendor <strong>${opts.vendorName}</strong> telah membalas penawaran untuk quotation <strong>${opts.docNumber}</strong>.</p><pre>${notesAppend}</pre><p>Silakan buka sistem untuk meninjau dan mengonfirmasi.</p>`,
+      html: `<p>Vendor <strong>${esc(opts.vendorName)}</strong> telah membalas penawaran untuk quotation <strong>${esc(opts.docNumber)}</strong>.</p><pre>${esc(notesAppend)}</pre><p>Silakan buka sistem untuk meninjau dan mengonfirmasi.</p>`,
     }).catch((err: unknown) => logger.warn({ err }, "AI intake: vendor reply notification email failed"));
   }
 
@@ -455,7 +467,7 @@ async function processCustomerApproval(opts: {
         to: process.env.ADMIN_EMAIL ?? process.env.SMTP_FROM ?? "",
         subject: `[Customer SETUJU] ${opts.customerName} — ${opts.docNumber}`,
         text: `Customer ${opts.customerName} telah menyetujui quotation ${opts.docNumber} via email.\n\nCatatan AI: ${classification.notes ?? "-"}\n\nSilakan buka sistem dan konfirmasi quotation tersebut.`,
-        html: `<p>Customer <strong>${opts.customerName}</strong> telah <strong>menyetujui</strong> quotation <strong>${opts.docNumber}</strong> via email.</p><p>Catatan AI: ${classification.notes ?? "-"}</p><p>Silakan buka sistem dan <strong>konfirmasi</strong> quotation tersebut.</p>`,
+        html: `<p>Customer <strong>${esc(opts.customerName)}</strong> telah <strong>menyetujui</strong> quotation <strong>${esc(opts.docNumber)}</strong> via email.</p><p>Catatan AI: ${esc(classification.notes ?? "-")}</p><p>Silakan buka sistem dan <strong>konfirmasi</strong> quotation tersebut.</p>`,
       }).catch((err: unknown) => logger.warn({ err }, "AI intake: customer approval notification email failed"));
     }
 
@@ -583,7 +595,7 @@ async function createDraftQuotation(
   const destination = extracted.destination ?? null;
   const shipmentType = toShipmentType(extracted.transportMode);
   const phone = opts.waPhone ?? extracted.customerPhone ?? "000000000000";
-  const email = opts.fromEmail ?? extracted.customerEmail ?? `${phone}@ai.cstlogistics.id`;
+  const email = opts.fromEmail ?? extracted.customerEmail ?? `${phone}@ai.b2bmarketplace.id`;
   const now = new Date();
   const jamOrder = new Intl.DateTimeFormat("id-ID", {
     timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", hour12: false,
@@ -873,9 +885,9 @@ export async function saveAiIntakeSettings(settings: {
   const upsert = async (key: string, value: string) => {
     await db
       .insert(portalContentTable)
-      .values({ key, value, updatedAt: new Date() })
+      .values({ key, value, updatedAt: new Date() } as any)
       .onConflictDoUpdate({
-        target: portalContentTable.key,
+        target: [portalContentTable.key, (portalContentTable as any).locale],
         set: { value, updatedAt: new Date() },
       });
   };
@@ -905,9 +917,51 @@ function guessMimeFromUrl(url: string): string {
   return "";
 }
 
+// SSRF guard: block fetches to private/loopback/link-local address ranges
+function isSsrfSafeUrl(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  // Only allow http/https
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Block loopback, private, and reserved hostnames
+  const blockedHostnames = ["localhost", "metadata.google.internal"];
+  if (blockedHostnames.includes(hostname)) return false;
+
+  // Block private/reserved IPv4 CIDR ranges
+  const ipv4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const [, a, b] = ipv4.map(Number);
+    // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8
+    if (a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) || (a === 169 && b === 254)) {
+      return false;
+    }
+  }
+
+  // Block IPv6 loopback/link-local (::1, fe80::, fc00::, fd00::)
+  if (hostname === "::1" || hostname.startsWith("fe80") ||
+      hostname.startsWith("fc") || hostname.startsWith("fd")) {
+    return false;
+  }
+
+  return true;
+}
+
 async function downloadFileBuffer(
   url: string,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  // SSRF protection: reject private/internal URLs from untrusted webhook payloads
+  if (!isSsrfSafeUrl(url)) {
+    logger.warn({ url }, "AI media intake: blocked SSRF-unsafe URL");
+    return null;
+  }
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
     if (!resp.ok) {
@@ -923,7 +977,7 @@ async function downloadFileBuffer(
   }
 }
 
-const AI_MEDIA_INTAKE_PROMPT = `You are an order intake assistant for CST Logistics, a freight forwarding company.
+const AI_MEDIA_INTAKE_PROMPT = `You are an order intake assistant for B2B Marketplace and Logistic, a freight forwarding company.
 Your job is to read a document (invoice, quotation, Bill of Lading, Air Waybill, shipping order, customs form, or any business document) and extract order/freight inquiry data.
 Always respond ONLY with valid JSON — no markdown, no code blocks, no explanation.
 

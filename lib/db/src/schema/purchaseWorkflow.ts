@@ -1,6 +1,6 @@
 import {
   pgTable, pgEnum, serial, text, integer, numeric, boolean,
-  timestamp, index, unique,
+  timestamp, index, unique, jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -10,6 +10,9 @@ import { companiesTable } from "./companies";
 import { purchaseDocumentsTable, purchaseDocumentLinesTable } from "./purchaseDocuments";
 import { warehousesTable, warehouseRacksTable } from "./inventory";
 import { uomTable, uomConversionsTable } from "./uom";
+import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
+import { mktPurchaseOrderLinesTable } from "./mktPurchaseOrderLines";
+import { mktPoGoodsReceiptsTable } from "./mktPoGoodsReceipts";
 
 // Backward-compat aliases so route files using uomMasterTable keep working
 export { uomTable as uomMasterTable, uomConversionsTable };
@@ -41,7 +44,7 @@ export const prReturnStatusEnum = pgEnum("pr_return_status", [
 ]);
 
 export const viStatusEnum = pgEnum("vi_status", [
-  "draft", "posted", "matched", "paid", "cancelled",
+  "draft", "submitted", "posted", "matched", "ready_for_ap", "paid", "cancelled",
 ]);
 
 export const payReqStatusEnum = pgEnum("pay_req_status", [
@@ -68,6 +71,11 @@ export const purchaseRequestsTable = pgTable("purchase_requests", {
   rfqId: integer("rfq_id"),
   cancelledAt: timestamp("cancelled_at"),
   createdBy: text("created_by"),
+  // ── Template Engine ──────────────────────────────────────────────────────────
+  categoryKey: text("category_key"),
+  templateId: text("template_id"),
+  templateVersion: text("template_version"),
+  templateSnapshot: jsonb("template_snapshot"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [
@@ -85,6 +93,8 @@ export const purchaseRequestLinesTable = pgTable("purchase_request_lines", {
   unit: text("unit").notNull().default("pcs"),
   estimatedCost: numeric("estimated_cost", { precision: 14, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
+  productCategory: text("product_category"),
+  customFieldValues: jsonb("custom_field_values"),
 }, (t) => [
   index("pr_lines_pr_idx").on(t.prId),
 ]);
@@ -120,6 +130,10 @@ export const vendorQuotationsTable = pgTable("vendor_quotations", {
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
+  incoterm: text("incoterm"),
+  deliveryTerm: text("delivery_term"),
+  availability: text("availability"),
+  documentRefs: jsonb("document_refs"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [
@@ -183,6 +197,9 @@ export const goodsReceiptLinesTable = pgTable("goods_receipt_lines", {
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
   rackId: integer("rack_id").references(() => warehouseRacksTable.id, { onDelete: "set null" }),
   notes: text("notes"),
+  condition: text("condition"),
+  receivingNotes: text("receiving_notes"),
+  attachments: jsonb("attachments"),
 }, (t) => [
   index("gr_lines_gr_idx").on(t.grId),
 ]);
@@ -272,19 +289,42 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   supplierName: text("supplier_name").notNull(),
   poId: integer("po_id").references(() => purchaseDocumentsTable.id, { onDelete: "set null" }),
   grId: integer("gr_id").references(() => goodsReceiptsTable.id, { onDelete: "set null" }),
+  mktPurchaseOrderId: integer("mkt_purchase_order_id").references(() => mktPurchaseOrdersTable.id, { onDelete: "set null" }),
+  mktGoodsReceiptId: integer("mkt_goods_receipt_id").references(() => mktPoGoodsReceiptsTable.id, { onDelete: "set null" }),
   status: viStatusEnum("status").notNull().default("draft"),
   invoiceDate: timestamp("invoice_date").defaultNow().notNull(),
   dueDate: timestamp("due_date"),
   paymentTermDays: integer("payment_term_days").default(30),
+  currency: text("currency").notNull().default("IDR"),
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  withholdingTaxAmount: numeric("withholding_tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxReviewStatus: text("tax_review_status").notNull().default("not_required"),
+  taxReviewReason: text("tax_review_reason"),
+  withholdingReviewStatus: text("withholding_review_status").notNull().default("not_required"),
+  withholdingReviewCompletedBy: text("withholding_review_completed_by"),
+  withholdingReviewCompletedAt: timestamp("withholding_review_completed_at"),
+  withholdingTaxType: text("withholding_tax_type"),
+  taxObject: text("tax_object"),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
   amountPaid: numeric("amount_paid", { precision: 14, scale: 2 }).notNull().default("0"),
   threeWayMatchStatus: text("three_way_match_status").notNull().default("unmatched"),
   matchNotes: text("match_notes"),
   journalEntryId: integer("journal_entry_id"),
   notes: text("notes"),
+  invoiceBreakdown: jsonb("invoice_breakdown").$type<Record<string, unknown> | null>(),
+  attachmentObjectPath: text("attachment_object_path"),
+  attachmentFileName: text("attachment_file_name"),
+  attachmentContentType: text("attachment_content_type"),
+  attachmentSize: integer("attachment_size"),
+  categoryKey: text("category_key"),
+  templateId: text("template_id"),
+  templateVersion: text("template_version"),
+  templateSnapshot: jsonb("template_snapshot").$type<Record<string, unknown> | null>(),
   cancelledAt: timestamp("cancelled_at"),
+  // SAP Invoice Lock fields
+  isLocked: boolean("is_locked").notNull().default(false),
+  sapLockSnapshot: jsonb("sap_lock_snapshot").$type<Record<string, unknown> | null>(),
   createdBy: text("created_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -297,6 +337,7 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
 export const vendorInvoiceLinesTable = pgTable("vendor_invoice_lines", {
   id: serial("id").primaryKey(),
   invoiceId: integer("invoice_id").notNull().references(() => vendorInvoicesTable.id, { onDelete: "cascade" }),
+  mktPurchaseOrderLineId: integer("mkt_purchase_order_line_id").references(() => mktPurchaseOrderLinesTable.id, { onDelete: "set null" }),
   productId: integer("product_id").references(() => productsTable.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   quantity: numeric("quantity", { precision: 12, scale: 3 }).notNull().default("1"),
@@ -304,9 +345,103 @@ export const vendorInvoiceLinesTable = pgTable("vendor_invoice_lines", {
   unitCost: numeric("unit_cost", { precision: 14, scale: 2 }).notNull().default("0"),
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  coaHint: text("coa_hint"),
+  coaAccountId: integer("coa_account_id"),
+  coaResolutionStatus: text("coa_resolution_status").notNull().default("unresolved"),
+  coaConfirmedBy: text("coa_confirmed_by"),
+  coaConfirmedAt: timestamp("coa_confirmed_at"),
+  coaMappingKey: text("coa_mapping_key"),
   notes: text("notes"),
 }, (t) => [
   index("vi_lines_invoice_idx").on(t.invoiceId),
+]);
+
+/**
+ * One row per withholding tax object on an invoice line.  Keeping this
+ * separate from vendor_invoices prevents a header-level PPh value from being
+ * applied to every line of a multi-line invoice.
+ */
+export const vendorInvoiceLineTaxesTable = pgTable("vendor_invoice_line_taxes", {
+  id: serial("id").primaryKey(),
+  invoiceLineId: integer("invoice_line_id").notNull()
+    .references(() => vendorInvoiceLinesTable.id, { onDelete: "cascade" }),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  taxType: text("tax_type").notNull(),
+  taxObject: text("tax_object").notNull(),
+  baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  liabilityAccountId: integer("liability_account_id"),
+  resolutionStatus: text("resolution_status").notNull().default("tax_review"),
+  reviewReason: text("review_reason"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  index("vendor_invoice_line_taxes_line_idx").on(t.invoiceLineId),
+  index("vendor_invoice_line_taxes_company_idx").on(t.companyId),
+]);
+
+/**
+ * Approved, reusable line-to-COA mappings.  Supplier and product are optional
+ * refinements, but company ownership is mandatory.
+ */
+export const vendorInvoiceCoaMappingsTable = pgTable("vendor_invoice_coa_mappings", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  supplierId: integer("supplier_id").references(() => suppliersTable.id, { onDelete: "set null" }),
+  productId: integer("product_id").references(() => productsTable.id, { onDelete: "set null" }),
+  mappingKey: text("mapping_key").notNull(),
+  coaAccountId: integer("coa_account_id").notNull(),
+  status: text("status").notNull().default("approved"),
+  approvedBy: text("approved_by").notNull(),
+  approvedAt: timestamp("approved_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("vendor_invoice_coa_mapping_scope_unique").on(
+    t.companyId, t.supplierId, t.productId, t.mappingKey,
+  ),
+  index("vendor_invoice_coa_mapping_company_idx").on(t.companyId),
+  index("vendor_invoice_coa_mapping_lookup_idx").on(t.companyId, t.supplierId, t.productId, t.mappingKey),
+]);
+
+/**
+ * Withholding evidence/proof lifecycle.  A confirmed tax without a proof row
+ * is deliberately not considered payable/settled.
+ */
+export const vendorWithholdingRecordsTable = pgTable("vendor_withholding_records", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  vendorInvoiceId: integer("vendor_invoice_id").notNull()
+    .references(() => vendorInvoicesTable.id, { onDelete: "restrict" }),
+  invoiceLineId: integer("invoice_line_id").notNull()
+    .references(() => vendorInvoiceLinesTable.id, { onDelete: "restrict" }),
+  lineTaxId: integer("line_tax_id").notNull()
+    .references(() => vendorInvoiceLineTaxesTable.id, { onDelete: "restrict" }),
+  taxType: text("tax_type").notNull(),
+  taxObject: text("tax_object").notNull(),
+  baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  liabilityAccountId: integer("liability_account_id"),
+  status: text("status").notNull().default("proof_pending"),
+  proofObjectPath: text("proof_object_path"),
+  proofReference: text("proof_reference"),
+  proofContentType: text("proof_content_type"),
+  proofIssuedAt: timestamp("proof_issued_at"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  postedAt: timestamp("posted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("vendor_withholding_line_tax_unique").on(t.lineTaxId),
+  index("vendor_withholding_company_idx").on(t.companyId),
+  index("vendor_withholding_invoice_idx").on(t.vendorInvoiceId),
+  index("vendor_withholding_status_idx").on(t.status),
 ]);
 
 // ── Payment Requests ───────────────────────────────────────────────────────────
@@ -323,17 +458,45 @@ export const paymentRequestsTable = pgTable("payment_requests", {
   approvedAt: timestamp("approved_at"),
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   paidAmount: numeric("paid_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  currency: text("currency").notNull().default("IDR"),
   paymentMethod: text("payment_method"),
   bankAccount: text("bank_account"),
   paymentDate: timestamp("payment_date"),
   journalEntryId: integer("journal_entry_id"),
   notes: text("notes"),
+  // Marketplace AP handoff metadata. These fields are additive and do not
+  // authorize, execute, post, or settle a payment.
+  sourceType: text("source_type"),
+  sourceId: integer("source_id"),
+  mktApPreparationId: integer("mkt_ap_preparation_id"),
+  idempotencyKey: text("idempotency_key"),
+  payloadFingerprint: text("payload_fingerprint"),
+  mktLifecycleStatus: text("mkt_lifecycle_status"),
+  mktFinanceReviewedBy: text("mkt_finance_reviewed_by"),
+  mktFinanceReviewedAt: timestamp("mkt_finance_reviewed_at"),
+  mktApprovedBy: text("mkt_approved_by"),
+  mktApprovedAt: timestamp("mkt_approved_at"),
+  mktTreasuryReadyBy: text("mkt_treasury_ready_by"),
+  mktTreasuryReadyAt: timestamp("mkt_treasury_ready_at"),
+  mktExecutionStartedAt: timestamp("mkt_execution_started_at"),
+  mktCompletedAt: timestamp("mkt_completed_at"),
+  mktFailureCode: text("mkt_failure_code"),
+  mktFailureReason: text("mkt_failure_reason"),
+  mktFailureAt: timestamp("mkt_failure_at"),
+  mktFailedBy: text("mkt_failed_by"),
+  mktCancellationIdempotencyKey: text("mkt_cancellation_idempotency_key"),
+  mktCancelledBy: text("mkt_cancelled_by"),
+  mktCancellationReason: text("mkt_cancellation_reason"),
   cancelledAt: timestamp("cancelled_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [
   index("pay_req_supplier_idx").on(t.supplierId),
   index("pay_req_status_idx").on(t.status),
+  index("pay_req_source_idx").on(t.sourceType, t.sourceId),
+  index("pay_req_mkt_ap_idx").on(t.mktApPreparationId),
+  unique("pay_req_idempotency_unique").on(t.idempotencyKey),
+  unique("pay_req_mkt_ap_unique").on(t.mktApPreparationId),
 ]);
 
 export const paymentRequestItemsTable = pgTable("payment_request_items", {
@@ -474,6 +637,9 @@ export type PurchaseReturn = typeof purchaseReturnsTable.$inferSelect;
 export type PurchaseReturnLine = typeof purchaseReturnLinesTable.$inferSelect;
 export type VendorInvoice = typeof vendorInvoicesTable.$inferSelect;
 export type VendorInvoiceLine = typeof vendorInvoiceLinesTable.$inferSelect;
+export type VendorInvoiceLineTax = typeof vendorInvoiceLineTaxesTable.$inferSelect;
+export type VendorInvoiceCoaMapping = typeof vendorInvoiceCoaMappingsTable.$inferSelect;
+export type VendorWithholdingRecord = typeof vendorWithholdingRecordsTable.$inferSelect;
 export type PaymentRequest = typeof paymentRequestsTable.$inferSelect;
 export type PaymentRequestItem = typeof paymentRequestItemsTable.$inferSelect;
 export type LandedCost = typeof landedCostsTable.$inferSelect;

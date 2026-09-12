@@ -7,7 +7,6 @@ import {
   useAddCorrespondenceAttachment,
   useDeleteCorrespondenceAttachment,
   useListCustomers,
-  useListSuppliers,
   useValidateCorrespondence,
   useRejectCorrespondence,
   useArchiveCorrespondence,
@@ -20,6 +19,7 @@ import {
   type CorrespondenceAttachment,
 } from "@workspace/api-client-react";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch-on-hover";
+import { useVendors } from "@/hooks/useVendors";
 import { useState, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -190,7 +190,7 @@ export default function CorrespondencesPage() {
     query: { queryKey: getListCorrespondencesQueryKey(queryParams) },
   });
   const { data: customers = [] } = useListCustomers();
-  const { data: suppliers = [] } = useListSuppliers();
+  const { data: suppliers = [] } = useVendors();
 
   const createCorrespondence = useCreateCorrespondence();
   const updateCorrespondence = useUpdateCorrespondence();

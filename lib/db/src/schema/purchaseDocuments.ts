@@ -1,10 +1,11 @@
-import { pgTable, serial, text, integer, numeric, timestamp, pgEnum, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, numeric, timestamp, pgEnum, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { suppliersTable } from "./suppliers";
 import { productsTable } from "./products";
 import { companiesTable } from "./companies";
 import { warehousesTable } from "./inventory";
+import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
 
 export const purchaseDocKindEnum = pgEnum("purchase_doc_kind", ["rfq", "order"]);
 export const purchaseDocStatusEnum = pgEnum("purchase_doc_status", [
@@ -28,6 +29,7 @@ export const purchasePaymentStatusEnum = pgEnum("purchase_payment_status", [
   "unpaid",
   "partial",
   "paid",
+  "overdue",
 ]);
 
 export const purchaseDocumentsTable = pgTable("purchase_documents", {
@@ -56,14 +58,32 @@ export const purchaseDocumentsTable = pgTable("purchase_documents", {
   billDate: text("bill_date"),
   dueDate: text("due_date"),
   paymentTermDays: integer("payment_term_days").default(30),
+  productCategory: text("product_category"),
+  incoterm: text("incoterm"),
+  deliveryTerm: text("delivery_term"),
+  targetPrice: numeric("target_price", { precision: 14, scale: 2 }),
+  commoditySpecs: jsonb("commodity_specs"),
+  requiredDocuments: jsonb("required_documents"),
+  categoryKey: text("category_key"),
+  templateId: text("template_id"),
+  templateVersion: text("template_version"),
+  templateSnapshot: jsonb("template_snapshot").$type<Record<string, unknown> | null>(),
   cancelledAt: timestamp("cancelled_at"),
+  cancelledBy: text("cancelled_by"),
+  cancelReason: text("cancel_reason"),
+  approvedBy: text("approved_by"),
+  approvedAt: timestamp("approved_at"),
+  editReason: text("edit_reason"),
   createdById: text("created_by_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // Marketplace link — Added Phase 1C (2026-07-02), Group D migration
+  mktPurchaseOrderId: integer("mkt_purchase_order_id").references(() => mktPurchaseOrdersTable.id, { onDelete: "set null" }),
 }, (t) => [
   index("purchase_docs_company_idx").on(t.companyId),
   index("purchase_docs_supplier_idx").on(t.supplierId),
   index("purchase_docs_status_idx").on(t.status, t.kind),
+  index("purchase_documents_mkt_po_idx").on(t.mktPurchaseOrderId),
 ]);
 
 export const purchaseDocumentLinesTable = pgTable("purchase_document_lines", {

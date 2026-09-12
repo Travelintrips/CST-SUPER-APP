@@ -1,5 +1,16 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
+import { ArrowLeft } from "lucide-react";
+import TokenErrorPage, { httpStatusToTokenErrorType, type TokenErrorType } from "@/components/TokenErrorPage";
+
+type PriceItem = {
+  name: string;
+  category: string;
+  subtotal: number;
+  unitPrice: number | null;
+  qty: number | null;
+  unit: string | null;
+};
 
 type QuoteData = {
   token: string;
@@ -7,11 +18,15 @@ type QuoteData = {
   isExpired: boolean;
   isResponded: boolean;
   rfqNumber: string;
-  serviceType: string;
-  origin: string;
-  destination: string;
-  cargoDetail: string;
+  serviceType: string | null;
+  origin: string | null;
+  destination: string | null;
+  cargoDetail: string | null;
   finalCustomerPrice: number | null;
+  displaySubtotal: number | null;
+  displayTax: number | null;
+  displayTotal: number | null;
+  priceItems: PriceItem[];
   etaFinal: string | null;
   termsConditions: string | null;
   quoteNotes: string | null;
@@ -52,6 +67,7 @@ export default function CustomerQuotePage() {
   const { token } = useParams<{ token: string }>();
   const [data, setData] = useState<QuoteData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tokenErrorType, setTokenErrorType] = useState<TokenErrorType | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [action, setAction] = useState<"approve" | "revise" | "reject" | null>(null);
@@ -59,7 +75,7 @@ export default function CustomerQuotePage() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [submitResult, setSubmitResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [submitResult, setSubmitResult] = useState<{ ok: boolean; message: string; action?: "approve" | "revise" | "reject" } | null>(null);
 
   const countdown = useCountdown(data?.validUntil);
 
@@ -68,7 +84,15 @@ export default function CustomerQuotePage() {
     fetch(`/api/customer-quote/${token}`)
       .then(async (r) => {
         const d = await r.json() as QuoteData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) {
+          if ([404, 409, 410, 403].includes(r.status)) {
+            setTokenErrorType(httpStatusToTokenErrorType(r.status));
+            setError(d.error ?? null);
+          } else {
+            setError(d.error ?? "Terjadi kesalahan");
+          }
+          return;
+        }
         setData(d);
       })
       .catch((e: Error) => setError(e.message))
@@ -90,7 +114,7 @@ export default function CustomerQuotePage() {
       });
       const d = await res.json() as { ok?: boolean; message?: string; error?: string };
       if (!res.ok) throw new Error(d.error ?? "Gagal mengirim respons");
-      setSubmitResult({ ok: true, message: d.message ?? "Berhasil" });
+      setSubmitResult({ ok: true, message: d.message ?? "Berhasil", action });
     } catch (e: unknown) {
       setSubmitResult({ ok: false, message: (e as Error).message });
     } finally {
@@ -101,15 +125,17 @@ export default function CustomerQuotePage() {
   };
 
   if (loading) return <Loader />;
+  if (tokenErrorType) return <TokenErrorPage type={tokenErrorType} message={error} />;
   if (error) return <ErrorPage message={error} />;
   if (!data) return <ErrorPage message="Data tidak ditemukan" />;
 
   if (submitResult?.ok) {
-    const emoji = action === "approve" ? "✅" : action === "revise" ? "🔄" : "❌";
+    const doneAction = submitResult.action;
+    const emoji = doneAction === "approve" ? "✅" : doneAction === "revise" ? "🔄" : "❌";
     return (
       <SuccessPage
         emoji={emoji}
-        title={action === "approve" ? "Penawaran Disetujui!" : action === "revise" ? "Revisi Terkirim" : "Penolakan Dicatat"}
+        title={doneAction === "approve" ? "Penawaran Disetujui!" : doneAction === "revise" ? "Revisi Terkirim" : "Penolakan Dicatat"}
         message={submitResult.message}
       />
     );
@@ -134,6 +160,13 @@ export default function CustomerQuotePage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 py-10 px-4">
       <div className="max-w-lg mx-auto space-y-4">
+        <button
+          onClick={() => window.history.back()}
+          className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-sm"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+        </button>
+
         {/* Header */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
           <div className="flex items-center gap-3 mb-1">
@@ -188,25 +221,76 @@ export default function CustomerQuotePage() {
           </div>
         )}
 
-        {/* Detail */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Detail Pengiriman</h2>
-          <div className="space-y-3">
-            <Row label="Layanan" value={data.serviceType} />
-            <Row label="Asal" value={data.origin} />
-            <Row label="Tujuan" value={data.destination} />
-            <Row label="Kargo" value={data.cargoDetail} />
+        {/* Detail — hanya tampil jika ada minimal satu field yang terisi */}
+        {(data.serviceType || data.origin || data.destination || data.cargoDetail) && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Detail Pengiriman</h2>
+            <div className="space-y-3">
+              <Row label="Layanan" value={data.serviceType} />
+              <Row label="Asal" value={data.origin} />
+              <Row label="Tujuan" value={data.destination} />
+              <Row label="Kargo" value={data.cargoDetail} />
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Pricing */}
         <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
           <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">Detail Penawaran</h2>
           <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-slate-600">Harga Final</span>
-              <span className="text-2xl font-bold text-blue-700">{idr(data.finalCustomerPrice)}</span>
-            </div>
+            {/* Line items (if any) */}
+            {data.priceItems && data.priceItems.length > 0 && (
+              <div className="rounded-xl border border-slate-100 overflow-hidden mb-2">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 text-xs">
+                      <th className="text-left px-3 py-2 font-medium">Item / Layanan</th>
+                      <th className="text-right px-3 py-2 font-medium">Qty</th>
+                      <th className="text-right px-3 py-2 font-medium">Satuan</th>
+                      <th className="text-right px-3 py-2 font-medium">Harga Jual</th>
+                      <th className="text-right px-3 py-2 font-medium">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {data.priceItems.map((item, idx) => (
+                      <tr key={idx}>
+                        <td className="px-3 py-2 text-slate-700">{item.name}</td>
+                        <td className="px-3 py-2 text-right text-slate-500">{item.qty ?? "—"}</td>
+                        <td className="px-3 py-2 text-right text-slate-400 text-xs">{item.unit ?? "—"}</td>
+                        <td className="px-3 py-2 text-right text-slate-500">{item.unitPrice != null ? idr(item.unitPrice) : "—"}</td>
+                        <td className="px-3 py-2 text-right text-slate-700 font-medium">{idr(item.subtotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Price breakdown */}
+            {data.displayTax != null && data.displayTotal != null ? (
+              <div className="space-y-2">
+                {data.displaySubtotal != null && (
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-slate-500">Jumlah Pemesanan</span>
+                    <span className="text-slate-700 font-medium">{idr(data.displaySubtotal)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-500">PPN 11%</span>
+                  <span className="text-slate-700 font-medium">{idr(data.displayTax)}</span>
+                </div>
+                <div className="border-t border-slate-200 pt-2 flex justify-between items-center">
+                  <span className="text-sm font-semibold text-slate-700">Total Penawaran</span>
+                  <span className="text-2xl font-bold text-blue-700">{idr(data.displayTotal)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-600">Harga Final</span>
+                <span className="text-2xl font-bold text-blue-700">{idr(data.finalCustomerPrice)}</span>
+              </div>
+            )}
+
             {data.etaFinal && <Row label="Estimasi Waktu" value={data.etaFinal} />}
             {data.validUntil && (
               <Row label="Berlaku Hingga" value={new Date(data.validUntil).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })} />
@@ -301,8 +385,10 @@ export default function CustomerQuotePage() {
               <p className="text-sm text-slate-600 mb-1">Anda akan menyetujui penawaran berikut:</p>
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm mb-4">
                 <p className="font-semibold text-green-800">{data.quotationNumber ?? data.rfqNumber}</p>
-                <p className="text-green-700">{data.origin} → {data.destination}</p>
-                <p className="text-lg font-bold text-green-700 mt-1">{idr(data.finalCustomerPrice)}</p>
+                {(data.origin || data.destination) && (
+                  <p className="text-green-700">{data.origin || "—"} → {data.destination || "—"}</p>
+                )}
+                <p className="text-lg font-bold text-green-700 mt-1">{idr(data.displayTotal ?? data.finalCustomerPrice)}</p>
               </div>
               <p className="text-xs text-slate-400 mb-4">Dengan menekan Setuju, Anda menyetujui penawaran dan syarat yang berlaku.</p>
               <div className="flex gap-2">
@@ -322,18 +408,18 @@ export default function CustomerQuotePage() {
         )}
 
         <p className="text-center text-xs text-slate-400 pb-4">
-          CST Logistics · Pertanyaan? Hubungi tim kami.
+Pertanyaan? Hubungi tim kami.
         </p>
       </div>
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div className="flex justify-between items-start gap-3">
       <span className="text-sm text-slate-500 flex-shrink-0">{label}</span>
-      <span className="text-sm font-medium text-slate-800 text-right">{value}</span>
+      <span className="text-sm font-medium text-slate-800 text-right">{value || "—"}</span>
     </div>
   );
 }

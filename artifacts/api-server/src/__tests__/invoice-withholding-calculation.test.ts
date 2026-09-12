@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import { applyWithholdingCalculations, extractWithholdingRateHints } from "../lib/invoiceWithholdingCalculation.js";
+
+describe("invoice withholding calculation", () => {
+  const sourceText = `
+    Pendapatan Konsesi ( PPH PASAL 23 tarif 15%) 15.834.000 1.741.740 17.575.740
+    Pemakaian Listrik ( PPH PASAL 4 AYAT 2 ( FINAL) tarif 10%) 10.962.796 1.205.908 12.168.704
+    Pemakaian Air ( PPH PASAL 4 AYAT 2 ( FINAL) tarif 10%) 1.756.710 193.238 1.949.948
+  `;
+
+  it("extracts the printed PPh type and rate per component", () => {
+    expect(extractWithholdingRateHints(sourceText)).toEqual([
+      { component: "concession", type: "PPh 23", rate: 15 },
+      { component: "electricity", type: "PPh 4(2)", rate: 10 },
+      { component: "water", type: "PPh 4(2)", rate: 10 },
+    ]);
+  });
+
+  it("calculates PPh from NET and payable from GROSS without using VAT", () => {
+    const result = applyWithholdingCalculations(
+      [
+        { component: "concession", label: "Pendapatan Konsesi", dpp: 15834000, ppn: 1741740, gross: 17575740 },
+        { component: "electricity", label: "Pemakaian Listrik", dpp: 10962796, ppn: 1205908, gross: 12168704 },
+        { component: "water", label: "Pemakaian Air", dpp: 1756710, ppn: 193238, gross: 1949948 },
+      ],
+      { type: null, rate: null, amount: null, base_amount: null, evidence: null },
+      { dpp: 28553506, ppn: 3140886, gross: 31694392 },
+      sourceText,
+    );
+
+    expect(result.components.map((component) => component.withholding_tax_amount)).toEqual([
+      2375100,
+      1096280,
+      175671,
+    ]);
+    expect(result.components.map((component) => component.payable_amount)).toEqual([
+      15200640,
+      11072424,
+      1774277,
+    ]);
+    expect(result.withholding.amount).toBe(3647051);
+    expect(result.totals.withholding_tax_amount).toBe(3647051);
+    expect(result.totals.payable_amount).toBe(28047341);
+    expect(result.withholding.calculation_method).toBe("calculated_from_printed_rate");
+  });
+
+  it("does not calculate when only a PPh label exists without a rate or base", () => {
+    const result = applyWithholdingCalculations(
+      [{ component: "other", label: "Jasa dengan PPh", dpp: null, ppn: null, gross: null }],
+      { type: "PPh 23", rate: null, amount: null, base_amount: null, evidence: "PPh disebutkan" },
+      { dpp: null, ppn: null, gross: null },
+    );
+
+    expect(result.components[0].withholding_tax_amount).toBeNull();
+    expect(result.components[0].payable_amount).toBeNull();
+    expect(result.totals.withholding_tax_amount).toBeNull();
+    expect(result.totals.payable_amount).toBeNull();
+  });
+
+  it("applies the Angkasa Pura vendor policy from DPP", () => {
+    const result = applyWithholdingCalculations(
+      [
+        { component: "concession", label: "DPP Konsesi", dpp: 19622000 },
+        { component: "electricity", label: "Listrik dan Air", dpp: 13737238 },
+      ],
+      {},
+      {},
+      "",
+      "PT Angkasa Pura Indonesia",
+    );
+
+    expect(result.components.map((component) => ({
+      ppn: component.ppn,
+      gross: component.gross,
+      pph: component.withholding_tax_amount,
+      payable: component.payable_amount,
+      type: component.withholding_tax_type,
+      rate: component.withholding_tax_rate,
+    }))).toEqual([
+      {
+        ppn: 2158420,
+        gross: 21780420,
+        pph: 2943300,
+        payable: 18837120,
+        type: "PPh 23",
+        rate: 15,
+      },
+      {
+        ppn: 1511096,
+        gross: 15248334,
+        pph: 1373724,
+        payable: 13874610,
+        type: "PPh 4(2)",
+        rate: 10,
+      },
+    ]);
+    expect(result.totals).toMatchObject({
+      dpp: 33359238,
+      ppn: 3669516,
+      gross: 37028754,
+      withholding_tax_amount: 4317024,
+      payable_amount: 32711730,
+    });
+    expect(result.withholding.calculation_method).toBe("calculated_from_vendor_policy");
+  });
+
+  it("matches the Sport Center Angkasa Pura invoice PPh total", () => {
+    const result = applyWithholdingCalculations(
+      [
+        { component: "concession", label: "Pendapatan Konsesi", dpp: 13000000 },
+        { component: "electricity", label: "Pemakaian Listrik", dpp: 10566250 },
+        { component: "water", label: "Pemakaian Air", dpp: 1638810 },
+      ],
+      {},
+      {},
+      sourceText,
+      "PT Angkasa Pura Indonesia",
+    );
+
+    expect(result.components.map((component) => component.withholding_tax_amount)).toEqual([
+      1950000,
+      1056625,
+      163881,
+    ]);
+    expect(result.withholding.amount).toBe(3170506);
+    expect(result.totals.withholding_tax_amount).toBe(3170506);
+    expect(result.components[0]?.withholding_tax_type).toBe("PPh 23");
+    expect(result.components[1]?.withholding_tax_type).toBe("PPh 4(2)");
+    expect(result.components[2]?.withholding_tax_type).toBe("PPh 4(2)");
+  });
+});

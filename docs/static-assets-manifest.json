@@ -1,0 +1,2187 @@
+{
+  "generatedAt": "2026-08-07T07:21:28.877Z",
+  "bucket": "public-assets",
+  "totalFiles": 242,
+  "totalOriginalBytes": 171208344,
+  "totalOptimizedBytes": 16847198,
+  "assets": [
+    {
+      "artifact": "api-server",
+      "localPath": "/pos-images/b4a05340-1c9b-4d55-8247-7b91f4fc21d5.png",
+      "sourceFile": "artifacts/api-server/public/pos-images/b4a05340-1c9b-4d55-8247-7b91f4fc21d5.png",
+      "storagePath": "portal-assets/static/api-server/pos-images/b4a05340-1c9b-4d55-8247-7b91f4fc21d5.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/api-server/pos-images/b4a05340-1c9b-4d55-8247-7b91f4fc21d5.webp",
+      "originalBytes": 210425,
+      "optimizedBytes": 22094
+    },
+    {
+      "artifact": "api-server",
+      "localPath": "/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.png",
+      "sourceFile": "artifacts/api-server/public/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.png",
+      "storagePath": "portal-assets/static/api-server/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/api-server/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.webp",
+      "originalBytes": 210425,
+      "optimizedBytes": 22094
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/Screenshot_319_1785522354317.jpg",
+      "sourceFile": "artifacts/bizportal/public/Screenshot_319_1785522354317.jpg",
+      "storagePath": "portal-assets/static/bizportal/Screenshot_319_1785522354317.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/Screenshot_319_1785522354317.webp",
+      "originalBytes": 152570,
+      "optimizedBytes": 65604
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/Screenshot_48_1782454788238.jpg",
+      "sourceFile": "artifacts/bizportal/public/Screenshot_48_1782454788238.jpg",
+      "storagePath": "portal-assets/static/bizportal/Screenshot_48_1782454788238.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/Screenshot_48_1782454788238.webp",
+      "originalBytes": 111692,
+      "optimizedBytes": 46874
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/Screenshot_49_1782455835883.jpg",
+      "sourceFile": "artifacts/bizportal/public/Screenshot_49_1782455835883.jpg",
+      "storagePath": "portal-assets/static/bizportal/Screenshot_49_1782455835883.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/Screenshot_49_1782455835883.webp",
+      "originalBytes": 60259,
+      "optimizedBytes": 24454
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/Screenshot_50_1782456605892.jpg",
+      "sourceFile": "artifacts/bizportal/public/Screenshot_50_1782456605892.jpg",
+      "storagePath": "portal-assets/static/bizportal/Screenshot_50_1782456605892.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/Screenshot_50_1782456605892.webp",
+      "originalBytes": 76573,
+      "optimizedBytes": 36042
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/favicon.svg",
+      "sourceFile": "artifacts/bizportal/public/favicon.svg",
+      "storagePath": "portal-assets/static/bizportal/favicon.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/favicon.svg",
+      "originalBytes": 1212,
+      "optimizedBytes": 1114
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/logocst.png",
+      "sourceFile": "artifacts/bizportal/public/logocst.png",
+      "storagePath": "portal-assets/static/bizportal/logocst.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/logocst.webp",
+      "originalBytes": 253491,
+      "optimizedBytes": 22396
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/bubble.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/bubble.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/bubble.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/bubble.webp",
+      "originalBytes": 26099,
+      "optimizedBytes": 10054
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/cheese.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/cheese.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/cheese.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/cheese.webp",
+      "originalBytes": 23088,
+      "optimizedBytes": 8516
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/chocolate.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/chocolate.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/chocolate.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/chocolate.webp",
+      "originalBytes": 25371,
+      "optimizedBytes": 10008
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/cream-cheese.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/cream-cheese.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/cream-cheese.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/cream-cheese.webp",
+      "originalBytes": 22630,
+      "optimizedBytes": 7812
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/matcha.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/matcha.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/matcha.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/matcha.webp",
+      "originalBytes": 24147,
+      "optimizedBytes": 9492
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/premium-chocolate.png",
+      "sourceFile": "artifacts/bizportal/public/menu/premium-chocolate.png",
+      "storagePath": "portal-assets/static/bizportal/menu/premium-chocolate.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/premium-chocolate.webp",
+      "originalBytes": 213581,
+      "optimizedBytes": 23702
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/premium-matcha.png",
+      "sourceFile": "artifacts/bizportal/public/menu/premium-matcha.png",
+      "storagePath": "portal-assets/static/bizportal/menu/premium-matcha.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/premium-matcha.webp",
+      "originalBytes": 209966,
+      "optimizedBytes": 22974
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/premium-thai-tea.png",
+      "sourceFile": "artifacts/bizportal/public/menu/premium-thai-tea.png",
+      "storagePath": "portal-assets/static/bizportal/menu/premium-thai-tea.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/premium-thai-tea.webp",
+      "originalBytes": 210425,
+      "optimizedBytes": 22094
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/menu/thai-tea.jpg",
+      "sourceFile": "artifacts/bizportal/public/menu/thai-tea.jpg",
+      "storagePath": "portal-assets/static/bizportal/menu/thai-tea.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/menu/thai-tea.webp",
+      "originalBytes": 25415,
+      "optimizedBytes": 10084
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/opengraph.jpg",
+      "sourceFile": "artifacts/bizportal/public/opengraph.jpg",
+      "storagePath": "portal-assets/static/bizportal/opengraph.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/opengraph.webp",
+      "originalBytes": 26976,
+      "optimizedBytes": 14062
+    },
+    {
+      "artifact": "bizportal",
+      "localPath": "/thai-tea-cst-logo.jpeg",
+      "sourceFile": "artifacts/bizportal/public/thai-tea-cst-logo.jpeg",
+      "storagePath": "portal-assets/static/bizportal/thai-tea-cst-logo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/bizportal/thai-tea-cst-logo.webp",
+      "originalBytes": 95266,
+      "optimizedBytes": 58846
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/favicon.svg",
+      "sourceFile": "artifacts/customer-portal/public/favicon.svg",
+      "storagePath": "portal-assets/static/customer-portal/favicon.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/favicon.svg",
+      "originalBytes": 1463,
+      "optimizedBytes": 1114
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/air-freight.png",
+      "sourceFile": "artifacts/customer-portal/public/images/air-freight.png",
+      "storagePath": "portal-assets/static/customer-portal/images/air-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/air-freight.webp",
+      "originalBytes": 2097693,
+      "optimizedBytes": 42940
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/banner-trucking-container.png",
+      "sourceFile": "artifacts/customer-portal/public/images/banner-trucking-container.png",
+      "storagePath": "portal-assets/static/customer-portal/images/banner-trucking-container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/banner-trucking-container.webp",
+      "originalBytes": 1830643,
+      "optimizedBytes": 62498
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/customs-document.png",
+      "sourceFile": "artifacts/customer-portal/public/images/customs-document.png",
+      "storagePath": "portal-assets/static/customer-portal/images/customs-document.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs-document.webp",
+      "originalBytes": 1408698,
+      "optimizedBytes": 46826
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/customs-gavel.png",
+      "sourceFile": "artifacts/customer-portal/public/images/customs-gavel.png",
+      "storagePath": "portal-assets/static/customer-portal/images/customs-gavel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs-gavel.webp",
+      "originalBytes": 2062741,
+      "optimizedBytes": 39658
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/customs.png",
+      "sourceFile": "artifacts/customer-portal/public/images/customs.png",
+      "storagePath": "portal-assets/static/customer-portal/images/customs.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs.webp",
+      "originalBytes": 2042225,
+      "optimizedBytes": 85162
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/gambar-baru.png",
+      "sourceFile": "artifacts/customer-portal/public/images/gambar-baru.png",
+      "storagePath": "portal-assets/static/customer-portal/images/gambar-baru.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/gambar-baru.webp",
+      "originalBytes": 8626056,
+      "optimizedBytes": 304654
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/hero-bg-lama.png",
+      "sourceFile": "artifacts/customer-portal/public/images/hero-bg-lama.png",
+      "storagePath": "portal-assets/static/customer-portal/images/hero-bg-lama.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg-lama.webp",
+      "originalBytes": 2683054,
+      "optimizedBytes": 211582
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/hero-bg.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/hero-bg.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/hero-bg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp",
+      "originalBytes": 313742,
+      "optimizedBytes": 206020
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/hero-bg.png",
+      "sourceFile": "artifacts/customer-portal/public/images/hero-bg.png",
+      "storagePath": "portal-assets/static/customer-portal/images/hero-bg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp",
+      "originalBytes": 8626056,
+      "optimizedBytes": 304654
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/hero-bg.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/hero-bg.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/hero-bg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp",
+      "originalBytes": 307172,
+      "optimizedBytes": 256124
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/logistics-routes.svg",
+      "sourceFile": "artifacts/customer-portal/public/images/logistics-routes.svg",
+      "storagePath": "portal-assets/static/customer-portal/images/logistics-routes.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logistics-routes.svg",
+      "originalBytes": 7685,
+      "optimizedBytes": 6346
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/logo-baru.png",
+      "sourceFile": "artifacts/customer-portal/public/images/logo-baru.png",
+      "storagePath": "portal-assets/static/customer-portal/images/logo-baru.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+      "originalBytes": 2995520,
+      "optimizedBytes": 125134
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/logo.png",
+      "sourceFile": "artifacts/customer-portal/public/images/logo.png",
+      "storagePath": "portal-assets/static/customer-portal/images/logo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.webp",
+      "originalBytes": 253491,
+      "optimizedBytes": 22396
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/og-cover.png",
+      "sourceFile": "artifacts/customer-portal/public/images/og-cover.png",
+      "storagePath": "portal-assets/static/customer-portal/images/og-cover.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/og-cover.webp",
+      "originalBytes": 1155789,
+      "optimizedBytes": 68024
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/port-operations.png",
+      "sourceFile": "artifacts/customer-portal/public/images/port-operations.png",
+      "storagePath": "portal-assets/static/customer-portal/images/port-operations.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.webp",
+      "originalBytes": 2528818,
+      "optimizedBytes": 176484
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/port-operations.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/port-operations.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/port-operations.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.webp",
+      "originalBytes": 157508,
+      "optimizedBytes": 157780
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/product-hero-brand.png",
+      "sourceFile": "artifacts/customer-portal/public/images/product-hero-brand.png",
+      "storagePath": "portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "originalBytes": 2617438,
+      "optimizedBytes": 180994
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/product-hero-brand.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/product-hero-brand.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "originalBytes": 163148,
+      "optimizedBytes": 163752
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/asuransi-kargo.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/asuransi-kargo.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/asuransi-kargo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/asuransi-kargo.webp",
+      "originalBytes": 1676394,
+      "optimizedBytes": 53090
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/asuransi-kargo.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/asuransi-kargo.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/asuransi-kargo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/asuransi-kargo.webp",
+      "originalBytes": 43564,
+      "optimizedBytes": 44822
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/batubara-coal.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/batubara-coal.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "originalBytes": 270090,
+      "optimizedBytes": 27948
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/batubara-coal.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/batubara-coal.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "originalBytes": 23646,
+      "optimizedBytes": 24914
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/beras-rice.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/beras-rice.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "originalBytes": 393093,
+      "optimizedBytes": 41982
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/beras-rice.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/beras-rice.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "originalBytes": 33240,
+      "optimizedBytes": 34178
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/biaya-storage.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/biaya-storage.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/biaya-storage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/biaya-storage.webp",
+      "originalBytes": 2809127,
+      "optimizedBytes": 223746
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/biaya-storage.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/biaya-storage.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/biaya-storage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/biaya-storage.webp",
+      "originalBytes": 185044,
+      "optimizedBytes": 194000
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/container.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/container.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/container.webp",
+      "originalBytes": 2606123,
+      "optimizedBytes": 190598
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/container.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/container.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/container.webp",
+      "originalBytes": 156242,
+      "optimizedBytes": 161966
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/customs-clearance.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/customs-clearance.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/customs-clearance.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/customs-clearance.webp",
+      "originalBytes": 1935938,
+      "optimizedBytes": 63486
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/customs-clearance.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/customs-clearance.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/customs-clearance.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/customs-clearance.webp",
+      "originalBytes": 51298,
+      "optimizedBytes": 52628
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/emkl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/emkl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/emkl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/emkl.webp",
+      "originalBytes": 2417469,
+      "optimizedBytes": 137374
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/emkl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/emkl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/emkl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/emkl.webp",
+      "originalBytes": 109724,
+      "optimizedBytes": 111834
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-laut-fcl-20ft.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-laut-fcl-20ft.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-laut-fcl-20ft.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-laut-fcl-20ft.webp",
+      "originalBytes": 2397305,
+      "optimizedBytes": 143924
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-laut-fcl-20ft.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-laut-fcl-20ft.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-laut-fcl-20ft.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-laut-fcl-20ft.webp",
+      "originalBytes": 114872,
+      "optimizedBytes": 119090
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-laut-lcl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-laut-lcl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-laut-lcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-laut-lcl.webp",
+      "originalBytes": 2049466,
+      "optimizedBytes": 108636
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-laut-lcl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-laut-lcl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-laut-lcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-laut-lcl.webp",
+      "originalBytes": 89864,
+      "optimizedBytes": 93344
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-udara.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-udara.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-udara.webp",
+      "originalBytes": 2118312,
+      "optimizedBytes": 129108
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/freight-udara.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/freight-udara.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/freight-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/freight-udara.webp",
+      "originalBytes": 105210,
+      "optimizedBytes": 108566
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/green-bean-arabica-grade1.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/green-bean-arabica-grade1.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/green-bean-arabica-grade1.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica-grade1.webp",
+      "originalBytes": 2397759,
+      "optimizedBytes": 73882
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/green-bean-arabica-grade1.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/green-bean-arabica-grade1.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/green-bean-arabica-grade1.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica-grade1.webp",
+      "originalBytes": 60252,
+      "optimizedBytes": 62800
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/green-bean-arabica.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/green-bean-arabica.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "originalBytes": 623182,
+      "optimizedBytes": 39980
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/green-bean-arabica.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/green-bean-arabica.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "originalBytes": 33774,
+      "optimizedBytes": 35572
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling-cargo-laut.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling-cargo-laut.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling-cargo-laut.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling-cargo-laut.webp",
+      "originalBytes": 2527646,
+      "optimizedBytes": 173706
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling-cargo-laut.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling-cargo-laut.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling-cargo-laut.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling-cargo-laut.webp",
+      "originalBytes": 143730,
+      "optimizedBytes": 150164
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling-cargo-udara.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling-cargo-udara.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling-cargo-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling-cargo-udara.webp",
+      "originalBytes": 2487804,
+      "optimizedBytes": 174104
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling-cargo-udara.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling-cargo-udara.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling-cargo-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling-cargo-udara.webp",
+      "originalBytes": 143536,
+      "optimizedBytes": 149408
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling.webp",
+      "originalBytes": 2721734,
+      "optimizedBytes": 199460
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/handling.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/handling.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/handling.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/handling.webp",
+      "originalBytes": 163550,
+      "optimizedBytes": 167762
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/kursi-kantor-ergonomik.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/kursi-kantor-ergonomik.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomik.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomik.webp",
+      "originalBytes": 721511,
+      "optimizedBytes": 53424
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/kursi-kantor-ergonomik.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/kursi-kantor-ergonomik.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomik.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomik.webp",
+      "originalBytes": 44558,
+      "optimizedBytes": 46016
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/kursi-kantor-ergonomis.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/kursi-kantor-ergonomis.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "originalBytes": 661575,
+      "optimizedBytes": 32410
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/kursi-kantor-ergonomis.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/kursi-kantor-ergonomis.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "originalBytes": 27478,
+      "optimizedBytes": 28658
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/meja-kerja-standing-desk.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/meja-kerja-standing-desk.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "originalBytes": 67784,
+      "optimizedBytes": 4050
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/meja-kerja-standing-desk.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/meja-kerja-standing-desk.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "originalBytes": 3284,
+      "optimizedBytes": 3426
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/meja-standing-desk.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/meja-standing-desk.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/meja-standing-desk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/meja-standing-desk.webp",
+      "originalBytes": 599540,
+      "optimizedBytes": 15366
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/meja-standing-desk.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/meja-standing-desk.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/meja-standing-desk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/meja-standing-desk.webp",
+      "originalBytes": 12930,
+      "optimizedBytes": 13340
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/nikel.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/nikel.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/nikel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/nikel.webp",
+      "originalBytes": 24846,
+      "optimizedBytes": 22838
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/nikel.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/nikel.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/nikel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/nikel.webp",
+      "originalBytes": 19326,
+      "optimizedBytes": 20200
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/ocean-freight.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/ocean-freight.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/ocean-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/ocean-freight.webp",
+      "originalBytes": 2261809,
+      "optimizedBytes": 161952
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/ocean-freight.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/ocean-freight.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/ocean-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/ocean-freight.webp",
+      "originalBytes": 131910,
+      "optimizedBytes": 136904
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/pengurusan-dokumen-ppjk.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/pengurusan-dokumen-ppjk.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/pengurusan-dokumen-ppjk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/pengurusan-dokumen-ppjk.webp",
+      "originalBytes": 1977558,
+      "optimizedBytes": 62588
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/pengurusan-dokumen-ppjk.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/pengurusan-dokumen-ppjk.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/pengurusan-dokumen-ppjk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/pengurusan-dokumen-ppjk.webp",
+      "originalBytes": 51642,
+      "optimizedBytes": 52964
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/port-charges.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/port-charges.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/port-charges.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/port-charges.webp",
+      "originalBytes": 2552184,
+      "optimizedBytes": 216640
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/port-charges.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/port-charges.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/port-charges.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/port-charges.webp",
+      "originalBytes": 174442,
+      "optimizedBytes": 180484
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/printer-hp-laserjet.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/printer-hp-laserjet.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "originalBytes": 21850,
+      "optimizedBytes": 1710
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/printer-hp-laserjet.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/printer-hp-laserjet.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "originalBytes": 1438,
+      "optimizedBytes": 1474
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/samsung-galaxy-a54.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/samsung-galaxy-a54.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "originalBytes": 176048,
+      "optimizedBytes": 7982
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/samsung-galaxy-a54.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/samsung-galaxy-a54.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "originalBytes": 6398,
+      "optimizedBytes": 6676
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/sawit-palm-oil.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/sawit-palm-oil.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "originalBytes": 466804,
+      "optimizedBytes": 45844
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/sawit-palm-oil.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/sawit-palm-oil.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "originalBytes": 38956,
+      "optimizedBytes": 40580
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/storage-demurrage.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/storage-demurrage.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/storage-demurrage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/storage-demurrage.webp",
+      "originalBytes": 2738147,
+      "optimizedBytes": 205202
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/storage-demurrage.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/storage-demurrage.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/storage-demurrage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/storage-demurrage.webp",
+      "originalBytes": 170946,
+      "optimizedBytes": 178526
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/trucking.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/trucking.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/trucking.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/trucking.webp",
+      "originalBytes": 1964516,
+      "optimizedBytes": 81274
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/trucking.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/trucking.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/trucking.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/trucking.webp",
+      "originalBytes": 64774,
+      "optimizedBytes": 66058
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/urus-dokumen-pabean.png",
+      "sourceFile": "artifacts/customer-portal/public/images/products/urus-dokumen-pabean.png",
+      "storagePath": "portal-assets/static/customer-portal/images/products/urus-dokumen-pabean.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/urus-dokumen-pabean.webp",
+      "originalBytes": 1719637,
+      "optimizedBytes": 166160
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/products/urus-dokumen-pabean.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/products/urus-dokumen-pabean.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/products/urus-dokumen-pabean.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/urus-dokumen-pabean.webp",
+      "originalBytes": 145432,
+      "optimizedBytes": 151310
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/sea-freight.png",
+      "sourceFile": "artifacts/customer-portal/public/images/sea-freight.png",
+      "storagePath": "portal-assets/static/customer-portal/images/sea-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/sea-freight.webp",
+      "originalBytes": 2712632,
+      "optimizedBytes": 163046
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/sea-freight.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/sea-freight.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/sea-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/sea-freight.webp",
+      "originalBytes": 141722,
+      "optimizedBytes": 137722
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/air-freight.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/air-freight.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "originalBytes": 1862043,
+      "optimizedBytes": 64334
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/air-freight.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/air-freight.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "originalBytes": 51414,
+      "optimizedBytes": 52844
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/asuransi-kargo.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/asuransi-kargo.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "originalBytes": 2370629,
+      "optimizedBytes": 90680
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/asuransi-kargo.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/asuransi-kargo.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "originalBytes": 73438,
+      "optimizedBytes": 75260
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/biaya-storage.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/biaya-storage.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "originalBytes": 2729230,
+      "optimizedBytes": 193556
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/biaya-storage.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/biaya-storage.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "originalBytes": 161200,
+      "optimizedBytes": 165798
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/customs-clearance.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/customs-clearance.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "originalBytes": 2150212,
+      "optimizedBytes": 79580
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/customs-clearance.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/customs-clearance.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "originalBytes": 65628,
+      "optimizedBytes": 68556
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/emkl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/emkl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/emkl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/emkl.webp",
+      "originalBytes": 3023692,
+      "optimizedBytes": 230404
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/emkl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/emkl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/emkl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/emkl.webp",
+      "originalBytes": 188708,
+      "optimizedBytes": 195204
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-laut-fcl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-laut-fcl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "originalBytes": 2015157,
+      "optimizedBytes": 121222
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-laut-fcl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-laut-fcl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "originalBytes": 101752,
+      "optimizedBytes": 105190
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-laut-lcl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-laut-lcl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "originalBytes": 2553770,
+      "optimizedBytes": 169116
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-laut-lcl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-laut-lcl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "originalBytes": 139680,
+      "optimizedBytes": 145532
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-udara.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-udara.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "originalBytes": 2292665,
+      "optimizedBytes": 94520
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/freight-udara.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/freight-udara.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "originalBytes": 75740,
+      "optimizedBytes": 77010
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/handling-cargo-laut.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/handling-cargo-laut.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "originalBytes": 2365026,
+      "optimizedBytes": 137202
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/handling-cargo-laut.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/handling-cargo-laut.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "originalBytes": 113680,
+      "optimizedBytes": 118618
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/handling-cargo-udara.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/handling-cargo-udara.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "originalBytes": 2679472,
+      "optimizedBytes": 190214
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/handling-cargo-udara.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/handling-cargo-udara.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "originalBytes": 160332,
+      "optimizedBytes": 164884
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/ocean-freight.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/ocean-freight.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "originalBytes": 2529880,
+      "optimizedBytes": 170294
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/ocean-freight.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/ocean-freight.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "originalBytes": 137312,
+      "optimizedBytes": 139946
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/pengurusan-dokumen-ppjk.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/pengurusan-dokumen-ppjk.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "originalBytes": 2033245,
+      "optimizedBytes": 67056
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/pengurusan-dokumen-ppjk.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/pengurusan-dokumen-ppjk.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "originalBytes": 54718,
+      "optimizedBytes": 56854
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/port-charges.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/port-charges.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "originalBytes": 2578409,
+      "optimizedBytes": 177202
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/port-charges.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/port-charges.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "originalBytes": 141410,
+      "optimizedBytes": 147580
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/storage-demurrage.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/storage-demurrage.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "originalBytes": 2130975,
+      "optimizedBytes": 94482
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/storage-demurrage.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/storage-demurrage.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "originalBytes": 74048,
+      "optimizedBytes": 76660
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/trucking-container.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/trucking-container.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "originalBytes": 2307016,
+      "optimizedBytes": 99104
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/trucking-container.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/trucking-container.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "originalBytes": 80516,
+      "optimizedBytes": 83612
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/urus-dokumen-pabean.png",
+      "sourceFile": "artifacts/customer-portal/public/images/services/urus-dokumen-pabean.png",
+      "storagePath": "portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "originalBytes": 2305590,
+      "optimizedBytes": 70306
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/services/urus-dokumen-pabean.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/services/urus-dokumen-pabean.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "originalBytes": 57512,
+      "optimizedBytes": 59740
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/box-kecil-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/box-kecil-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "originalBytes": 920922,
+      "optimizedBytes": 47540
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/box-kecil-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/box-kecil-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "originalBytes": 40524,
+      "optimizedBytes": 44048
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/box-kecil.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/box-kecil.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "originalBytes": 72958,
+      "optimizedBytes": 22480
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/box-kecil.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/box-kecil.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "originalBytes": 219098,
+      "optimizedBytes": 48418
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/box-kecil.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/box-kecil.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil.webp",
+      "originalBytes": 43242,
+      "optimizedBytes": 46862
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "originalBytes": 674913,
+      "optimizedBytes": 32402
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "originalBytes": 27590,
+      "optimizedBytes": 29924
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long-nobg.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long-nobg.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long-nobg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long-nobg.webp",
+      "originalBytes": 293686,
+      "optimizedBytes": 41918
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long-nobg.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long-nobg.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long-nobg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long-nobg.webp",
+      "originalBytes": 35966,
+      "optimizedBytes": 38242
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "originalBytes": 81037,
+      "optimizedBytes": 26656
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "originalBytes": 323565,
+      "optimizedBytes": 56960
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/cdd-long.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/cdd-long.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long.webp",
+      "originalBytes": 51938,
+      "optimizedBytes": 53346
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/double-engkel-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/double-engkel-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "originalBytes": 726834,
+      "optimizedBytes": 37184
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/double-engkel-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/double-engkel-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "originalBytes": 31964,
+      "optimizedBytes": 34346
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/double-engkel.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/double-engkel.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "originalBytes": 76763,
+      "optimizedBytes": 24952
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/double-engkel.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/double-engkel.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "originalBytes": 267566,
+      "optimizedBytes": 56452
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/double-engkel.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/double-engkel.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel.webp",
+      "originalBytes": 49946,
+      "optimizedBytes": 54122
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/engkel-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/engkel-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "originalBytes": 788936,
+      "optimizedBytes": 44016
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/engkel-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/engkel-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "originalBytes": 37458,
+      "optimizedBytes": 40578
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/engkel.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/engkel.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "originalBytes": 77323,
+      "optimizedBytes": 25182
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/engkel.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/engkel.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "originalBytes": 283211,
+      "optimizedBytes": 55434
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/engkel.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/engkel.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel.webp",
+      "originalBytes": 48424,
+      "optimizedBytes": 52452
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/fuso-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/fuso-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "originalBytes": 909006,
+      "optimizedBytes": 43754
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/fuso-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/fuso-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "originalBytes": 37362,
+      "optimizedBytes": 40628
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/fuso.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/fuso.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "originalBytes": 80848,
+      "optimizedBytes": 29258
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/fuso.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/fuso.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "originalBytes": 290265,
+      "optimizedBytes": 62466
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/fuso.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/fuso.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso.webp",
+      "originalBytes": 57184,
+      "optimizedBytes": 58662
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/box-kecil-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/box-kecil-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/box-kecil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/box-kecil-hd.webp",
+      "originalBytes": 872210,
+      "optimizedBytes": 39634
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/box-kecil-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/box-kecil-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/box-kecil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/box-kecil-hd.webp",
+      "originalBytes": 33624,
+      "optimizedBytes": 36522
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/double-engkel-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/double-engkel-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/double-engkel-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/double-engkel-hd.webp",
+      "originalBytes": 819221,
+      "optimizedBytes": 48092
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/double-engkel-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/double-engkel-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/double-engkel-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/double-engkel-hd.webp",
+      "originalBytes": 40860,
+      "optimizedBytes": 44264
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/engkel-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/engkel-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/engkel-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/engkel-hd.webp",
+      "originalBytes": 689527,
+      "optimizedBytes": 41362
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/engkel-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/engkel-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/engkel-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/engkel-hd.webp",
+      "originalBytes": 35868,
+      "optimizedBytes": 38690
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/fuso-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/fuso-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/fuso-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/fuso-hd.webp",
+      "originalBytes": 933831,
+      "optimizedBytes": 46780
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/fuso-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/fuso-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/fuso-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/fuso-hd.webp",
+      "originalBytes": 39722,
+      "optimizedBytes": 43252
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/mobil-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/mobil-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/mobil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/mobil-hd.webp",
+      "originalBytes": 963693,
+      "optimizedBytes": 41462
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/mobil-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/mobil-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/mobil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/mobil-hd.webp",
+      "originalBytes": 35986,
+      "optimizedBytes": 38764
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/mobil-xl-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/mobil-xl-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/mobil-xl-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/mobil-xl-hd.webp",
+      "originalBytes": 1442153,
+      "optimizedBytes": 45232
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/mobil-xl-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/mobil-xl-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/mobil-xl-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/mobil-xl-hd.webp",
+      "originalBytes": 39632,
+      "optimizedBytes": 41946
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/pickup-kecil-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/pickup-kecil-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/pickup-kecil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/pickup-kecil-hd.webp",
+      "originalBytes": 644636,
+      "optimizedBytes": 37780
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/pickup-kecil-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/pickup-kecil-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/pickup-kecil-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/pickup-kecil-hd.webp",
+      "originalBytes": 33200,
+      "optimizedBytes": 35464
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/tronton-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/tronton-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/tronton-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/tronton-hd.webp",
+      "originalBytes": 959427,
+      "optimizedBytes": 55008
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/tronton-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/tronton-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/tronton-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/tronton-hd.webp",
+      "originalBytes": 47904,
+      "optimizedBytes": 51156
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/tronton-trailer-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/tronton-trailer-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/tronton-trailer-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/tronton-trailer-hd.webp",
+      "originalBytes": 1112407,
+      "optimizedBytes": 54716
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/tronton-trailer-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/tronton-trailer-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/tronton-trailer-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/tronton-trailer-hd.webp",
+      "originalBytes": 47204,
+      "optimizedBytes": 49576
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/van-hd.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/van-hd.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/van-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/van-hd.webp",
+      "originalBytes": 840058,
+      "optimizedBytes": 37408
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/hd/van-hd.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/hd/van-hd.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/hd/van-hd.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/hd/van-hd.webp",
+      "originalBytes": 31860,
+      "optimizedBytes": 35074
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "originalBytes": 874090,
+      "optimizedBytes": 41688
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "originalBytes": 35210,
+      "optimizedBytes": 38184
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-xl-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-xl-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "originalBytes": 824928,
+      "optimizedBytes": 41476
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-xl-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-xl-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "originalBytes": 35814,
+      "optimizedBytes": 38602
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-xl.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-xl.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "originalBytes": 85500,
+      "optimizedBytes": 32552
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-xl.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-xl.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "originalBytes": 325711,
+      "optimizedBytes": 40068
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil-xl.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil-xl.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl.webp",
+      "originalBytes": 34932,
+      "optimizedBytes": 36424
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "originalBytes": 80863,
+      "optimizedBytes": 30680
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "originalBytes": 324387,
+      "optimizedBytes": 48354
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/mobil.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/mobil.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil.webp",
+      "originalBytes": 43218,
+      "optimizedBytes": 45070
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/pickup-kecil-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/pickup-kecil-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "originalBytes": 786150,
+      "optimizedBytes": 38936
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/pickup-kecil-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/pickup-kecil-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "originalBytes": 33076,
+      "optimizedBytes": 36430
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/pickup-kecil.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/pickup-kecil.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "originalBytes": 72796,
+      "optimizedBytes": 25032
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/pickup-kecil.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/pickup-kecil.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "originalBytes": 217877,
+      "optimizedBytes": 52762
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/pickup-kecil.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/pickup-kecil.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil.webp",
+      "originalBytes": 47008,
+      "optimizedBytes": 50492
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/tronton-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/tronton-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "originalBytes": 745652,
+      "optimizedBytes": 42480
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/tronton-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/tronton-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "originalBytes": 36290,
+      "optimizedBytes": 39602
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/tronton.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/tronton.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "originalBytes": 78132,
+      "optimizedBytes": 22690
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/tronton.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/tronton.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "originalBytes": 275555,
+      "optimizedBytes": 51358
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/tronton.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/tronton.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton.webp",
+      "originalBytes": 44186,
+      "optimizedBytes": 48410
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-reefer-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-reefer-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "originalBytes": 776991,
+      "optimizedBytes": 39248
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-reefer-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-reefer-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "originalBytes": 33892,
+      "optimizedBytes": 36740
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-reefer.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-reefer.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "originalBytes": 82252,
+      "optimizedBytes": 30422
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-reefer.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-reefer.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "originalBytes": 346039,
+      "optimizedBytes": 49088
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-reefer.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-reefer.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer.webp",
+      "originalBytes": 43994,
+      "optimizedBytes": 45434
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-trailer-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-trailer-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "originalBytes": 865151,
+      "optimizedBytes": 44146
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-trailer-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-trailer-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "originalBytes": 37808,
+      "optimizedBytes": 41102
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-trailer.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-trailer.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "originalBytes": 74779,
+      "optimizedBytes": 21272
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-trailer.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-trailer.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "originalBytes": 208488,
+      "optimizedBytes": 41616
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/truk-trailer.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/truk-trailer.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer.webp",
+      "originalBytes": 37262,
+      "optimizedBytes": 39744
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/van-ai.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/van-ai.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "originalBytes": 821561,
+      "optimizedBytes": 37592
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/van-ai.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/van-ai.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "originalBytes": 31890,
+      "optimizedBytes": 35010
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/van.jpg",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/van.jpg",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "originalBytes": 78740,
+      "optimizedBytes": 22756
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/van.png",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/van.png",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "originalBytes": 226739,
+      "optimizedBytes": 58632
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/vehicles/van.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/vehicles/van.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van.webp",
+      "originalBytes": 52002,
+      "optimizedBytes": 55604
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/warehouse.png",
+      "sourceFile": "artifacts/customer-portal/public/images/warehouse.png",
+      "storagePath": "portal-assets/static/customer-portal/images/warehouse.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/warehouse.webp",
+      "originalBytes": 2779327,
+      "optimizedBytes": 226152
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/warehouse.webp",
+      "sourceFile": "artifacts/customer-portal/public/images/warehouse.webp",
+      "storagePath": "portal-assets/static/customer-portal/images/warehouse.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/warehouse.webp",
+      "originalBytes": 202168,
+      "optimizedBytes": 204040
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/images/world-map-logistics.svg",
+      "sourceFile": "artifacts/customer-portal/public/images/world-map-logistics.svg",
+      "storagePath": "portal-assets/static/customer-portal/images/world-map-logistics.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/world-map-logistics.svg",
+      "originalBytes": 10481,
+      "optimizedBytes": 8888
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/boba-thai-tea.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/boba-thai-tea.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/boba-thai-tea.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/boba-thai-tea.webp",
+      "originalBytes": 772953,
+      "optimizedBytes": 23592
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/bubble.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/bubble.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/bubble.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/bubble.webp",
+      "originalBytes": 26099,
+      "optimizedBytes": 10054
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/cheese.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/cheese.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/cheese.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/cheese.webp",
+      "originalBytes": 23088,
+      "optimizedBytes": 8516
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/chocolate.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/chocolate.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/chocolate.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/chocolate.webp",
+      "originalBytes": 25371,
+      "optimizedBytes": 10008
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/cream-cheese.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/cream-cheese.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/cream-cheese.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/cream-cheese.webp",
+      "originalBytes": 22630,
+      "optimizedBytes": 7812
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/matcha.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/matcha.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/matcha.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/matcha.webp",
+      "originalBytes": 24147,
+      "optimizedBytes": 9492
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/milk-tea-original.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/milk-tea-original.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/milk-tea-original.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/milk-tea-original.webp",
+      "originalBytes": 766687,
+      "optimizedBytes": 17116
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/premium-chocolate.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/premium-chocolate.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/premium-chocolate.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/premium-chocolate.webp",
+      "originalBytes": 213581,
+      "optimizedBytes": 23702
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/premium-matcha.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/premium-matcha.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/premium-matcha.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/premium-matcha.webp",
+      "originalBytes": 209966,
+      "optimizedBytes": 22974
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/premium-thai-tea.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/premium-thai-tea.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/premium-thai-tea.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/premium-thai-tea.webp",
+      "originalBytes": 210425,
+      "optimizedBytes": 22094
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/roti-bakar.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/roti-bakar.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/roti-bakar.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/roti-bakar.webp",
+      "originalBytes": 1200029,
+      "optimizedBytes": 76262
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-brown-sugar.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-brown-sugar.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-brown-sugar.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-brown-sugar.webp",
+      "originalBytes": 1008916,
+      "optimizedBytes": 41094
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-cheese.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-cheese.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-cheese.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-cheese.webp",
+      "originalBytes": 899727,
+      "optimizedBytes": 27442
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-large.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-large.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-large.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-large.webp",
+      "originalBytes": 963088,
+      "optimizedBytes": 29350
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-matcha.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-matcha.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-matcha.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-matcha.webp",
+      "originalBytes": 881669,
+      "optimizedBytes": 33538
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-original.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-original.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-original.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-original.webp",
+      "originalBytes": 1030733,
+      "optimizedBytes": 44412
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-pandan.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-pandan.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-pandan.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-pandan.webp",
+      "originalBytes": 1035131,
+      "optimizedBytes": 33108
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea-taro.png",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea-taro.png",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea-taro.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea-taro.webp",
+      "originalBytes": 822192,
+      "optimizedBytes": 24842
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/menu/thai-tea.jpg",
+      "sourceFile": "artifacts/customer-portal/public/menu/thai-tea.jpg",
+      "storagePath": "portal-assets/static/customer-portal/menu/thai-tea.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/menu/thai-tea.webp",
+      "originalBytes": 25415,
+      "optimizedBytes": 10084
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/opengraph.jpg",
+      "sourceFile": "artifacts/customer-portal/public/opengraph.jpg",
+      "storagePath": "portal-assets/static/customer-portal/opengraph.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/opengraph.webp",
+      "originalBytes": 125304,
+      "optimizedBytes": 82476
+    },
+    {
+      "artifact": "customer-portal",
+      "localPath": "/thai-tea-cst-logo.jpeg",
+      "sourceFile": "artifacts/customer-portal/public/thai-tea-cst-logo.jpeg",
+      "storagePath": "portal-assets/static/customer-portal/thai-tea-cst-logo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/thai-tea-cst-logo.webp",
+      "originalBytes": 95266,
+      "optimizedBytes": 58846
+    },
+    {
+      "artifact": "customer-poster",
+      "localPath": "/images/vehicles/pickup-kecil.jpg",
+      "sourceFile": "artifacts/customer-poster/public/images/vehicles/pickup-kecil.jpg",
+      "storagePath": "portal-assets/static/customer-poster/images/vehicles/pickup-kecil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-poster/images/vehicles/pickup-kecil.webp",
+      "originalBytes": 72796,
+      "optimizedBytes": 25032
+    },
+    {
+      "artifact": "logistic-order",
+      "localPath": "/favicon.svg",
+      "sourceFile": "artifacts/logistic-order/public/favicon.svg",
+      "storagePath": "portal-assets/static/logistic-order/favicon.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/logistic-order/favicon.svg",
+      "originalBytes": 1212,
+      "optimizedBytes": 1114
+    },
+    {
+      "artifact": "logistic-order",
+      "localPath": "/logocst-new.jpg",
+      "sourceFile": "artifacts/logistic-order/public/logocst-new.jpg",
+      "storagePath": "portal-assets/static/logistic-order/logocst-new.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst-new.webp",
+      "originalBytes": 253491,
+      "optimizedBytes": 22396
+    },
+    {
+      "artifact": "logistic-order",
+      "localPath": "/logocst.jpg",
+      "sourceFile": "artifacts/logistic-order/public/logocst.jpg",
+      "storagePath": "portal-assets/static/logistic-order/logocst.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst.webp",
+      "originalBytes": 253491,
+      "optimizedBytes": 22396
+    },
+    {
+      "artifact": "logistic-order",
+      "localPath": "/logocst.png",
+      "sourceFile": "artifacts/logistic-order/public/logocst.png",
+      "storagePath": "portal-assets/static/logistic-order/logocst.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst.webp",
+      "originalBytes": 253491,
+      "optimizedBytes": 22396
+    },
+    {
+      "artifact": "logistic-order",
+      "localPath": "/opengraph.jpg",
+      "sourceFile": "artifacts/logistic-order/public/opengraph.jpg",
+      "storagePath": "portal-assets/static/logistic-order/opengraph.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/logistic-order/opengraph.webp",
+      "originalBytes": 15640,
+      "optimizedBytes": 7896
+    }
+  ]
+}

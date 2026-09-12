@@ -4,6 +4,8 @@ import { useGetPortalCompany } from "@workspace/api-client-react";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { useEditMode } from "@/contexts/EditModeContext";
 import { resolveImageUrl } from "@/lib/utils";
+import { COMPANY_CONFIG } from "@/config/company";
+import { staticAsset } from "@/lib/staticAssets";
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, "");
@@ -12,9 +14,8 @@ function normalizePhone(raw: string): string {
   return "62" + digits;
 }
 
-const FOOTER_STYLE: React.CSSProperties = {
-  background: "linear-gradient(150deg, #0F172A 0%, #1E293B 50%, #0C4A6E 100%)",
-};
+const FOOTER_GRADIENT = "linear-gradient(150deg, var(--brand-dark-900) 0%, var(--brand-dark-800) 50%, var(--brand-navy-footer) 100%)";
+const FOOTER_STYLE: React.CSSProperties = { background: FOOTER_GRADIENT };
 
 interface NavItem {
   label: string;
@@ -88,19 +89,18 @@ export function Footer() {
 
   const rawLogoSrc = content["footer_logo"] ?? content["navbar_logo"];
   const logoSrc = rawLogoSrc
-    ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? rawLogoSrc) : rawLogoSrc)
-    : `${import.meta.env.BASE_URL}images/logo.png`;
+    ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? staticAsset("images/logo.png")) : rawLogoSrc)
+    : staticAsset("images/logo.png");
 
   const brandName = company?.name
-    ? company.name.length > 24
-      ? "CST Logistics"
+    ? company.name.length > COMPANY_CONFIG.brandNameMaxLengthFooter
+      ? COMPANY_CONFIG.brandName
       : company.name
-    : "CST Logistics";
+    : COMPANY_CONFIG.brandName;
 
   const phone = company?.phone ? normalizePhone(company.phone) : null;
-  const waHref = phone
-    ? `https://wa.me/${phone}?text=${encodeURIComponent(t("footer.waMessage"))}`
-    : null;
+  const waPhone = phone ?? normalizePhone(COMPANY_CONFIG.phone);
+  const waHref = `https://wa.me/${waPhone}?text=${encodeURIComponent(t("footer.waMessage"))}`;
 
 
   const quickLinks: NavItem[] = [
@@ -109,11 +109,13 @@ export function Footer() {
     { label: t("footer.calculator"),    href: "/calculator" },
     { label: t("footer.track"),         href: "/track" },
     { label: t("footer.customerPortal"), href: "/login" },
+    { label: "Hubungi Kami",            href: "/contact" },
+    { label: "Kebijakan Privasi",       href: "/privacy-policy" },
   ];
 
   const serviceLinks: NavItem[] = [
     { label: t("footer.seaFreight"),          href: "/freight-forwarding" },
-    { label: t("footer.airFreight"),          href: "/freight-forwarding" },
+    { label: t("footer.airFreight"),          href: "/air-freight-booking" },
     { label: t("footer.customsBrokerage"),    href: "/pabean" },
     { label: t("footer.domesticDistribution"), href: "/jasa" },
   ];
@@ -144,17 +146,15 @@ export function Footer() {
               {t("footer.description")}
             </p>
 
-            {waHref && (
-              <a
-                href={waHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#25D366]/20 hover:bg-[#25D366]/35 border border-[#25D366]/40 text-[#4ADE80] text-sm font-medium transition-all duration-200"
-              >
-                <MessageCircle className="h-4 w-4" />
-                WhatsApp
-              </a>
-            )}
+            <a
+              href={waHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[#25D366]/20 hover:bg-[#25D366]/35 border border-[#25D366]/40 text-[#4ADE80] text-sm font-medium transition-all duration-200"
+            >
+              <MessageCircle className="h-4 w-4" />
+              WhatsApp
+            </a>
           </div>
 
           {/* Col 2 — Quick Links */}
@@ -192,20 +192,21 @@ export function Footer() {
             </h4>
             <ul className="space-y-4">
 
-              {/* Kantor Jakarta */}
+              {/* Kantor — dari COMPANY_CONFIG.office */}
               <li>
                 <div className="flex items-start gap-3">
                   <MapPin className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-white/45 mb-1">
-                      Kantor Jakarta
+                      {COMPANY_CONFIG.office.label}
                     </p>
                     <p className="text-xs leading-relaxed text-white/65">
-                      Jln. Ternate No. 10B/C<br />
-                      Jakarta, Indonesia 10150
+                      {COMPANY_CONFIG.office.lines.map((line, i) => (
+                        <span key={i}>{line}{i < COMPANY_CONFIG.office.lines.length - 1 ? <br /> : null}</span>
+                      ))}
                     </p>
                     <a
-                      href="https://www.google.com/maps?q=Jln+Ternate+No+10B/C+Jakarta+Indonesia+10150"
+                      href={COMPANY_CONFIG.office.mapsUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 mt-1.5 text-[11px] font-medium text-sky-400/80 hover:text-sky-300 transition-colors duration-200"
@@ -216,62 +217,31 @@ export function Footer() {
                 </div>
               </li>
 
-              {/* Kantor Tangerang */}
               <li>
-                <div className="flex items-start gap-3">
-                  <MapPin className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-white/45 mb-1">
-                      Kantor Tangerang
-                    </p>
-                    <p className="text-xs leading-relaxed text-white/65">
-                      Sport Center Soekarno Hatta<br />
-                      Jl. C3 No. 831 RT 001 RW 010<br />
-                      Belakang Masjid Nurul Barkah<br />
-                      Pajang Benda, Tangerang Kota<br />
-                      Banten 15126
-                    </p>
-                    <a
-                      href="https://www.google.com/maps?q=Sport+Center+Soekarno+Hatta+Jl+C3+No+831+Pajang+Benda+Tangerang+Banten"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 mt-1.5 text-[11px] font-medium text-sky-400/80 hover:text-sky-300 transition-colors duration-200"
-                    >
-                      Lihat di Maps ↗
-                    </a>
-                  </div>
-                </div>
+                <a
+                  href={waHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 text-white/70 hover:text-white transition-colors duration-200 group"
+                >
+                  <Phone className="h-5 w-5 text-sky-400 shrink-0 group-hover:text-sky-300 transition-colors" />
+                  <span className="text-sm">
+                    {company?.phone || COMPANY_CONFIG.phoneDisplay}
+                  </span>
+                </a>
               </li>
 
-              {(company?.phone || true) && (
-                <li>
-                  <a
-                    href={waHref ?? `tel:${company?.phone ?? "+6280000000000"}`}
-                    target={waHref ? "_blank" : undefined}
-                    rel={waHref ? "noopener noreferrer" : undefined}
-                    className="flex items-center gap-3 text-white/70 hover:text-white transition-colors duration-200 group"
-                  >
-                    <Phone className="h-5 w-5 text-sky-400 shrink-0 group-hover:text-sky-300 transition-colors" />
-                    <span className="text-sm">
-                      {company?.phone || "+62 800 0000 0000"}
-                    </span>
-                  </a>
-                </li>
-              )}
-
-              {(company?.email || true) && (
-                <li>
-                  <a
-                    href={`mailto:${company?.email ?? "info@cstlogistic.com"}`}
-                    className="flex items-center gap-3 text-white/70 hover:text-white transition-colors duration-200 group"
-                  >
-                    <Mail className="h-5 w-5 text-sky-400 shrink-0 group-hover:text-sky-300 transition-colors" />
-                    <span className="text-sm">
-                      {company?.email || "info@cstlogistic.com"}
-                    </span>
-                  </a>
-                </li>
-              )}
+              <li>
+                <a
+                  href={`mailto:${company?.email ?? COMPANY_CONFIG.email}`}
+                  className="flex items-center gap-3 text-white/70 hover:text-white transition-colors duration-200 group"
+                >
+                  <Mail className="h-5 w-5 text-sky-400 shrink-0 group-hover:text-sky-300 transition-colors" />
+                  <span className="text-sm">
+                    {company?.email || COMPANY_CONFIG.email}
+                  </span>
+                </a>
+              </li>
             </ul>
           </div>
         </div>
@@ -282,7 +252,7 @@ export function Footer() {
           style={{ borderTop: "1px solid rgba(255,255,255,0.12)" }}
         >
           <p className="text-[13px]" style={{ color: "rgba(255,255,255,0.50)" }}>
-            &copy; {new Date().getFullYear()} {company?.name || "PT. Cahaya Sejati Teknologi"}.{" "}
+            &copy; {new Date().getFullYear()} {company?.name || COMPANY_CONFIG.legalName}.{" "}
             {t("footer.copyright")}
           </p>
         </div>

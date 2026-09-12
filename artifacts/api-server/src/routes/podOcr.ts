@@ -1,42 +1,41 @@
 import { Router } from "express";
-import multer from "multer";
-import OpenAI from "openai";
+import { getOpenAI } from "../lib/openaiClient.js";
 import { db, podOcrResultsTable, logisticOrdersTable, driverJobsTable } from "@workspace/db";
 import { eq, or } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { logger } from "../lib/logger.js";
+import { createTwoTierRateLimiter, extractRateLimitKey } from "../lib/userRateLimiter.js";
+import { imagePdfUpload } from "../lib/uploadMiddleware.js";
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = imagePdfUpload(20);
 const objectStorage = new ObjectStorageService();
 
-function getOpenAI() {
-  return new OpenAI({
-    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "",
-    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  });
-}
+// Per-user OCR rate limit: burst 5/minute + 20/hour.
+// Prevents one account/driver from draining OpenAI Vision quota.
+const ocrScanLimiter = createTwoTierRateLimiter(
+  { windowMs: 60_000, limit: 5 },       // 5 per minute
+  { windowMs: 60 * 60_000, limit: 20 }, // 20 per hour
+);
 
-// POST /api/pod-ocr/scan — upload POD image and run OCR
-// This endpoint is public so drivers can also submit POD without login
-router.post("/scan", upload.single("file"), async (req, res) => {
-  const file = (req as any).file as Express.Multer.File | undefined;
-  if (!file) { res.status(400).json({ error: "File wajib diupload" }); return; }
+// Allowed MIME types for POD OCR scan (images only — no executables or scripts)
+const POD_OCR_ALLOWED_MIME = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp",
+  "image/gif", "image/tiff", "image/heic", "image/heif",
+  "application/pdf",
+]);
 
-  const { orderId, orderNumber, jobToken } = req.body ?? {};
-
-  // Upload to object storage
-  let imageUrl = "";
-  try {
-    const key = `pod-ocr/${Date.now()}-${file.originalname}`;
-    const url = await objectStorage.uploadPublicFile(file.buffer, key, file.mimetype);
-    imageUrl = url;
-  } catch (e) {
-    logger.warn({ err: e }, "POD OCR: object storage upload failed, continuing with OCR");
-  }
-
-  // Run OpenAI Vision OCR
+// Background OCR processor — runs after request responds.
+// Updates the DB record in place when done.
+async function runOcrInBackground(
+  resultId: number,
+  fileBuffer: Buffer,
+  fileMimetype: string,
+  orderId: number | null,
+  orderNumber: string | null,
+  imageUrl: string,
+) {
   let extractedData: {
     order_number?: string;
     date?: string;
@@ -49,7 +48,7 @@ router.post("/scan", upload.single("file"), async (req, res) => {
 
   try {
     const openai = getOpenAI();
-    const imageData = `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
+    const imageData = `data:${fileMimetype};base64,${fileBuffer.toString("base64")}`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -86,7 +85,7 @@ Hanya kembalikan JSON, tanpa penjelasan tambahan.`,
     const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     extractedData = JSON.parse(cleaned);
   } catch (e) {
-    logger.error({ err: e }, "POD OCR: OpenAI vision failed");
+    logger.error({ err: e, resultId }, "POD OCR: OpenAI vision failed");
     extractedData = { confidence: 0, raw_text: "OCR gagal" };
   }
 
@@ -108,29 +107,101 @@ Hanya kembalikan JSON, tanpa penjelasan tambahan.`,
       : "mismatch";
   }
 
-  // Save to DB
-  const [result] = await db.insert(podOcrResultsTable).values({
+  // Update the existing pending record with results
+  await db.update(podOcrResultsTable)
+    .set({
+      extractedText: extractedData.raw_text ?? null,
+      extractedOrderNumber: extractedData.order_number ?? null,
+      extractedDate: extractedData.date ?? null,
+      extractedReceiver: extractedData.receiver ?? null,
+      extractedCompany: extractedData.company ?? null,
+      hasSignature: extractedData.has_signature ?? null,
+      verificationStatus,
+      mismatchFields: mismatchFields.join(","),
+      confidenceScore: String(extractedData.confidence ?? 0),
+      rawResponse: JSON.stringify(extractedData),
+    })
+    .where(eq(podOcrResultsTable.id, resultId));
+
+  logger.info({ resultId, verificationStatus }, "POD OCR: background job complete");
+}
+
+// POST /api/pod-ocr/scan — upload POD image and start async OCR
+// Returns immediately with a jobId. Poll GET /api/pod-ocr/:id for status.
+// verificationStatus="pending" means OCR is still running.
+router.post("/scan", upload.single("file"), async (req, res) => {
+  // Auth gate: must have a valid Clerk/session OR a driver bearer token.
+  const isClerkAuth = req.isAuthenticated();
+  const hasBearerToken = typeof req.headers["authorization"] === "string" &&
+    req.headers["authorization"].startsWith("Bearer ");
+  if (!isClerkAuth && !hasBearerToken) {
+    res.status(401).json({ error: "Unauthorized. Login diperlukan untuk menggunakan fitur POD OCR." });
+    return;
+  }
+
+  // Per-user/per-token OCR rate limit — applied after auth so key is stable
+  const rlKey = extractRateLimitKey(req);
+  if (!ocrScanLimiter.check(rlKey)) {
+    res.status(429).json({ error: "Terlalu banyak scan OCR. Batas: 5/menit dan 20/jam per akun." });
+    return;
+  }
+
+  const file = (req as any).file as Express.Multer.File | undefined;
+  if (!file) { res.status(400).json({ error: "File wajib diupload" }); return; }
+
+  // MIME type whitelist — reject non-image/non-PDF files
+  if (!POD_OCR_ALLOWED_MIME.has(file.mimetype.toLowerCase())) {
+    res.status(415).json({ error: `Tipe file tidak didukung: ${file.mimetype}. Hanya gambar dan PDF yang diperbolehkan.` });
+    return;
+  }
+
+  const { orderId, orderNumber, jobToken } = req.body ?? {};
+
+  // Upload to object storage
+  let imageUrl = "";
+  try {
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
+    const key = `pod-ocr/${Date.now()}-${safeName}`;
+    imageUrl = await objectStorage.uploadPublicRaw(key, file.buffer, file.mimetype);
+  } catch (e) {
+    logger.warn({ err: e }, "POD OCR: object storage upload failed, continuing with OCR");
+  }
+
+  // Save a "pending" record immediately — return this to client without waiting for OpenAI
+  const [pendingResult] = await db.insert(podOcrResultsTable).values({
     orderId: orderId ? Number(orderId) : null,
     orderNumber: orderNumber ? String(orderNumber) : null,
     imageUrl,
-    extractedText: extractedData.raw_text ?? null,
-    extractedOrderNumber: extractedData.order_number ?? null,
-    extractedDate: extractedData.date ?? null,
-    extractedReceiver: extractedData.receiver ?? null,
-    extractedCompany: extractedData.company ?? null,
-    hasSignature: extractedData.has_signature ?? null,
-    verificationStatus,
-    mismatchFields: mismatchFields.join(","),
-    confidenceScore: String(extractedData.confidence ?? 0),
-    rawResponse: JSON.stringify(extractedData),
+    extractedText: null,
+    extractedOrderNumber: null,
+    extractedDate: null,
+    extractedReceiver: null,
+    extractedCompany: null,
+    hasSignature: null,
+    verificationStatus: "pending",
+    mismatchFields: "",
+    confidenceScore: "0",
+    rawResponse: null,
   }).returning();
 
+  // Fire OCR in background — do NOT await, request returns immediately
+  runOcrInBackground(
+    pendingResult.id,
+    file.buffer,
+    file.mimetype,
+    orderId ? Number(orderId) : null,
+    orderNumber ? String(orderNumber) : null,
+    imageUrl,
+  ).catch((err) => logger.error({ err, resultId: pendingResult.id }, "POD OCR: background job crash"));
+
+  // Respond immediately — client polls GET /api/pod-ocr/:id until verificationStatus != "pending"
   res.json({
     ok: true,
-    result,
-    verificationStatus,
-    extracted: extractedData,
-    mismatchFields,
+    jobId: pendingResult.id,
+    result: pendingResult,
+    verificationStatus: "pending",
+    extracted: {},
+    mismatchFields: [],
     imageUrl,
   });
 });
@@ -148,7 +219,7 @@ router.get("/order/:orderId", async (req, res) => {
   res.json(results);
 });
 
-// GET /api/pod-ocr/:id — single result
+// GET /api/pod-ocr/:id — single result (poll this until verificationStatus != "pending")
 router.get("/:id", async (req, res) => {
   const ok = await requireClerkUser(req, res);
   if (!ok) return;

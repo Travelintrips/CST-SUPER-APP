@@ -28,6 +28,7 @@ interface AccountComboboxProps {
   value: number | null | undefined;
   onChange: (value: number) => void;
   placeholder?: string;
+  disabled?: boolean;
   "data-testid"?: string;
 }
 
@@ -36,6 +37,7 @@ export function AccountCombobox({
   value,
   onChange,
   placeholder = "Pilih akun",
+  disabled,
   "data-testid": testId,
 }: AccountComboboxProps) {
   const [open, setOpen] = useState(false);
@@ -44,12 +46,13 @@ export function AccountCombobox({
   const selected = activeAccounts.find((a) => a.id === value);
 
   return (
-    <Popover open={open} onOpenChange={setOpen} modal={true}>
+    <Popover open={disabled ? false : open} onOpenChange={(o) => { if (!disabled) setOpen(o); }} modal={true}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          disabled={disabled}
           className="w-full justify-between font-normal h-9 text-sm"
           data-testid={testId}
         >

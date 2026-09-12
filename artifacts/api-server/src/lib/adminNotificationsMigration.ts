@@ -19,5 +19,15 @@ export async function runAdminNotificationsMigration(): Promise<void> {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS admin_notif_type_idx    ON admin_notifications (type)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS admin_notif_read_idx    ON admin_notifications (read_at)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS admin_notif_created_idx ON admin_notifications (created_at DESC)`);
+  // Add title/body columns if missing — NOT NULL with empty-string default so
+  // existing rows are not violated and new inserts can always supply a value.
+  await db.execute(sql`ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS body  TEXT NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS dedupe_key TEXT`);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS admin_notif_dedupe_idx
+      ON admin_notifications (dedupe_key)
+      WHERE dedupe_key IS NOT NULL
+  `);
   logger.info("Admin notifications migration: selesai (admin_notifications table ready)");
 }

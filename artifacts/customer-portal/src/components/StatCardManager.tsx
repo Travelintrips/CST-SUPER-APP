@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useEditMode } from "@/contexts/EditModeContext";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   Package, Truck, Ship, Plane, Box, Archive, BarChart2, Layers,
   Navigation, Globe, Anchor, Activity, TrendingUp, Users, ClipboardList,
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { resolveImageUrl } from "@/lib/utils";
 
 const ALL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Package, Truck, Ship, Plane, Box, Archive, BarChart2, Layers,
@@ -116,7 +118,7 @@ export function StatCardDisplay({ card, count, isActive, onClick }: StatCardDisp
         <p className={`text-2xl font-bold ${isGradient ? "text-white drop-shadow" : colors.num}`}>{count}</p>
         {card.logoUrl ? (
           <img
-            src={card.logoUrl}
+            src={resolveImageUrl(card.logoUrl) ?? card.logoUrl}
             alt=""
             className="h-7 w-7 object-contain rounded"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
@@ -139,6 +141,7 @@ interface CardEditorProps {
 }
 
 function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: CardEditorProps) {
+  const { t } = useLanguage();
   const colors = getCardColor(card.colorKey);
   const IconComp = ALL_ICONS[card.iconKey] ?? Package;
   const hasCustomBg = !!card.bgCustom;
@@ -153,7 +156,7 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
       </div>
 
       {card.logoUrl ? (
-        <img src={card.logoUrl} alt="" className="h-5 w-5 object-contain rounded flex-shrink-0 mt-0.5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+        <img src={resolveImageUrl(card.logoUrl) ?? card.logoUrl} alt="" className="h-5 w-5 object-contain rounded flex-shrink-0 mt-0.5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
       ) : (
         <IconComp className={`h-5 w-5 ${colors.text} flex-shrink-0 mt-0.5`} />
       )}
@@ -164,12 +167,12 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
           value={card.label}
           onChange={(e) => onChange({ ...card, label: e.target.value })}
           className="h-7 text-xs font-medium bg-white/70 border-0 focus-visible:ring-1"
-          placeholder="Label"
+          placeholder={t("statCard.label", "Label")}
         />
 
         {/* Color picker */}
         <div className="flex gap-1.5 flex-wrap items-center">
-          <span className="text-[10px] text-muted-foreground">Warna:</span>
+          <span className="text-[10px] text-muted-foreground">{t("statCard.color", "Warna:")}</span>
           {COLORS.map((c) => (
             <button
               key={c.key}
@@ -182,7 +185,7 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
 
         {/* Icon picker */}
         <div className="flex gap-1.5 flex-wrap items-center">
-          <span className="text-[10px] text-muted-foreground">Ikon:</span>
+          <span className="text-[10px] text-muted-foreground">{t("statCard.icon", "Ikon:")}</span>
           {Object.entries(ALL_ICONS).map(([key, Icon]) => (
             <button
               key={key}
@@ -197,16 +200,16 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
 
         {/* Logo URL */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-muted-foreground flex-shrink-0">Logo:</span>
+          <span className="text-[10px] text-muted-foreground flex-shrink-0">{t("statCard.logo", "Logo:")}</span>
           <Input
             value={card.logoUrl ?? ""}
             onChange={(e) => onChange({ ...card, logoUrl: e.target.value || undefined })}
-            placeholder="URL gambar logo..."
+            placeholder={t("statCard.logoUrlPh", "URL gambar logo...")}
             className="h-6 text-xs bg-white/70 border-0 focus-visible:ring-1 flex-1"
           />
           {card.logoUrl && (
             <>
-              <img src={card.logoUrl} alt="" className="h-5 w-5 object-contain rounded border flex-shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              <img src={resolveImageUrl(card.logoUrl) ?? card.logoUrl} alt="" className="h-5 w-5 object-contain rounded border flex-shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               <button onClick={() => onChange({ ...card, logoUrl: undefined })} className="text-muted-foreground hover:text-red-500 flex-shrink-0"><X className="h-3 w-3" /></button>
             </>
           )}
@@ -214,13 +217,13 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
 
         {/* Background */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] text-muted-foreground flex-shrink-0">Background:</span>
+          <span className="text-[10px] text-muted-foreground flex-shrink-0">{t("statCard.background", "Background:")}</span>
           <input
             type="color"
             value={card.bgCustom && !card.bgCustom.includes("gradient") ? card.bgCustom : "#eff6ff"}
             onChange={(e) => onChange({ ...card, bgCustom: e.target.value })}
             className="h-5 w-6 rounded cursor-pointer border-0 p-0 flex-shrink-0"
-            title="Pilih warna solid"
+            title={t("statCard.pickSolidColor", "Pilih warna solid")}
           />
           {GRADIENT_PRESETS.map((g, i) => (
             <button
@@ -232,7 +235,7 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
             />
           ))}
           {card.bgCustom && (
-            <button onClick={() => onChange({ ...card, bgCustom: undefined })} className="text-muted-foreground hover:text-red-500 flex-shrink-0" title="Reset background"><X className="h-3 w-3" /></button>
+            <button onClick={() => onChange({ ...card, bgCustom: undefined })} className="text-muted-foreground hover:text-red-500 flex-shrink-0" title={t("statCard.resetBackground", "Reset background")}><X className="h-3 w-3" /></button>
           )}
         </div>
 
@@ -263,6 +266,7 @@ interface StatCardManagerProps {
 
 export function StatCardManagerPanel({ orders, statusFilter, onFilterChange }: StatCardManagerProps) {
   const { editMode } = useEditMode();
+  const { t } = useLanguage();
   const { cards, setCards } = useStatCards();
   const [showEditor, setShowEditor] = useState(false);
   const dragIndex = useRef<number | null>(null);
@@ -319,10 +323,10 @@ export function StatCardManagerPanel({ orders, statusFilter, onFilterChange }: S
     return (
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Status Cards</span>
+          <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">{t("statCard.statusCards", "Status Cards")}</span>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setShowEditor(!showEditor)}>
-              {showEditor ? <><Check className="h-3 w-3" /> Selesai</> : <><GripVertical className="h-3 w-3" /> Atur Cards</>}
+              {showEditor ? <><Check className="h-3 w-3" /> {t("statCard.done", "Selesai")}</> : <><GripVertical className="h-3 w-3" /> {t("statCard.arrangeCards", "Atur Cards")}</>}
             </Button>
             <Button size="sm" className="h-7 text-xs gap-1" onClick={addCard}>
               <Plus className="h-3 w-3" /> Tambah Card

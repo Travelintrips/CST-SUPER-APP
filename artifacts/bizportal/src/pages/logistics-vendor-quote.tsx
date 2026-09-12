@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
+import { useParams } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -17,41 +17,44 @@ import {
   Loader2,
   ThumbsUp,
   Clock,
+  Timer,
+  BoxIcon,
 } from "lucide-react";
 
-interface RfqFormData {
+interface OrderItem {
+  serviceName: string | null;
+  category: string | null;
+  qty: number;
+  unit: string;
+  vendorUnitPrice: number | null;
+  vendorSubtotal: number | null;
+  ppnAmount: number | null;
+  vendorGrandTotal: number | null;
+}
+
+interface V2FormData {
+  linkId: number;
   rfqNumber: string;
-  rfqStatus: string;
-  rfqNotes: string | null;
-  orderNumber: string;
-  shipmentType: string;
-  vehicleType: string | null;
+  vendorName: string;
+  orderType: string;
+  serviceType: string;
   origin: string;
   destination: string;
   commodity: string | null;
   cargoDescription: string | null;
-  grossWeight: string | null;
-  volumeCbm: string | null;
-  jumlahKoli: number | null;
+  grossWeight: number | null;
+  volumeCbm: number | null;
   requiredDate: string | null;
-  jamOrder: string | null;
-  namaPenerima: string | null;
-  nomorPenerima: string | null;
-  requestedPickup: string | null;
-  requestedDelivery: string | null;
-  createdAt: string;
-  vendorId: number;
-  vendorName: string;
-  vendorBasePrice: number | null;
+  basicPrice: number | null;
+  responseDeadline: string | null;
   alreadySubmitted: boolean;
-  existingQuote: {
-    vendorPrice: number;
-    estimatedPickup: string | null;
-    estimatedDelivery: string | null;
-    estimatedDays: number | null;
-    vendorNotes: string | null;
-    quoteStatus: string;
-  } | null;
+  currentStatus: string;
+  currentOfferedPrice: number | null;
+  currentEta: string | null;
+  currentNotes: string | null;
+  currentLeadTimeDays: number | null;
+  currentStockAvailability: string | null;
+  orderItems: OrderItem[];
 }
 
 const fmt = (n: number) =>
@@ -61,79 +64,102 @@ const fmt = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
-function getParams(): { rfq: string; v: string } {
-  const p = new URLSearchParams(window.location.search);
-  return { rfq: p.get("rfq") ?? "", v: p.get("v") ?? "" };
-}
-
-function isTruckingType(shipmentType: string) {
-  return shipmentType.toLowerCase().includes("trucking");
-}
+const STOCK_OPTIONS = [
+  { value: "available", label: "✓ Tersedia", color: "bg-green-50 border-green-300 text-green-800" },
+  { value: "limited", label: "⚠ Terbatas", color: "bg-yellow-50 border-yellow-300 text-yellow-800" },
+  { value: "unavailable", label: "✕ Tidak Tersedia", color: "bg-red-50 border-red-300 text-red-700" },
+  { value: "unknown", label: "? Tidak Tahu", color: "bg-gray-50 border-gray-300 text-gray-600" },
+];
 
 export default function LogisticsVendorQuotePage() {
+  const { token } = useParams<{ token: string }>();
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<RfqFormData | null>(null);
+  const [data, setData] = useState<V2FormData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
-  const [vendorPrice, setVendorPrice] = useState("");
+  const [action, setAction] = useState<"accept" | "counter" | "reject">("counter");
+  const [offeredPrice, setOfferedPrice] = useState("");
+  const [eta, setEta] = useState("");
   const [notes, setNotes] = useState("");
+  const [leadTimeDays, setLeadTimeDays] = useState("");
+  const [stockAvailability, setStockAvailability] = useState("unknown");
   const [sending, setSending] = useState(false);
 
-  const { rfq, v } = getParams();
-
   useEffect(() => {
-    if (!rfq || !v) {
-      setError("Link tidak valid. Parameter RFQ atau vendor tidak ditemukan.");
+    if (!token) {
+      setError("Link tidak valid. Token tidak ditemukan.");
       setLoading(false);
       return;
     }
 
-    fetch(`/api/logistic/orders/vendor-form?rfq=${encodeURIComponent(rfq)}&v=${encodeURIComponent(v)}`)
-      .then((res) => res.json())
-      .then((json: RfqFormData & { message?: string }) => {
-        if (json.message) {
-          setError(json.message);
-        } else {
-          setData(json);
-          if (json.alreadySubmitted && json.existingQuote) {
-            setVendorPrice(String(json.existingQuote.vendorPrice));
-            setNotes(json.existingQuote.vendorNotes ?? "");
-          } else if (json.vendorBasePrice && json.vendorBasePrice > 0) {
-            setVendorPrice(String(json.vendorBasePrice));
+    fetch(`/api/logistic/rfq/vendor-form/${encodeURIComponent(token)}`)
+      .then((res) => {
+        if (res.status === 410) return res.json().then((j: any) => { throw new Error(j.message ?? "Link sudah kadaluarsa"); });
+        if (!res.ok) return res.json().then((j: any) => { throw new Error(j.message ?? "Link tidak valid"); });
+        return res.json();
+      })
+      .then((json: V2FormData) => {
+        setData(json);
+        if (json.alreadySubmitted) {
+          if (json.currentOfferedPrice != null) {
+            setOfferedPrice(String(json.currentOfferedPrice));
+          } else if (json.basicPrice) {
+            setOfferedPrice(String(json.basicPrice));
           }
+          setEta(json.currentEta ?? "");
+          setNotes(json.currentNotes ?? "");
+          if (json.currentLeadTimeDays != null) setLeadTimeDays(String(json.currentLeadTimeDays));
+          if (json.currentStockAvailability) setStockAvailability(json.currentStockAvailability);
+          if (json.currentStatus === "accepted_basic_price") setAction("accept");
+          else if (json.currentStatus === "rejected") setAction("reject");
+          else setAction("counter");
+        } else if (json.basicPrice && json.basicPrice > 0) {
+          setOfferedPrice(String(json.basicPrice));
         }
       })
-      .catch(() => setError("Gagal memuat data RFQ. Coba lagi atau hubungi CST Logistics."))
+      .catch((e: Error) => setError(e.message || "Gagal memuat data RFQ. Coba lagi atau hubungi B2B Marketplace and Logistic."))
       .finally(() => setLoading(false));
-  }, [rfq, v]);
+  }, [token]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const price = parseFloat(vendorPrice.replace(/\./g, "").replace(",", "."));
-    if (!price || price <= 0) {
-      toast({ title: "Harga penawaran wajib diisi", variant: "destructive" });
-      return;
-    }
+    if (!token) return;
 
-    const isTrucking = data ? isTruckingType(data.shipmentType) : false;
+    if (action === "counter") {
+      const price = parseInt(offeredPrice.replace(/[^0-9]/g, ""), 10);
+      if (!price || price <= 0) {
+        toast({ title: "Harga penawaran wajib diisi", variant: "destructive" });
+        return;
+      }
+      if (!eta.trim()) {
+        toast({ title: "ETA wajib diisi untuk counter offer", variant: "destructive" });
+        return;
+      }
+    }
 
     setSending(true);
     try {
-      const res = await fetch(`/api/logistic/orders/vendor-quote`, {
+      const price = action === "counter" ? parseInt(offeredPrice.replace(/[^0-9]/g, ""), 10) : undefined;
+      const body: Record<string, unknown> = {
+        action,
+        notes: notes.trim() || undefined,
+        stockAvailability: stockAvailability || "unknown",
+      };
+      if (action === "counter") {
+        body.offeredPrice = price;
+        body.eta = eta.trim();
+      } else if (action === "accept" && eta.trim()) {
+        body.eta = eta.trim();
+      }
+      if (leadTimeDays.trim()) body.leadTimeDays = parseInt(leadTimeDays, 10);
+
+      const res = await fetch(`/api/logistic/rfq/vendor-form/${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rfqNumber: rfq,
-          vendorId: Number(v),
-          vendorPrice: price,
-          estimatedPickup: null,
-          estimatedDelivery: null,
-          estimatedDays: null,
-          notes: notes.trim() || null,
-        }),
+        body: JSON.stringify(body),
       });
       const json = await res.json() as { success?: boolean; message?: string };
       if (json.success) {
@@ -167,7 +193,7 @@ export default function LogisticsVendorQuotePage() {
           <h2 className="text-lg font-semibold text-slate-800">Link Tidak Valid</h2>
           <p className="text-sm text-slate-500">{error}</p>
           <p className="text-xs text-slate-400">
-            Hubungi CST Logistics untuk mendapatkan link yang baru.
+            Hubungi B2B Marketplace and Logistic untuk mendapatkan link yang baru.
           </p>
         </div>
       </div>
@@ -175,7 +201,8 @@ export default function LogisticsVendorQuotePage() {
   }
 
   if (submitted) {
-    const isTrucking = data ? isTruckingType(data.shipmentType) : false;
+    const finalPrice = action === "counter" ? parseInt(offeredPrice.replace(/[^0-9]/g, ""), 10) : (data?.basicPrice ?? 0);
+    const actionLabel = action === "accept" ? "diterima" : action === "reject" ? "ditolak" : "counter offer dikirim";
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-sm border border-green-100 p-8 max-w-sm w-full text-center space-y-4">
@@ -183,14 +210,14 @@ export default function LogisticsVendorQuotePage() {
             <CheckCircle2 className="w-9 h-9 text-green-600" />
           </div>
           <h2 className="text-xl font-bold text-slate-800">
-            {isTrucking ? "Konfirmasi Diterima!" : "Penawaran Terkirim!"}
+            {action === "reject" ? "Penawaran Ditolak" : "Penawaran Terkirim!"}
           </h2>
           <p className="text-sm text-slate-500">
-            {isTrucking
-              ? "Terima kasih. Anda telah menyetujui untuk memenuhi jadwal pengiriman ini. Tim CST Logistics akan segera menghubungi Anda."
-              : "Terima kasih. Tim CST Logistics akan menghubungi Anda apabila penawaran Anda dipilih."}
+            {action === "reject"
+              ? "Anda telah menolak RFQ ini. Terima kasih telah memberi tahu kami."
+              : `Penawaran Anda sudah ${actionLabel}. Tim B2B Marketplace and Logistic akan menghubungi Anda apabila penawaran Anda dipilih.`}
           </p>
-          {data && (
+          {data && action !== "reject" && (
             <div className="bg-slate-50 rounded-xl p-4 text-left text-sm space-y-1.5 mt-2">
               <div className="flex justify-between">
                 <span className="text-slate-500">No. RFQ</span>
@@ -200,14 +227,16 @@ export default function LogisticsVendorQuotePage() {
                 <span className="text-slate-500">Rute</span>
                 <span className="font-medium text-slate-800">{data.origin} → {data.destination}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Harga</span>
-                <span className="font-bold text-green-700">{fmt(parseFloat(vendorPrice.replace(/\./g, "").replace(",", ".")))}</span>
-              </div>
-              {isTrucking && data.requestedPickup && (
+              {action === "counter" && finalPrice > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Pickup</span>
-                  <span className="font-medium text-slate-800">{data.requestedPickup}</span>
+                  <span className="text-slate-500">Harga</span>
+                  <span className="font-bold text-green-700">{fmt(finalPrice)}</span>
+                </div>
+              )}
+              {leadTimeDays && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Lead Time</span>
+                  <span className="font-medium text-slate-800">{leadTimeDays} hari</span>
                 </div>
               )}
             </div>
@@ -219,11 +248,10 @@ export default function LogisticsVendorQuotePage() {
 
   if (!data) return null;
 
-  const isTrucking = isTruckingType(data.shipmentType);
+  const isTrucking = data.serviceType?.toLowerCase().includes("trucking");
   const isAlreadySubmitted = data.alreadySubmitted;
-  const jenisLayanan = data.vehicleType
-    ? `${data.shipmentType} — ${data.vehicleType}`
-    : data.shipmentType;
+  const jenisLayanan = data.serviceType;
+  const isDeadlinePassed = data.responseDeadline ? new Date(data.responseDeadline) < new Date() : false;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -231,7 +259,7 @@ export default function LogisticsVendorQuotePage() {
         <div className="max-w-lg mx-auto px-4 py-6">
           <div className="flex items-center gap-3 mb-1">
             <Truck className="w-5 h-5 opacity-80" />
-            <span className="text-sm font-medium opacity-80">CST Logistics</span>
+            <span className="text-sm font-medium opacity-80">B2B Marketplace and Logistic</span>
           </div>
           <h1 className="text-xl font-bold">Form Penawaran Vendor</h1>
           <p className={`text-sm mt-1 ${isTrucking ? "text-orange-200" : "text-blue-200"}`}>
@@ -245,15 +273,25 @@ export default function LogisticsVendorQuotePage() {
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="text-sm">
-              <p className="font-semibold text-amber-800">
-                {isTrucking ? "Sudah Dikonfirmasi" : "Penawaran Sudah Dikirim"}
-              </p>
+              <p className="font-semibold text-amber-800">Penawaran Sudah Dikirim</p>
               <p className="text-amber-600 mt-0.5">
-                {isTrucking
-                  ? "Anda sudah mengkonfirmasi order ini sebelumnya. Data di bawah adalah konfirmasi sebelumnya."
-                  : "Anda sudah mengajukan penawaran untuk RFQ ini. Data di bawah adalah penawaran sebelumnya."}
+                Anda sudah mengajukan penawaran sebelumnya. Anda dapat memperbarui di bawah ini.
               </p>
             </div>
+          </div>
+        )}
+
+        {isDeadlinePassed && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            Batas waktu respons sudah lewat. Penawaran Anda masih bisa dikirim sebagai late response.
+          </div>
+        )}
+
+        {data.responseDeadline && !isDeadlinePassed && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700 flex items-center gap-2">
+            <Clock className="w-4 h-4 flex-shrink-0" />
+            Batas waktu: <strong>{new Date(data.responseDeadline).toLocaleString("id-ID")}</strong>
           </div>
         )}
 
@@ -267,10 +305,7 @@ export default function LogisticsVendorQuotePage() {
             <Badge variant="outline" className="text-xs font-mono">{data.rfqNumber}</Badge>
           </div>
 
-          {/* Info dasar */}
           <div className="grid grid-cols-2 gap-y-2.5 text-sm">
-            <span className="text-slate-500">No. Order</span>
-            <span className="font-medium text-slate-800 text-right font-mono">{data.orderNumber}</span>
             <span className="text-slate-500">Jenis Layanan</span>
             <span className="font-medium text-slate-800 text-right">{jenisLayanan}</span>
             {data.commodity && (
@@ -281,7 +316,6 @@ export default function LogisticsVendorQuotePage() {
             )}
           </div>
 
-          {/* Rute — highlight */}
           <div className="bg-blue-50 rounded-xl px-4 py-3 space-y-1.5">
             <p className="text-xs text-blue-500 font-semibold uppercase tracking-wide flex items-center gap-1">
               <MapPin className="w-3 h-3" /> Rute Pengiriman
@@ -293,41 +327,16 @@ export default function LogisticsVendorQuotePage() {
             </div>
           </div>
 
-          {/* Tanggal & Jam — selalu tampil (fallback ke createdAt) */}
-          {(() => {
-            const orderDate = data.requiredDate
-              ? data.requiredDate
-              : new Intl.DateTimeFormat("id-ID", {
-                  timeZone: "Asia/Jakarta",
-                  day: "2-digit", month: "long", year: "numeric",
-                }).format(new Date(data.createdAt));
-            const orderTime = data.jamOrder
-              ? data.jamOrder
-              : new Intl.DateTimeFormat("id-ID", {
-                  timeZone: "Asia/Jakarta",
-                  hour: "2-digit", minute: "2-digit", hour12: false,
-                }).format(new Date(data.createdAt));
-            const dateLabel = data.requiredDate ? "Tgl Diperlukan" : "Tgl Order";
-            return (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl border border-slate-200 p-3">
-                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
-                    <Calendar className="w-3 h-3" /> {dateLabel}
-                  </p>
-                  <p className="text-sm font-bold text-slate-800">{orderDate}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl border border-slate-200 p-3">
-                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
-                    <Clock className="w-3 h-3" /> Jam
-                  </p>
-                  <p className="text-sm font-bold text-slate-800">{orderTime}</p>
-                </div>
-              </div>
-            );
-          })()}
+          {data.requiredDate && (
+            <div className="bg-slate-50 rounded-xl border border-slate-200 p-3">
+              <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                <Calendar className="w-3 h-3" /> Tgl Diperlukan
+              </p>
+              <p className="text-sm font-bold text-slate-800">{data.requiredDate}</p>
+            </div>
+          )}
 
-          {/* Informasi Barang */}
-          {(data.cargoDescription || data.grossWeight || data.volumeCbm || data.jumlahKoli) && (
+          {(data.cargoDescription || data.grossWeight || data.volumeCbm) && (
             <div className="border border-slate-100 rounded-xl overflow-hidden">
               <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1">
@@ -341,19 +350,13 @@ export default function LogisticsVendorQuotePage() {
                     <span className="font-medium text-slate-800 text-right">{data.cargoDescription}</span>
                   </>
                 )}
-                {data.jumlahKoli != null && (
-                  <>
-                    <span className="text-slate-500">Jumlah Koli</span>
-                    <span className="font-medium text-slate-800 text-right">{data.jumlahKoli} koli</span>
-                  </>
-                )}
-                {data.grossWeight && (
+                {data.grossWeight != null && (
                   <>
                     <span className="text-slate-500">Berat</span>
                     <span className="font-bold text-slate-800 text-right">{data.grossWeight} kg</span>
                   </>
                 )}
-                {data.volumeCbm && (
+                {data.volumeCbm != null && (
                   <>
                     <span className="text-slate-500">Volume</span>
                     <span className="font-medium text-slate-800 text-right">{data.volumeCbm} CBM</span>
@@ -363,115 +366,188 @@ export default function LogisticsVendorQuotePage() {
             </div>
           )}
 
-          {/* Penerima */}
-          {(data.namaPenerima || data.nomorPenerima) && (
-            <div className="grid grid-cols-2 gap-y-2.5 text-sm">
-              {data.namaPenerima && (
-                <>
-                  <span className="text-slate-500">Nama Penerima</span>
-                  <span className="font-medium text-slate-800 text-right">{data.namaPenerima}</span>
-                </>
-              )}
-              {data.nomorPenerima && (
-                <>
-                  <span className="text-slate-500">No. Penerima</span>
-                  <span className="font-medium text-slate-800 text-right">{data.nomorPenerima}</span>
-                </>
-              )}
-            </div>
-          )}
-
-          {data.rfqNotes && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3 text-sm">
-              <p className="text-xs text-yellow-600 font-semibold mb-1">Catatan Order</p>
-              <p className="text-slate-700">{data.rfqNotes}</p>
+          {data.orderItems.length > 0 && (
+            <div className="border border-slate-100 rounded-xl overflow-hidden">
+              <div className="bg-slate-50 px-4 py-2 border-b border-slate-100">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Item Order</p>
+              </div>
+              <div className="divide-y divide-slate-50">
+                {data.orderItems.map((item, i) => (
+                  <div key={i} className="px-4 py-3 text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span className="font-medium text-slate-800">{item.serviceName || item.category || `Item ${i + 1}`}</span>
+                      <span className="text-slate-500 text-xs">{item.qty} {item.unit}</span>
+                    </div>
+                    {item.vendorUnitPrice != null && (
+                      <div className="text-xs text-slate-500 space-y-0.5">
+                        <div className="flex justify-between">
+                          <span>Harga etalase / {item.unit}</span>
+                          <span className="text-slate-700">{fmt(item.vendorUnitPrice)}</span>
+                        </div>
+                        {item.vendorGrandTotal != null && (
+                          <div className="flex justify-between font-semibold text-slate-700">
+                            <span>Total (inc. PPN)</span>
+                            <span>{fmt(item.vendorGrandTotal)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Jadwal Permintaan Customer — khusus Trucking */}
-        {isTrucking && (data.requestedPickup || data.requestedDelivery) && (
-          <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-orange-600" />
-              <span className="text-sm font-semibold text-orange-800">Jadwal Permintaan Customer</span>
-            </div>
-            <p className="text-xs text-orange-600">
-              Dengan menekan tombol Setuju, Anda menyatakan sanggup memenuhi jadwal berikut:
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              {data.requestedPickup && (
-                <div className="bg-white rounded-xl border border-orange-200 p-3 text-center">
-                  <p className="text-xs text-slate-500 mb-1">ETA Pickup</p>
-                  <p className="text-sm font-bold text-orange-700">{data.requestedPickup}</p>
-                </div>
-              )}
-              {data.requestedDelivery && (
-                <div className="bg-white rounded-xl border border-orange-200 p-3 text-center">
-                  <p className="text-xs text-slate-500 mb-1">ETA Delivery</p>
-                  <p className="text-sm font-bold text-orange-700">{data.requestedDelivery}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Form */}
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
-          <div className="flex items-center gap-2 mb-1">
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-5">
+          <div className="flex items-center gap-2">
             <Send className="w-4 h-4 text-blue-600" />
             <span className="text-sm font-semibold text-slate-700">
-              {isAlreadySubmitted
-                ? (isTrucking ? "Perbarui Konfirmasi" : "Ubah Penawaran")
-                : (isTrucking ? "Konfirmasi Kesanggupan" : "Isi Penawaran Anda")}
+              {isAlreadySubmitted ? "Perbarui Penawaran" : "Isi Penawaran Anda"}
             </span>
           </div>
 
-          {/* Harga — selalu ada */}
-          <div className="space-y-1.5">
-            <Label htmlFor="vendorPrice" className="text-sm font-semibold text-slate-700">
-              Harga Penawaran (Rp) <span className="text-red-500">*</span>
-            </Label>
-            {data.vendorBasePrice && data.vendorBasePrice > 0 && !isAlreadySubmitted && (
-              <p className="text-xs text-slate-500">
-                Harga dasar vendor: <span className="font-medium text-slate-700">{fmt(data.vendorBasePrice)}</span>
+          {/* Action selection */}
+          <div className="space-y-2">
+            <Label className="text-sm font-semibold text-slate-700">Respons Anda <span className="text-red-500">*</span></Label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { value: "accept", label: "✓ Terima Harga Dasar", color: "border-green-300 bg-green-50 text-green-800" },
+                { value: "counter", label: "↕ Counter Offer", color: "border-blue-300 bg-blue-50 text-blue-800" },
+                { value: "reject", label: "✕ Tolak", color: "border-red-300 bg-red-50 text-red-700" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setAction(opt.value as any)}
+                  className={`px-2 py-2.5 rounded-xl border-2 text-xs font-semibold transition-all ${
+                    action === opt.value ? opt.color + " ring-2 ring-offset-1 ring-current" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {action === "accept" && data.basicPrice && (
+              <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5">
+                Anda menerima harga dasar: <strong>{fmt(data.basicPrice)}</strong>
               </p>
-            )}
-            <input
-              id="vendorPrice"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="Contoh: 5000000"
-              value={vendorPrice}
-              onChange={(e) => setVendorPrice(e.target.value.replace(/[^0-9]/g, ""))}
-              className="w-full h-12 px-3 text-lg font-semibold text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              required
-            />
-            {vendorPrice && parseFloat(vendorPrice) > 0 && (
-              <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                <p className="text-sm text-green-700 font-semibold">
-                  {fmt(parseFloat(vendorPrice))}
-                </p>
-              </div>
             )}
           </div>
 
+          {/* Harga counter offer */}
+          {action === "counter" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="offeredPrice" className="text-sm font-semibold text-slate-700">
+                Harga Penawaran (Rp) <span className="text-red-500">*</span>
+              </Label>
+              {data.basicPrice && data.basicPrice > 0 && (
+                <p className="text-xs text-slate-500">
+                  Harga dasar: <span className="font-medium text-slate-700">{fmt(data.basicPrice)}</span>
+                </p>
+              )}
+              <input
+                id="offeredPrice"
+                type="text"
+                inputMode="numeric"
+                placeholder="Contoh: 5000000"
+                value={offeredPrice}
+                onChange={(e) => setOfferedPrice(e.target.value.replace(/[^0-9]/g, ""))}
+                className="w-full h-12 px-3 text-lg font-semibold text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                required={action === "counter"}
+              />
+              {offeredPrice && parseInt(offeredPrice, 10) > 0 && (
+                <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <p className="text-sm text-green-700 font-semibold">{fmt(parseInt(offeredPrice, 10))}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ETA */}
+          {action !== "reject" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="eta" className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />
+                ETA {action === "counter" ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal">(opsional)</span>}
+              </Label>
+              <input
+                id="eta"
+                type="text"
+                placeholder="Contoh: 3-5 hari kerja, 2026-06-10, H+2"
+                value={eta}
+                onChange={(e) => setEta(e.target.value)}
+                className="w-full h-10 px-3 text-sm text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                required={action === "counter"}
+              />
+            </div>
+          )}
+
+          {/* Lead Time Days */}
+          {action !== "reject" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="leadTimeDays" className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                <Timer className="w-3.5 h-3.5" />
+                Lead Time (hari) <span className="text-slate-400 font-normal">(opsional)</span>
+              </Label>
+              <input
+                id="leadTimeDays"
+                type="number"
+                inputMode="numeric"
+                min="0"
+                max="365"
+                placeholder="Contoh: 3"
+                value={leadTimeDays}
+                onChange={(e) => setLeadTimeDays(e.target.value.replace(/[^0-9]/g, ""))}
+                className="w-full h-10 px-3 text-sm text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-400">Jumlah hari dari order diterima hingga pengiriman siap dilakukan</p>
+            </div>
+          )}
+
+          {/* Stock Availability */}
+          {action !== "reject" && (
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                <BoxIcon className="w-3.5 h-3.5" />
+                Ketersediaan Stok / Armada
+              </Label>
+              <div className="grid grid-cols-2 gap-2">
+                {STOCK_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setStockAvailability(opt.value)}
+                    className={`px-3 py-2.5 rounded-xl border-2 text-xs font-semibold transition-all text-left ${
+                      stockAvailability === opt.value
+                        ? opt.color + " ring-2 ring-offset-1 ring-current"
+                        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
           <div className="space-y-1.5">
             <Label htmlFor="notes" className="text-sm text-slate-600">
-              {isTrucking ? "Catatan Tambahan (opsional)" : "Catatan / Syarat Tambahan"}
+              Catatan / Syarat Tambahan <span className="text-slate-400">(opsional)</span>
             </Label>
-            <textarea
+            <Textarea
               id="notes"
               rows={3}
               placeholder={
-                isTrucking
-                  ? "Misal: Armada siap, butuh koordinasi H-1, dll."
+                action === "reject"
+                  ? "Alasan menolak (opsional)..."
                   : "Misal: Sudah termasuk asuransi, pembayaran 14 hari, dll."
               }
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3 py-2 text-sm text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+              className="text-sm resize-none"
             />
           </div>
 
@@ -479,9 +555,11 @@ export default function LogisticsVendorQuotePage() {
             type="submit"
             disabled={sending}
             className={`w-full h-12 text-white text-base font-semibold rounded-xl ${
-              isTrucking
-                ? "bg-orange-500 hover:bg-orange-600"
-                : "bg-blue-600 hover:bg-blue-700"
+              action === "reject"
+                ? "bg-red-500 hover:bg-red-600"
+                : action === "accept"
+                  ? "bg-green-600 hover:bg-green-700"
+                  : "bg-blue-600 hover:bg-blue-700"
             }`}
           >
             {sending ? (
@@ -489,22 +567,27 @@ export default function LogisticsVendorQuotePage() {
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Mengirim...
               </>
-            ) : isTrucking ? (
+            ) : action === "reject" ? (
+              <>
+                <AlertCircle className="w-4 h-4 mr-2" />
+                {isAlreadySubmitted ? "Perbarui (Tolak)" : "Tolak RFQ Ini"}
+              </>
+            ) : action === "accept" ? (
               <>
                 <ThumbsUp className="w-4 h-4 mr-2" />
-                {isAlreadySubmitted ? "Perbarui Konfirmasi" : "Setuju — Saya Sanggup Memenuhi Jadwal"}
+                {isAlreadySubmitted ? "Perbarui Konfirmasi" : "Terima Harga Dasar"}
               </>
             ) : (
               <>
                 <Send className="w-4 h-4 mr-2" />
-                {isAlreadySubmitted ? "Perbarui Penawaran" : "Kirim Penawaran"}
+                {isAlreadySubmitted ? "Perbarui Counter Offer" : "Kirim Counter Offer"}
               </>
             )}
           </Button>
         </form>
 
         <p className="text-center text-xs text-slate-400 pb-6">
-          © CST Logistics — Form ini hanya untuk vendor yang menerima RFQ.
+          © B2B Marketplace and Logistic — Form ini hanya untuk vendor yang menerima RFQ.
         </p>
       </div>
     </div>

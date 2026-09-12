@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useGetSalesReport, getGetSalesReportQueryKey } from "@workspace/api-client-react";
 import { AppShell } from "@/components/layout/AppShell";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { TrendingUp } from "lucide-react";
+import { ArrowLeft, TrendingUp } from "lucide-react";
+import { Link } from "wouter";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -27,6 +28,8 @@ export default function SalesReportPage() {
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
           <div>
+            <Link href="/reports"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <TrendingUp className="h-6 w-6" /> Laporan Penjualan
             </h1>

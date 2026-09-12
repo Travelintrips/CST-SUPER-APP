@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
-import { useLocation } from "wouter";
+import { useState } from "react";
+import { useLocation, Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,8 +25,9 @@ import type { SalesDocument } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch-on-hover";
-import { Plus, Trash2, X, Search, RefreshCw, FileText } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, X, Search, RefreshCw, FileText, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useCompany } from "@/contexts/CompanyContext";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -54,13 +56,14 @@ const STAT_CARD_COLORS: Record<string, string> = {
   cancelled: "text-red-400",
 };
 
-type PaymentFilter = "all" | "unpaid" | "partial" | "paid";
+type PaymentFilter = "all" | "unpaid" | "partial" | "paid" | "overdue";
 
 const PAYMENT_LABELS: Record<PaymentFilter, string> = {
   all: "Semua",
   unpaid: "Belum Bayar",
   partial: "Sebagian",
   paid: "Lunas",
+  overdue: "Jatuh Tempo",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -74,17 +77,20 @@ function StatusBadge({ status }: { status: string }) {
 function PaymentBadge({ status }: { status: string }) {
   if (status === "paid") return <Badge className="bg-emerald-900/50 text-emerald-300 border-emerald-700 text-xs">Lunas</Badge>;
   if (status === "partial") return <Badge className="bg-amber-900/50 text-amber-300 border-amber-700 text-xs">Sebagian</Badge>;
+  if (status === "overdue") return <Badge className="bg-red-900/50 text-red-300 border-red-700 text-xs">Jatuh Tempo</Badge>;
   return <Badge variant="outline" className="text-slate-400 border-slate-600 text-xs">Belum Bayar</Badge>;
 }
 
 function isOverdue(doc: SalesDocument): boolean {
-  if (!doc.expectedDate) return false;
+  if (!(doc as any).dueDate) return false;
   if (doc.paymentStatus === "paid") return false;
   if (doc.invoiceStatus === "none") return false;
-  return new Date(doc.expectedDate) < new Date(new Date().toDateString());
+  return new Date((doc as any).dueDate as string) < new Date(new Date().toDateString());
 }
 
 interface Props { kind?: "quote" | "order" }
+
+const PAGE_SIZE = 50;
 
 export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
   const isQuote = kind === "quote";
@@ -93,48 +99,55 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
   const prefetchHover = usePrefetchOnHover();
   const { toast } = useToast();
   const { t } = useLanguage();
+  const { activeCompanyId } = useCompany();
 
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [quickViewDoc, setQuickViewDoc] = useState<SalesDocument | null>(null);
 
+  const { data: templateCategories = [] } = useQuery<string[]>({
+    queryKey: ["/api/sales/documents/template-categories", kind],
+    queryFn: () =>
+      fetch(`/api/sales/documents/template-categories?kind=${kind}`, { credentials: "include" })
+        .then((r) => r.ok ? r.json() : []),
+    staleTime: 60_000,
+  });
+
   const deleteMut = useDeleteSalesDocument();
   const actionMut = useSalesDocumentAction();
 
-  // Fetch all docs (no filter) for counts; then filter client-side
-  const { data: allDocs = [], refetch } = useListSalesDocuments({ kind });
+  const apiParams = {
+    kind,
+    ...(activeCompanyId ? { company: activeCompanyId } : {}),
+    ...(statusFilter !== "all" ? { status: statusFilter as SalesDocument["status"] } : {}),
+    ...(paymentFilter !== "all" ? { paymentStatus: paymentFilter } : {}),
+    ...(categoryFilter !== "all" ? { categoryKey: categoryFilter } : {}),
+    ...(search.trim() ? { search: search.trim() } : {}),
+    page,
+    limit: PAGE_SIZE,
+  };
 
-  const filtered = useMemo(() => {
-    let result = allDocs;
-    if (statusFilter !== "all")
-      result = result.filter((d) => d.status === statusFilter);
-    if (!isQuote && paymentFilter !== "all")
-      result = result.filter((d) => d.paymentStatus === paymentFilter);
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (d) =>
-          d.docNumber.toLowerCase().includes(q) ||
-          d.customerName.toLowerCase().includes(q),
-      );
-    }
-    return result;
-  }, [allDocs, statusFilter, paymentFilter, search, isQuote]);
+  const { data: result, refetch } = useListSalesDocuments(apiParams as any);
+  const filtered = result?.data ?? [];
+  const pagination = result?.pagination;
 
-  const counts = useMemo(() => ({
-    total: allDocs.length,
-    draft: allDocs.filter((d) => d.status === "draft").length,
-    sent: allDocs.filter((d) => d.status === "sent").length,
-    confirmed: allDocs.filter((d) => d.status === "confirmed").length,
-    done: allDocs.filter((d) => d.status === "done").length,
-    cancelled: allDocs.filter((d) => d.status === "cancelled").length,
-    // for orders
-    unpaid: allDocs.filter((d) => d.paymentStatus === "unpaid").length,
-    toDeliver: allDocs.filter((d) => d.deliveryStatus === "to_deliver").length,
-  }), [allDocs]);
+  const handleFilterChange = (fn: () => void) => { fn(); setPage(1); setSelectedIds(new Set()); };
+
+  const counts = {
+    total: pagination?.total ?? 0,
+    draft: statusFilter === "draft" ? (pagination?.total ?? 0) : 0,
+    sent: statusFilter === "sent" ? (pagination?.total ?? 0) : 0,
+    confirmed: statusFilter === "confirmed" ? (pagination?.total ?? 0) : 0,
+    done: statusFilter === "done" ? (pagination?.total ?? 0) : 0,
+    cancelled: statusFilter === "cancelled" ? (pagination?.total ?? 0) : 0,
+    unpaid: paymentFilter === "unpaid" ? (pagination?.total ?? 0) : 0,
+    toDeliver: 0,
+  };
 
   const title = isQuote ? "Quotations" : "Sales Orders";
   const desc = isQuote ? "Penawaran ke pelanggan." : "Pesanan penjualan terkonfirmasi.";
@@ -198,6 +211,69 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
     }
   };
 
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("kind", kind);
+      params.set("limit", "5000");
+      if (activeCompanyId) params.set("company", String(activeCompanyId));
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      if (paymentFilter !== "all") params.set("paymentStatus", paymentFilter);
+      if (categoryFilter !== "all") params.set("categoryKey", categoryFilter);
+      if (search.trim()) params.set("search", search.trim());
+
+      const res = await fetch(`/api/sales/documents?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Gagal mengambil data");
+      const json = await res.json() as { data: SalesDocument[] };
+      const rows = json.data;
+
+      const headers = isQuote
+        ? ["No. Dokumen", "Customer", "Status", "Valid Sampai", "Total (IDR)", "Tanggal Dibuat"]
+        : ["No. Dokumen", "Customer", "Status", "Pembayaran", "Jatuh Tempo", "Total (IDR)", "Origin", "Tujuan", "Tanggal Dibuat"];
+
+      const escape = (v: string | null | undefined) => {
+        if (v == null) return "";
+        const s = String(v);
+        return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+
+      const lines = [
+        headers.join(","),
+        ...rows.map((d) =>
+          isQuote
+            ? [d.docNumber, d.customerName, STATUS_LABELS[d.status] ?? d.status,
+                d.validUntil ? new Date(d.validUntil).toLocaleDateString("id-ID") : "",
+                d.grandTotal != null ? String(d.grandTotal) : "",
+                new Date(d.createdAt).toLocaleDateString("id-ID")]
+              .map(escape).join(",")
+            : [d.docNumber, d.customerName, STATUS_LABELS[d.status] ?? d.status,
+                PAYMENT_LABELS[d.paymentStatus as PaymentFilter] ?? d.paymentStatus ?? "",
+                d.expectedDate ? new Date(d.expectedDate).toLocaleDateString("id-ID") : "",
+                d.grandTotal != null ? String(d.grandTotal) : "",
+                d.origin ?? "", d.destination ?? "",
+                new Date(d.createdAt).toLocaleDateString("id-ID")]
+              .map(escape).join(",")
+        ),
+      ];
+
+      const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ts = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `${isQuote ? "quotations" : "sales-orders"}-${ts}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({ title: "Export gagal", variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const colCount = isQuote ? 7 : 10;
 
   return (
@@ -206,6 +282,7 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
 
         {/* Header */}
         <div className="flex items-center justify-between">
+          <Link href="/sales"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <FileText className="h-6 w-6" /> {title}
@@ -215,6 +292,17 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2">
               <RefreshCw className="h-4 w-4" /> Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExport}
+              disabled={isExporting}
+              className="gap-2"
+              title={`Export ${isQuote ? "quotations" : "sales orders"} ke CSV`}
+            >
+              <Download className="h-4 w-4" />
+              {isExporting ? "Mengexport..." : "Export CSV"}
             </Button>
             {isQuote && (
               <Button onClick={() => navigate("/sales/quotations/new")} data-testid="button-new-quote">
@@ -236,11 +324,9 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               }`}
               onClick={() => {
                 if (s.key === "unpaid_pay") {
-                  setStatusFilter("all");
-                  setPaymentFilter(paymentFilter === "unpaid" ? "all" : "unpaid");
+                  handleFilterChange(() => { setStatusFilter("all"); setPaymentFilter(paymentFilter === "unpaid" ? "all" : "unpaid"); });
                 } else {
-                  setPaymentFilter("all");
-                  setStatusFilter(s.key === statusFilter ? "all" : s.key);
+                  handleFilterChange(() => { setPaymentFilter("all"); setStatusFilter(s.key === statusFilter ? "all" : s.key); });
                 }
               }}
             >
@@ -260,11 +346,11 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               placeholder={`Cari nomor ${isQuote ? "penawaran" : "order"}, customer...`}
               className={`pl-9 ${search ? "pr-9" : ""}`}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => handleFilterChange(() => setSearch(e.target.value))}
             />
             {search && (
               <button
-                onClick={() => setSearch("")}
+                onClick={() => handleFilterChange(() => setSearch(""))}
                 className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
                 aria-label="Hapus pencarian"
               >
@@ -272,7 +358,7 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               </button>
             )}
           </div>
-          <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPaymentFilter("all"); }}>
+          <Select value={statusFilter} onValueChange={(v) => handleFilterChange(() => { setStatusFilter(v); setPaymentFilter("all"); })}>
             <SelectTrigger className="w-44" data-testid="status-filter">
               <SelectValue placeholder="Semua Status" />
             </SelectTrigger>
@@ -283,6 +369,19 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               ))}
             </SelectContent>
           </Select>
+          {templateCategories.length > 0 && (
+            <Select value={categoryFilter} onValueChange={(v) => handleFilterChange(() => setCategoryFilter(v))}>
+              <SelectTrigger className="w-52" data-testid="category-filter">
+                <SelectValue placeholder="Semua Komoditi" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Komoditi</SelectItem>
+                {templateCategories.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
 
         {/* Payment filter chips — orders only */}
@@ -292,7 +391,7 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               <button
                 key={f}
                 type="button"
-                onClick={() => { setPaymentFilter(f); if (f !== "all") setStatusFilter("all"); }}
+                onClick={() => handleFilterChange(() => { setPaymentFilter(f); if (f !== "all") setStatusFilter("all"); })}
                 data-testid={`filter-payment-${f}`}
                 className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${
                   paymentFilter === f
@@ -301,10 +400,8 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
                 }`}
               >
                 {PAYMENT_LABELS[f]}
-                {f !== "all" && (
-                  <span className="ml-1.5 opacity-70">
-                    {allDocs.filter((d) => d.paymentStatus === f).length}
-                  </span>
+                {f !== "all" && paymentFilter === f && (
+                  <span className="ml-1.5 opacity-70">{pagination?.total ?? 0}</span>
                 )}
               </button>
             ))}
@@ -327,10 +424,12 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
         <Card>
           <CardHeader className="pb-3 pt-4 px-4">
             <CardTitle className="text-sm text-muted-foreground">
-              {filtered.length} {isQuote ? "penawaran" : "order"}
+              {pagination ? `${pagination.total} ` : ""}{isQuote ? "penawaran" : "order"}
               {statusFilter !== "all" ? ` · ${STATUS_LABELS[statusFilter] ?? statusFilter}` : ""}
               {!isQuote && paymentFilter !== "all" ? ` · ${PAYMENT_LABELS[paymentFilter]}` : ""}
+              {categoryFilter !== "all" ? ` · ${categoryFilter}` : ""}
               {search ? ` · "${search}"` : ""}
+              {pagination && pagination.totalPages > 1 ? ` · hal. ${pagination.page}/${pagination.totalPages}` : ""}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -440,6 +539,32 @@ export default function SalesDocumentsListPage({ kind = "quote" }: Props) {
               </TableBody>
             </Table>
           </CardContent>
+
+          {/* Pagination controls */}
+          {pagination && pagination.totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <span className="text-xs text-muted-foreground">
+                {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} dari {pagination.total}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={pagination.page <= 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-xs px-2">{pagination.page} / {pagination.totalPages}</span>
+                <Button
+                  variant="outline" size="sm"
+                  onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
+                  disabled={pagination.page >= pagination.totalPages}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       </div>
 

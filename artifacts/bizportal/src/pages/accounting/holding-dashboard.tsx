@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -23,7 +24,9 @@ import {
   RefreshCw,
   Download,
   Eye,
+  ArrowLeft,
 } from "lucide-react";
+import { Link } from "wouter";
 
 function fmt(n: number) {
   return new Intl.NumberFormat("id-ID", {
@@ -253,6 +256,8 @@ export default function HoldingDashboardPage() {
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
+                <Link href="/accounting"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
                 <h1 className="text-2xl font-bold tracking-tight">Holding Dashboard</h1>
                 <Badge className="bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 text-xs font-mono">
                   CST GROUP
@@ -279,11 +284,11 @@ export default function HoldingDashboardPage() {
         <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-card p-4">
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Dari Tanggal</Label>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-8 text-sm w-40" />
+            <DatePicker value={from} onChange={(v) => setFrom(v)} className="h-8 text-sm w-40" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Sampai Tanggal</Label>
-            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-8 text-sm w-40" />
+            <DatePicker value={to} onChange={(v) => setTo(v)} className="h-8 text-sm w-40" />
           </div>
           <div className="space-y-1">
             <Label className="text-xs text-muted-foreground">Perusahaan</Label>

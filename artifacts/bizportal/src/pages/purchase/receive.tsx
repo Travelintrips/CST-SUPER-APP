@@ -11,7 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { PackageCheck, Plus, ChevronDown, ChevronUp, Warehouse } from "lucide-react";
+import { ArrowLeft, PackageCheck, Plus, ChevronDown, ChevronUp, Warehouse } from "lucide-react";
+import { Link } from "wouter";
 
 interface PoLine {
   id: number; product_id: number; product_name: string; sku: string; unit: string;
@@ -129,6 +130,8 @@ export default function PurchaseReceivePage() {
     <AppShell>
       <div className="p-6 space-y-6">
         <div>
+          <Link href="/purchase"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <PackageCheck size={24} /> Purchase Receive (GRN)
           </h1>

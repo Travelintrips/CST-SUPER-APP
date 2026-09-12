@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
+import { broadcastInvalidation } from "../lib/alertsBroadcast.js";
 import { eq, and, desc, sql } from "drizzle-orm";
 import {
   db, logisticOrdersTable, logisticOrderRfqsTable, rfqVendorLinksTable,
@@ -7,15 +8,24 @@ import {
   customerQuoteLinksTable, customerQuoteResponsesTable,
   orderTaskLinksTable, orderUpdatesTable, customerOrderLinksTable,
   driverLocationsTable,
+  logisticOrderItemsTable,
 } from "@workspace/db";
+import { resolveTemplate } from "@workspace/product-templates";
 import { requireClerkUser } from "../lib/requireAdmin.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
-import { getAdminWa } from "../lib/adminWa.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
+import { getAdminGroupWa } from "../lib/adminWa.js";
 import { getPreferredDomain } from "../lib/domain.js";
+import { calcTax } from "../lib/taxHelper.js";
 import { logger } from "../lib/logger.js";
+import { logTokenAccess } from "../lib/tokenGuard.js";
 import { checkOrderGeofence } from "../lib/orderGeofenceChecker.js";
+import { updateOrderProgress } from "../lib/orderProgress.js";
+import { getWaTemplateConfig, renderTemplate, deriveServiceType } from "../lib/orderNotification.js";
+import { logOrderAudit, logCustomerApprovalEvent, logOrderStatusChange } from "../lib/auditTrail.js";
+import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 
-const tok = () => randomBytes(24).toString("hex");
+// P0.2 — 256-bit secure token generator
+const tok = () => randomBytes(32).toString("hex");
 const fmtRp = (n: number | null | undefined) =>
   n == null ? "—" : `Rp ${Math.round(n).toLocaleString("id-ID")}`;
 
@@ -30,6 +40,15 @@ function getBaseUrl(): string {
 
 export const customerQuoteAdminRouter = Router();
 
+// Boot migration: add template columns to customer_quote_links
+db.execute(sql.raw(`
+  ALTER TABLE customer_quote_links ADD COLUMN IF NOT EXISTS category_key TEXT;
+  ALTER TABLE customer_quote_links ADD COLUMN IF NOT EXISTS template_id TEXT;
+  ALTER TABLE customer_quote_links ADD COLUMN IF NOT EXISTS template_version TEXT;
+  ALTER TABLE customer_quote_links ADD COLUMN IF NOT EXISTS template_snapshot JSONB;
+  ALTER TABLE customer_quote_links ADD COLUMN IF NOT EXISTS price_items JSONB;
+`)).catch((e: unknown) => logger.warn({ e }, "customer_quote_links migration warn"));
+
 // POST /api/logistic/rfq/:rfqId/send-customer-quote
 customerQuoteAdminRouter.post("/rfq/:rfqId/send-customer-quote", async (req: Request, res: Response) => {
   if (!(await requireClerkUser(req, res))) return;
@@ -38,10 +57,11 @@ customerQuoteAdminRouter.post("/rfq/:rfqId/send-customer-quote", async (req: Req
 
   const {
     etaFinal, termsConditions, quoteNotes, finalCustomerPrice,
-    validInDays,
+    validInDays, priceItems,
   } = req.body as {
     etaFinal?: string; termsConditions?: string; quoteNotes?: string;
     finalCustomerPrice?: number; validInDays?: number;
+    priceItems?: Array<{ name: string; qty?: number | null; unit?: string | null; unitPrice?: number | null; subtotal: number }>;
   };
 
   try {
@@ -59,7 +79,51 @@ customerQuoteAdminRouter.post("/rfq/:rfqId/send-customer-quote", async (req: Req
       ? Number(selectedLink.offeredPrice)
       : selectedLink?.basicPrice ? Number(selectedLink.basicPrice) : null;
 
-    const customerPrice = finalCustomerPrice ?? (order.finalSellingPrice ? Number(order.finalSellingPrice) : null);
+    const orderSubtotalNum = order.subtotal ? Number(order.subtotal) : 0;
+    const orderTaxNum = order.tax ? Number(order.tax) : 0;
+    const orderGrandTotalNum = order.grandTotal ? Number(order.grandTotal) : (orderSubtotalNum + orderTaxNum);
+
+    // Harga jual ke customer: pakai finalCustomerPrice dari request jika ada,
+    // fallback ke order.finalSellingPrice, fallback ke order grandTotal (subtotal+tax)
+    const customerPrice = finalCustomerPrice
+      ?? (order.finalSellingPrice ? Number(order.finalSellingPrice) : null)
+      ?? (orderGrandTotalNum > 0 ? orderGrandTotalNum : null);
+
+    // Fetch order items untuk breakdown WA
+    const rawOrderItems = await db.select({
+      serviceName: logisticOrderItemsTable.serviceName,
+      inputData: logisticOrderItemsTable.inputData,
+      subtotal: logisticOrderItemsTable.subtotal,
+    }).from(logisticOrderItemsTable).where(eq(logisticOrderItemsTable.orderId, order.id));
+
+    let itemsBlock: string | null = null;
+    if (rawOrderItems.length > 0) {
+      const lines = rawOrderItems.map((it, idx) => {
+        const inp = (it.inputData as Record<string, unknown> | null) ?? {};
+        const qtyRaw = inp.qty ?? inp.quantity ?? inp.jumlah;
+        const qty = qtyRaw != null ? Number(qtyRaw) : null;
+        const unit = inp.unit ? String(inp.unit) : null;
+        const sub = it.subtotal ? parseFloat(it.subtotal) : null;
+        const parts = [`${idx + 1}. ${it.serviceName}`];
+        if (qty != null) parts.push(`   Qty: ${qty}${unit ? ` ${unit}` : ""}`);
+        if (sub != null && sub > 0) {
+          if (qty != null && qty > 1) {
+            parts.push(`   Harga/Unit: ${fmtRp(sub / qty)}`);
+          }
+          parts.push(`   Subtotal: ${fmtRp(sub)}`);
+        }
+        return parts.join("\n");
+      });
+      itemsBlock = lines.join("\n\n");
+    }
+
+    // Hitung breakdown subtotal/tax/total untuk WA
+    const displaySubtotal = orderSubtotalNum > 0 ? orderSubtotalNum
+      : customerPrice ? Math.round(customerPrice / 1.11) : null;
+    const displayTax = orderTaxNum > 0 ? orderTaxNum
+      : displaySubtotal ? (customerPrice! - displaySubtotal) : null;
+    const displayTotal = customerPrice ?? (displaySubtotal != null && displayTax != null ? displaySubtotal + displayTax : null);
+
     const margin = customerPrice && vendorCost ? customerPrice - vendorCost : null;
 
     const validUntil = validInDays
@@ -68,20 +132,44 @@ customerQuoteAdminRouter.post("/rfq/:rfqId/send-customer-quote", async (req: Req
 
     const token = tok();
 
+    // Resolve templateSnapshot from RFQ (saved in STEP 2) or from order's categoryKey
+    let templateSnapshot: Record<string, unknown> | null = (rfq as any).templateSnapshot ?? null;
+    const orderCategoryKey: string | null = (order as any).categoryKey ?? null;
+    const rfqTemplateId: string | null = (rfq as any).templateId ? String((rfq as any).templateId) : null;
+    const rfqTemplateVersion: string | null = (rfq as any).templateVersion ?? null;
+    if (!templateSnapshot && orderCategoryKey) {
+      try {
+        const resolved = await resolveTemplate(orderCategoryKey);
+        if (resolved) templateSnapshot = resolved as unknown as Record<string, unknown>;
+      } catch { /* non-critical */ }
+    }
+
     // Create customer_quote_links record
     const [link] = await db.insert(customerQuoteLinksTable).values({
       rfqId,
       orderId: order.id,
       token,
       status: "pending",
-      etaFinal: etaFinal ?? order.etaFinal ?? null,
+      etaFinal: etaFinal ?? (order as any).etaFinal ?? null,
       termsConditions: termsConditions ?? null,
       quoteNotes: quoteNotes ?? null,
       finalCustomerPrice: customerPrice ? String(customerPrice) : null,
       vendorCost: vendorCost ? String(vendorCost) : null,
       margin: margin ? String(margin) : null,
       validUntil,
+      categoryKey: orderCategoryKey,
+      templateId: rfqTemplateId,
+      templateVersion: rfqTemplateVersion,
+      templateSnapshot: templateSnapshot ?? undefined,
     } as any).returning();
+
+    // Save per-item price breakdown if provided (Step 12/13)
+    if (Array.isArray(priceItems) && priceItems.length > 0 && link?.id) {
+      await db.execute(sql`
+        UPDATE customer_quote_links SET price_items = ${JSON.stringify(priceItems)}::jsonb
+        WHERE id = ${link.id}
+      `).catch(() => {});
+    }
 
     // Update logistic_order with new status + columns (raw SQL for added columns not in Drizzle schema)
     await db.execute(sql`
@@ -105,27 +193,105 @@ customerQuoteAdminRouter.post("/rfq/:rfqId/send-customer-quote", async (req: Req
       isPublic: false,
     });
 
+    updateOrderProgress(order.id, "SENT_TO_CUSTOMER", "admin", "Admin", `Penawaran dikirim ke customer. Harga: ${fmtRp(customerPrice)}`).catch(() => {});
+
+    // Audit trail: customer_approval_history + order_audit_logs
+    logCustomerApprovalEvent({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      rfqId: rfq.id,
+      eventType: "quotation_sent",
+      oldStatus: (order as any).customer_quote_status ?? null,
+      newStatus: "customer_quoted",
+      customerName: order.customerName ?? null,
+      customerEmail: order.email ?? null,
+      customerPhone: order.phone ?? null,
+      tokenUsed: token,
+      actorType: "admin",
+      actorName: "Admin",
+    }).catch(() => {});
+    logOrderAudit({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      rfqId: rfq.id,
+      actorType: "admin",
+      actorName: "Admin",
+      action: "customer_quoted",
+      description: `Penawaran dikirim ke customer ${order.customerName ?? "-"}. Harga: ${fmtRp(customerPrice)}. ETA: ${etaFinal ?? "—"}.`,
+      newValue: { customerPrice, etaFinal, token },
+    }).catch(() => {});
+
     const quoteUrl = `${getBaseUrl()}/customer-quote/${token}`;
 
     // Send WhatsApp to customer
     if (order.phone) {
-      const waMsg =
-        `Halo ${order.customerName ?? "Customer"},\n\n` +
-        `Berikut penawaran untuk permintaan Anda:\n\n` +
-        `RFQ: ${rfq.rfqNumber}\n` +
-        `Layanan: ${order.shipmentType}\n` +
-        `Rute: ${order.origin} → ${order.destination}\n` +
-        `Harga: ${fmtRp(customerPrice)}\n` +
-        `ETA: ${etaFinal ?? "—"}\n` +
-        `Valid sampai: ${validUntil.toLocaleDateString("id-ID")}\n\n` +
-        `Silakan review dan konfirmasi melalui link berikut:\n${quoteUrl}`;
-
+      const tplBody = await getWaTemplateConfig("customer", "customer_approval",
+        `✅ *PENAWARAN SIAP — CST LOGISTICS*\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `Halo *{{customerName}}*,\n\n` +
+        `Penawaran untuk order *{{orderNumber}}* telah siap.\n` +
+        `No. RFQ    : {{rfqNumber}}\n` +
+        `Layanan    : {{shipmentType}}\n` +
+        `Rute       : {{route}}\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `{{itemsBlock}}\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `💵 Subtotal : {{subtotalDisplay}}\n` +
+        `🧾 PPN 11%  : {{taxDisplay}}\n` +
+        `💰 Total    : *{{totalDisplay}}*\n` +
+        `ETA         : {{etaFinal}}\n` +
+        `Valid s/d   : {{validUntil}}\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `Silakan review dan konfirmasi melalui link berikut:\n` +
+        `🔗 {{customerApprovalLink}}\n\n` +
+        `Penawaran berlaku {{validUntil}}.\n` +
+        `Terima kasih 🙏\n_B2B Marketplace and Logistic_`
+      );
+      const svcType = deriveServiceType(order.shipmentType ?? "", (order as any).orderType ?? undefined);
+      const origin = order.origin || null;
+      const destination = order.destination || null;
+      // Build commodity context from resolved templateSnapshot — never exposes base price/margin
+      const { buildCommodityContext } = await import("../lib/orderNotification.js");
+      const firstItemForCtx = itemsBlock
+        ? (() => {
+            const raw = (order as any).items ?? (order as any).orderItems ?? [];
+            return Array.isArray(raw) ? raw[0] : null;
+          })()
+        : null;
+      const commodityCtxCQ = buildCommodityContext(templateSnapshot ?? null, {
+        quantity: firstItemForCtx?.qty ?? firstItemForCtx?.quantity ?? null,
+        unit: firstItemForCtx?.unit ?? null,
+      });
+      const waMsg = renderTemplate(tplBody, {
+        customerName: order.customerName ?? "Customer",
+        rfqNumber: rfq.rfqNumber,
+        orderNumber: order.orderNumber,
+        shipmentType: order.shipmentType || null,
+        serviceType: svcType || null,
+        origin,
+        destination,
+        commodity: order.commodity ?? null,
+        cargoDescription: order.cargoDescription ?? null,
+        route: (origin && destination) ? `${origin} → ${destination}` : (origin || destination || null),
+        itemsBlock,
+        subtotalDisplay: displaySubtotal != null ? fmtRp(displaySubtotal) : null,
+        taxDisplay: displayTax != null ? fmtRp(displayTax) : null,
+        totalDisplay: fmtRp(displayTotal),
+        sellingPrice: fmtRp(customerPrice),
+        etaFinal: etaFinal ?? null,
+        validUntil: validUntil.toLocaleDateString("id-ID"),
+        customerApprovalLink: quoteUrl,
+        timestamp: new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }),
+        ...commodityCtxCQ,
+      }, svcType);
       sendWhatsApp(order.phone, waMsg).catch((e) =>
         logger.warn({ e }, "customerQuote WA to customer failed")
       );
     }
 
     logger.info({ rfqId, orderId: order.id, token }, "Customer quote sent");
+    broadcastInvalidation("rfq", order.id);
+    broadcastInvalidation("logistic_orders", order.id);
     return res.status(201).json({ ok: true, token, quoteUrl, link });
   } catch (err) {
     logger.error({ err }, "send-customer-quote error");
@@ -166,13 +332,16 @@ customerQuoteAdminRouter.post("/orders/:orderId/create-task-link", async (req: R
     if (vendorId) {
       const [vendor] = await db.select().from(suppliersTable).where(eq(suppliersTable.id, vendorId));
       if (vendor?.phone) {
-        const [order] = await db.select().from(logisticOrdersTable).where(eq(logisticOrdersTable.id, orderId));
-        const waMsg =
-          `🚚 *Tugas Order Baru — CST Logistics*\n\n` +
-          `Order: ${order?.orderNumber ?? orderId}\n` +
-          `Rute: ${order?.origin ?? ""} → ${order?.destination ?? ""}\n` +
-          (label ? `Keterangan: ${label}\n` : "") +
-          `\nSilakan buka link berikut untuk konfirmasi dan update status:\n${taskUrl}`;
+        const [orderRow] = await db.select().from(logisticOrdersTable).where(eq(logisticOrdersTable.id, orderId));
+        const defaultTpl = ["🚚 *Tugas Order Baru — B2B Marketplace and Logistic*","","Order: {{orderNumber}}","Rute: {{route}}","Keterangan: {{label}}","","Silakan buka link berikut untuk konfirmasi dan update status:","{{taskUrl}}","_{{timestamp}}_"].join("\n");
+        const tplBody = await getWaTemplateConfig("vendor", "task_link", defaultTpl);
+        const waMsg = renderTemplate(tplBody, {
+          orderNumber: orderRow?.orderNumber ?? String(orderId),
+          route: orderRow ? `${orderRow.origin ?? ""} → ${orderRow.destination ?? ""}` : "",
+          label: label ?? null,
+          taskUrl,
+          timestamp: new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }),
+        });
         sendWhatsApp(vendor.phone, waMsg).catch((e) =>
           logger.warn({ e }, "createTaskLink WA failed")
         );
@@ -267,7 +436,7 @@ customerQuoteAdminRouter.get("/orders/:orderId/detail", async (req: Request, res
       WHERE r.order_id = ${orderId}
       ORDER BY fs.created_at DESC
     `);
-    const freightShipments = (freightRows as any[]).map((row: any) => ({
+    const freightShipments = (freightRows.rows as any[]).map((row: any) => ({
       id: row.id as number,
       shipmentNumber: row.shipmentNumber as string,
       status: row.status as string,
@@ -353,11 +522,29 @@ customerQuoteAdminRouter.patch("/orders/:orderId/status", async (req: Request, r
   if (!status) return res.status(400).json({ message: "status wajib" });
 
   try {
-    await db.update(logisticOrdersTable).set({ status }).where(eq(logisticOrdersTable.id, orderId));
+    const svcResult = await transitionLogisticOrderStatus(orderId, status, {
+      actorType: "admin",
+      actorId: (req.user as { id?: string } | undefined)?.id ?? undefined,
+      actorName: actorName ?? "Admin",
+      notes: notes ?? undefined,
+      source: "PATCH /logistic/orders/:orderId/status",
+      skipAudit: false,
+    });
+    if (!svcResult.ok) {
+      if (svcResult.allowedTransitions !== undefined) {
+        return res.status(422).json({
+          message: svcResult.error,
+          allowedTransitions: svcResult.allowedTransitions,
+          code: "INVALID_TRANSITION",
+        });
+      }
+      return res.status(400).json({ message: svcResult.error ?? "Gagal update status" });
+    }
     await db.insert(orderUpdatesTable).values({
       orderId, actorType: "admin", actorName: actorName ?? "Admin",
       status, notes: notes ?? `Status diubah ke: ${status}`, isPublic: true,
     });
+    broadcastInvalidation("logistic_orders", orderId);
     return res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "update-order-status error");
@@ -377,7 +564,20 @@ customerQuotePublicRouter.get("/:token", async (req: Request, res: Response) => 
   try {
     const [link] = await db.select().from(customerQuoteLinksTable)
       .where(eq(customerQuoteLinksTable.token, token));
-    if (!link) return res.status(404).json({ error: "Link tidak ditemukan" });
+    if (!link) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, action: "view", outcome: "denied_not_found", req });
+      return res.status(404).json({ error: "Link tidak ditemukan" });
+    }
+    if ((link as any).revokedAt) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "view", outcome: "denied_revoked", req });
+      return res.status(403).json({ error: "Link ini telah dicabut", isRevoked: true });
+    }
+    const isExpiredNow = link.validUntil && link.validUntil < new Date();
+    if (isExpiredNow) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "view", outcome: "denied_expired", req });
+      return res.status(410).json({ error: "Link sudah kadaluarsa", isExpired: true });
+    }
+    logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "view", outcome: "ok", req });
 
     // Mark opened
     if (!link.openedAt) {
@@ -392,25 +592,113 @@ customerQuotePublicRouter.get("/:token", async (req: Request, res: Response) => 
     const isExpired = link.validUntil && link.validUntil < new Date();
     const isResponded = ["approved", "revision_requested", "rejected"].includes(link.status);
 
+    const [rfqRow] = link.rfqId
+      ? await db.select().from(logisticOrderRfqsTable).where(eq(logisticOrderRfqsTable.id, link.rfqId))
+      : [null];
+
+    const orderItems = await db.select().from(logisticOrderItemsTable)
+      .where(eq(logisticOrderItemsTable.orderId, link.orderId));
+
+    function extractQty(inp: unknown): number | null {
+      if (!inp || typeof inp !== "object") return null;
+      const d = inp as Record<string, unknown>;
+      const q = d.quantity ?? d.qty ?? d.jumlah;
+      if (typeof q === "number") return q;
+      if (typeof q === "string") { const n = parseFloat(q); return isNaN(n) ? null : n; }
+      return null;
+    }
+    function extractUnit(inp: unknown): string | null {
+      if (!inp || typeof inp !== "object") return null;
+      const d = inp as Record<string, unknown>;
+      const u = d.unit ?? d.satuan ?? d.uom;
+      return typeof u === "string" ? u : null;
+    }
+
+    function extractUnitPrice(inp: unknown): number | null {
+      if (!inp || typeof inp !== "object") return null;
+      const d = inp as Record<string, unknown>;
+      const raw = d.price ?? d.productPrice ?? d.unitPrice ?? d.sellingPrice ?? null;
+      if (typeof raw === "number") return raw;
+      if (typeof raw === "string") { const n = parseFloat(raw); return isNaN(n) ? null : n; }
+      return null;
+    }
+
+    const finalCustomerPrice = link.finalCustomerPrice ? Number(link.finalCustomerPrice) : null;
+    const orderSubtotal = order.subtotal ? Number(order.subtotal) : 0;
+    const orderTax = order.tax ? Number(order.tax) : 0;
+    const orderGrandTotal = order.grandTotal ? Number(order.grandTotal) : 0;
+
+    // Prioritas: gunakan harga dari catalog (order.subtotal + order.tax = grand_total).
+    // finalCustomerPrice (override admin) hanya sebagai fallback jika data catalog belum ada.
+    let displaySubtotal: number | null = null;
+    let displayTax: number | null = null;
+    let displayTotal: number | null = null;
+
+    if (orderSubtotal > 0 && orderTax > 0) {
+      displaySubtotal = orderSubtotal;
+      displayTax = orderTax;
+      displayTotal = orderGrandTotal > 0 ? orderGrandTotal : orderSubtotal + orderTax;
+    } else if (orderGrandTotal > 0) {
+      displaySubtotal = Math.round(orderGrandTotal / 1.11);
+      displayTax = orderGrandTotal - displaySubtotal;
+      displayTotal = orderGrandTotal;
+    } else if (finalCustomerPrice && finalCustomerPrice > 0) {
+      // Fallback: belum ada data catalog — pakai harga admin (belum PPN) + PPN
+      displaySubtotal = finalCustomerPrice;
+      displayTax = calcTax(finalCustomerPrice);
+      displayTotal = finalCustomerPrice + displayTax;
+    }
+
+    // Bangun priceItems: gunakan stored price_items jika ada (dari Step 12), otherwise computed
+    const storedPriceItems = (link as any).price_items ?? null;
+    const priceItems: Array<{ name: string; category?: string; subtotal: number; unitPrice: number | null; qty: number | null; unit: string | null }> =
+      Array.isArray(storedPriceItems) && storedPriceItems.length > 0
+        ? storedPriceItems
+        : orderItems.map((i) => {
+            const qty = extractQty(i.inputData);
+            const unitPrice = extractUnitPrice(i.inputData); // harga catalog (sebelum PPN)
+            const dbSubtotal = i.subtotal ? Number(i.subtotal) : 0;
+            const subtotal = unitPrice != null && qty != null
+              ? unitPrice * qty
+              : dbSubtotal;
+            return {
+              name: i.serviceName,
+              category: i.category,
+              subtotal,
+              unitPrice,
+              qty,
+              unit: extractUnit(i.inputData),
+            };
+          });
+
     return res.json({
       token,
       status: link.status,
       isExpired,
       isResponded,
-      rfqNumber: order.orderNumber,
-      serviceType: order.shipmentType,
-      origin: order.origin,
-      destination: order.destination,
+      rfqNumber: rfqRow?.rfqNumber ?? order.orderNumber,
+      quotationNumber: (order as any).quotationNumber ?? null,
+      serviceType: order.shipmentType || null,
+      origin: order.origin || null,
+      destination: order.destination || null,
       cargoDetail: [
         order.commodity, order.cargoDescription,
         order.grossWeight ? `${order.grossWeight} kg` : null,
         order.volumeCbm ? `${order.volumeCbm} cbm` : null,
-      ].filter(Boolean).join(" · ") || "—",
-      finalCustomerPrice: link.finalCustomerPrice ? Number(link.finalCustomerPrice) : null,
+      ].filter(Boolean).join(" · ") || null,
+      finalCustomerPrice,
+      displaySubtotal,
+      displayTax,
+      displayTotal,
+      priceItems,
       etaFinal: link.etaFinal,
       termsConditions: link.termsConditions,
       quoteNotes: link.quoteNotes,
       validUntil: link.validUntil?.toISOString() ?? null,
+      categoryKey: (link as any).categoryKey ?? null,
+      templateId: (link as any).templateId ?? null,
+      templateVersion: (link as any).templateVersion ?? null,
+      templateSnapshot: (link as any).templateSnapshot ?? null,
     });
   } catch (err) {
     logger.error({ err }, "get customer-quote error");
@@ -433,13 +721,25 @@ customerQuotePublicRouter.post("/:token/respond", async (req: Request, res: Resp
   try {
     const [link] = await db.select().from(customerQuoteLinksTable)
       .where(eq(customerQuoteLinksTable.token, token));
-    if (!link) return res.status(404).json({ error: "Link tidak ditemukan" });
-
+    if (!link) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, action: "respond", outcome: "denied_not_found", req });
+      return res.status(404).json({ error: "Link tidak ditemukan" });
+    }
+    if ((link as any).revokedAt) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "respond", outcome: "denied_revoked", req });
+      return res.status(403).json({ error: "Link ini telah dicabut", isRevoked: true });
+    }
     const isExpired = link.validUntil && link.validUntil < new Date();
-    if (isExpired) return res.status(410).json({ error: "Link sudah kadaluarsa" });
-
+    if (isExpired) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "respond", outcome: "denied_expired", req });
+      return res.status(410).json({ error: "Link sudah kadaluarsa" });
+    }
     const isResponded = ["approved", "revision_requested", "rejected"].includes(link.status);
-    if (isResponded) return res.status(409).json({ error: "Penawaran ini sudah dijawab sebelumnya" });
+    if (isResponded) {
+      logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "respond", outcome: "denied_used", req });
+      return res.status(409).json({ error: "Penawaran ini sudah dijawab sebelumnya" });
+    }
+    logTokenAccess({ tokenType: "customer_quote", tokenRef: token, entityId: link.id, action: "respond", outcome: "ok", req });
 
     const [order] = await db.select().from(logisticOrdersTable)
       .where(eq(logisticOrdersTable.id, link.orderId));
@@ -450,9 +750,17 @@ customerQuotePublicRouter.post("/:token/respond", async (req: Request, res: Resp
       : "rejected";
 
     const now = new Date();
-    await db.update(customerQuoteLinksTable)
+    // Atomic guard: only update if status is still pending — prevents race between concurrent requests
+    const updated = await db.update(customerQuoteLinksTable)
       .set({ status: linkStatus, respondedAt: now })
-      .where(eq(customerQuoteLinksTable.token, token));
+      .where(and(
+        eq(customerQuoteLinksTable.token, token),
+        eq(customerQuoteLinksTable.status, "pending"),
+      ))
+      .returning({ id: customerQuoteLinksTable.id });
+    if (!updated.length) {
+      return res.status(409).json({ error: "Penawaran ini sudah dijawab oleh request lain" });
+    }
 
     // Save response record
     await db.insert(customerQuoteResponsesTable).values({
@@ -479,53 +787,151 @@ customerQuotePublicRouter.post("/:token/respond", async (req: Request, res: Resp
 
     const rfqNum = order.orderNumber;
     const adminLink = `${getBaseUrl()}/bizportal/logistics/orders/${order.id}`;
-    const rfqLink = `${getBaseUrl()}/bizportal/logistics/portal-orders/${order.id}`;
-    const adminWa = await getAdminWa();
+    const rfqLink = `${getBaseUrl()}/bizportal/logistics/orders/${order.id}`;
+    const adminGroupWa = await getAdminGroupWa();
 
-    if (adminWa && response === "approve") {
+    if (response === "approve") {
       // Create customer tracking link automatically
       const trackToken = tok();
       await db.insert(customerOrderLinksTable).values({ orderId: order.id, token: trackToken });
 
-      // Send WA to admin
-      const waAdmin =
-        `✅ Customer Approve Penawaran\n\n` +
-        `RFQ: ${rfqNum}\n` +
-        `Customer: ${order.customerName}\n` +
-        `Harga Final: ${fmtRp(link.finalCustomerPrice ? Number(link.finalCustomerPrice) : null)}\n\n` +
-        `Lihat order:\n${adminLink}`;
-      sendWhatsApp(adminWa, waAdmin).catch(() => {});
+      // Generate forward_vendor mini-form link (no-login) for admin
+      let fwdShort: string | null = null;
+      try {
+        const { createAdminActionLink, getAdminActionUrl } = await import("./adminAction.js");
+        const { generateShortLink } = await import("../lib/shortLink.js");
+        const fwdToken = await createAdminActionLink(order.id, "forward_vendor", link.rfqId ?? undefined, 72);
+        const fwdUrl = getAdminActionUrl(fwdToken);
+        fwdShort = await generateShortLink(fwdUrl, { context: "admin_action", refType: "order", refId: String(order.id) });
+      } catch (e) {
+        logger.warn({ e }, "customerQuote approve: gagal generate forward_vendor link");
+      }
+
+      // Send WA to admin group only
+      const ts = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+      if (adminGroupWa) {
+        const tplApproveGroup = await getWaTemplateConfig("admin_group", "customer_approved",
+          "🎉 *CUSTOMER APPROVED*\n" +
+          "━━━━━━━━━━━━━━━━\n" +
+          "Order      : *{{orderNumber}}*\n" +
+          "Customer   : *{{customerName}}*\n" +
+          "━━━━━━━━━━━━━━━━\n" +
+          "💰 Harga Jual  : *{{sellingPrice}}*\n" +
+          "📦 Harga Basic : {{vendorCost}}\n" +
+          "📈 Margin      : {{margin}}\n" +
+          "━━━━━━━━━━━━━━━━\n" +
+          "{{fwdUrl}}\n" +
+          "_{{timestamp}}_"
+        );
+        const _selling = link.finalCustomerPrice ? Number(link.finalCustomerPrice) : null;
+        const _cost = link.vendorCost ? Number(link.vendorCost) : null;
+        const _margin = (_selling != null && _cost != null) ? _selling - _cost : null;
+        const approvedVars = {
+          rfqNumber: rfqNum, orderNumber: order.orderNumber, customerName: order.customerName,
+          sellingPrice: fmtRp(_selling),
+          vendorCost: fmtRp(_cost),
+          margin: _margin != null
+            ? `${fmtRp(_margin)}${_selling ? ` (${Math.round((_margin / _selling) * 100)}%)` : ""}`
+            : "—",
+          fwdUrl: fwdShort ? `📦 Forward ke vendor (tanpa login):\n${fwdShort}` : `Lihat order:\n${adminLink}`,
+          timestamp: ts,
+        };
+        sendWhatsApp(adminGroupWa, renderTemplate(tplApproveGroup, approvedVars)).catch(() => {});
+      }
 
       // Notify selected vendor
       if (order.approvedVendorId) {
         const [vendor] = await db.select().from(suppliersTable)
           .where(eq(suppliersTable.id, order.approvedVendorId));
         if (vendor?.phone) {
-          const waVendor =
-            `📦 *Order Dikonfirmasi — CST Logistics*\n\n` +
-            `Order: ${order.orderNumber}\n` +
-            `Rute: ${order.origin} → ${order.destination}\n\n` +
-            `Customer telah menyetujui penawaran. Tim CST akan segera menghubungi Anda.`;
+          const defaultVendorTpl = "📦 *Order Dikonfirmasi — B2B Marketplace and Logistic*\n\nOrder: {{orderNumber}}\nRute: {{route}}\n\nCustomer telah menyetujui penawaran. Tim CST akan segera menghubungi Anda.";
+          const tplVendor = await getWaTemplateConfig("vendor", "customer_approved", defaultVendorTpl);
+          const waVendor = renderTemplate(tplVendor, {
+            orderNumber: order.orderNumber,
+            route: `${order.origin} → ${order.destination}`,
+            timestamp: ts,
+          });
           sendWhatsApp(vendor.phone, waVendor).catch(() => {});
         }
       }
-    } else if (adminWa && response === "revise") {
-      const waAdmin =
-        `🟡 Customer Minta Revisi\n\n` +
-        `RFQ: ${rfqNum}\n` +
-        `Customer: ${order.customerName}\n` +
-        `Catatan:\n${revisionNotes ?? "—"}\n\n` +
-        `Buka RFQ:\n${rfqLink}`;
-      sendWhatsApp(adminWa, waAdmin).catch(() => {});
-    } else if (adminWa && response === "reject") {
-      const waAdmin =
-        `🔴 Customer Menolak Penawaran\n\n` +
-        `RFQ: ${rfqNum}\n` +
-        `Customer: ${order.customerName}\n` +
-        `Alasan:\n${rejectionReason ?? "—"}\n\n` +
-        `Buka RFQ:\n${rfqLink}`;
-      sendWhatsApp(adminWa, waAdmin).catch(() => {});
+    } else if (response === "revise") {
+      const ts = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+      if (adminGroupWa) {
+        const tpl = await getWaTemplateConfig("admin_group", "customer_revised", "🟡 *CUSTOMER REVISI — {{rfqNumber}}*\nCustomer: {{customerName}}\nCatatan: {{revisionNotes}}\n{{rfqLink}}\n_{{timestamp}}_");
+        const waAdmin = renderTemplate(tpl, {
+          rfqNumber: rfqNum, customerName: order.customerName,
+          revisionNotes: revisionNotes ?? "—", rfqLink, timestamp: ts,
+        });
+        sendWhatsApp(adminGroupWa, waAdmin).catch(() => {});
+      }
+      if (order.phone) {
+        const custTpl = await getWaTemplateConfig("customer", "quote_revision_sent",
+          "🔄 *Revisi Penawaran Dikirim*\n\nHalo *{{customerName}}*,\n\nCatatan revisi Anda untuk order *{{orderNumber}}* telah kami terima.\n\nCatatan: {{revisionNotes}}\n\nTim kami akan segera menindaklanjuti dan mengirimkan penawaran baru.\n\nTerima kasih 🙏\n_B2B Marketplace and Logistic_"
+        );
+        sendWhatsApp(order.phone, renderTemplate(custTpl, {
+          customerName: order.customerName ?? "Customer",
+          orderNumber: order.orderNumber,
+          revisionNotes: revisionNotes ?? "—",
+          timestamp: ts,
+        })).catch(() => {});
+      }
+    } else if (response === "reject") {
+      const ts = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+      if (adminGroupWa) {
+        const tpl = await getWaTemplateConfig("admin_group", "customer_rejected", "🔴 *CUSTOMER TOLAK — {{rfqNumber}}*\nCustomer: {{customerName}}\nAlasan: {{rejectionReason}}\n{{rfqLink}}\n_{{timestamp}}_");
+        const waAdmin = renderTemplate(tpl, {
+          rfqNumber: rfqNum, customerName: order.customerName,
+          rejectionReason: rejectionReason ?? "—", rfqLink, timestamp: ts,
+        });
+        sendWhatsApp(adminGroupWa, waAdmin).catch(() => {});
+      }
+      if (order.phone) {
+        const custTpl = await getWaTemplateConfig("customer", "quote_rejected_confirmation",
+          "❌ *Penolakan Penawaran Tercatat*\n\nHalo *{{customerName}}*,\n\nPenolakan penawaran untuk order *{{orderNumber}}* telah kami catat.\n\nAlasan: {{rejectionReason}}\n\nJika ada pertanyaan atau ingin melanjutkan proses dengan syarat lain, silakan hubungi kami.\n\nTerima kasih 🙏\n_B2B Marketplace and Logistic_"
+        );
+        sendWhatsApp(order.phone, renderTemplate(custTpl, {
+          customerName: order.customerName ?? "Customer",
+          orderNumber: order.orderNumber,
+          rejectionReason: rejectionReason ?? "—",
+          timestamp: ts,
+        })).catch(() => {});
+      }
     }
+
+    // Audit trail: customer_approval_history + order_audit_logs
+    logCustomerApprovalEvent({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      rfqId: link.rfqId ?? null,
+      eventType: response === "approve" ? "quotation_approved"
+        : response === "revise" ? "quotation_revision_requested"
+        : "quotation_rejected",
+      oldStatus: "customer_quoted",
+      newStatus: linkStatus,
+      customerName: order.customerName ?? null,
+      customerEmail: order.email ?? null,
+      customerPhone: order.phone ?? null,
+      tokenUsed: token,
+      response,
+      revisionNotes: revisionNotes ?? null,
+      rejectionReason: rejectionReason ?? null,
+      actorType: "customer",
+      actorName: order.customerName ?? null,
+      ipAddress: req.ip ?? null,
+    }).catch(() => {});
+    logOrderAudit({
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      rfqId: link.rfqId ?? null,
+      actorType: "customer",
+      actorName: order.customerName ?? null,
+      action: response === "approve" ? "customer_approved"
+        : response === "revise" ? "customer_revision_requested"
+        : "customer_rejected",
+      description: notes,
+      newValue: { response, linkStatus, revisionNotes, rejectionReason },
+      ipAddress: req.ip ?? null,
+    }).catch(() => {});
 
     const msg = response === "approve"
       ? "Terima kasih! Penawaran Anda telah dikonfirmasi. Tim kami akan segera menghubungi Anda."
@@ -668,7 +1074,14 @@ orderTaskPublicRouter.post("/:token/update", async (req: Request, res: Response)
 
     // Update order status if given
     if (status && ORDER_STATUSES.includes(status)) {
-      await db.update(logisticOrdersTable).set({ status }).where(eq(logisticOrdersTable.id, link.orderId));
+      const svcRes = await transitionLogisticOrderStatus(link.orderId, status, {
+        actorType: "vendor",
+        actorName: vendorName ?? "Vendor",
+        source: "POST /task-link/:token/update",
+        force: true,
+        skipAudit: false,
+      });
+      if (!svcRes.ok) logger.warn({ svcRes, status, orderId: link.orderId }, "task-link status update rejected");
     }
 
     // Log update
@@ -682,15 +1095,15 @@ orderTaskPublicRouter.post("/:token/update", async (req: Request, res: Response)
       isPublic: true,
     });
 
-    // Notify admin
-    const adminWa = await getAdminWa();
-    if (adminWa && (status || notes)) {
+    // Notify admin group
+    const adminGroupWaTask = await getAdminGroupWa();
+    if (adminGroupWaTask && (status || notes)) {
       const waMsg =
         `📦 Update Order — ${order.orderNumber}\n` +
         `Dari: ${vendorName ?? link.roleType}\n` +
         (status ? `Status: ${status}\n` : "") +
         (notes ? `Catatan: ${notes}\n` : "");
-      sendWhatsApp(adminWa, waMsg).catch(() => {});
+      sendWhatsApp(adminGroupWaTask, waMsg).catch(() => {});
     }
 
     return res.json({ ok: true, message: "Update berhasil" });
@@ -722,6 +1135,13 @@ customerOrderPublicRouter.get("/:token", async (req: Request, res: Response) => 
       .where(and(eq(orderUpdatesTable.orderId, link.orderId), eq(orderUpdatesTable.isPublic, true)))
       .orderBy(desc(orderUpdatesTable.createdAt));
 
+    const productPrice = (order as any).productPrice ? Number((order as any).productPrice) : null;
+    const truckPrice = (order as any).truckPrice ? Number((order as any).truckPrice) : null;
+    const truckSource: string | null = (order as any).truckSource ?? null;
+    const totalPrice = (productPrice != null && truckPrice != null)
+      ? productPrice + truckPrice
+      : productPrice ?? truckPrice ?? null;
+
     return res.json({
       orderNumber: order.orderNumber,
       serviceType: order.shipmentType,
@@ -730,6 +1150,10 @@ customerOrderPublicRouter.get("/:token", async (req: Request, res: Response) => 
       status: order.status,
       etaFinal: (order as any).etaFinal ?? null,
       createdAt: order.createdAt,
+      productPrice,
+      truckPrice,
+      truckSource,
+      totalPrice,
       timeline: updates.map(u => ({
         id: u.id,
         status: u.status,

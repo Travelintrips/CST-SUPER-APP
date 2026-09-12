@@ -78,55 +78,30 @@ export async function runCustomerQuoteFlowMigration(): Promise<void> {
     );
   `);
 
-  // Add new columns to logistic_orders
+  // Add new columns to customer_quote_links and logistic_orders — batched to minimise lock time
   await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='customer_quote_status') THEN
-        ALTER TABLE logistic_orders ADD COLUMN customer_quote_status TEXT;
-      END IF;
-    END $$;
+    ALTER TABLE customer_quote_links
+      ADD COLUMN IF NOT EXISTS category_key TEXT,
+      ADD COLUMN IF NOT EXISTS template_id TEXT,
+      ADD COLUMN IF NOT EXISTS template_version TEXT,
+      ADD COLUMN IF NOT EXISTS template_snapshot JSONB;
   `);
+
   await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='eta_final') THEN
-        ALTER TABLE logistic_orders ADD COLUMN eta_final TEXT;
-      END IF;
-    END $$;
+    ALTER TABLE logistic_orders
+      ADD COLUMN IF NOT EXISTS customer_quote_status TEXT,
+      ADD COLUMN IF NOT EXISTS eta_final TEXT,
+      ADD COLUMN IF NOT EXISTS terms_conditions TEXT,
+      ADD COLUMN IF NOT EXISTS quote_notes TEXT,
+      ADD COLUMN IF NOT EXISTS vendor_cost NUMERIC(14,2),
+      ADD COLUMN IF NOT EXISTS order_margin NUMERIC(14,2),
+      ADD COLUMN IF NOT EXISTS selected_vendor_link_id INTEGER;
   `);
+
+  // ── Media Foundation: idempotent ADD COLUMN IF NOT EXISTS ──────────────────
   await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='terms_conditions') THEN
-        ALTER TABLE logistic_orders ADD COLUMN terms_conditions TEXT;
-      END IF;
-    END $$;
-  `);
-  await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='quote_notes') THEN
-        ALTER TABLE logistic_orders ADD COLUMN quote_notes TEXT;
-      END IF;
-    END $$;
-  `);
-  await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='vendor_cost') THEN
-        ALTER TABLE logistic_orders ADD COLUMN vendor_cost NUMERIC(14,2);
-      END IF;
-    END $$;
-  `);
-  await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='order_margin') THEN
-        ALTER TABLE logistic_orders ADD COLUMN order_margin NUMERIC(14,2);
-      END IF;
-    END $$;
-  `);
-  await db.execute(sql`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='selected_vendor_link_id') THEN
-        ALTER TABLE logistic_orders ADD COLUMN selected_vendor_link_id INTEGER;
-      END IF;
-    END $$;
+    ALTER TABLE customer_quote_links
+      ADD COLUMN IF NOT EXISTS media_assets JSONB NOT NULL DEFAULT '[]'
   `);
 
   logger.info("Customer quote flow migration: ok");

@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { Link } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { useCart } from "@/lib/logistic-cart";
 import { OPEN_CART_EVENT } from "@/components/CartDrawer";
+import { staticAsset } from "@/lib/staticAssets";
 
 type MediaItem = { type: "image" | "video"; url: string };
 
@@ -28,6 +30,12 @@ interface Product {
   imageUrl: string | null;
   mediaItems: MediaItem[];
   categories: string[];
+  weightKg: number | null;
+  lengthCm: number | null;
+  widthCm: number | null;
+  heightCm: number | null;
+  goodsType: string | null;
+  currencyCode?: string;
 }
 
 
@@ -38,38 +46,21 @@ const formatUSD = (v: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 
 function isUsdProduct(product: Product): boolean {
-  return product.subcategory === "Green Bean";
+  return (product.currencyCode ?? "IDR") === "USD";
 }
 
-// ── USD/IDR exchange rate — cached in localStorage for 6 h ─────────────────
-const _USD_IDR_KEY = "cst_usd_idr_rate";
-const _USD_IDR_TTL = 6 * 60 * 60 * 1000;
+// ── USD/IDR exchange rate — fetched from server (H6 fix) ────────────────────
+// Rate is fetched from our own API server (which caches it for 5 min server-side).
+// This avoids direct external API calls from the browser and stale 6-hour localStorage.
 const _USD_IDR_FALLBACK = 16_300;
 
-function _readCachedRate(): { rate: number; fresh: boolean } {
-  try {
-    const raw = localStorage.getItem(_USD_IDR_KEY);
-    if (raw) {
-      const { rate, ts } = JSON.parse(raw) as { rate: number; ts: number };
-      if (rate > 1000) return { rate, fresh: Date.now() - ts < _USD_IDR_TTL };
-    }
-  } catch { /* ignore */ }
-  return { rate: _USD_IDR_FALLBACK, fresh: false };
-}
-
 function useUsdIdrRate(): number {
-  const [rate, setRate] = useState<number>(() => _readCachedRate().rate);
+  const [rate, setRate] = useState<number>(_USD_IDR_FALLBACK);
   useEffect(() => {
-    const { fresh } = _readCachedRate();
-    if (fresh) return;
-    fetch("https://open.er-api.com/v6/latest/USD")
+    fetch("/api/ecommerce/usd-idr-rate")
       .then((r) => r.json())
-      .then((data) => {
-        const idr = (data?.rates?.IDR as number) ?? 0;
-        if (idr > 1000) {
-          localStorage.setItem(_USD_IDR_KEY, JSON.stringify({ rate: idr, ts: Date.now() }));
-          setRate(idr);
-        }
+      .then((data: { rate?: number }) => {
+        if (data?.rate && data.rate > 1000) setRate(data.rate);
       })
       .catch(() => { /* keep fallback */ });
   }, []);
@@ -77,9 +68,14 @@ function useUsdIdrRate(): number {
 }
 
 function getMedia(product: Product): MediaItem[] {
-  const items = product.mediaItems ?? [];
+  const items = (product.mediaItems ?? []).map((item) => ({
+    ...item,
+    url: item.type === "image" ? (resolveImageUrl(item.url) ?? item.url) : item.url,
+  }));
   if (items.length > 0) return items;
-  if (product.imageUrl) return [{ type: "image", url: product.imageUrl }];
+  if (product.imageUrl) {
+    return [{ type: "image", url: resolveImageUrl(product.imageUrl) ?? product.imageUrl }];
+  }
   return [];
 }
 
@@ -335,6 +331,11 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
         qty,
         unit: selectedUnit,
         productPrice: product.price,
+        weightKg: product.weightKg,
+        lengthCm: product.lengthCm,
+        widthCm: product.widthCm,
+        heightCm: product.heightCm,
+        goodsType: product.goodsType,
       },
       calculationResult: {},
       subtotal: product.price > 0 ? product.price * qty : 0,
@@ -381,6 +382,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
 
           {/* Price */}
           <div className="bg-primary/5 rounded-xl px-4 py-3 border border-primary/10">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">{t("products.priceLabel")}</p>
             {product.price > 0 ? (
               <div>
                 {isUsdProduct(product) ? (
@@ -412,7 +414,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
           {hasUnitChoice && (
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                Satuan / Ukuran
+                {t("products.unitSizeLabel")}
               </p>
               <div className="flex flex-wrap gap-2">
                 {effectiveUnitOptions.map((u) => (
@@ -440,7 +442,17 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
                 onClick={() => setQty((q) => Math.max(1, q - 1))}
                 className="w-8 h-8 rounded-lg border border-border flex items-center justify-center hover:bg-gray-100 transition-colors font-bold"
               >−</button>
-              <span className="w-10 text-center font-semibold">{qty}</span>
+              <input
+                type="number"
+                min={1}
+                value={qty}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v) && v >= 1) setQty(v);
+                  else if (e.target.value === "") setQty(1);
+                }}
+                className="w-14 h-8 text-center font-semibold border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
               <span className="text-xs text-muted-foreground">{selectedUnit}</span>
               <button
                 onClick={() => setQty((q) => q + 1)}
@@ -468,7 +480,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
             {!addedToCart ? (
               <Button className="w-full gap-2 h-11" onClick={handleAddToCart}>
                 <ShoppingCart className="h-4 w-4" />
-                Masukkan ke Keranjang
+                {t("products.addToCart")}
               </Button>
             ) : (
               <>
@@ -476,7 +488,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
                 <div className="flex items-center gap-2.5 px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl">
                   <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-emerald-700 truncate">Ditambahkan ke keranjang!</p>
+                    <p className="text-sm font-semibold text-emerald-700 truncate">{t("products.addedToCart")}</p>
                     <p className="text-xs text-emerald-600">{qty} × {product.name}</p>
                   </div>
                 </div>
@@ -484,7 +496,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
                 {/* Primary: Checkout */}
                 <Button className="w-full gap-2 h-11" onClick={handleCheckout}>
                   <ShoppingCart className="h-4 w-4" />
-                  Lanjutkan ke Checkout
+                  {t("products.goToCheckout")}
                   <ArrowRight className="h-4 w-4 ml-auto" />
                 </Button>
               </>
@@ -497,25 +509,48 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
 }
 
 // ── Product hero background — swap this path to change the image ───────────
-const PRODUCT_HERO_BG = `${import.meta.env.BASE_URL}images/product-hero-brand.png`;
+const PRODUCT_HERO_BG = "/api/storage/public-objects/portal-assets/static/customer-portal/images/product-hero-brand.webp";
 
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Products() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("q") ?? "";
+  });
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [realtimeUpdated, setRealtimeUpdated] = useState(false);
   const { t } = useLanguage();
   const usdIdrRate = useUsdIdrRate();
+  const qc = useQueryClient();
 
   useEffect(() => {
-    fetch("/api/portal/products")
-      .then((r) => r.json())
-      .then((data) => setProducts(Array.isArray(data) ? data : []))
-      .catch(() => setProducts([]))
-      .finally(() => setIsLoading(false));
-  }, []);
+    const es = new EventSource("/api/ecommerce/events");
+    es.onopen = () => setRealtimeConnected(true);
+    es.onerror = () => setRealtimeConnected(false);
+    es.addEventListener("price_sync", () => {
+      setRealtimeUpdated(true);
+      qc.invalidateQueries({ queryKey: ["portal-products"] });
+      setTimeout(() => setRealtimeUpdated(false), 3000);
+    });
+    return () => { es.close(); setRealtimeConnected(false); };
+  }, [qc]);
+
+  const { data: productsData, isLoading } = useQuery<Product[]>({
+    queryKey: ["portal-products"],
+    queryFn: () => fetch("/api/portal/products").then((r) => {
+      if (!r.ok) throw new Error(`Gagal memuat produk (${r.status})`);
+      return r.json();
+    }),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    refetchInterval: 30_000,
+  });
+
+  const products = Array.isArray(productsData) ? productsData : [];
 
   const allCategories = Array.from(new Set(products.flatMap((p) => p.categories)));
 
@@ -650,10 +685,10 @@ export default function Products() {
             </div>
             <div>
               <p className="text-[13.5px] font-semibold text-slate-800 leading-tight">
-                Ingin memesan layanan pengiriman?
+                {t("products.shippingCta")}
               </p>
               <p className="text-[12px] text-slate-500 mt-0.5">
-                Temukan layanan Freight, Trucking, dan lainnya di halaman Jasa/Services.
+                {t("products.shippingCtaDesc")}
               </p>
             </div>
           </div>
@@ -672,9 +707,28 @@ export default function Products() {
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 4px 16px rgba(11,92,173,0.38)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 2px 10px rgba(11,92,173,0.25)"; }}
             >
-              Lihat Jasa/Services <ArrowRight className="h-3.5 w-3.5" />
+              {t("products.shippingCtaBtn")} <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </Link>
+        </div>
+
+        {/* Realtime status + product count row */}
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm text-slate-500">
+            {filtered.length > 0 && (
+              <span>{selectedCategory
+                ? t("products.productCountWithCat").replace("{n}", String(filtered.length)).replace("{cat}", selectedCategory)
+                : t("products.productCountAll").replace("{n}", String(filtered.length))}</span>
+            )}
+          </p>
+          {realtimeConnected && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full" style={{ background: realtimeUpdated ? "rgba(251,191,36,0.12)" : "rgba(16,185,129,0.10)", border: `1px solid ${realtimeUpdated ? "rgba(251,191,36,0.35)" : "rgba(16,185,129,0.30)"}`, transition: "all 0.4s ease" }}>
+              <span className={`w-1.5 h-1.5 rounded-full ${realtimeUpdated ? "bg-amber-400 animate-ping" : "bg-emerald-400"}`} style={{ transition: "background 0.4s" }} />
+              <span className="text-[11px] font-semibold" style={{ color: realtimeUpdated ? "#d97706" : "#059669", transition: "color 0.4s" }}>
+                {realtimeUpdated ? t("products.realtimeUpdated") : t("products.realtimeLive")}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Category filter chips */}
@@ -818,6 +872,7 @@ export default function Products() {
 
                   {/* Price */}
                   <div className="mb-2">
+                    <span className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest block mb-0.5">{t("products.priceLabel")}</span>
                     {product.price > 0 ? (
                       <>
                         <div className="flex items-baseline gap-1.5">
@@ -839,7 +894,7 @@ export default function Products() {
                                 borderRadius: "5px",
                               }}
                             >
-                              {product.unitOptions.length} satuan
+                              {product.unitOptions.length} {t("products.unitCount")}
                             </span>
                           )}
                         </div>
@@ -907,8 +962,8 @@ export default function Products() {
             style={{ border: "1.5px dashed #CBD5E1", boxShadow: "0 1px 4px rgba(15,23,42,0.05)" }}
           >
             <img
-              src={`${import.meta.env.BASE_URL}images/logo.png`}
-              alt="CST Logistics"
+              src={staticAsset("images/logo.png")}
+              alt="B2B Marketplace and Logistic"
               className="h-14 w-auto mx-auto mb-5 object-contain opacity-30"
             />
             <h3 className="text-[17px] font-semibold text-slate-700 mb-2">{t("products.noProducts")}</h3>
@@ -934,10 +989,10 @@ export default function Products() {
             </div>
             <div>
               <p className="text-white font-bold text-[15px] leading-snug">
-                Ingin memesan layanan pengiriman?
+                {t("products.shippingCta2")}
               </p>
               <p className="text-blue-100 text-[13px] mt-0.5">
-                Pilih jasa pengiriman kami — Domestik, Trucking, Freight &amp; Customs.
+                {t("products.shippingCtaDesc2")}
               </p>
             </div>
           </div>
@@ -953,7 +1008,7 @@ export default function Products() {
             onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.28)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.18)"; }}
           >
-            Buka Jasa/Services
+            {t("products.shippingCtaBtn2")}
             <ChevronRight className="h-4 w-4" />
           </a>
         </div>

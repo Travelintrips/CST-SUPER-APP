@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { CheckCircle2, AlertCircle, Loader2, Truck, MapPin, Package, User, Phone, ThumbsUp, ThumbsDown, ArrowRight, FileText, Calendar, Clock, Weight, Info } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 function apiUrl(path: string) { return `${BASE}${path}`; }
@@ -59,6 +60,7 @@ function DetailRow({ icon, label, value }: { icon: React.ReactNode; label: strin
 }
 
 export default function ConfirmPage() {
+  const { t } = useLanguage();
   const token = getTokenFromUrl();
   const [data, setData] = useState<ConfirmData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,7 +99,7 @@ export default function ConfirmPage() {
         body: JSON.stringify({ action }),
       });
       const json = await res.json() as { message?: string; salesOrderNumber?: string };
-      if (!res.ok) { alert(json.message ?? "Terjadi kesalahan"); return; }
+      if (!res.ok) { alert(json.message ?? t("confirmPage.errorMsg")); return; }
       if (json.salesOrderNumber) setSalesOrderNumber(json.salesOrderNumber);
       setDone(action);
     } catch {
@@ -211,7 +213,7 @@ export default function ConfirmPage() {
           <div className="space-y-3">
             <DetailRow
               icon={<User className="h-4 w-4" />}
-              label="Nama Pelanggan"
+              label={t("confirmPage.customerName")}
               value={data.customerName}
             />
             {data.phone && (

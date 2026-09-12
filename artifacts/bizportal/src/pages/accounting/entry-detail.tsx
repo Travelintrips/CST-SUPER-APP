@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useRoute, Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +9,9 @@ import {
   useGetAccountingEntry, useListAccounts, useListJournals,
   getGetAccountingEntryQueryKey,
 } from "@workspace/api-client-react";
-import { ChevronLeft, FileText } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { ArrowLeft, ChevronLeft, FileText, Send } from "lucide-react";
 
 const idr = (n: number) => new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
 
@@ -18,6 +21,9 @@ export default function EntryDetailPage() {
   const { data: entry, isLoading } = useGetAccountingEntry(id, { query: { queryKey: getGetAccountingEntryQueryKey(id), enabled: !!id } });
   const { data: accounts } = useListAccounts();
   const { data: journals } = useListJournals();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [posting, setPosting] = useState(false);
 
   const accLabel = (aid: number) => {
     const a = accounts?.find((x) => x.id === aid);
@@ -28,12 +34,47 @@ export default function EntryDetailPage() {
     return j ? `${j.code} - ${j.name}` : `#${jid}`;
   };
 
+  const handlePost = async () => {
+    setPosting(true);
+    try {
+      const resp = await fetch(`/api/accounting/entries/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "posted", date: entry?.date }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({})) as { message?: string };
+        throw new Error(err.message ?? `HTTP ${resp.status}`);
+      }
+      toast({ title: "Jurnal berhasil diposting" });
+      qc.invalidateQueries({ queryKey: getGetAccountingEntryQueryKey(id) });
+    } catch (err: unknown) {
+      toast({ title: "Gagal posting jurnal", description: String(err), variant: "destructive" });
+    } finally {
+      setPosting(false);
+    }
+  };
+
   return (
     <AppShell>
       <div className="space-y-6 p-6">
         <div className="flex items-center gap-2">
           <Link href="/accounting/entries"><Button variant="ghost" size="sm"><ChevronLeft className="h-4 w-4 mr-1" />Kembali</Button></Link>
+          <Link href="/accounting/entries"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
           <h1 className="text-2xl font-bold flex items-center gap-2"><FileText className="h-6 w-6" />{entry?.entryNumber ?? "Memuat..."}</h1>
+
+          {entry && (entry.status as string) === "draft" && entry.source === "manual" && (
+            <Button
+              size="sm"
+              className="ml-auto bg-green-600 hover:bg-green-700 text-white gap-1"
+              onClick={handlePost}
+              disabled={posting}
+            >
+              <Send className="h-4 w-4" />
+              {posting ? "Memposting..." : "Post Jurnal"}
+            </Button>
+          )}
         </div>
 
         {isLoading ? <div>Memuat...</div> : !entry ? <div>Entry tidak ditemukan</div> : (

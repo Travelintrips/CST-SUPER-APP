@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -8,8 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BarChart2, Download, Trophy, Clock, CheckCircle2, XCircle, Loader2, Timer } from "lucide-react";
+import { ArrowLeft, BarChart2, Download, Trophy, Clock, CheckCircle2, XCircle, Loader2, Timer } from "lucide-react";
 import { exportXlsx } from "@/lib/export";
+import { Link } from "wouter";
 
 interface DriverStat {
   driverId: number;
@@ -108,6 +110,8 @@ export default function LogisticsDriverPerformancePage() {
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
+            <Link href="/logistics/drivers"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <BarChart2 className="w-6 h-6 text-primary" />
               Laporan Performa Driver
@@ -128,11 +132,11 @@ export default function LogisticsDriverPerformancePage() {
             <div className="flex flex-wrap items-end gap-4">
               <div className="space-y-1.5">
                 <Label className="text-xs">Dari Tanggal</Label>
-                <Input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="w-40 h-9" />
+                <DatePicker value={from} onChange={(v) => setFrom(v)} className="w-40 h-9" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Sampai Tanggal</Label>
-                <Input type="date" value={to} min={from} max={toLocalDate(new Date())} onChange={(e) => setTo(e.target.value)} className="w-40 h-9" />
+                <DatePicker value={to} onChange={(v) => setTo(v)} className="w-40 h-9" />
               </div>
               <Button size="sm" onClick={() => setApplied({ from, to })}>
                 Tampilkan
@@ -244,7 +248,7 @@ export default function LogisticsDriverPerformancePage() {
                       </TableRow>
                     )
                     : drivers.map((d, i) => (
-                      <TableRow key={d.driverId} className={i < 3 ? "bg-amber-50/40 dark:bg-amber-950/10" : ""}>
+                      <TableRow key={d.driverId} className={i < 3 ? "bg-amber-50/40 dark:bg-amber-950" : ""}>
                         <TableCell><RankBadge rank={i + 1} /></TableCell>
                         <TableCell>
                           <div>

@@ -27,6 +27,7 @@ import { Router, type Request, type Response } from "express";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { db, productsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
+import { deleteFromSupabase } from "../lib/supabaseStorage.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -155,7 +156,19 @@ router.put("/products/:id", async (req: Request, res: Response) => {
 router.delete("/products/:id", async (req: Request, res: Response) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) { res.status(400).json({ message: "Invalid id" }); return; }
+  const [product] = await db.select({ imageUrl: productsTable.imageUrl, mediaItems: productsTable.mediaItems })
+    .from(productsTable).where(eq(productsTable.id, id));
   await db.delete(productsTable).where(eq(productsTable.id, id));
+  // Cascade storage cleanup
+  if (product) {
+    const urls: string[] = [];
+    if (product.imageUrl) urls.push(product.imageUrl);
+    try {
+      const items: Array<{ url?: string }> = JSON.parse(product.mediaItems ?? "[]");
+      for (const item of items) { if (item.url) urls.push(item.url); }
+    } catch { /* ignore */ }
+    for (const url of urls) deleteFromSupabase(url).catch(() => {});
+  }
   res.json({ ok: true });
 });
 

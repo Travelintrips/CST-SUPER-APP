@@ -1,0 +1,2929 @@
+/**
+ * Unified Matching Engine — single source of truth untuk bank reconciliation.
+ *
+ * Rules:
+ *  - Amount match WAJIB untuk auto-approve (tidak ada exception)
+ *  - Scoring: Amount +50, Date ±1d +20, exact canonical settlement date +10,
+ *    Ref exact +20, OCR +10 (max 100)
+ *  - Threshold: ≥90 + amount_match = AUTO; 70–89 = MANUAL; <70 = UNMATCHED
+ *  - Satu mutation hanya boleh match ke 1 kandidat (unique lock di DB)
+ *  - Jurnal hanya dibuat setelah approval (di approveAndCreateJournal)
+ */
+
+import {
+  db,
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
+import { sql } from "drizzle-orm";
+import { logger } from "../logger.js";
+import { recordCandidateSourceAvailability } from "../monitoring/reconciliationMonitor.js";
+import { captureFailedJob } from "../financial/failedJobSystem.js";
+import { classifyMutationDescription, persistClassification } from "../expenseClassificationService.js";
+import { postEntryWithClient, type DbClient, type PostingLine } from "../accounting.js";
+import { normalizeDescription } from "../bankDescriptionNormalizer.js";
+import {
+  areQrisProvidersCompatible,
+  normalizeQrisProvider,
+  resolveQrisProviderFromEvidence,
+} from "./providerSettlementRules.js";
+import { JournalMappingError } from "../journalMappingErrors.js";
+import {
+  resolveJournalForEconomicEvent,
+  JournalReuseErrorCode,
+} from "./journalReuseEngine.js";
+import { assertGenericApprovalAllowed } from "./genericPostGuard.js";
+import {
+  classifyBankMutationPaymentType,
+  isQrisSettlementDescription,
+} from "./qrisSettlement.js";
+import { normalizeCompanyId } from "../services/portalCompanyScopeUtils.js";
+import {
+  isSportPaymentInActiveCanonicalSettlement,
+  sportPaymentCanonicalSettlementExclusionSql,
+  SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT,
+} from "./sportPaymentCanonicalSettlement.js";
+import {
+  CANONICAL_SETTLEMENT_SOURCE,
+  findCanonicalSettlementCandidates,
+} from "./canonicalSettlementAdapter.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+} from "./bankReconciliationSettings.js";
+import {
+  evaluateReconRules,
+  type ReconRule,
+  type ReconRuleMutationInput,
+} from "./reconRuleEngine.js";
+import { requiredCandidateApprovalError } from "./candidateRequirementStatus.js";
+import { invalidateRulesCache } from "./reconCache.js";
+export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
+import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
+
+type OptionalCandidateSource = "logistic_order" | "invoice" | "tenant_invoice";
+
+const OPTIONAL_SOURCE_REQUIREMENTS: Record<OptionalCandidateSource, Record<string, string[]>> = {
+  logistic_order: {
+    logistic_orders: ["id", "grand_total", "created_at", "sender_name", "order_number", "company_id"],
+  },
+  invoice: {
+    sales_documents: ["id", "total_amount", "invoice_date", "invoice_number", "customer_id", "company_id", "payment_status"],
+    customers: ["id", "name"],
+  },
+  tenant_invoice: {
+    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "invoice_number", "company_id", "status"],
+    tenants: ["id", "business_name"],
+  },
+};
+
+let optionalSourceAvailability:
+  | { expiresAt: number; available: Set<OptionalCandidateSource> }
+  | null = null;
+
+/** Allows isolated tests to exercise schema preflight without a five-minute cache. */
+export function resetOptionalCandidateSourceAvailabilityForTests(): void {
+  optionalSourceAvailability = null;
+}
+
+/**
+ * Runtime databases can lag the checked-in Drizzle schema. Check optional
+ * sources once per short TTL so a missing table/column is skipped before its
+ * candidate SQL is sent to PostgreSQL.
+ */
+async function getOptionalSourceAvailability(): Promise<Set<OptionalCandidateSource>> {
+  const now = Date.now();
+  if (optionalSourceAvailability && optionalSourceAvailability.expiresAt > now) {
+    return optionalSourceAvailability.available;
+  }
+
+  const requiredTables = Object.values(OPTIONAL_SOURCE_REQUIREMENTS)
+    .flatMap((requirements) => Object.keys(requirements));
+  const tableList = [...new Set(requiredTables)]
+    .map((table) => `'${table.replace(/'/g, "''")}'`)
+    .join(", ");
+
+  try {
+    const { rows } = await db.execute(sql.raw(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name IN (${tableList})
+    `));
+    const columns = new Map<string, Set<string>>();
+    for (const row of rows as Array<{ table_name?: string; column_name?: string }>) {
+      if (!row.table_name || !row.column_name) continue;
+      if (!columns.has(row.table_name)) columns.set(row.table_name, new Set());
+      columns.get(row.table_name)!.add(row.column_name);
+    }
+
+    const available = new Set<OptionalCandidateSource>();
+    for (const [source, requirements] of Object.entries(OPTIONAL_SOURCE_REQUIREMENTS) as Array<
+      [OptionalCandidateSource, Record<string, string[]>]
+    >) {
+      const missing = Object.entries(requirements).flatMap(([table, requiredColumns]) =>
+        requiredColumns
+          .filter((column) => !columns.get(table)?.has(column))
+          .map((column) => `${table}.${column}`),
+      );
+      if (missing.length === 0) {
+        available.add(source);
+        recordCandidateSourceAvailability({
+          source,
+          optional: true,
+          available: true,
+        });
+      } else {
+        recordCandidateSourceAvailability({
+          source,
+          optional: true,
+          available: false,
+          failureKind: "schema_preflight",
+          failureCode: "missing_schema_requirements",
+        });
+        logger.warn(
+          { source, missing },
+          "[unifiedMatchingEngine] optional candidate source skipped by schema preflight",
+        );
+      }
+    }
+
+    optionalSourceAvailability = { available, expiresAt: now + 5 * 60_000 };
+    return available;
+  } catch (error: any) {
+    // Keep core matching available. Optional sources remain disabled until the
+    // next TTL refresh rather than repeatedly retrying a broken discovery query.
+    logger.warn(
+      { err: error?.message ?? String(error) },
+      "[unifiedMatchingEngine] candidate source schema preflight failed; optional sources skipped",
+    );
+    const available = new Set<OptionalCandidateSource>();
+    for (const source of Object.keys(OPTIONAL_SOURCE_REQUIREMENTS) as OptionalCandidateSource[]) {
+      recordCandidateSourceAvailability({
+        source,
+        optional: true,
+        available: false,
+        failureKind: "schema_preflight",
+        failureCode: "schema_preflight_query_failed",
+      });
+    }
+    optionalSourceAvailability = { available, expiresAt: now + 60_000 };
+    return available;
+  }
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type CandidateType =
+  | "accounting_payment"
+  | "logistic_order"
+  | "invoice"
+  | "expense"
+  | "sport_payment"
+  | "qris_settlement"
+  | "tenant_invoice";
+
+export interface MatchCandidate {
+  id: number;
+  type: CandidateType;
+  /** Source-qualified identity; historical rows may legitimately be null. */
+  candidateSource?: ReconciliationCandidateSource | null;
+  amount: number;
+  date: string;
+  ref?: string | null;
+  name?: string | null;
+  gross_amount?: number | null;
+  mdr_amount?: number | null;
+  tax_withheld_amount?: number | null;
+  other_fee_amount?: number | null;
+  settlement_date?: string | null;
+  settlement_reference?: string | null;
+  settlement_status?: string | null;
+  payment_method?: string | null;
+  payment_type?: string | null;
+  sport_payment_type?: "bank_transfer" | "qris" | "paylabs" | null;
+  settlement_item_count?: number | null;
+  settlement_partial?: boolean;
+  company_id?: number | null;
+  bank_account_id?: number | null;
+  provider_code?: string | null;
+  provider_name?: string | null;
+  provider_fee_amount?: number | null;
+  fee_tax_amount?: number | null;
+  adjustment_amount?: number | null;
+  expected_bank_amount?: number | null;
+  settlement_rule_version?: string | null;
+  variance_eligible?: boolean;
+}
+
+export interface UnifiedScoredMatch {
+  candidate: MatchCandidate;
+  score: number;
+  reason: string[];
+  amount_match: boolean;
+  date_match: boolean;
+  ref_match: boolean;
+  ocr_match: boolean;
+  vendor_match: boolean;
+  confidence: number; // 0-100 display value
+  variance_amount: number | null;
+  variance_percent: number | null;
+  amount_variance_match: boolean;
+}
+
+export interface UnifiedMatchResult {
+  status: "auto_matched" | "manual_review" | "unmatched";
+  best?: UnifiedScoredMatch;
+  all: UnifiedScoredMatch[];
+}
+
+export { SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT };
+
+export interface MutationInput {
+  id: number;
+  amount: number;
+  transaction_date: string;
+  mutation_key: string;
+  provider_order_id?: string | null;
+  provider_name?: string | null;
+  normalized_description?: string | null;
+  uploaded_proof_url?: string | null;
+  company_id?: number | null;
+  bank_account_id?: number | null;
+  direction?: string;
+  /** Generic bank matching tolerance in IDR; QRIS uses provider rules instead. */
+  amount_tolerance?: number;
+}
+
+/**
+ * Resolve the tolerance belonging to the highest-priority rule that matches
+ * this mutation. A null rule value is intentionally treated as legacy data and
+ * falls back to the old company setting; newly edited rules send an explicit
+ * zero when exact matching is desired.
+ */
+export async function getMatchingAmountTolerance(
+  mutation: Pick<MutationInput, "amount" | "company_id" | "bank_account_id" | "direction" | "normalized_description" | "provider_order_id" | "uploaded_proof_url">,
+): Promise<number> {
+  const companyId = normalizeCompanyId(mutation.company_id);
+  if (companyId == null) return 0;
+
+  try {
+    const { rows } = await db.execute(sql`
+      SELECT id, company_id, name, description, priority, is_active,
+             direction, bank_account_id, condition_type, condition_field,
+             condition_operator, condition_value, target_type, target_id,
+             target_coa_code, amount_tolerance, confidence_score,
+             stop_processing, conditions_json, logic, specificity, reference_amount,
+             requires_document_upload, tax_type,
+             ai_classification_rule_id,
+             match_count, last_matched_at, created_by, created_at, updated_at
+      FROM recon_rules
+      WHERE company_id = ${companyId} AND is_active = TRUE
+      ORDER BY priority DESC, id ASC
+    `);
+    const rawRules = rows as Array<Record<string, any>>;
+    const rules = rawRules.map((row): ReconRule => {
+      let conditions = row.conditions_json;
+      if (typeof conditions === "string") {
+        try { conditions = JSON.parse(conditions); } catch { conditions = undefined; }
+      }
+      return {
+        id: Number(row.id),
+        companyId,
+        name: String(row.name ?? ""),
+        description: row.description == null ? null : String(row.description),
+        priority: Number(row.priority ?? 100),
+        isActive: row.is_active !== false,
+        direction: row.direction === "IN" || row.direction === "OUT" ? row.direction : null,
+        bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
+        conditionType: String(row.condition_type ?? "SIMPLE"),
+        conditionField: String(row.condition_field) as ReconRule["conditionField"],
+        conditionOperator: String(row.condition_operator) as ReconRule["conditionOperator"],
+        conditionValue: String(row.condition_value ?? ""),
+        conditionsJson: Array.isArray(conditions) ? conditions : null,
+        conditions: Array.isArray(conditions) ? conditions : undefined,
+        logic: row.logic === "OR" ? "OR" : "AND",
+        specificity: Number(row.specificity ?? 1),
+        targetType: String(row.target_type ?? "unknown") as ReconRule["targetType"],
+        targetId: row.target_id == null ? null : Number(row.target_id),
+        targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code),
+        amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
+        referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
+        requiresDocumentUpload: Boolean(row.requires_document_upload),
+        taxType: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none",
+        aiClassificationRuleId: row.ai_classification_rule_id == null ? null : Number(row.ai_classification_rule_id),
+        confidenceScore: Number(row.confidence_score ?? 100),
+        stopProcessing: row.stop_processing !== false,
+        matchCount: Number(row.match_count ?? 0),
+        lastMatchedAt: row.last_matched_at == null ? null : String(row.last_matched_at),
+        createdBy: row.created_by == null ? null : String(row.created_by),
+        createdAt: String(row.created_at ?? ""),
+        updatedAt: String(row.updated_at ?? ""),
+      };
+    });
+    const mutationInput: ReconRuleMutationInput = {
+      description: String(mutation.normalized_description ?? ""),
+      reference: mutation.provider_order_id ?? null,
+      amount: Number(mutation.amount),
+      direction: String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN",
+      bankAccountId: mutation.bank_account_id ?? null,
+      hasDocumentUpload: Boolean(mutation.uploaded_proof_url),
+      companyId,
+    };
+    const result = evaluateReconRules(rules, mutationInput);
+    if (result.ruleId != null) {
+      const matched = rules.find(rule => rule.id === result.ruleId);
+      const configured = sanitizeBankAmountTolerance(matched?.amountTolerance);
+      if (configured != null) return configured;
+    }
+  } catch (error: any) {
+    logger.debug(
+      { err: error?.message ?? String(error), companyId },
+      "[unifiedMatchingEngine] per-rule tolerance unavailable; using company fallback",
+    );
+  }
+
+  return (await getBankReconciliationSettings(companyId)).amountTolerance;
+}
+
+/**
+ * Keep one scored candidate per source-qualified identity.
+ *
+ * A NULL source is intentionally represented by a stable sentinel: historical
+ * rows must remain distinct from both legacy and canonical source identities.
+ */
+export function dedupeCandidatesByIdentity(
+  candidates: MatchCandidate[],
+): MatchCandidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = [
+      candidate.type,
+      candidate.id,
+      candidate.candidateSource ?? "<historical-null>",
+    ].join(":");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
+  return candidate.type === "qris_settlement"
+    || (
+      candidate.type === "sport_payment"
+      && candidate.sport_payment_type === "qris"
+    );
+}
+
+/**
+ * QRIS classification must be based on evidence carried by the bank mutation.
+ * A payment row marked QRIS is not evidence that an unrelated bank transfer
+ * is QRIS. Explicit provider fields are accepted here because they are
+ * bank-mutation metadata; ordinary payment-method fields are never passed in.
+ */
+export function hasQrisBankEvidence(
+  mutation: Pick<MutationInput, "provider_name" | "provider_order_id" | "normalized_description">,
+): boolean {
+  const explicitProvider = normalizeQrisProvider(mutation.provider_name);
+  if (explicitProvider !== "unknown") return true;
+
+  return [
+    mutation.provider_name,
+    mutation.provider_order_id,
+    mutation.normalized_description,
+  ].some((value) => isQrisSettlementDescription(value));
+}
+
+export function isQrisCandidateAllowedForMutation(
+  mutation: Pick<MutationInput, "provider_name" | "provider_order_id" | "normalized_description">,
+  candidate: MatchCandidate,
+): boolean {
+  return !isQrisCandidateForMatching(candidate) || hasQrisBankEvidence(mutation);
+}
+
+type ContraResolution = {
+  accountId: number;
+  label: string;
+  treatment: "ar" | "ap" | "expense" | "revenue" | "asset";
+};
+
+function canonicalCandidateType(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const aliases: Record<string, string> = {
+    expenses: "expense",
+    accounting_payments: "accounting_payment",
+    sales_documents: "invoice",
+  };
+  return aliases[value] ?? value;
+}
+
+type InternalTransferTarget = {
+  type?: unknown;
+  subtype?: unknown;
+  name?: unknown;
+  code?: unknown;
+  is_active?: unknown;
+  is_header?: unknown;
+  is_postable?: unknown;
+};
+
+export function isValidInternalTransferTarget(account: InternalTransferTarget): boolean {
+  const type = String(account.type ?? "").toLowerCase();
+  const subtype = String(account.subtype ?? "").toLowerCase();
+  const name = String(account.name ?? "").toLowerCase();
+  const code = String(account.code ?? "").toLowerCase();
+  const legacyCashBankName =
+    /\bkas\b/.test(name) ||
+    name.includes("cash") ||
+    name.includes("petty") ||
+    /\bbank\b/.test(name) ||
+    name.includes("giro") ||
+    name.includes("tabungan") ||
+    name.includes("kliring");
+  const legacyCashBankCode = /^1-101[0-9]/.test(code) || /^1-102[0-9]/.test(code);
+
+  return (
+    account.is_active === true &&
+    account.is_header === false &&
+    account.is_postable === true &&
+    type === "asset" &&
+    (subtype === "cash_bank" || (subtype === "" && (legacyCashBankName || legacyCashBankCode)))
+  );
+}
+
+export function buildBankMutationJournalLines(
+  direction: string,
+  bankCoaId: number,
+  contraCoaId: number,
+  amount: number,
+  description: string,
+): PostingLine[] {
+  return direction === "IN"
+    ? [
+        { accountId: bankCoaId, debit: amount, credit: 0, description },
+        { accountId: contraCoaId, debit: 0, credit: amount, description },
+      ]
+    : [
+        { accountId: contraCoaId, debit: amount, credit: 0, description },
+        { accountId: bankCoaId, debit: 0, credit: amount, description },
+      ];
+}
+
+function treatmentForReconRuleTarget(targetType: string | null | undefined): ContraResolution["treatment"] {
+  switch (String(targetType ?? "").toLowerCase()) {
+    case "internal_transfer":
+    case "intercompany_transfer":
+      return "asset";
+    case "customer_payment":
+      return "ar";
+    case "vendor_payment":
+      return "ap";
+    case "income":
+      return "revenue";
+    default:
+      return "expense";
+  }
+}
+
+async function loadReconRuleTarget(
+  client: DbClient,
+  companyId: number,
+  ruleId: number,
+): Promise<{ targetType: string; targetCoaCode: string | null } | null> {
+  const { rows } = await client.execute(sql.raw(`
+    SELECT target_type, target_coa_code
+    FROM recon_rules
+    WHERE id = ${ruleId}
+      AND company_id = ${companyId}
+      AND is_active = TRUE
+    LIMIT 1
+  `)).catch(() => ({ rows: [] as any[] }));
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    targetType: String(row.target_type ?? ""),
+    targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code).trim() || null,
+  };
+}
+
+function escapeSql(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+export interface AtomicRuleAiInput {
+  companyId: number;
+  name: string;
+  description?: string | null;
+  conditionField: string;
+  conditionOperator: string;
+  conditionValue: string;
+  conditions: Array<{
+    field: string;
+    operator: string;
+    value: string;
+    negate?: boolean;
+  }>;
+  logic: "AND" | "OR";
+  specificity: number;
+  actionFlow: string;
+  actionCoaCode: string;
+  confidence: number;
+  priority: number;
+  source?: string;
+  candidateRequirement?: "required" | "not_required";
+}
+
+/**
+ * Persist the Rule AI selected during manual COA approval using the caller's
+ * transaction client. This intentionally owns the operational mirror as well:
+ * the matcher must never observe an AI rule without its runtime rule.
+ *
+ * The advisory lock makes the logical rule identity safe under concurrent
+ * retries. The surrounding approval transaction then guarantees that a journal
+ * failure rolls back both the AI row and its operational mirror.
+ */
+export async function persistRuleAiWithinTransaction(
+  client: DbClient,
+  input: AtomicRuleAiInput,
+  actor: string,
+): Promise<{ id: number }> {
+  const allowedConditionFields = new Set([
+    "description", "amount", "direction", "bank", "transaction_code",
+    "normalized", "reference", "counterparty_name", "counterparty_account",
+  ]);
+  const allowedConditionOperators = new Set([
+    "contains", "not_contains", "equals", "not_equals", "starts_with",
+    "ends_with", "eq", "neq", "regex", "greater_than", "less_than",
+    "gte", "lte", "between",
+  ]);
+  const allowedActionFlows = new Set([
+    "BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INTERNAL_TRANSFER",
+    "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED",
+  ]);
+
+  if (!Number.isSafeInteger(input.companyId) || input.companyId <= 0) {
+    throw new Error("Rule AI membutuhkan company_id yang valid");
+  }
+  if (!input.name.trim() || !input.conditionValue.trim() || !input.actionCoaCode.trim()) {
+    throw new Error("Rule AI membutuhkan nama, kondisi, dan COA tujuan");
+  }
+  if (!Array.isArray(input.conditions) || input.conditions.length === 0) {
+    throw new Error("Rule AI membutuhkan minimal satu kondisi");
+  }
+  if (!allowedConditionFields.has(input.conditionField) ||
+      !allowedConditionOperators.has(input.conditionOperator) ||
+      !allowedActionFlows.has(input.actionFlow)) {
+    throw new Error("Field, operator, atau alur Rule AI tidak valid");
+  }
+
+  const conditions = input.conditions.map((condition) => ({
+    field: String(condition.field),
+    operator: String(condition.operator),
+    value: String(condition.value),
+    negate: Boolean(condition.negate),
+  }));
+  if (conditions.some((condition) =>
+    !allowedConditionFields.has(condition.field) ||
+    !allowedConditionOperators.has(condition.operator) ||
+    !condition.value.trim()
+  )) {
+    throw new Error("Kondisi Rule AI tidak valid");
+  }
+  const conditionsJson = JSON.stringify(conditions);
+  const conditionsSql = `'${escapeSql(conditionsJson)}'::jsonb`;
+  const conditionValueSql = `'${escapeSql(input.conditionValue)}'`;
+  const conditionFieldSql = `'${escapeSql(input.conditionField)}'`;
+  const conditionOperatorSql = `'${escapeSql(input.conditionOperator)}'`;
+  const logic = input.logic === "OR" ? "OR" : "AND";
+  const actionFlow = escapeSql(input.actionFlow);
+  const actionCoaCode = escapeSql(input.actionCoaCode.trim());
+  const descriptionSql = input.description?.trim()
+    ? `'${escapeSql(input.description.trim())}'`
+    : "NULL";
+  const source = escapeSql(input.source ?? "manual");
+  const escapedActor = escapeSql(actor);
+  const specificity = Math.max(1, Math.min(999, Math.trunc(input.specificity)));
+  const priority = Math.max(1, Math.min(999, Math.trunc(input.priority)));
+  const confidence = Math.max(0, Math.min(1, Number(input.confidence)));
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(confidence * 100)));
+  const candidateRequirement = input.candidateRequirement === "required" ? "required" : "not_required";
+
+  // Same condition/action identity must serialize before SELECT+UPDATE/INSERT.
+  const lockIdentity = [
+    input.companyId,
+    input.conditionField,
+    input.conditionOperator,
+    input.conditionValue,
+    conditionsJson,
+    logic,
+    input.actionFlow,
+  ].join(":");
+  await client.execute(sql.raw(
+    `SELECT pg_advisory_xact_lock(hashtext('${escapeSql(lockIdentity)}'))`,
+  ));
+
+  const existing = await client.execute(sql.raw(`
+    SELECT id
+    FROM recon_ai_classification_rules
+    WHERE company_id = ${input.companyId}
+      AND condition_field = ${conditionFieldSql}
+      AND condition_operator = ${conditionOperatorSql}
+      AND condition_value = ${conditionValueSql}
+      AND COALESCE(
+        conditions_json,
+        jsonb_build_array(jsonb_build_object(
+          'field', condition_field,
+          'operator', condition_operator,
+          'value', condition_value,
+          'negate', false
+        ))
+      ) = ${conditionsSql}
+      AND COALESCE(logic, 'AND') = '${logic}'
+      AND COALESCE(action_flow, '') = '${actionFlow}'
+    ORDER BY is_active DESC, updated_at DESC NULLS LAST, id DESC
+    LIMIT 1
+    FOR UPDATE
+  `));
+  const existingId = Number((existing.rows[0] as any)?.id ?? 0);
+
+  const ruleResult = await client.execute(sql.raw(existingId > 0
+    ? `
+      UPDATE recon_ai_classification_rules
+      SET name = '${escapeSql(input.name.trim())}',
+          description = ${descriptionSql},
+          condition_field = ${conditionFieldSql},
+          condition_operator = ${conditionOperatorSql},
+          condition_value = ${conditionValueSql},
+          conditions_json = ${conditionsSql},
+          logic = '${logic}',
+          specificity = ${specificity},
+          action_flow = '${actionFlow}',
+          action_coa_code = '${actionCoaCode}',
+          confidence = ${confidence},
+          priority = ${priority},
+           candidate_requirement = '${candidateRequirement}',
+          source = '${source}',
+          is_active = TRUE,
+          updated_at = NOW()
+      WHERE id = ${existingId}
+      RETURNING *
+    `
+    : `
+      INSERT INTO recon_ai_classification_rules
+        (company_id, name, description, condition_field, condition_operator,
+         condition_value, conditions_json, logic, specificity, action_flow,
+          action_coa_code, candidate_requirement, confidence, priority, source, created_by)
+      VALUES
+        (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
+         ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
+         ${conditionsSql}, '${logic}', ${specificity}, '${actionFlow}',
+          '${actionCoaCode}', '${candidateRequirement}', ${confidence}, ${priority}, '${source}', '${escapedActor}')
+      RETURNING *
+    `));
+  const aiRule = ruleResult.rows[0] as Record<string, unknown> | undefined;
+  if (!aiRule?.id) throw new Error("Rule AI gagal disimpan");
+  const aiRuleId = Number(aiRule.id);
+
+  const direction = input.actionFlow === "INCOME_ALLOCATION"
+    ? "IN"
+    : input.actionFlow === "INTERNAL_TRANSFER"
+      ? null
+      : "OUT";
+  const directionSql = direction == null ? "NULL" : `'${direction}'`;
+  const directionPredicate = direction == null
+    ? "direction IS NULL"
+    : `direction = '${direction}'`;
+  const targetType = input.actionFlow === "INTERNAL_TRANSFER"
+    ? "internal_transfer"
+    : input.actionFlow === "INCOME_ALLOCATION"
+      ? "income"
+      : "expense";
+
+  const linkedMirror = await client.execute(sql.raw(`
+    SELECT id
+    FROM recon_rules
+    WHERE ai_classification_rule_id = ${aiRuleId}
+    LIMIT 1
+    FOR UPDATE
+  `));
+  let mirrorId = Number((linkedMirror.rows[0] as any)?.id ?? 0);
+
+  if (!mirrorId) {
+    const existingMirror = await client.execute(sql.raw(`
+      SELECT id
+      FROM recon_rules
+      WHERE company_id = ${input.companyId}
+        AND is_active = TRUE
+        AND ai_classification_rule_id IS NULL
+        AND ${directionPredicate}
+        AND condition_field = ${conditionFieldSql}
+        AND condition_operator = ${conditionOperatorSql}
+        AND condition_value = ${conditionValueSql}
+        AND COALESCE(target_coa_code, '') = '${actionCoaCode}'
+      ORDER BY id ASC
+      LIMIT 1
+      FOR UPDATE
+    `));
+    mirrorId = Number((existingMirror.rows[0] as any)?.id ?? 0);
+  }
+
+  if (mirrorId) {
+    await client.execute(sql.raw(`
+      UPDATE recon_rules
+      SET name = '${escapeSql(input.name.trim())}',
+          description = ${descriptionSql},
+          priority = ${priority},
+          is_active = TRUE,
+          direction = ${directionSql},
+          condition_type = 'AI_CLASSIFICATION',
+          condition_field = ${conditionFieldSql},
+          condition_operator = ${conditionOperatorSql},
+          condition_value = ${conditionValueSql},
+          conditions_json = ${conditionsSql},
+          logic = '${logic}',
+          specificity = ${specificity},
+          target_type = '${targetType}',
+          target_coa_code = '${actionCoaCode}',
+           candidate_requirement = '${candidateRequirement}',
+          confidence_score = ${confidenceScore},
+          stop_processing = TRUE,
+          ai_classification_rule_id = ${aiRuleId},
+          updated_at = NOW()
+      WHERE id = ${mirrorId}
+    `));
+  } else {
+    const mirrorResult = await client.execute(sql.raw(`
+      INSERT INTO recon_rules
+        (company_id, name, description, priority, is_active, direction,
+         condition_type, condition_field, condition_operator, condition_value,
+         conditions_json, logic, specificity, target_type, target_coa_code,
+          candidate_requirement, confidence_score, stop_processing, created_by, ai_classification_rule_id)
+      VALUES
+        (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
+         ${priority}, TRUE, ${directionSql}, 'AI_CLASSIFICATION',
+         ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
+         ${conditionsSql}, '${logic}', ${specificity}, '${targetType}',
+          '${actionCoaCode}', '${candidateRequirement}', ${confidenceScore}, TRUE, '${escapedActor}',
+         ${aiRuleId})
+      RETURNING id
+    `));
+    mirrorId = Number((mirrorResult.rows[0] as any)?.id ?? 0);
+    if (!mirrorId) throw new Error("Mirror operasional Rule AI gagal disimpan");
+  }
+
+  await client.execute(sql.raw(`
+    UPDATE recon_ai_classification_rules
+    SET operational_rule_id = ${mirrorId}, updated_at = NOW()
+    WHERE id = ${aiRuleId}
+  `));
+
+  return { id: aiRuleId };
+}
+
+/**
+ * Resolve a per-company leaf COA from its base seed code.
+ * Seeded leaf accounts are suffixed with the company abbreviation
+ * (e.g. 5-3010-CST), while a few legacy databases still contain the
+ * unsuffixed code. Company-owned accounts always win.
+ */
+async function findCompanyCoa(
+  client: DbClient,
+  companyId: number | null,
+  baseCode: string,
+): Promise<number | null> {
+  const code = escapeSql(baseCode);
+  const companyWhere = companyId != null
+    ? `(company_id = ${companyId} OR company_id IS NULL)`
+    : "company_id IS NULL";
+  const { rows } = await client.execute(sql.raw(`
+    SELECT id
+    FROM chart_of_accounts
+    WHERE ${companyWhere}
+      AND (code = '${code}' OR code LIKE '${code}-%')
+      AND is_active = TRUE
+      AND is_header = FALSE
+      AND is_postable = TRUE
+    ORDER BY CASE WHEN company_id ${companyId != null ? `= ${companyId}` : "IS NULL"} THEN 0 ELSE 1 END,
+             LENGTH(code), id
+    LIMIT 1
+  `));
+  return rows[0] && (rows[0] as any).id != null ? Number((rows[0] as any).id) : null;
+}
+
+/**
+ * Select the contra account for a bank mutation. AR/AP are not a generic
+ * fallback anymore: they are only used when the selected candidate represents
+ * a receivable or payable settlement. Direct bank expenses go to an expense
+ * account, especially bank administration fees.
+ */
+export async function resolveContraAccount(
+  client: DbClient,
+  args: {
+    direction: string;
+    companyId: number | null;
+    bankAccountId?: number | null;
+    candidateType: string | null;
+    candidateId: number | null;
+    description: string;
+    expenseCategory?: string | null;
+    expenseSubtype?: string | null;
+    settings: Record<string, unknown>;
+  },
+): Promise<ContraResolution | null> {
+  const {
+    direction,
+    companyId,
+    bankAccountId,
+    candidateId,
+    description,
+    expenseCategory,
+    expenseSubtype,
+    settings,
+  } = args;
+  const type = canonicalCandidateType(args.candidateType);
+
+  // A Rule AI match is an explicit COA decision. Resolve it before the
+  // description normalizer so a "kas besar" rule cannot fall through to an
+  // arbitrary second bank account or an expense fallback.
+  if (type === "recon_rule" && candidateId != null && companyId != null) {
+    const ruleTarget = await loadReconRuleTarget(client, companyId, candidateId);
+    if (!ruleTarget?.targetCoaCode) return null;
+    const accountId = await findCompanyCoa(client, companyId, ruleTarget.targetCoaCode);
+    if (!accountId) return null;
+    return {
+      accountId,
+      label: `COA Rule AI: ${ruleTarget.targetCoaCode}`,
+      treatment: treatmentForReconRuleTarget(ruleTarget.targetType),
+    };
+  }
+
+  const normalized = normalizeDescription(description);
+  const category = String(expenseCategory ?? normalized.category ?? "").toLowerCase();
+  const subtype = String(expenseSubtype ?? "").toLowerCase();
+
+  // A transfer between the company's own cash/bank accounts is an asset
+  // movement, not an expense and not an AR/AP settlement.
+  if (normalized.isInternalTransfer || category === "internal_transfer") {
+    if (companyId != null) {
+      const { rows } = await client.execute(sql.raw(`
+        SELECT coa_id
+        FROM company_bank_accounts
+        WHERE company_id = ${companyId}
+          AND is_active = TRUE
+          ${bankAccountId != null ? `AND id <> ${bankAccountId}` : ""}
+          AND coa_id IS NOT NULL
+        ORDER BY id
+        LIMIT 1
+      `)).catch(() => ({ rows: [] as any[] }));
+      const assetId = rows[0] && (rows[0] as any).coa_id != null
+        ? Number((rows[0] as any).coa_id)
+        : null;
+      if (assetId) return { accountId: assetId, label: "Akun Bank/Kas Lawan", treatment: "asset" };
+    }
+    return null;
+  }
+
+  if (direction === "IN") {
+    // A sport payment is normally posted by the Sport Center module already.
+    // If it has not been posted yet, its natural contra is revenue.
+    if (type === "sport_payment") {
+      const accountId = await findCompanyCoa(client, companyId, "4-1017");
+      if (accountId) return { accountId, label: "Pendapatan Booking Sport Center", treatment: "revenue" };
+    }
+
+    // Interest income (bunga tabungan / jasa giro) must credit the interest
+    // income account (4-2010 Pendapatan Bunga), NOT Piutang Usaha.
+    // This check runs before the generic AR fallback so that bank-statement
+    // entries with descriptions like "JASA GIRO", "BUNGA TABUNGAN", or
+    // "KREDIT BUNGA" are always posted to the correct revenue account.
+    if (category === "interest_income") {
+      const accountId = await findCompanyCoa(client, companyId, "4-2010");
+      if (accountId) return { accountId, label: "Pendapatan Bunga", treatment: "revenue" };
+    }
+
+    // Invoice/customer receipt clears receivables. Do not credit revenue
+    // again when the source document is an invoice or inbound payment.
+    // Only use AR when the candidate is explicitly an invoice / customer receipt
+    // (type = "invoice" | "customer_payment") OR when no candidate is selected
+    // at all and the description is not interest-related.
+    const arId = settings.ar_account_id ? Number(settings.ar_account_id) : null;
+    if (arId) return { accountId: arId, label: "Piutang Usaha", treatment: "ar" };
+    return null;
+  }
+
+  const isInterestTax =
+    category === "interest_tax_withholding" ||
+    subtype === "interest_tax_withholding";
+
+  const isBankFee =
+    !isInterestTax && (
+      category === "bank_fee" ||
+      subtype === "bank_charge" ||
+      normalized.isBankFee
+    );
+
+  // A selected vendor/accounting payment means the bank mutation settles an
+  // existing payable, so AP is correct for this specific candidate type.
+  if (type === "vendor_payment" || type === "accounting_payment") {
+    const apId = settings.ap_account_id ? Number(settings.ap_account_id) : null;
+    if (apId) return { accountId: apId, label: "Hutang Usaha", treatment: "ap" };
+    return null;
+  }
+
+  // Expense candidates may already carry their exact expense COA.
+  if (type === "expense" && candidateId) {
+    const companyWhere = companyId != null
+      ? `(e.company_id = ${companyId} OR e.company_id IS NULL)`
+      : "1 = 1";
+    const { rows } = await client.execute(sql.raw(`
+      SELECT COALESCE(e.expense_account_id, ec.expense_account_id) AS expense_account_id
+      FROM expenses e
+      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+      WHERE e.id = ${Number(candidateId)}
+        AND ${companyWhere}
+        AND e.status <> 'voided'
+      LIMIT 1
+    `)).catch(() => ({ rows: [] as any[] }));
+    const expenseAccountId = rows[0] && (rows[0] as any).expense_account_id != null
+      ? Number((rows[0] as any).expense_account_id)
+      : null;
+    if (expenseAccountId) {
+      return { accountId: expenseAccountId, label: "Beban sesuai Expense", treatment: "expense" };
+    }
+  }
+
+  // Deterministic semantic mappings for direct bank outflows.
+  // FAIL-CLOSED (Task #6): no generic 5-2040 fallback. If the category
+  // doesn't map to a specific COA prefix → return null so the caller
+  // surfaces MANUAL_REVIEW_REQUIRED instead of posting to the wrong account.
+  // Task #6: Only map to SPECIFIC, well-known expense codes.
+  // "5-2040" (Beban Operasional Lain) is REMOVED as a generic catch-all —
+  // unknown categories must go through manual review (return null → NEED_COA_MAPPING).
+  const specificCode: string | null =
+    isInterestTax ? "5-3044" :
+    isBankFee ? "5-3010" :
+    category === "utility_electricity" || category === "utility_water" || subtype === "utility" ? "5-2030" :
+    category === "payroll" || subtype === "payroll" ? "5-2010" :
+    type === "logistic_order" ? "5-1011" :
+    null; // No generic "5-2040" fallback — specific COA required
+
+  if (specificCode) {
+    const accountId = await findCompanyCoa(client, companyId, specificCode);
+    if (accountId) {
+      const label =
+        isInterestTax ? "Beban PPh Final atas Bunga Bank" :
+        isBankFee ? "Beban Bunga & Administrasi Bank" :
+        specificCode === "5-2030" ? "Beban Utilitas" :
+        specificCode === "5-2010" ? "Beban Gaji & Tunjangan" :
+        specificCode === "5-1011" ? "Biaya Pengiriman Langsung" :
+        specificCode;
+      return { accountId, label, treatment: "expense" };
+    }
+  }
+
+  // Generic expense category falls back to the purchase_expense_account configured
+  // in accounting settings.  This preserves prior behaviour: unknown-category direct
+  // outflows that are explicitly labelled "expense" use the company's configured
+  // expense account rather than requiring manual review.
+  if (category === "expense") {
+    const expenseId = settings.purchase_expense_account_id
+      ? Number(settings.purchase_expense_account_id)
+      : null;
+    if (expenseId) return { accountId: expenseId, label: "Beban", treatment: "expense" };
+  }
+
+  // Task #6: No generic fallback to 5-2040 / "Beban Operasional Lain".
+  // Returning null causes approveAndCreateJournal to reject the approval
+  // with a typed error, keeping the mutation in a reviewable state.
+  // Admins must configure a specific COA mapping before approval.
+  logger.warn(
+    { companyId, category, subtype, type: args.candidateType },
+    "[FAIL-CLOSED] resolveContraAccount: kategori tidak dikenali — COA spesifik diperlukan (JOURNAL_MAPPING_REQUIRED)",
+  );
+  return null;
+}
+
+// ─── Scoring (max 100 pts) ────────────────────────────────────────────────────
+
+export function scoreUnified(
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">
+    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name" | "amount_tolerance">>,
+  cand: MatchCandidate,
+): UnifiedScoredMatch {
+  let score = 0;
+  const reason: string[] = [];
+
+  // QRIS candidates are company/provider scoped. A mismatch or missing
+  // identity must never be overridden by an exact amount.
+  const requiresQrisIdentity = isQrisCandidateForMatching(cand);
+  const mutationCompanyId = normalizeCompanyId(mutation.company_id);
+  const candidateCompanyId = normalizeCompanyId(cand.company_id);
+  // Company scope is mandatory for every candidate type, not only QRIS.
+  // Amount/reference/date evidence must never turn an unscoped or
+  // cross-company row into a reviewable match.
+  const companyMismatch =
+    mutationCompanyId == null ||
+    candidateCompanyId == null ||
+    candidateCompanyId !== mutationCompanyId;
+  const bankAccountMismatch =
+    cand.bank_account_id != null &&
+    mutation.bank_account_id != null &&
+    Number(cand.bank_account_id) !== Number(mutation.bank_account_id);
+  const candidateProviderCode = normalizeQrisProvider(cand.provider_code);
+  const candidateProviderName = normalizeQrisProvider(cand.provider_name);
+  const mutationProvider = resolveQrisProviderFromEvidence({
+    providerName: mutation.provider_name,
+    providerOrderId: mutation.provider_order_id,
+    description: mutation.normalized_description,
+  });
+  const candidateProvider =
+    candidateProviderCode !== "unknown" ? candidateProviderCode : candidateProviderName;
+  const providerMismatch =
+    requiresQrisIdentity &&
+    (
+      candidateProvider === "unknown" ||
+      mutationProvider === "unknown" ||
+      !areQrisProvidersCompatible(candidateProvider, mutationProvider)
+    );
+  const qrisEvidenceMissing =
+    requiresQrisIdentity &&
+    !hasQrisBankEvidence(mutation);
+
+  // 1. Amount — MANDATORY for auto-approve (+50). QRIS keeps the
+  // provider-specific variance contract and is exact in this generic scorer.
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ?? 0;
+  const amountTolerance = requiresQrisIdentity ? 0 : configuredTolerance;
+  const amountMatch =
+    !companyMismatch &&
+    !bankAccountMismatch &&
+    !providerMismatch &&
+    !qrisEvidenceMissing &&
+    Math.abs(Number(cand.amount) - Number(mutation.amount)) <= amountTolerance + 0.01;
+  if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
+  else if (amountTolerance > 0 && !companyMismatch && !bankAccountMismatch && !providerMismatch) {
+    reason.push(`nominal di luar toleransi ±${amountTolerance.toLocaleString("id-ID")}`);
+  }
+  if (companyMismatch) reason.push("company tidak cocok");
+  if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
+  if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
+  if (qrisEvidenceMissing) reason.push("bukti QRIS pada mutasi bank tidak ditemukan");
+
+  // 2. Date match.
+  // Generic bank-transfer candidates must be on the same calendar date.
+  // QRIS/Sport candidates retain the settlement-specific ±1 day tolerance.
+  const mDate = new Date(mutation.transaction_date).getTime();
+  const cDate = new Date(cand.date).getTime();
+  const diffDays = Math.abs(mDate - cDate) / 86_400_000;
+  const dateMatch = requiresQrisIdentity ? diffDays <= 1 : diffDays === 0;
+  if (diffDays === 0)     { score += 20; reason.push("tanggal sama (+20)"); }
+  else if (requiresQrisIdentity && diffDays <= 1) {
+    score += 20;
+    reason.push("tanggal beda 1 hari (+20)");
+  }
+  if (
+    diffDays === 0 &&
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE
+  ) {
+    // Exact canonical settlement dates are stronger evidence than the
+    // otherwise eligible ±1-day tolerance. Keep the tolerance candidate in
+    // the review set, but make deterministic exact-date evidence win.
+    score += 10;
+    reason.push("tanggal settlement canonical tepat (+10)");
+  }
+
+  // 3. Booking reference EXACT match (+20)
+  let refMatch = false;
+  if (cand.ref && mutation.provider_order_id) {
+    if (cand.ref.toUpperCase().trim() === mutation.provider_order_id.toUpperCase().trim()) {
+      refMatch = true; score += 20; reason.push(`referensi tepat "${cand.ref}" (+20)`);
+    }
+  }
+
+  // 4. Proof match — boolean only: mutation has uploaded proof (+5)
+  const ocrMatch = !!(mutation.uploaded_proof_url);
+  if (ocrMatch) { score += 5; reason.push("bukti transfer tersedia (+5)"); }
+
+  // 5. Vendor/counterparty name fuzzy match — token overlap (+10)
+  let vendorMatch = false;
+  if (cand.name && mutation.normalized_description) {
+    const candNorm = cand.name.toLowerCase().replace(/[^a-z0-9]/g, " ").trim();
+    const mutNorm  = mutation.normalized_description.toLowerCase().replace(/[^a-z0-9]/g, " ").trim();
+    const candTokens = new Set(candNorm.split(/\s+/).filter(t => t.length > 2));
+    const mutTokens  = mutNorm.split(/\s+/).filter(t => t.length > 2);
+    if (candTokens.size > 0 && mutTokens.length > 0) {
+      const overlapCount = mutTokens.filter(t => candTokens.has(t)).length;
+      const ratio = overlapCount / Math.max(candTokens.size, mutTokens.length);
+      if (ratio >= 0.4) {
+        vendorMatch = true;
+        score = Math.min(100, score + 10);
+        reason.push(`nama vendor cocok (+10)`);
+      }
+    }
+  }
+
+  const expectedAmount = Number(
+    cand.expected_bank_amount ?? cand.amount,
+  );
+  const bankAmount = Number(mutation.amount);
+  const varianceAmount = Number.isFinite(expectedAmount) && Number.isFinite(bankAmount)
+    ? bankAmount - expectedAmount
+    : null;
+  const variancePercent = varianceAmount != null && Math.abs(expectedAmount) > 0.000001
+    ? Math.abs(varianceAmount) / Math.abs(expectedAmount) * 100
+    : null;
+  const canonicalVarianceEvidence =
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
+    cand.variance_eligible === true &&
+    !amountMatch &&
+    varianceAmount != null &&
+    variancePercent != null &&
+    !companyMismatch &&
+    !bankAccountMismatch &&
+    !providerMismatch;
+
+  // Exact amount scoring is intentionally unchanged. A canonical variance
+  // candidate receives a smaller, distance-aware evidence score only after
+  // identity/date/provider/account checks pass. This keeps exact candidates
+  // above variance candidates without making tolerance an approval signal.
+  if (canonicalVarianceEvidence) {
+    const varianceEvidenceScore = Math.max(
+      1,
+      Math.round(35 - Math.min(34, variancePercent)),
+    );
+    score += varianceEvidenceScore;
+    reason.push(
+      `amount variance ${varianceAmount >= 0 ? "+" : ""}${varianceAmount.toFixed(2)} ` +
+      `(${variancePercent.toFixed(2)}%; evidence +${varianceEvidenceScore})`,
+    );
+    reason.push("canonical variance — perlu review");
+  }
+
+  return {
+    candidate: cand,
+    score,
+    reason,
+    amount_match: amountMatch,
+    date_match: dateMatch,
+    ref_match: refMatch,
+    ocr_match: ocrMatch,
+    vendor_match: vendorMatch,
+    confidence: Math.min(100, score),
+    variance_amount: varianceAmount,
+    variance_percent: variancePercent,
+    amount_variance_match: canonicalVarianceEvidence,
+  };
+}
+
+// ─── Threshold classifier ─────────────────────────────────────────────────────
+// Thresholds: ≥95 = high confidence auto, ≥80 = medium auto, ≥65 = manual review, <65 = unmatched
+
+export function classifyMatch(s: UnifiedScoredMatch): "auto_matched" | "manual_review" | "unmatched" {
+  if (s.score >= 90 && s.amount_match) return "auto_matched";
+  if (s.score >= 80) return "auto_matched";
+  if (s.score >= 65) return "manual_review";
+  return "unmatched";
+}
+
+export function confidenceLabel(score: number): "high" | "medium" | "low" | "none" {
+  if (score >= 95) return "high";
+  if (score >= 90) return "high";
+  if (score >= 80) return "medium";
+  if (score >= 65) return "low";
+  return "none";
+}
+
+// ─── Fetch candidates (amount-first filter) ───────────────────────────────────
+
+export async function fetchCandidates(
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description" | "amount_tolerance">,
+): Promise<MatchCandidate[]> {
+  const candidates: MatchCandidate[] = [];
+  const { amount, transaction_date } = mutation;
+  const company_id = normalizeCompanyId(mutation.company_id);
+  // A bank mutation without company scope must never search the shared
+  // candidate pool. Returning no candidates is safer than a cross-company
+  // suggestion; callers should repair/import it with an explicit company.
+  if (company_id == null) {
+    logger.warn(
+      "[unifiedMatchingEngine] matching skipped: bank mutation has no company_id",
+    );
+    return candidates;
+  }
+  const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
+  const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
+  const mutationPaymentType = classifyBankMutationPaymentType({
+    providerName: mutation.provider_name,
+    providerOrderId: mutation.provider_order_id,
+    description: mutation.normalized_description,
+  });
+  const mutationLooksPaylabs = mutationPaymentType === "paylabs";
+  const mutationLooksQris = mutationPaymentType === "qris" && !mutationLooksPaylabs;
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
+    (await getMatchingAmountTolerance(mutation));
+  const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
+  const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
+  const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
+  const dateOffset = (value: string, days: number): string => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    parsed.setUTCDate(parsed.getUTCDate() + days);
+    return parsed.toISOString().slice(0, 10);
+  };
+  const canonicalTolerance = async (): Promise<{
+    absolute: number;
+    percentage: number;
+    providerCode: string | null;
+  }> => {
+    const providerCode = resolveQrisProviderFromEvidence({
+      providerName: mutation.provider_name,
+      providerOrderId: mutation.provider_order_id,
+      description: mutation.normalized_description,
+    });
+    if (providerCode === "unknown" || company_id == null || mutationBankAccountId == null) {
+      // Unknown provider or incomplete bank identity is fail-closed for variance.
+      return { absolute: 0, percentage: 0, providerCode: null };
+    }
+
+    try {
+      const { rows } = await db.execute(sql`
+        SELECT company_id, bank_account_id, provider_code,
+               absolute_variance_tolerance, percentage_variance_tolerance
+        FROM qris_provider_settlement_rules
+        WHERE is_active = TRUE
+          AND (company_id IS NULL OR company_id = ${Number(company_id)})
+          AND (bank_account_id IS NULL OR bank_account_id = ${mutationBankAccountId})
+      `);
+      const matchingRows = (rows as Array<Record<string, unknown>>)
+        .filter((row) => {
+          const configuredProvider = normalizeQrisProvider(String(row.provider_code ?? ""));
+          return configuredProvider === providerCode
+            // QRTRAVELI/GPN is the bank-side label for Mandiri's
+            // owner-approved settlement rule in this account.
+            || (providerCode === "gpn_qris" && configuredProvider === "mandiri_direct");
+        })
+        .sort((a, b) => {
+          const specificity = (row: Record<string, unknown>) =>
+            (row.company_id != null && Number(row.company_id) === Number(company_id) ? 2 : 0) +
+            (row.bank_account_id != null && Number(row.bank_account_id) === mutationBankAccountId ? 1 : 0);
+          return specificity(b) - specificity(a);
+        });
+      const row = matchingRows[0];
+      return {
+        absolute: Math.max(0, Number(row?.absolute_variance_tolerance ?? 0)),
+        percentage: Math.max(0, Number(row?.percentage_variance_tolerance ?? 0)),
+        providerCode,
+      };
+    } catch (error: any) {
+      logger.warn(
+        { err: error?.message ?? String(error) },
+        "[unifiedMatchingEngine] canonical variance rule unavailable; exact-only",
+      );
+      return { absolute: 0, percentage: 0, providerCode };
+    }
+  };
+  const canonicalBankAccountNumber = mutationBankAccountId == null
+    ? Promise.resolve<string | null>(null)
+    : db.execute(sql`
+        SELECT account_number::text AS account_number
+        FROM company_bank_accounts
+        WHERE id = ${mutationBankAccountId}
+          AND is_active = TRUE
+          AND (company_id IS NULL OR company_id = ${company_id ?? null})
+        LIMIT 1
+      `)
+        .then(({ rows }) => {
+          const accountNumber = (rows[0] as Record<string, unknown> | undefined)?.account_number;
+          return accountNumber == null ? null : String(accountNumber);
+        })
+        .catch(() => null);
+  const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) <= ${amountTolerance + 0.01}`;
+  // The aggregate tables may not exist yet on older runtime databases. Keep
+  // the source query fail-safe and only add the aggregate candidate when both
+  // tables are present.
+  // These two discovery reads are independent. Run them together so a QRIS
+  // mutation does not wait for the canonical source lookup before starting its
+  // candidate queries.
+  const qrisTablesPromise = mutationLooksQris
+    ? db.execute(sql.raw(`
+        SELECT to_regclass('public.qris_settlements') AS settlements,
+               to_regclass('public.qris_settlement_items') AS items
+      `))
+        .then(({ rows }) => {
+          const available = Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items);
+          recordCandidateSourceAvailability({
+            source: "qris_settlement",
+            optional: true,
+            available,
+            ...(available
+              ? {}
+              : {
+                  failureKind: "schema_preflight" as const,
+                  failureCode: "missing_schema_requirements",
+                }),
+          });
+          return available;
+        })
+        .catch(() => {
+          recordCandidateSourceAvailability({
+            source: "qris_settlement",
+            optional: true,
+            available: false,
+            failureKind: "schema_preflight",
+            failureCode: "schema_preflight_query_failed",
+          });
+          return false;
+        })
+    : Promise.resolve(false);
+  const canonicalCandidatesPromise = direction === "IN"
+    ? Promise.all([canonicalTolerance(), canonicalBankAccountNumber]).then(
+      ([tolerance, externalBankAccountNumber]) =>
+        findCanonicalSettlementCandidates({
+          companyId: company_id ?? null,
+          bankAmount: Number(amount),
+          absoluteVarianceTolerance: tolerance.absolute,
+          percentageVarianceTolerance: tolerance.percentage,
+           // A canonical settlement outside the configured tolerance remains
+           // useful review evidence. scoreUnified marks the variance and the
+           // orchestration layer keeps canonical candidates manual-review-only.
+           includeOutsideTolerance: true,
+          // expected_bank_settlements stores the external account number;
+          // public bank_mutations stores company_bank_accounts.id.
+          bankAccountId: externalBankAccountNumber ?? mutationBankAccountId,
+          providerCode: tolerance.providerCode,
+          from: transaction_date ? dateOffset(transaction_date, -3) : null,
+          to: transaction_date ? dateOffset(transaction_date, 3) : null,
+        }),
+    )
+      .then((candidates) => {
+        recordCandidateSourceAvailability({
+          source: CANONICAL_SETTLEMENT_SOURCE,
+          optional: false,
+          available: true,
+        });
+        return candidates;
+      })
+      .catch((e: any) => {
+        recordCandidateSourceAvailability({
+          source: CANONICAL_SETTLEMENT_SOURCE,
+          optional: false,
+          available: false,
+          failureKind: "query",
+          failureCode: "candidate_query_failed",
+        });
+        logger.warn(
+          { err: e.message },
+          "[unifiedMatchingEngine] canonical settlement source skipped",
+        );
+        return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
+      })
+    : Promise.resolve([] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>);
+  const [qrisSettlementTablesAvailable, canonicalCandidates] = await Promise.all([
+    qrisTablesPromise,
+    canonicalCandidatesPromise,
+  ]);
+  const calculatedSportNet = "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))";
+  const verifiedSportNet = `(CASE
+    WHEN COALESCE(sp.net_amount, 0) > 0
+      AND COALESCE(sp.settlement_status, 'unsettled') NOT IN ('unsettled', 'pending')
+    THEN sp.net_amount
+    ELSE ${calculatedSportNet}
+  END)`;
+  const qrisAmountFilter = `(ABS(${verifiedSportNet}::numeric - ${Number(amount)}) < 0.01)`;
+  const sportAmountFilter = mutationLooksQris
+    ? qrisAmountFilter
+    : `ABS(sp.amount::numeric - ${Number(amount)}) < 0.01`;
+  const sportPaymentTypeForMutation = mutationLooksPaylabs
+    ? "paylabs"
+    : mutationLooksQris
+      ? "qris"
+      : "bank_transfer";
+  // Bank mutations are imported as Indonesian calendar dates, while Sport
+  // Center timestamps are stored as timestamptz.  Normalize timestamp-backed
+  // payment dates to the operational timezone before comparing them; e.g.
+  // 2026-08-16 18:53 UTC is 2026-08-17 in Asia/Jakarta.
+  const sportPaymentDateExpr =
+    `COALESCE((sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date, ` +
+    `(sp.created_at AT TIME ZONE 'Asia/Jakarta')::date)`;
+  const settlementDateExpr = `COALESCE(sp.settlement_date, ${sportPaymentDateExpr} + 1)`;
+  const sportPaymentTypeExpr = `CASE
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%transfer%'
+      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%bank%'
+      THEN 'bank_transfer'
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%qris%'
+      THEN CASE
+        WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
+          OR LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
+          THEN 'paylabs'
+        ELSE 'qris'
+      END
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
+    WHEN LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%qris%'
+      THEN 'qris'
+    WHEN LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
+    ELSE 'bank_transfer'
+  END`;
+  // A Sport Center payment is not automatically QRIS. Bank-transfer payments
+  // must match by payment date; only QRIS uses the settlement date (often H+1).
+  const sportCandidateDateExpr = `CASE
+    WHEN ${sportPaymentTypeExpr} = 'qris' THEN ${settlementDateExpr}
+    ELSE ${sportPaymentDateExpr}
+  END`;
+  const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
+           AND NOT EXISTS (
+             SELECT 1
+             FROM qris_settlement_items qsi_member
+             JOIN qris_settlements qs_member ON qs_member.id = qsi_member.settlement_id
+             WHERE qsi_member.sport_payment_id = sp.id
+               AND ABS(qs_member.net_amount::numeric - ${Number(amount)}) < 0.01
+               AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+               AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
+           )` : "";
+  const canonicalSportPaymentExclusion =
+    `AND ${sportPaymentCanonicalSettlementExclusionSql("sp")}`;
+
+  // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
+  const coFilter = `AND ##TBL##.company_id = ${Number(company_id)}`;
+  // accounting_payments may use operational types such as transfer or
+  // bank_transfer, not only inbound/outbound. Exclude opposite-direction
+  // keywords instead of requiring one exact enum value.
+  const accountingPaymentDirectionFilter = direction === "OUT"
+    ? `LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%receipt%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%inbound%'`
+    : `LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%payment%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%outbound%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%vendor%'`;
+
+  const sources: Array<{
+    q: string;
+    type: CandidateType;
+    candidateSource?: ReconciliationCandidateSource | null;
+  }> = [
+    {
+      type: "accounting_payment",
+      q: `
+        SELECT ap.id, ap.amount,
+               ap.date::text AS date,
+               COALESCE(ap.partner_name, ap.memo, '') AS name,
+               ap.ref AS ref
+        FROM accounting_payments ap
+        WHERE ${amtFilter.replace("##AMT##", "ap.amount")}
+          AND ap.date BETWEEN ${dateFrom} AND ${dateTo}
+          AND ap.status = 'posted'
+          AND (
+            ${accountingPaymentDirectionFilter}
+            OR ap.payment_type IS NULL
+          )
+          -- Sport Center payments are represented canonically by sport_payments.
+          -- Their accounting_payments row is only the accounting/journal link;
+          -- including it here would create a second candidate for one event.
+          AND (ap.source_type IS NULL OR ap.source_type <> 'sport_center')
+          ${coFilter.replace("##TBL##", "ap")}
+      `,
+    },
+    {
+      type: "logistic_order",
+      q: `
+        SELECT lo.id, lo.grand_total AS amount,
+               lo.created_at::date::text AS date,
+               COALESCE(lo.sender_name, '') AS name,
+               lo.order_number AS ref
+        FROM logistic_orders lo
+        WHERE ${amtFilter.replace("##AMT##", "lo.grand_total")}
+          AND '${direction}' = 'OUT'
+          AND lo.created_at::date BETWEEN ${dateFrom} AND ${dateTo}
+          ${coFilter.replace("##TBL##", "lo")}
+      `,
+    },
+    {
+      type: "invoice",
+      q: `
+        SELECT sd.id,
+               COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) AS amount,
+               COALESCE(sd.invoice_date, sd.created_at::date)::text AS date,
+               COALESCE(c.name, '') AS name,
+               sd.doc_number AS ref
+        FROM sales_documents sd
+        LEFT JOIN customers c ON c.id = sd.customer_id
+        WHERE sd.invoice_number IS NOT NULL
+          AND '${direction}' = 'IN'
+          AND sd.company_id = ${Number(company_id)}
+          AND sd.payment_status = 'paid'
+          AND ${amtFilter.replace("##AMT##", "COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount)")}
+          AND COALESCE(sd.invoice_date, sd.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
+          ${coFilter.replace("##TBL##", "sd")}
+      `,
+    },
+    {
+      type: "expense",
+      q: `
+        SELECT e.id, e.total AS amount,
+               e.date::text AS date,
+               COALESCE(e.description, '') AS name,
+               e.expense_number AS ref
+        FROM expenses e
+        WHERE ${amtFilter.replace("##AMT##", "e.total")}
+          AND '${direction}' = 'OUT'
+          AND e.date BETWEEN ${dateFrom} AND ${dateTo}
+          ${coFilter.replace("##TBL##", "e")}
+      `,
+    },
+    ...(direction === "IN" ? [{
+      // Sport Center payments have three reconciliation rails:
+      // ordinary bank transfer, direct QRIS settlement, and Paylabs.
+      // QRIS uses verified net/settlement-date matching; the other two
+      // use the payment amount and payment date.
+      type: "sport_payment" as CandidateType,
+      q: `
+        SELECT sp.id,
+               ${mutationLooksQris ? verifiedSportNet : "sp.amount"} AS amount,
+               ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr}::text AS date,
+               COALESCE(c.name, sb.customer_name, '') AS name,
+                COALESCE(sp.payment_number, CONCAT('SPORT-', sp.booking_id::text)) AS ref,
+               sp.company_id,
+               sp.bank_account_id,
+               LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
+               sp.payment_provider::text AS provider_name,
+               sp.amount AS gross_amount,
+               COALESCE(sp.mdr_amount, 0) AS mdr_amount,
+               COALESCE(sp.tax_withheld_amount, 0) AS tax_withheld_amount,
+               COALESCE(sp.other_fee_amount, 0) AS other_fee_amount,
+               ${settlementDateExpr}::text AS settlement_date,
+               sp.settlement_reference,
+                sp.method AS payment_method,
+                sp.payment_type,
+                ${sportPaymentTypeExpr} AS sport_payment_type,
+               sp.settlement_status,
+               1 AS settlement_item_count,
+               (COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled')) AS settlement_partial
+        FROM sport_payments sp
+        LEFT JOIN customers c ON c.id = sp.customer_id
+        LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        WHERE ${sportAmountFilter}
+          AND sp.company_id = ${Number(company_id)}
+          AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
+          AND sp.status = 'paid'
+          AND ${sportPaymentTypeExpr} = '${sportPaymentTypeForMutation}'
+           ${aggregateMatchFilter}
+           ${canonicalSportPaymentExclusion}
+          AND (
+            sp.bank_account_id IS NULL
+            OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
+          )
+      `,
+    }] : []),
+    ...(direction === "IN" && !mutationLooksQris && !mutationLooksPaylabs ? [{
+      // Keep a possible QRIS payment visible to the matching decision only as
+      // a type-conflict signal. runUnifiedMatching filters it from normal
+      // candidates and routes the mutation to manual review; it can never
+      // become an automatic QRIS match merely because amount/date agree.
+      type: "sport_payment" as CandidateType,
+      q: `
+        SELECT sp.id,
+               sp.amount AS amount,
+               ${sportPaymentDateExpr}::text AS date,
+               COALESCE(c.name, sb.customer_name, '') AS name,
+               COALESCE(sp.payment_number, CONCAT('SPORT-', sp.booking_id::text)) AS ref,
+               sp.company_id,
+               sp.bank_account_id,
+               LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
+               sp.payment_provider::text AS provider_name,
+               sp.amount AS gross_amount,
+               COALESCE(sp.mdr_amount, 0) AS mdr_amount,
+               COALESCE(sp.tax_withheld_amount, 0) AS tax_withheld_amount,
+               COALESCE(sp.other_fee_amount, 0) AS other_fee_amount,
+               ${settlementDateExpr}::text AS settlement_date,
+               sp.settlement_reference,
+               sp.method AS payment_method,
+               sp.payment_type,
+               'qris' AS sport_payment_type,
+               sp.settlement_status,
+               1 AS settlement_item_count,
+               (COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled')) AS settlement_partial
+        FROM sport_payments sp
+        LEFT JOIN customers c ON c.id = sp.customer_id
+        LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        WHERE ABS(sp.amount::numeric - ${Number(amount)}) < 0.01
+          AND sp.company_id = ${Number(company_id)}
+          AND ${sportPaymentDateExpr} = '${transaction_date}'::date
+          AND sp.status = 'paid'
+          AND ${sportPaymentTypeExpr} = 'qris'
+          ${canonicalSportPaymentExclusion}
+          AND (
+            sp.bank_account_id IS NULL
+            OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
+          )
+      `,
+    }] : []),
+    ...(mutationLooksQris && qrisSettlementTablesAvailable ? [{
+      type: "qris_settlement" as CandidateType,
+      candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
+      q: `
+        SELECT qs.id,
+               qs.net_amount AS amount,
+               qs.settlement_date::text AS date,
+               COALESCE(qs.settlement_reference, 'QRIS settlement') AS name,
+               qs.settlement_reference AS ref,
+               qs.gross_amount,
+               qs.mdr_amount,
+               qs.tax_withheld_amount,
+               qs.other_fee_amount,
+               qs.settlement_date::text AS settlement_date,
+               qs.settlement_reference,
+               'qris' AS payment_method,
+               qs.status AS settlement_status,
+               COUNT(qsi.id)::int AS settlement_item_count,
+               (COALESCE(qs.status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled')) AS settlement_partial
+        FROM qris_settlements qs
+        LEFT JOIN qris_settlement_items qsi ON qsi.settlement_id = qs.id
+        WHERE ABS(qs.net_amount::numeric - ${Number(amount)}) < 0.01
+          AND '${direction}' = 'IN'
+          AND qs.company_id = ${company_id ?? "NULL"}
+          AND qs.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+          AND COALESCE(qs.status, 'unsettled') NOT IN ('cancelled', 'reversed')
+        GROUP BY qs.id
+      `,
+    }] : []),
+    {
+      type: "tenant_invoice" as CandidateType,
+      q: `
+        SELECT ti.id, ti.total_amount AS amount,
+               ti.created_at::date::text AS date,
+               COALESCE(t.business_name, '') AS name,
+               ti.invoice_number AS ref
+        FROM tenant_invoices ti
+        LEFT JOIN tenants t ON t.id = ti.tenant_id
+        WHERE ${amtFilter.replace("##AMT##", "ti.total_amount")}
+          AND '${direction}' = 'IN'
+          AND ti.status = 'paid'
+          ${coFilter.replace("##TBL##", "ti")}
+          AND ti.created_at::date BETWEEN ${dateFrom} AND ${dateTo}
+      `,
+    },
+  ];
+
+  // Phase 4C-5: canonical Sport Center settlements are read only through the
+  // verified adapter. The adapter uses expected_bank_settlements (net_amount)
+  // and enforces posted + unlinked + posted settlement journal eligibility.
+  for (const canonical of canonicalCandidates) {
+    const candidate: MatchCandidate = {
+      id: canonical.id,
+      type: "qris_settlement",
+      candidateSource: canonical.candidateSource,
+      amount: canonical.amount,
+      date: canonical.date,
+      ref: canonical.ref,
+      name: canonical.name,
+      gross_amount: canonical.gross_amount,
+      mdr_amount: canonical.mdr_amount,
+      provider_fee_amount: canonical.provider_fee_amount,
+      fee_tax_amount: canonical.fee_tax_amount,
+      tax_withheld_amount: canonical.tax_withheld_amount,
+      adjustment_amount: canonical.adjustment_amount,
+      expected_bank_amount: canonical.expected_bank_amount,
+      settlement_date: canonical.settlement_date,
+      settlement_reference: canonical.settlement_reference,
+      settlement_status: canonical.settlement_status,
+      company_id: canonical.company_id,
+      bank_account_id: canonical.bank_account_id,
+      provider_code: canonical.provider_code,
+      provider_name: canonical.provider_name,
+      settlement_rule_version: canonical.settlement_rule_version,
+      variance_eligible: true,
+    };
+    candidates.push(candidate);
+  }
+
+  // Candidate sources are independent amount/date lookups. Running them in
+  // parallel removes one full database round-trip per source while preserving
+  // fail-soft behavior for optional/legacy tables.
+  const availableOptionalSources = await getOptionalSourceAvailability();
+  const sourceRows = await Promise.all(
+    sources
+      .filter((src) =>
+        !OPTIONAL_SOURCE_REQUIREMENTS[src.type as OptionalCandidateSource] ||
+        availableOptionalSources.has(src.type as OptionalCandidateSource),
+      )
+      .map(async (src) => {
+      try {
+        const { rows } = await db.execute(sql.raw(src.q));
+        recordCandidateSourceAvailability({
+          source: src.type,
+          optional: Object.prototype.hasOwnProperty.call(OPTIONAL_SOURCE_REQUIREMENTS, src.type),
+          available: true,
+        });
+        return { src, rows: rows as any[] };
+      } catch (e: any) {
+        const isOptionalSource = Object.prototype.hasOwnProperty.call(
+          OPTIONAL_SOURCE_REQUIREMENTS,
+          src.type,
+        );
+        recordCandidateSourceAvailability({
+          source: src.type,
+          optional: isOptionalSource,
+          available: false,
+          failureKind: "query",
+          failureCode: "candidate_query_failed",
+        });
+        logger.warn(
+          {
+            err: e.message,
+            source: src.type,
+            optional: isOptionalSource,
+            required: !isOptionalSource,
+          },
+          "[unifiedMatchingEngine] candidate source query failed; continuing with remaining sources",
+        );
+        return { src, rows: [] as any[] };
+      }
+      }),
+  );
+  for (const { src, rows } of sourceRows) {
+    for (const r of rows) {
+      candidates.push({
+        id: Number(r.id),
+        type: src.type,
+        candidateSource: src.candidateSource ?? null,
+        amount: Number(r.amount),
+        date: String(r.date ?? ""),
+        name: r.name ?? null,
+        ref: r.ref ?? null,
+        gross_amount: r.gross_amount != null ? Number(r.gross_amount) : null,
+        mdr_amount: r.mdr_amount != null ? Number(r.mdr_amount) : null,
+        tax_withheld_amount: r.tax_withheld_amount != null ? Number(r.tax_withheld_amount) : null,
+        other_fee_amount: r.other_fee_amount != null ? Number(r.other_fee_amount) : null,
+        settlement_date: r.settlement_date ? String(r.settlement_date) : null,
+        settlement_reference: r.settlement_reference ? String(r.settlement_reference) : null,
+        settlement_status: r.settlement_status ? String(r.settlement_status) : null,
+        payment_method: r.payment_method ? String(r.payment_method) : null,
+         payment_type: r.payment_type ? String(r.payment_type) : null,
+         sport_payment_type: r.sport_payment_type
+           ? String(r.sport_payment_type) as "bank_transfer" | "qris" | "paylabs"
+           : null,
+        settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
+        settlement_partial: Boolean(r.settlement_partial),
+        company_id: r.company_id != null ? Number(r.company_id) : null,
+        bank_account_id: r.bank_account_id != null ? Number(r.bank_account_id) : null,
+        provider_code: r.provider_code ? String(r.provider_code) : null,
+        provider_name: r.provider_name ? String(r.provider_name) : null,
+      });
+    }
+  }
+
+  return dedupeCandidatesByBusinessIdentity(dedupeCandidatesByIdentity(candidates));
+}
+
+// ─── Audit helper ─────────────────────────────────────────────────────────────
+
+function formatReviewAmount(value: number): string {
+  return `Rp ${Number(value || 0).toLocaleString("id-ID", {
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/**
+ * Keep the reason for a score-based review alongside the mutation status.
+ * The reviewer should be able to see which matching signals failed, rather
+ * than having to infer it from a generic "matched" or "review" label.
+ */
+export function buildMatchingReviewReason(
+  mutation: MutationInput,
+  best: UnifiedScoredMatch,
+): string {
+  const reasons: string[] = [];
+  const mutationAmount = Number(mutation.amount ?? 0);
+  const candidateAmount = Number(best.candidate.amount ?? 0);
+
+  if (!best.amount_match) {
+    reasons.push(
+      `nominal bank ${formatReviewAmount(mutationAmount)} berbeda dari kandidat ${formatReviewAmount(candidateAmount)}`,
+    );
+  }
+  if (!best.date_match) {
+    reasons.push(
+      `tanggal bank ${String(mutation.transaction_date ?? "").slice(0, 10)} tidak sama atau di luar toleransi tanggal kandidat ${String(best.candidate.date ?? "").slice(0, 10)}`,
+    );
+  }
+  if (!best.ref_match) {
+    reasons.push(
+      mutation.provider_order_id
+        ? `referensi bank "${mutation.provider_order_id}" tidak cocok dengan referensi kandidat "${best.candidate.ref ?? "-"}"`
+        : "referensi bank tidak tersedia atau tidak cocok",
+    );
+  }
+  if (!best.vendor_match && best.candidate.name) {
+    reasons.push(
+      `nama/deskripsi bank belum cukup cocok dengan pihak "${best.candidate.name}"`,
+    );
+  }
+  if (best.candidate.candidateSource === CANONICAL_SETTLEMENT_SOURCE) {
+    reasons.push("kandidat settlement canonical wajib melalui review settlement khusus");
+  } else if (best.score < 80) {
+    reasons.push(`skor pencocokan ${best.score.toFixed(2)}% belum mencapai ambang auto-match 80%`);
+  }
+
+  if (reasons.length === 0) {
+    reasons.push("seluruh sinyal utama belum memenuhi safeguard auto-match");
+  }
+
+  return `Review ditampilkan karena ${reasons.join("; ")}. Admin perlu memeriksa kandidat dan mengonfirmasi hasilnya.`;
+}
+
+async function writeReconAudit(
+  mutationId: number | null,
+  action: string,
+  actor: string,
+  meta: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await db.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+      VALUES (${mutationId ?? "NULL"}, '${action.replace(/'/g, "''")}',
+              '${actor.replace(/'/g, "''")}',
+              '${JSON.stringify(meta).replace(/'/g, "''")}')
+    `));
+  } catch {}
+}
+
+// ─── Main orchestrator ────────────────────────────────────────────────────────
+
+/**
+ * runUnifiedMatching — fetch candidates, score, save to bank_reconciliation_matches.
+ * Updates bank_mutations.status to 'matched' or 'unmatched'.
+ * For auto_matched: also marks the best match as 'approved' in bank_reconciliation_matches.
+ * Journal creation is NOT done here — always deferred to approveAndCreateJournal().
+ */
+export async function runUnifiedMatching(
+  mutation: MutationInput,
+  actor: string,
+): Promise<UnifiedMatchResult> {
+  const explicitProvider = normalizeQrisProvider(mutation.provider_name);
+  const descriptionProvider = normalizeQrisProvider(mutation.normalized_description);
+  const amountTolerance = await getMatchingAmountTolerance(mutation);
+  const matchingMutation =
+    explicitProvider === "unknown" && descriptionProvider !== "unknown"
+      ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: amountTolerance }
+      : { ...mutation, amount_tolerance: amountTolerance };
+  const fetchedCandidates = await fetchCandidates(matchingMutation);
+  const blockedCandidates = fetchedCandidates.filter(
+    (candidate) => !isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+  );
+  const candidates = fetchedCandidates.filter((candidate) =>
+    isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+  );
+
+  if (!candidates.length) {
+    if (blockedCandidates.some((candidate) => isQrisCandidateForMatching(candidate))) {
+      const reviewReason =
+        "Perbedaan jenis transaksi: mutasi terindikasi Transfer Bank, sedangkan kandidat payment QRIS; wajib Review Manual.";
+      await db.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status = 'manual_review',
+            review_reason = '${reviewReason.replace(/'/g, "''")}',
+            review_code = 'TRANSACTION_TYPE_MISMATCH',
+            updated_at = NOW()
+        WHERE id = ${mutation.id}
+          AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+      `)).catch(() => {});
+      await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
+        count: fetchedCandidates.length,
+        blocked_qris_candidates: blockedCandidates.length,
+        status: "manual_review",
+        review_code: "TRANSACTION_TYPE_MISMATCH",
+      });
+      return { status: "manual_review", all: [] };
+    }
+
+    await db.execute(sql.raw(
+      `UPDATE bank_mutations SET status = 'unmatched', updated_at = NOW() WHERE id = ${mutation.id}`,
+    )).catch(() => {});
+    await writeReconAudit(mutation.id, "MATCH_CREATED", actor, { count: 0, status: "unmatched" });
+
+    // Auto-classify expense when no match found and direction is OUT
+    // This runs in background (fire-and-forget) — does not block reconciliation response
+    if (mutation.direction === "OUT" && mutation.normalized_description) {
+      classifyMutationDescription({
+        description: mutation.normalized_description,
+        amount: mutation.amount,
+        direction: "OUT",
+        companyId: mutation.company_id ?? null,
+        useAi: true,
+      })
+        .then(result => persistClassification(mutation.id, result))
+        .catch(err => logger.warn(
+          { err: err.message, mutationId: mutation.id },
+          "[unifiedMatchingEngine] auto-classify failed (non-fatal)",
+        ));
+    }
+
+    return { status: "unmatched", all: [] };
+  }
+
+  const scored = dedupeCandidatesByIdentity(candidates)
+    .map(c => scoreUnified(matchingMutation, c))
+    .sort((a, b) => b.score - a.score);
+
+  // Persist all candidate scores in one statement instead of one round-trip
+  // per candidate. The values are derived from typed engine output; strings
+  // are escaped before being embedded in the existing raw SQL path.
+  const sourceAwareValues = scored
+    .filter((s) => s.candidate.candidateSource != null)
+    .map((s) => `(
+    ${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
+    '${s.reason.join("; ").replace(/'/g, "''")}',
+    ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
+    'candidate',
+    ${s.candidate.candidateSource ? `'${s.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
+  )`);
+  const historicalValues = scored
+    .filter((s) => s.candidate.candidateSource == null)
+    .map((s) => `(
+    ${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
+    '${s.reason.join("; ").replace(/'/g, "''")}',
+    ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
+    'candidate', NULL
+  )`);
+
+  // Source-aware candidates are an idempotent identity, not append-only
+  // evidence. Stale active source-aware rows are retained as superseded
+  // history, while the current candidate set becomes the only active set.
+  const sourceIdentityPredicate = (s: UnifiedScoredMatch) =>
+    `(candidate_type = '${s.candidate.type.replace(/'/g, "''")}'` +
+    ` AND candidate_id = ${s.candidate.id}` +
+    ` AND candidate_source = '${s.candidate.candidateSource!.replace(/'/g, "''")}' )`;
+  const currentSourceIdentities = scored
+    .filter((s) => s.candidate.candidateSource != null)
+    .map(sourceIdentityPredicate);
+  await db.execute(sql.raw(`
+    UPDATE bank_reconciliation_matches
+    SET status = 'superseded'
+    WHERE mutation_id = ${mutation.id}
+      AND candidate_source IS NOT NULL
+      AND status = 'candidate'
+      ${currentSourceIdentities.length
+        ? `AND NOT (${currentSourceIdentities.join(" OR ")})`
+        : ""}
+  `)).catch(() => {});
+
+  // Historical rows have no source discriminator, so they cannot be updated
+  // with the source-aware ON CONFLICT path below. Re-running matching must
+  // replace their active candidate set, otherwise a candidate created under
+  // the old H+1 bank-transfer rule remains visible and can disagree with the
+  // current same-day eligibility shown by the UI and summary endpoint.
+  const currentHistoricalIdentities = scored
+    .filter((s) => s.candidate.candidateSource == null)
+    .map((s) =>
+      `(candidate_type = '${s.candidate.type.replace(/'/g, "''")}'` +
+      ` AND candidate_id = ${s.candidate.id})`,
+    );
+  await db.execute(sql.raw(`
+    UPDATE bank_reconciliation_matches
+    SET status = 'superseded'
+    WHERE mutation_id = ${mutation.id}
+      AND candidate_source IS NULL
+      AND status = 'candidate'
+      ${currentHistoricalIdentities.length
+        ? `AND NOT (${currentHistoricalIdentities.join(" OR ")})`
+        : ""}
+  `)).catch(() => {});
+
+  if (sourceAwareValues.length) {
+    try {
+      await db.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_matches
+          (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+           amount_match, date_match, name_match, order_id_match, proof_match, status,
+           candidate_source)
+        VALUES ${sourceAwareValues.join(",\n")}
+        ON CONFLICT
+          (mutation_id, candidate_type, candidate_id, candidate_source)
+          WHERE candidate_source IS NOT NULL
+            AND status IN ('candidate', 'approved')
+        DO UPDATE SET
+          match_score = EXCLUDED.match_score,
+          match_reason = EXCLUDED.match_reason,
+          amount_match = EXCLUDED.amount_match,
+          date_match = EXCLUDED.date_match,
+          name_match = EXCLUDED.name_match,
+          order_id_match = EXCLUDED.order_id_match,
+          proof_match = EXCLUDED.proof_match,
+          status = CASE
+            WHEN bank_reconciliation_matches.status = 'approved' THEN 'approved'
+            ELSE 'candidate'
+          END
+      `));
+    } catch (error: any) {
+      logger.error(
+        {
+          err: error?.message ?? String(error),
+          mutationId: mutation.id,
+          sourceAwareCandidateCount: sourceAwareValues.length,
+        },
+        "[unifiedMatchingEngine] source-aware match persistence failed",
+      );
+      throw error;
+    }
+  }
+
+  // Historical NULL-source persistence remains deliberately unchanged: NULL
+  // is not silently interpreted as the legacy QRIS source.
+  if (historicalValues.length) {
+    await db.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match, status,
+         candidate_source)
+      VALUES ${historicalValues.join(",\n")}
+      ON CONFLICT DO NOTHING
+    `)).catch(() => {});
+  }
+
+  const best = scored[0];
+  // Phase 4C-5 deliberately stops before approval. A canonical candidate may
+  // be scored and persisted, but it must remain a reviewable candidate until
+  // the dedicated canonical approval phase.
+  const isCanonicalBest =
+    best.candidate.candidateSource === CANONICAL_SETTLEMENT_SOURCE;
+  const classification = isCanonicalBest ? "manual_review" : classifyMatch(best);
+
+  await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
+    count: scored.length,
+    best_score: best.score,
+    best_type: best.candidate.type,
+    best_id: best.candidate.id,
+    classification,
+    amount_match: best.amount_match,
+  });
+
+  if (classification === "auto_matched") {
+    // Mark best candidate as approved in matches table
+    await db.execute(sql.raw(`
+      UPDATE bank_reconciliation_matches
+      SET status = 'approved'
+      WHERE mutation_id = ${mutation.id}
+        AND candidate_type = '${best.candidate.type}'
+        AND candidate_id = ${best.candidate.id}
+        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource}'` : "NULL"}
+    `)).catch(() => {});
+    // Set mutation status to 'matched' — journal will be created by approval gate
+    await db.execute(sql.raw(
+      `UPDATE bank_mutations SET status = 'matched', updated_at = NOW() WHERE id = ${mutation.id}`,
+    )).catch(() => {});
+    logger.info({ mutationId: mutation.id, score: best.score }, "[unifiedMatchingEngine] auto_matched");
+  } else if (classification === "manual_review") {
+    const reviewReason = buildMatchingReviewReason(mutation, best);
+    const reviewCode = isCanonicalBest
+      ? "CANONICAL_SETTLEMENT_REVIEW"
+      : "MATCH_SCORE_REVIEW";
+    await db.execute(sql.raw(
+      `UPDATE bank_mutations
+       SET status = 'matched',
+           review_reason = '${reviewReason.replace(/'/g, "''")}',
+           review_code = '${reviewCode}',
+           updated_at = NOW()
+       WHERE id = ${mutation.id}`,
+    )).catch(() => {});
+  }
+
+  return { status: classification, best, all: scored };
+}
+
+// ─── Journal creation after approval ─────────────────────────────────────────
+
+/**
+ * approveAndCreateJournal — SINGLE ENTRY POINT untuk reconciliation approval.
+ *
+ * ALL steps run inside ONE db.transaction():
+ *   1. SELECT FOR UPDATE — acquires row lock (prevents double-click / concurrent approve)
+ *   2. Guard: already approved / existing approved match check
+ *   3. Resolve bank COA + contra account (AR/AP) + bank journal
+ *   4. postEntryWithClient — handles: period lock (BLOCKING throw), balance validation,
+ *      sequence number (RECON/YYYY/NNNNNN), header+lines INSERT, idempotency, checksum
+ *   5. UPDATE bank_mutations: status='approved_pending_posting' + journal_entry_id (ATOMIC — no .catch)
+ *   6. UPDATE / INSERT bank_reconciliation_matches (approved)
+ *   7. INSERT bank_reconciliation_audit (inside tx — no .catch: must succeed or rollback)
+ *   → COMMIT or full ROLLBACK if any step throws
+ *
+ * Period lock: enforced by _postEntryCore — throws PERIOD_CLOSED for closed periods.
+ * Auto-post is opt-in for a fully matched, explicit COA reference rule. Normal
+ * human approval still creates a draft and requires the separate post action.
+ */
+
+/**
+ * Translate a raw PostgreSQL / trigger error into a user-friendly Indonesian message.
+ * The raw message is logged separately; only the friendly string is shown to the user.
+ */
+function mapDbErrorToUserMessage(rootMsg: string, originalError: any): string {
+  // PostgreSQL error code lives on the cause object (Drizzle unwrap) or the error itself.
+  const pgCode: string | undefined =
+    originalError?.cause?.code ?? originalError?.code;
+
+  // 23505 — unique_violation (duplicate key)
+  if (pgCode === "23505") {
+    return "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.";
+  }
+
+  // 23503 — foreign_key_violation (invalid COA or related record)
+  if (pgCode === "23503") {
+    return "Akun COA tidak valid. Pastikan kode akun benar.";
+  }
+
+  // P0001 — raise_exception (custom trigger / function errors)
+  if (pgCode === "P0001") {
+    if (rootMsg.includes("IMMUTABILITY_VIOLATION")) {
+      return "Jurnal sudah diposting dan tidak bisa diubah. Gunakan reversal untuk koreksi.";
+    }
+    if (rootMsg.includes("PERIOD_CLOSED")) {
+      return "Periode keuangan sudah ditutup. Gunakan entri di periode baru.";
+    }
+  }
+
+  // Trigger message strings (some DBs surface via message, not code)
+  if (rootMsg.includes("IMMUTABILITY_VIOLATION") || rootMsg.includes("immutability")) {
+    return "Jurnal sudah diposting dan tidak bisa diubah. Gunakan reversal untuk koreksi.";
+  }
+  if (rootMsg.includes("PERIOD_CLOSED") || rootMsg.includes("period is closed")) {
+    return "Periode keuangan sudah ditutup. Gunakan entri di periode baru.";
+  }
+  if (rootMsg.includes("duplicate key") || rootMsg.includes("unique constraint")) {
+    return "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.";
+  }
+  if (rootMsg.includes("foreign key") || rootMsg.includes("violates foreign key")) {
+    return "Akun COA tidak valid. Pastikan kode akun benar.";
+  }
+
+  // Fallback: generic but still non-technical
+  return "Terjadi kesalahan saat membuat jurnal. Silakan coba lagi atau hubungi tim teknis.";
+}
+
+export async function approveAndCreateJournal(
+  mutationId: number,
+  matchId: number | null,
+  candidateType: string | null,
+  candidateId: number | null,
+  actor: string,
+  note?: string,
+  /** COA code explicitly chosen by user after a JOURNAL_MAPPING_REQUIRED error.
+   *  When provided, bypasses resolveContraAccount and uses this account directly. */
+  manualCoaCode?: string | null,
+  candidateSource: ReconciliationCandidateSource | null = null,
+  autoPost = false,
+  ruleAi?: AtomicRuleAiInput | null,
+): Promise<{ ok: boolean; journalEntryId: number | null; ruleAiId?: number; error?: string; manual_review_required?: true; code?: string }> {
+
+  let journalEntryId: number | null = null;
+  let journalEntryNumber = "";
+  let persistedRuleAiId: number | null = null;
+
+  try {
+    const txResult = await db.transaction(async (tx) => {
+
+       // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
+       const { rows: locked } = await tx.execute(sql.raw(`
+         SELECT bm.id, bm.status, bm.amount, bm.direction,
+               bm.transaction_date, bm.description, bm.mutation_key,
+                 bm.provider_name, bm.provider_order_id, bm.normalized_description,
+                 bm.company_id, bm.bank_account_id, bm.journal_entry_id,
+                bm.expense_category, bm.expense_suggested_account_subtype
+        FROM bank_mutations bm
+        WHERE bm.id = ${mutationId}
+        FOR UPDATE
+      `));
+      if (!locked.length) {
+        throw Object.assign(new Error("Mutasi tidak ditemukan"), { code: "NOT_FOUND" });
+      }
+      const mut = locked[0] as Record<string, unknown>;
+
+      const companyId   = normalizeCompanyId(mut["company_id"]);
+      const bankAccId   = mut["bank_account_id"] != null ? Number(mut["bank_account_id"]) : null;
+      const txDate      = String(mut["transaction_date"] ?? "").split("T")[0];
+      const amount      = Number(mut["amount"]);
+      const direction   = String(mut["direction"] ?? "IN");
+      if (companyId == null) {
+        throw Object.assign(
+          new Error("Mutasi tidak memiliki company_id yang valid; approval diblokir"),
+          { code: "COMPANY_SCOPE_REQUIRED" },
+        );
+      }
+
+       // When manual COA selection also teaches Rule AI, persist it before any
+       // journal work but on this same transaction. A journal failure therefore
+       // rolls back the rule and its operational mirror too.
+       if (ruleAi) {
+         if (ruleAi.companyId !== companyId) {
+           throw Object.assign(
+             new Error("Rule AI dan mutasi harus berada dalam perusahaan yang sama"),
+             { code: "COMPANY_SCOPE_REQUIRED" },
+           );
+         }
+         const persisted = await persistRuleAiWithinTransaction(
+           tx as unknown as DbClient,
+           ruleAi,
+           actor,
+         );
+         persistedRuleAiId = persisted.id;
+       }
+
+       // A previous auto-post can successfully create the source journal but
+       // fail before the mutation status is promoted. The next run must adopt
+       // that *same* journal, not create a duplicate and then route a fully
+       // configured Rule AI back to manual review. This narrow recovery is only
+       // available to the explicit auto-post path and proves the entry belongs
+       // to this mutation, company, and amount before changing any status.
+       if (autoPost) {
+         const linkedJournalId = mut["journal_entry_id"] != null
+           ? Number(mut["journal_entry_id"])
+           : null;
+         const { rows: existingEntries } = await tx.execute(sql.raw(`
+           SELECT
+             ae.id,
+             ae.entry_number,
+             ae.status,
+             ae.total_debit,
+             ae.total_credit,
+             COALESCE(ae.is_voided, FALSE) AS is_voided,
+             COALESCE(ae.is_reversed, FALSE) AS is_reversed
+           FROM accounting_entries ae
+           WHERE ae.company_id = ${companyId}
+             AND (
+               ${linkedJournalId == null ? "FALSE" : `ae.id = ${linkedJournalId}`}
+               OR (ae.source = 'bank_reconciliation' AND ae.source_id = ${mutationId})
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM bank_mutations claimed
+               WHERE claimed.journal_entry_id = ae.id
+                 AND claimed.id <> ${mutationId}
+                 AND claimed.status IN ('approved_pending_posting', 'approved', 'posted')
+             )
+           ORDER BY CASE WHEN ae.id = ${linkedJournalId ?? -1} THEN 0 ELSE 1 END
+           LIMIT 2
+           FOR UPDATE
+         `));
+         const existingEntry = existingEntries.length === 1
+           ? existingEntries[0] as Record<string, unknown>
+           : null;
+         const existingAmount = Number(existingEntry?.["total_debit"] ?? NaN);
+         const amountTolerance = Math.max(1, amount * 0.0001);
+         const canRecoverExistingJournal = existingEntry != null
+           && ["draft", "posted"].includes(String(existingEntry["status"] ?? ""))
+           && !Boolean(existingEntry["is_voided"])
+           && !Boolean(existingEntry["is_reversed"])
+           && Math.abs(existingAmount - amount) <= amountTolerance;
+
+         if (canRecoverExistingJournal) {
+           const entryId = Number(existingEntry["id"]);
+           const entryNumber = String(existingEntry["entry_number"] ?? "");
+           if (existingEntry["status"] === "draft") {
+             await tx.execute(sql.raw(`
+               UPDATE accounting_entries
+               SET status = 'posted', posted_at = NOW()
+               WHERE id = ${entryId} AND status = 'draft'
+             `));
+           }
+           await tx.execute(sql.raw(`
+             UPDATE bank_mutations
+             SET status = 'posted',
+                 journal_entry_id = ${entryId},
+                 approved_by = '${escapeSql(actor)}',
+                 approved_at = NOW(),
+                 posted_by = '${escapeSql(actor)}',
+                 posted_at = NOW(),
+                 review_reason = NULL,
+                 review_code = NULL,
+                 updated_at = NOW()
+             WHERE id = ${mutationId}
+           `));
+           const recoveryMeta = JSON.stringify({
+             journal_entry_id: entryId,
+             entry_number: entryNumber,
+             recovered_existing_auto_post: true,
+             direction,
+             amount,
+           }).replace(/'/g, "''");
+           await tx.execute(sql.raw(`
+             INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+             VALUES (${mutationId}, 'MATCH_APPROVED_AUTO_POSTED', '${escapeSql(actor)}', '${recoveryMeta}')
+           `));
+           return {
+             txJournalEntryId: entryId,
+             entryNumber,
+              ruleAiId: persistedRuleAiId,
+           };
+         }
+       }
+
+       // A match row is the source of truth. Do not let a stale or tampered
+       // browser payload change the candidate selected by the reviewer.
+       let selectedCandidateType = candidateType;
+       let selectedCandidateId = candidateId;
+       let selectedCandidateSource = candidateSource;
+        if (matchId) {
+         const { rows: matchRows } = await tx.execute(sql.raw(`
+           SELECT id, candidate_type, candidate_id, candidate_source
+           FROM bank_reconciliation_matches
+           WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
+           FOR UPDATE
+         `));
+         if (!matchRows.length) {
+           throw Object.assign(
+             new Error("Kandidat rekonsiliasi tidak ditemukan untuk mutasi ini"),
+             { code: "INVALID_MATCH" },
+           );
+         }
+         selectedCandidateType = String((matchRows[0] as any).candidate_type ?? "");
+         selectedCandidateId = Number((matchRows[0] as any).candidate_id);
+          selectedCandidateSource = (matchRows[0] as any).candidate_source ?? null;
+       }
+
+       const selectedType = canonicalCandidateType(selectedCandidateType);
+        // The requirement is persisted in the rule-match audit trail so this
+        // remains enforceable even when the browser sends no candidate payload
+        // or sends the Rule AI evidence row itself. Older audit rows without a
+        // snapshot fall back to the current rule configuration.
+        const { rows: requiredCandidateRules } = await tx.execute(sql.raw(`
+          SELECT bra.id
+          FROM bank_reconciliation_audit bra
+          LEFT JOIN recon_rules rr
+            ON rr.id = CASE
+              WHEN COALESCE(NULLIF(bra.meta->>'matched_rule_id', ''), NULLIF(bra.meta->>'rule_id', '')) ~ '^[0-9]+$'
+              THEN COALESCE(NULLIF(bra.meta->>'matched_rule_id', ''), NULLIF(bra.meta->>'rule_id', ''))::bigint
+              ELSE NULL
+            END
+          WHERE bra.mutation_id = ${mutationId}
+            AND bra.action IN ('RULE_ENGINE_MATCH', 'RULE_CANDIDATE_REQUIRED', 'AUTO_POST_BLOCKED')
+            AND (
+              bra.meta->>'candidate_requirement' = 'required'
+              OR (
+                rr.candidate_requirement = 'required'
+                AND rr.company_id = ${companyId}
+              )
+            )
+          ORDER BY bra.id DESC
+          LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        const candidateRequirement = requiredCandidateRules.length > 0 ? "required" : "not_required";
+
+        const requiredCandidateError = requiredCandidateApprovalError({
+          candidateRequirement,
+          candidateType: selectedType,
+          candidateId: selectedCandidateId == null ? null : Number(selectedCandidateId),
+        });
+        if (requiredCandidateError) {
+          throw Object.assign(
+            new Error(requiredCandidateError.message),
+            { code: requiredCandidateError.code },
+          );
+        }
+
+       const allowedCandidateTypes = new Set([
+         "accounting_payment",
+         "logistic_order",
+         "invoice",
+         "expense",
+         "sport_payment",
+        "qris_settlement",
+         "tenant_invoice",
+          "recon_rule",
+          "internal_transfer",
+       ]);
+       if (selectedType && !allowedCandidateTypes.has(selectedType)) {
+         throw Object.assign(new Error("Tipe kandidat rekonsiliasi tidak valid"), { code: "INVALID_MATCH" });
+       }
+       if (selectedType === "qris_settlement") {
+         assertGenericApprovalAllowed({
+           candidate_type: selectedType,
+           candidate_id: selectedCandidateId,
+           candidate_source: selectedCandidateSource,
+         });
+       }
+
+        if (selectedType === "internal_transfer" && direction !== "OUT") {
+          throw Object.assign(
+            new Error("Transfer internal hanya dapat dialokasikan dari mutasi bank keluar"),
+            { code: "INVALID_MATCH" },
+          );
+        }
+
+       // Never approve a QRIS source against an ordinary bank mutation.
+       // This protects older/stale match rows that were created before the
+       // bank-evidence gate existed and prevents a browser payload from
+       // bypassing candidate-generation safeguards.
+       if (
+         selectedType === "qris_settlement" ||
+         selectedType === "sport_payment"
+       ) {
+         let sourceIsQris = selectedType === "qris_settlement";
+         if (selectedType === "sport_payment" && selectedCandidateId != null) {
+           const { rows: paymentRows } = await tx.execute(sql.raw(`
+             SELECT method, payment_type, payment_provider
+             FROM sport_payments
+             WHERE id = ${Number(selectedCandidateId)}
+               AND company_id = ${companyId}
+             LIMIT 1
+           `));
+           const payment = paymentRows[0] as Record<string, unknown> | undefined;
+           if (!payment) {
+             throw Object.assign(
+               new Error("Payment Sport Center tidak ditemukan untuk perusahaan ini"),
+               { code: "INVALID_MATCH" },
+             );
+           }
+           const paymentText = [
+             payment.payment_provider,
+             payment.payment_type,
+             payment.method,
+           ].map((value) => String(value ?? "").toLowerCase()).join(" ");
+           const isPaylabs = paymentText.includes("paylabs");
+           sourceIsQris = !isPaylabs && paymentText.includes("qris");
+         }
+
+         if (
+           sourceIsQris &&
+           !hasQrisBankEvidence({
+             provider_name: mut["provider_name"] == null ? null : String(mut["provider_name"]),
+             provider_order_id: mut["provider_order_id"] == null ? null : String(mut["provider_order_id"]),
+             normalized_description: mut["normalized_description"] == null
+               ? String(mut["description"] ?? "")
+               : String(mut["normalized_description"]),
+           })
+         ) {
+           throw Object.assign(
+             new Error(
+               "Approval diblokir: payment QRIS tidak memiliki bukti QRIS pada mutasi bank.",
+             ),
+             { code: "QRIS_BANK_EVIDENCE_REQUIRED" },
+           );
+         }
+       }
+
+       // ── Step 2: Guard — idempotency and conflicting approved match ────────
+        if (
+          mut["status"] === "approved" ||
+          mut["status"] === "approved_pending_posting" ||
+          mut["status"] === "posted"
+        ) {
+         throw Object.assign(new Error("Mutasi sudah diproses sebelumnya"), { code: "CONFLICT" });
+       }
+       const { rows: existingApproval } = await tx.execute(sql.raw(`
+         SELECT id FROM bank_reconciliation_matches
+         WHERE mutation_id = ${mutationId} AND status = 'approved'
+         LIMIT 2
+       `));
+       const differentApproval = (existingApproval as any[]).find(
+         (row) => Number(row.id) !== Number(matchId),
+       );
+       if (differentApproval) {
+         throw Object.assign(
+           new Error("Kandidat lain sudah di-approve untuk mutasi ini"),
+           { code: "CONFLICT" },
+         );
+       }
+
+        // Phase 4C-4: candidate generation can race with canonical settlement
+        // posting. Revalidate the source payment while the approval transaction
+        // is still open, before any journal or bank mutation changes.
+        if (selectedType === "sport_payment" && selectedCandidateId != null) {
+          const alreadySettled = await isSportPaymentInActiveCanonicalSettlement(
+            tx as unknown as DbClient,
+            selectedCandidateId,
+          );
+          if (alreadySettled) {
+            throw Object.assign(
+              new Error(
+                "Sport Center payment already belongs to an active canonical settlement",
+              ),
+              { code: SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT },
+            );
+          }
+        }
+
+      // ── Step 3: Resolve bank COA + contra account + journal ───────────────
+      // Bank COA: company_bank_accounts.coa_id WHERE id = bank_account_id
+      let bankCoaId: number | null = null;
+      if (bankAccId) {
+        const { rows: cbaRows } = await tx.execute(sql.raw(`
+          SELECT coa_id FROM company_bank_accounts WHERE id = ${bankAccId} LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        bankCoaId = (cbaRows[0] as any)?.coa_id ? Number((cbaRows[0] as any).coa_id) : null;
+      }
+
+       let contraCoaId: number | null = null;
+       let contraLabel = "";
+       let contraTreatment: ContraResolution["treatment"] | null = null;
+       let journalId:   number | null = null;
+       let settings: Record<string, unknown> = {};
+
+      if (companyId) {
+        const { rows: settRows } = await tx.execute(sql.raw(`
+           SELECT default_bank_account_id, ar_account_id, ap_account_id,
+                  purchase_expense_account_id, bank_journal_id
+          FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        const sett = (settRows[0] as any) ?? {};
+         settings = sett;
+
+        if (!bankCoaId && sett.default_bank_account_id) {
+          bankCoaId = Number(sett.default_bank_account_id);
+        }
+        journalId = sett.bank_journal_id ? Number(sett.bank_journal_id) : null;
+      }
+
+       // ── Universal Journal Reuse Engine (Phase 7) ─────────────────────────
+       // Determines whether an existing posted journal should be reused,
+       // a new one created, or the mutation flagged for manual review.
+       // FAIL CLOSED: any lookup error → MANUAL_REVIEW_REQUIRED, never silent empty.
+       // The engine handles ALL candidate types; no inline queries here.
+       let reusedEntry: { id: number; entryNumber: string } | null = null;
+
+       const reuseResolution = await resolveJournalForEconomicEvent(
+         tx as unknown as DbClient,
+         {
+           companyId,
+           candidateType: selectedCandidateType,
+           candidateId: selectedCandidateId,
+            candidateSource: selectedCandidateSource,
+           mutationId,
+           mutationAmount: amount,
+           mutationDate: txDate,
+         },
+       );
+
+       logger.info(
+         { mutationId, candidateType: selectedCandidateType, candidateId: selectedCandidateId,
+           decision: reuseResolution.decision, confidence: reuseResolution.confidence,
+           reasons: reuseResolution.reasons },
+         "[approveAndCreateJournal] JournalReuseEngine decision",
+       );
+
+       if (reuseResolution.decision === "REJECT_DUPLICATE") {
+         throw Object.assign(
+           new Error(
+             `Duplikat economic event terdeteksi: jurnal ${reuseResolution.existingJournalNumber ?? reuseResolution.existingJournalId} ` +
+             `sudah terhubung ke mutasi bank lain. ${reuseResolution.reasons[0] ?? ""}`,
+           ),
+           { code: JournalReuseErrorCode.ECONOMIC_EVENT_DUPLICATE },
+         );
+       }
+
+       if (reuseResolution.decision === "MANUAL_REVIEW_REQUIRED") {
+         throw new JournalMappingError(
+           "JOURNAL_MAPPING_REQUIRED",
+           `Rekonsiliasi memerlukan review manual: ${reuseResolution.reasons[0] ?? "ambiguous economic event"}. ` +
+           `Periksa jurnal yang ada sebelum melanjutkan.`,
+           { mutationId, code: reuseResolution.evidence["code"] ?? JournalReuseErrorCode.MANUAL_REVIEW_REQUIRED },
+         );
+       }
+
+       if (reuseResolution.decision === "REUSE_EXISTING_JOURNAL" &&
+           reuseResolution.existingJournalId != null) {
+         reusedEntry = {
+           id: reuseResolution.existingJournalId,
+           entryNumber: reuseResolution.existingJournalNumber ?? "",
+         };
+       }
+       // decision === "CREATE_NEW_JOURNAL": reusedEntry stays null → fall through to new journal path
+
+       if (reusedEntry) {
+         await tx.execute(sql.raw(`
+           UPDATE bank_mutations
+           SET status = 'posted',
+               journal_entry_id = ${reusedEntry.id},
+               approved_by = '${escapeSql(actor)}',
+               approved_at = NOW(),
+               posted_by = '${escapeSql(actor)}',
+               posted_at = NOW(),
+               updated_at = NOW()
+           WHERE id = ${mutationId}
+         `));
+
+         // Promote draft accounting entry → posted.
+         // Upstream modules (sport center, payroll, etc.) create journal entries in
+         // 'draft' status as provisional records.  Bank reconciliation approval is
+         // the authoritative confirmation; we upgrade the status here so the entry
+         // appears in Trial Balance and other posted-only views.
+         // WHERE status = 'draft' makes this a safe no-op when reusing a fully-posted journal.
+         await tx.execute(sql.raw(`
+           UPDATE accounting_entries
+           SET status = 'posted',
+               posted_at = NOW()
+           WHERE id = ${reusedEntry.id}
+             AND status = 'draft'
+         `));
+
+         if (matchId) {
+           await tx.execute(sql.raw(`
+             UPDATE bank_reconciliation_matches
+             SET status = 'approved'
+             WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
+           `));
+         } else if (selectedCandidateType && selectedCandidateId != null) {
+           await tx.execute(sql.raw(`
+             INSERT INTO bank_reconciliation_matches
+               (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+                amount_match, date_match, name_match, order_id_match, proof_match, status,
+                candidate_source)
+             VALUES
+               (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
+                100, 'existing posted source journal reused', true, false, false, false, false, 'approved',
+                ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
+             ON CONFLICT DO NOTHING
+           `));
+         }
+
+         const reuseMeta = JSON.stringify({
+           match_id: matchId,
+           candidate_type: selectedCandidateType,
+           candidate_id: selectedCandidateId,
+           candidate_source: selectedCandidateSource,
+           journal_entry_id: reusedEntry.id,
+           reused_existing_entry: true,
+           direction,
+         }).replace(/'/g, "''");
+         await tx.execute(sql.raw(`
+           INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+           VALUES (${mutationId}, 'MATCH_APPROVED', '${escapeSql(actor)}', '${reuseMeta}')
+         `));
+
+         return {
+           txJournalEntryId: reusedEntry.id,
+           entryNumber: reusedEntry.entryNumber,
+            ruleAiId: persistedRuleAiId,
+         };
+       }
+
+       // ── Manual COA override (user picked an account after JOURNAL_MAPPING_REQUIRED) ──
+       if (manualCoaCode?.trim()) {
+         const manualId = await findCompanyCoa(tx as unknown as DbClient, companyId, manualCoaCode.trim());
+         if (!manualId) {
+           throw new JournalMappingError(
+             "COA_NOT_FOUND",
+             `Akun COA "${manualCoaCode}" tidak ditemukan atau tidak aktif di perusahaan ini.`,
+             { mutationId, manualCoaCode },
+           );
+         }
+         contraCoaId     = manualId;
+         contraLabel     = `Akun dipilih manual: ${manualCoaCode}`;
+            if (selectedType === "internal_transfer") {
+             const { rows: targetRows } = await tx.execute(sql.raw(`
+                SELECT id, code, name, type, subtype, is_active, is_header, is_postable
+               FROM chart_of_accounts
+               WHERE id = ${manualId}
+                  AND (company_id = ${companyId} OR company_id IS NULL)
+               LIMIT 1
+             `));
+             const target = targetRows[0] as any;
+              if (!target || !isValidInternalTransferTarget(target)) {
+               throw new JournalMappingError(
+                 "COA_NOT_FOUND",
+                 "Transfer internal hanya boleh diarahkan ke COA Kas Besar, Kas Kecil, bank, atau akun cash_bank.",
+                 { mutationId, manualCoaCode },
+               );
+             }
+             contraTreatment = "asset";
+           } else if (selectedType === "recon_rule" && selectedCandidateId != null) {
+            const ruleTarget = await loadReconRuleTarget(
+              tx as unknown as DbClient,
+              companyId,
+              selectedCandidateId,
+            );
+            contraTreatment = treatmentForReconRuleTarget(ruleTarget?.targetType);
+          } else {
+            contraTreatment = "expense";
+          }
+         logger.info({ mutationId, manualCoaCode, contraCoaId }, "[approveAndCreateJournal] manual COA override applied");
+       } else {
+         const contra = await resolveContraAccount(tx as unknown as DbClient, {
+           direction,
+           companyId,
+           bankAccountId: bankAccId,
+           candidateType: selectedCandidateType,
+           candidateId: selectedCandidateId,
+           description: String(mut["description"] ?? ""),
+           expenseCategory: (mut["expense_category"] as string | null) ?? null,
+           expenseSubtype: (mut["expense_suggested_account_subtype"] as string | null) ?? null,
+           settings,
+         });
+         contraCoaId     = contra?.accountId ?? null;
+         contraLabel     = contra?.label ?? "";
+         contraTreatment = contra?.treatment ?? null;
+       }
+
+      // Fallback journal: query by type/name when bank_journal_id not set
+      if (!journalId) {
+        const { rows: jRows } = await tx.execute(sql.raw(`
+          SELECT id FROM accounting_journals
+          WHERE ${companyId ? `company_id = ${companyId}` : "company_id IS NULL"}
+            AND (LOWER(name) LIKE '%bank%' OR LOWER(code) LIKE '%bank%' OR type = 'bank')
+          ORDER BY id ASC LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        journalId = (jRows[0] as any)?.id ? Number((jRows[0] as any).id) : null;
+      }
+
+      if (!bankCoaId) {
+        throw new JournalMappingError(
+          "COA_NOT_FOUND",
+          "Akun bank/kas tidak ditemukan. Konfigurasikan 'Default Bank Account' di Accounting Settings.",
+          { mutationId, bankAccountId: bankAccId },
+        );
+      }
+      if (!contraCoaId) {
+        throw new JournalMappingError(
+          "JOURNAL_MAPPING_REQUIRED",
+           direction === "IN"
+             ? "Akun piutang (AR) tidak dikonfigurasi di Accounting Settings."
+             : "Akun beban/utang untuk transaksi ini tidak ditemukan. Konfigurasikan COA beban atau pilih kandidat expense/vendor yang valid.",
+          { mutationId, direction },
+        );
+      }
+      if (!journalId) {
+        throw new JournalMappingError(
+          "JOURNAL_MAPPING_REQUIRED",
+          "Jurnal bank tidak ditemukan. Buat jurnal bertipe 'bank' atau konfigurasikan 'Bank Journal' di Accounting Settings.",
+          { mutationId },
+        );
+      }
+
+       // ── Step 4: Build double-entry lines + post via canonical engine ──────
+       //   Bank IN:  DEBIT bank COA,   CREDIT AR/revenue
+       //   Bank OUT: DEBIT expense/AP, CREDIT bank COA
+      const lineDesc = note ?? `Rekon ${direction} ${String(mut["mutation_key"] ?? "").slice(0, 60)}`;
+       const lines = buildBankMutationJournalLines(
+         direction,
+         bankCoaId,
+         contraCoaId,
+         amount,
+         lineDesc,
+       );
+
+      // postEntryWithClient handles: period lock (throws PERIOD_CLOSED if closed),
+      // balance validation (throws if debit ≠ credit), sequence number, header+lines
+      // INSERT, idempotency (source=bank_reconciliation + sourceId=mutationId),
+      // checksum hash, ledger event (fire-and-forget via global db — never poisons tx).
+      const entry = await postEntryWithClient(
+        tx as unknown as DbClient,
+        {
+          journalId,
+          date:        new Date(txDate),
+          ref:         String(mut["mutation_key"] ?? "").slice(0, 100),
+          description: String(mut["description"] ?? "").slice(0, 200),
+           expenseCategory: contraTreatment === "expense"
+             ? String(mut["expense_category"] ?? "bank_reconciliation_expense")
+             : null,
+          source:      "bank_reconciliation",
+          sourceId:    mutationId,
+          companyId:   companyId ?? undefined,
+          createdById: actor,
+          lines,
+        },
+        "RECON",
+        "draft",   // Admin must explicitly post — auto-post disabled
+      );
+
+      // ── Step 5: Update mutation ATOMICALLY (inside tx, no .catch) ─────────
+       // Normal approval stops at approved_pending_posting. Explicit reference
+       // rules may request autoPost; in that case promote the same balanced
+       // journal atomically before committing.
+      await tx.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status           = 'approved_pending_posting',
+            journal_entry_id = ${entry.id},
+            approved_by      = '${actor.replace(/'/g, "''")}',
+            approved_at      = NOW(),
+            updated_at       = NOW()
+        WHERE id = ${mutationId}
+      `));
+
+       if (autoPost) {
+         await tx.execute(sql.raw(`
+           UPDATE accounting_entries
+           SET status = 'posted'
+           WHERE id = ${entry.id} AND status = 'draft'
+         `));
+         await tx.execute(sql.raw(`
+           UPDATE bank_mutations
+           SET status = 'posted',
+               posted_by = '${actor.replace(/'/g, "''")}',
+               posted_at = NOW(),
+               updated_at = NOW()
+           WHERE id = ${mutationId} AND status = 'approved_pending_posting'
+         `));
+       }
+
+      // ── Step 6: Update/insert approved match record ────────────────────────
+      if (matchId) {
+        await tx.execute(sql.raw(`
+          UPDATE bank_reconciliation_matches
+          SET status = 'approved'
+          WHERE id = ${matchId} AND mutation_id = ${mutationId}
+        `));
+       } else if (selectedCandidateType && selectedCandidateId != null) {
+        await tx.execute(sql.raw(`
+          INSERT INTO bank_reconciliation_matches
+            (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+             amount_match, date_match, name_match, order_id_match, proof_match, status,
+             candidate_source)
+          VALUES
+             (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
+             100, 'manual approve', true, false, false, false, false, 'approved',
+             ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
+          ON CONFLICT DO NOTHING
+        `));
+      }
+
+      // ── Step 7: Audit log inside transaction — NO .catch() ────────────────
+      // Must succeed or the entire transaction rolls back. This ensures we never
+      // commit an approval without a corresponding audit trail.
+      const auditMeta = JSON.stringify({
+        match_id:         matchId,
+         candidate_type:   selectedCandidateType,
+         candidate_id:     selectedCandidateId,
+        journal_entry_id: entry.id,
+        entry_number:     entry.entryNumber,
+        bank_coa_id:      bankCoaId,
+        contra_coa_id:    contraCoaId,
+         contra_label:     contraLabel,
+         contra_treatment: contraTreatment,
+        amount,
+        direction,
+        note:             note ?? null,
+         auto_post:        autoPost,
+      }).replace(/'/g, "''");
+      await tx.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+       VALUES (${mutationId}, '${autoPost ? "MATCH_APPROVED_AUTO_POSTED" : "MATCH_APPROVED"}', '${actor.replace(/'/g, "''")}', '${auditMeta}')
+      `));
+
+       return {
+         txJournalEntryId: entry.id,
+         entryNumber: entry.entryNumber,
+         ruleAiId: persistedRuleAiId,
+       };
+    });
+
+    journalEntryId     = txResult.txJournalEntryId;
+    journalEntryNumber = txResult.entryNumber;
+
+  } catch (e: any) {
+    // captureFailedJob runs OUTSIDE tx — always fires even after rollback
+    // Drizzle v0.45+ wraps DB errors as DrizzleError { message: "Failed query: <SQL>", cause: <pgError> }.
+    // Unwrap to expose the real PostgreSQL message (e.g. "duplicate key", trigger exceptions).
+    const rootMsg: string =
+      (e as any)?.cause?.message ?? e.message ?? String(e);
+
+    captureFailedJob(
+      "reconciliation_approval",
+      { mutationId, matchId, candidateType, candidateId, actor },
+      rootMsg,
+    ).catch(() => {});
+    logger.error({ err: rootMsg, drizzleMsg: e.message, mutationId }, "[approveAndCreateJournal] transaction rolled back");
+
+    // JournalMappingError must propagate its typed code and manual_review_required
+    // to the route so it can return 422 instead of swallowing it as a generic 400.
+    if (e instanceof JournalMappingError) {
+      return {
+        ok: false,
+        journalEntryId: null,
+        error: e.message,
+        manual_review_required: true as const,
+        code: e.code,
+      };
+    }
+
+    if (e?.code === SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT) {
+      return {
+        ok: false,
+        journalEntryId: null,
+        error: e.message,
+        code: e.code,
+      };
+    }
+
+    // Map raw PostgreSQL / trigger error codes to user-friendly Indonesian messages.
+    const userFriendlyError = mapDbErrorToUserMessage(rootMsg, e);
+    return { ok: false, journalEntryId: null, error: userFriendlyError };
+  }
+
+  // ── Post-commit: fire-and-forget side effects (use global db — outside tx) ──
+  writeReconAudit(mutationId, "JOURNAL_CREATED", actor, {
+    journal_entry_id: journalEntryId,
+    entry_number:     journalEntryNumber,
+  }).catch(() => {});
+  if (persistedRuleAiId != null) {
+    invalidateRulesCache(ruleAi?.companyId ?? 0);
+  }
+
+  logger.info(
+    { mutationId, journalEntryId, entryNumber: journalEntryNumber, actor },
+    "[approveAndCreateJournal] success — all steps committed",
+  );
+
+  return {
+    ok: true,
+    journalEntryId,
+    ...(persistedRuleAiId != null ? { ruleAiId: persistedRuleAiId } : {}),
+  };
+}

@@ -1,9 +1,23 @@
 import { SignJWT, jwtVerify } from "jose";
 
-const SECRET_RAW = process.env.PORTAL_JWT_SECRET ?? process.env.SESSION_SECRET ?? "portal-jwt-fallback-secret-change-me";
-const SECRET = new TextEncoder().encode(SECRET_RAW);
+// Lazy — only throws when the JWT is actually used, NOT at module load.
+// Prevents API server crash-loop when PORTAL_JWT_SECRET is not set in dev.
+function getSecret(): Uint8Array {
+  // Production bundles historically provide SESSION_SECRET (the required
+  // canonical signing secret) but may not contain a separate
+  // PORTAL_JWT_SECRET. Keep the dedicated key preferred while allowing the
+  // canonical secret to keep portal login functional across old bundles.
+  const raw = process.env.PORTAL_JWT_SECRET ?? process.env.SESSION_SECRET;
+  if (!raw) {
+    throw new Error(
+      "Portal JWT secret not configured. Set PORTAL_JWT_SECRET or SESSION_SECRET environment variable."
+    );
+  }
+  return new TextEncoder().encode(raw);
+}
+
 const ISSUER = "cst-portal";
-const EXPIRY = "30d";
+const EXPIRY = "7d";
 
 export interface PortalJwtPayload {
   sub: string;
@@ -18,12 +32,12 @@ export async function signPortalJwt(payload: PortalJwtPayload): Promise<string> 
     .setIssuer(ISSUER)
     .setIssuedAt()
     .setExpirationTime(EXPIRY)
-    .sign(SECRET);
+    .sign(getSecret());
 }
 
 export async function verifyPortalJwt(token: string): Promise<PortalJwtPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, SECRET, { issuer: ISSUER });
+    const { payload } = await jwtVerify(token, getSecret(), { issuer: ISSUER });
     if (
       typeof payload.email === "string" &&
       typeof payload.customerId === "number" &&

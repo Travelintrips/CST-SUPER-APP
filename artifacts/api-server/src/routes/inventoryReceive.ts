@@ -3,6 +3,8 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { postStockIn } from "../lib/inventoryStock.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
+import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -214,6 +216,85 @@ router.post("/", async (req: Request, res: Response) => {
 
   const result = await loadReceipt(receiptId);
   res.status(201).json(result);
+
+  // Notifikasi WA + email setelah GRN dibuat (fire-and-forget, setelah response terkirim)
+  void (async () => {
+    try {
+      const poRow = po.rows[0] as any;
+      const totalValue = validLines.reduce((s, l) => s + l.qtyReceived * l.unitCost, 0);
+      const waMsg =
+        `📦 *GRN Dibuat*\nNo: ${rNo}\nPO: ${poRow.doc_number ?? poId}\nSupplier: ${poRow.supplier_name ?? "-"}\nTotal: Rp ${totalValue.toLocaleString("id-ID")}`;
+      const phones = [
+        ...(process.env.ADMIN_WA_PHONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
+        ...(process.env.FONNTE_ADMIN_WA?.trim() ? [process.env.FONNTE_ADMIN_WA.trim()] : []),
+      ];
+      const unique = [...new Set(phones)];
+      for (const phone of unique) {
+        await sendWhatsApp(phone, waMsg, {
+          context: "grn_created",
+          refType: "purchase_receipt",
+          refId: String(receiptId),
+        });
+      }
+
+      // Email ke supplier (jika punya email dan SMTP dikonfigurasi)
+      if (isSmtpConfigured() && poRow.supplier_id) {
+        const supRows = await db.execute(sql`SELECT contact_email, name FROM suppliers WHERE id = ${poRow.supplier_id} LIMIT 1`);
+        const sup = supRows.rows[0] as any;
+        const supplierEmail: string | undefined = sup?.contact_email;
+        if (supplierEmail) {
+          const lineRows = await db.execute(sql`
+            SELECT p.name AS product_name, prl.qty_received::float, prl.unit_cost::float
+            FROM purchase_receipt_lines prl
+            JOIN products p ON p.id = prl.product_id
+            WHERE prl.receipt_id = ${receiptId}
+            ORDER BY prl.id
+          `);
+          const lineItems = (lineRows.rows as any[])
+            .map((l) =>
+              `<tr><td style="padding:4px 8px;border:1px solid #ddd;">${l.product_name}</td>` +
+              `<td style="padding:4px 8px;border:1px solid #ddd;text-align:right;">${Number(l.qty_received).toLocaleString("id-ID")}</td>` +
+              `<td style="padding:4px 8px;border:1px solid #ddd;text-align:right;">Rp ${(Number(l.unit_cost)).toLocaleString("id-ID")}</td></tr>`
+            )
+            .join("");
+          const html = `
+<p>Kepada Yth. ${poRow.supplier_name ?? sup?.name ?? "Supplier"},</p>
+<p>Kami mengonfirmasi bahwa barang dari <strong>Purchase Order ${poRow.doc_number ?? poId}</strong> telah kami terima dengan detail sebagai berikut:</p>
+<table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:14px;">
+  <thead>
+    <tr style="background:#f5f5f5;">
+      <th style="padding:6px 8px;border:1px solid #ddd;text-align:left;">Produk</th>
+      <th style="padding:6px 8px;border:1px solid #ddd;text-align:right;">Qty Diterima</th>
+      <th style="padding:6px 8px;border:1px solid #ddd;text-align:right;">Harga Satuan</th>
+    </tr>
+  </thead>
+  <tbody>${lineItems}</tbody>
+  <tfoot>
+    <tr>
+      <td colspan="2" style="padding:6px 8px;border:1px solid #ddd;text-align:right;font-weight:bold;">Total</td>
+      <td style="padding:6px 8px;border:1px solid #ddd;text-align:right;font-weight:bold;">Rp ${totalValue.toLocaleString("id-ID")}</td>
+    </tr>
+  </tfoot>
+</table>
+<p><strong>No. GRN:</strong> ${rNo}</p>
+<p>Terima kasih atas kerjasamanya.</p>`;
+          const text =
+            `Konfirmasi GRN ${rNo}\nPO: ${poRow.doc_number ?? poId}\nSupplier: ${poRow.supplier_name ?? "-"}\nTotal Diterima: Rp ${totalValue.toLocaleString("id-ID")}`;
+          await sendMail({
+            to: supplierEmail,
+            subject: `Konfirmasi Penerimaan Barang (GRN) - ${rNo}`,
+            html,
+            text,
+            context: "grn_created",
+            refType: "purchase_receipt",
+            refId: String(receiptId),
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[grn notify]", e);
+    }
+  })();
 });
 
 // ── CANCEL ────────────────────────────────────────────────────────────────────

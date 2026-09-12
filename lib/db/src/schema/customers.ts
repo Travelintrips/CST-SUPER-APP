@@ -10,6 +10,7 @@ export const customersTable = pgTable("customers", {
   email: text("email"),
   phone: text("phone"),
   taxId: text("tax_id"),
+  nik: text("nik"),
   address: text("address"),
   notes: text("notes"),
   defaultSalesTaxId: integer("default_sales_tax_id"),

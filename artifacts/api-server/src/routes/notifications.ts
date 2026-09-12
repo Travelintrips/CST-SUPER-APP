@@ -11,10 +11,11 @@ router.use(async (req, res, next) => {
   if (ok) next();
 });
 
-// GET /api/notifications?type=all&read=all&limit=50&offset=0
+// GET /api/notifications?type=all&read=all&search=&limit=50&offset=0
 router.get("/", async (req, res) => {
   const type = req.query.type as string | undefined;
   const read = req.query.read as string | undefined;
+  const search = (req.query.search as string | undefined)?.trim() ?? "";
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const offset = Number(req.query.offset ?? 0);
 
@@ -23,17 +24,20 @@ router.get("/", async (req, res) => {
     read === "unread" ? sql`read_at IS NULL` :
     read === "read"   ? sql`read_at IS NOT NULL` :
                         sql`TRUE`;
+  const searchFilter = search
+    ? sql`(order_number ILIKE ${"%" + search + "%"} OR customer_name ILIKE ${"%" + search + "%"})`
+    : sql`TRUE`;
 
   const [rows, countRows, unreadRows] = await Promise.all([
     db.execute(sql`
       SELECT * FROM admin_notifications
-      WHERE ${typeFilter} AND ${readFilter}
+      WHERE ${typeFilter} AND ${readFilter} AND ${searchFilter}
       ORDER BY created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `),
     db.execute(sql`
       SELECT COUNT(*)::int AS count FROM admin_notifications
-      WHERE ${typeFilter} AND ${readFilter}
+      WHERE ${typeFilter} AND ${readFilter} AND ${searchFilter}
     `),
     db.execute(sql`
       SELECT COUNT(*)::int AS count FROM admin_notifications WHERE read_at IS NULL

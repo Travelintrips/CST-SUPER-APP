@@ -5,16 +5,45 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 const rawPort = process.env.PORT;
-const port = rawPort ? Number(rawPort) : 18442;
+const port = rawPort ? Number(rawPort) : 3000;
 
 const basePath = process.env.BASE_PATH ?? "/bizportal/";
+const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
+const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const replitDevDomain = (process.env.REPLIT_DEV_DOMAIN ?? "")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
+const isDeployment = !!process.env.REPLIT_DEPLOYMENT;
+// The preview is served through the Replit gateway, not directly from the
+// internal Vite port. Use the public HTTPS origin for HMR so the browser
+// connects back through the gateway's WebSocket upgrade proxy.
+const viteHmr = !isDeployment && replitDevDomain
+  ? {
+      protocol: "wss" as const,
+      host: replitDevDomain,
+      clientPort: 443,
+    }
+  : false;
+
+// In dev (non-deployment), prefer *_DEV variants so they match the API server's
+// sport_center Supabase connection (SUPABASE_URL_DEV / SUPABASE_ANON_KEY_DEV).
+// In production, use the VITE_SUPABASE_* secrets or SUPABASE_* configs.
+const isDeploy = !!process.env.REPLIT_DEPLOYMENT;
+const resolvedSupabaseUrl = isDeploy
+  ? (process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "")
+  : (process.env.SUPABASE_URL_DEV ?? process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "");
+const resolvedSupabaseAnonKey = isDeploy
+  ? (process.env.VITE_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? "")
+  : (process.env.SUPABASE_ANON_KEY_DEV ?? process.env.VITE_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? "");
 
 export default defineConfig({
   base: basePath,
   define: {
-    "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ""),
-    "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? ""),
+    "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(resolvedSupabaseUrl),
+    "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(resolvedSupabaseAnonKey),
     "import.meta.env.VITE_REPLIT_DEV_DOMAIN": JSON.stringify(process.env.REPLIT_DEV_DOMAIN ?? ""),
+    "import.meta.env.VITE_GOOGLE_MAPS_API_KEY": JSON.stringify(process.env.GOOGLE_MAPS_API_KEY ?? ""),
+    "import.meta.env.VITE_API_BASE_URL": JSON.stringify(process.env.VITE_API_BASE_URL ?? ""),
   },
   plugins: [
     {
@@ -67,8 +96,55 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
       "@": path.resolve(import.meta.dirname, "src"),
       "@assets": path.resolve(import.meta.dirname, "..", "..", "attached_assets"),
       "@workspace/replit-auth-web": path.resolve(import.meta.dirname, "../../lib/replit-auth-web/src/index.ts"),
+      "@workspace/product-templates": path.resolve(import.meta.dirname, "../../lib/product-templates/src/index.ts"),
+      "@workspace/logistics-constants": path.resolve(import.meta.dirname, "../../lib/logistics-constants/src/index.ts"),
+      "react": path.resolve(import.meta.dirname, "node_modules/react"),
+      "react-dom": path.resolve(import.meta.dirname, "node_modules/react-dom"),
+      "react/jsx-runtime": path.resolve(import.meta.dirname, "node_modules/react/jsx-runtime"),
+      "react/jsx-dev-runtime": path.resolve(import.meta.dirname, "node_modules/react/jsx-dev-runtime"),
     },
     dedupe: ["react", "react-dom"],
+  },
+  optimizeDeps: {
+    include: [
+      "react",
+      "react-dom",
+      "react-dom/client",
+      "@radix-ui/react-progress",
+      "@radix-ui/react-accordion",
+      "@radix-ui/react-alert-dialog",
+      "@radix-ui/react-avatar",
+      "@radix-ui/react-checkbox",
+      "@radix-ui/react-collapsible",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-dropdown-menu",
+      "@radix-ui/react-label",
+      "@radix-ui/react-navigation-menu",
+      "@radix-ui/react-popover",
+      "@radix-ui/react-radio-group",
+      "@radix-ui/react-scroll-area",
+      "@radix-ui/react-select",
+      "@radix-ui/react-separator",
+      "@radix-ui/react-slider",
+      "@radix-ui/react-slot",
+      "@radix-ui/react-switch",
+      "@radix-ui/react-tabs",
+      "@radix-ui/react-toast",
+      "@radix-ui/react-toggle",
+      "@radix-ui/react-toggle-group",
+      "@radix-ui/react-tooltip",
+      "@tanstack/react-query",
+      "lucide-react",
+      "wouter",
+      "clsx",
+      "tailwind-merge",
+      "class-variance-authority",
+      "framer-motion",
+      "sonner",
+      "recharts",
+      "date-fns",
+    ],
+    force: false,
   },
   root: path.resolve(import.meta.dirname),
   build: {
@@ -80,6 +156,34 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
         if (warning.code === "SOURCEMAP_ERROR") return;
         warn(warning);
       },
+      output: {
+        manualChunks(id) {
+          // ExcelJS is large (~3 MB) and only needed on export — keep in its own chunk
+          if (id.includes("node_modules/exceljs") || id.includes("node_modules/archiver") || id.includes("node_modules/jszip")) {
+            return "vendor-excel";
+          }
+          // Recharts + d3 deps
+          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-") || id.includes("node_modules/victory-")) {
+            return "vendor-charts";
+          }
+          // Framer Motion
+          if (id.includes("node_modules/framer-motion")) {
+            return "vendor-motion";
+          }
+          // Radix UI
+          if (id.includes("node_modules/@radix-ui")) {
+            return "vendor-radix";
+          }
+          // React core
+          if (id.includes("node_modules/react/") || id.includes("node_modules/react-dom/") || id.includes("node_modules/scheduler/")) {
+            return "vendor-react";
+          }
+          // Tanstack query
+          if (id.includes("node_modules/@tanstack")) {
+            return "vendor-query";
+          }
+        },
+      },
     },
   },
   css: {
@@ -89,19 +193,19 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
   },
   server: {
     port,
-    strictPort: false,
+    strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
-    hmr: {
-      clientPort: 443,
-      protocol: "wss",
+    hmr: viteHmr,
+    headers: {
+      "X-Frame-Options": "ALLOWALL",
+      "Content-Security-Policy": "frame-ancestors *",
     },
     watch: {
       ignored: [
         "**/node_modules/**",
         path.resolve(import.meta.dirname, "../api-server/**"),
         path.resolve(import.meta.dirname, "../customer-portal/**"),
-        path.resolve(import.meta.dirname, "../cst-driver/**"),
         path.resolve(import.meta.dirname, "../logistic-order/**"),
         path.resolve(import.meta.dirname, "../mockup-sandbox/**"),
       ],
@@ -110,16 +214,20 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
       strict: false,
     },
     proxy: {
+      [BRAND_LOGO_ASSET_PATH]: {
+        target: BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN,
+        changeOrigin: true,
+        secure: true,
+      },
       "/api": {
-        target: "http://localhost:8080",
+        // The standalone artifact API runs on 18444. The unified Gateway can
+        // still override this with API_PORT/FORWARDER_PORT when it owns 8080.
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
+        ws: true,
       },
-      "/pos-images": {
-        target: "http://localhost:8080",
-        changeOrigin: true,
-      },
-      "/sport-center": {
-        target: "http://localhost:8082",
+      "/wa-gateway": {
+        target: "http://localhost:8000",
         changeOrigin: true,
         ws: true,
       },

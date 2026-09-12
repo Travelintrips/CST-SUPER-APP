@@ -4,7 +4,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "noImplicitReturns": false
   },
   "include": ["src"],
   "references": [

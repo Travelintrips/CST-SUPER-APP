@@ -7,6 +7,32 @@ import { useGetFreightShipment, useCreateFreightAttachment, useGetAccountingSett
 import { useUpload } from "@workspace/object-storage-web";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useQuery } from "@tanstack/react-query";
+
+interface DocTemplate {
+  primaryColor?: string;
+  accentColor?: string;
+  logoUrl?: string;
+  companyName?: string;
+  companyAddress?: string;
+  companyPhone?: string;
+  companyEmail?: string;
+  footerText?: string;
+  defaultTerms?: string;
+  headerText?: string;
+}
+
+function useDocTemplate(type: string) {
+  return useQuery<DocTemplate>({
+    queryKey: ["doc-template", type],
+    queryFn: async () => {
+      const res = await fetch(`/api/settings/documents/${type}`, { credentials: "include" });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+}
 
 const BL_ALLOWED_STATUSES = ["confirmed", "in_transit", "completed"];
 
@@ -45,6 +71,20 @@ export default function LogisticsFreightBLPage() {
 
   const { data: shipment, isLoading } = useGetFreightShipment(id);
   const { data: accountingSettings } = useGetAccountingSettings();
+  const { data: docTemplate } = useDocTemplate("delivery_note");
+
+  const primaryColor = docTemplate?.primaryColor || "#1f2937";
+  const accentColor = docTemplate?.accentColor || "#6b7280";
+  const templateLogoUrl = docTemplate?.logoUrl;
+  const templateFooter = docTemplate?.footerText;
+  const templateTerms = docTemplate?.defaultTerms;
+  const companyNameDisplay = (docTemplate?.companyName && docTemplate.companyName.trim())
+    ? docTemplate.companyName
+    : (accountingSettings?.companyName || "FREIGHT FORWARDER");
+  const companyAddressDisplay = (docTemplate?.companyAddress && docTemplate.companyAddress.trim())
+    ? docTemplate.companyAddress
+    : accountingSettings?.companyAddress;
+  const logoUrl = templateLogoUrl || accountingSettings?.companyLogoUrl;
   const createAttachment = useCreateFreightAttachment();
   const { uploadFile } = useUpload({
     onError: (err) => {
@@ -218,30 +258,33 @@ export default function LogisticsFreightBLPage() {
             {/* Left: Company Logo / Name */}
             <div className="flex-1 border-r border-gray-700 p-3 flex flex-col justify-center">
               <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-1">Issued by</p>
-              {accountingSettings?.companyLogoUrl && (
+              {logoUrl && (
                 <img
-                  src={accountingSettings.companyLogoUrl}
+                  src={logoUrl}
                   alt="Company Logo"
                   className="mb-1 object-contain"
                   style={{ maxHeight: "40px", maxWidth: "120px" }}
                   crossOrigin="anonymous"
                 />
               )}
-              <p className="text-lg font-bold text-gray-900">
-                {accountingSettings?.companyName || "FREIGHT FORWARDER"}
+              <p className="text-lg font-bold" style={{ color: primaryColor }}>
+                {companyNameDisplay}
               </p>
-              {accountingSettings?.companyAddress && (
+              {companyAddressDisplay && (
                 <p className="text-xs text-gray-600 whitespace-pre-line">
-                  {accountingSettings.companyAddress}
+                  {companyAddressDisplay}
                 </p>
               )}
-              {!accountingSettings?.companyName && (
+              {docTemplate?.companyPhone && (
+                <p className="text-xs text-gray-500">{docTemplate.companyPhone}</p>
+              )}
+              {!accountingSettings?.companyName && !docTemplate?.companyName && (
                 <p className="text-xs text-gray-600">Freight Forwarding Services</p>
               )}
             </div>
             {/* Right: BL Type & Number */}
             <div className="flex flex-col justify-center items-center px-6">
-              <p className="text-2xl font-extrabold uppercase tracking-widest text-gray-900">Bill of Lading</p>
+              <p className="text-2xl font-extrabold uppercase tracking-widest" style={{ color: primaryColor }}>Bill of Lading</p>
               <p className="text-xs text-gray-500 mt-1 font-mono">{shipment.shipmentNumber}</p>
             </div>
           </div>
@@ -305,7 +348,7 @@ export default function LogisticsFreightBLPage() {
               <div
                 key={h}
                 className="border-r border-b border-gray-700 p-1 text-center last:border-r-0"
-                style={{ fontSize: "0.6rem", fontWeight: "bold", textTransform: "uppercase", background: "#f5f5f5" }}
+                style={{ fontSize: "0.6rem", fontWeight: "bold", textTransform: "uppercase", background: primaryColor, color: "#ffffff" }}
               >
                 {h}
               </div>
@@ -383,17 +426,20 @@ export default function LogisticsFreightBLPage() {
           </div>
 
           {/* ── Notes ── */}
-          {shipment.notes && (
+          {(shipment.notes || templateTerms) && (
             <div className="border border-t-0 border-gray-700 p-2">
               <p className="text-gray-500 uppercase font-bold mb-1" style={{ fontSize: "0.6rem" }}>Remarks / Notes</p>
-              <p className="text-xs">{shipment.notes}</p>
+              {shipment.notes && <p className="text-xs mb-1">{shipment.notes}</p>}
+              {templateTerms && (
+                <p className="text-xs text-gray-500 whitespace-pre-line">{templateTerms}</p>
+              )}
             </div>
           )}
 
           {/* ── Footer ── */}
-          <div className="mt-4 text-center">
-            <p className="text-xs text-gray-400">
-              This Bill of Lading is non-negotiable unless made out to order. BizPortal — Freight Management System.
+          <div className="mt-4 text-center border-t border-gray-200 pt-3">
+            <p className="text-xs" style={{ color: accentColor }}>
+              {templateFooter || "This Bill of Lading is non-negotiable unless made out to order."}
             </p>
           </div>
         </div>

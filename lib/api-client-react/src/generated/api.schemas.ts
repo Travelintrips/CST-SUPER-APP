@@ -5,6 +5,239 @@
  * BizPortal Multi-Division API
  * OpenAPI spec version: 0.1.0
  */
+export interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export type MediaItemType = (typeof MediaItemType)[keyof typeof MediaItemType];
+
+export const MediaItemType = {
+  image: "image",
+  video: "video",
+} as const;
+
+export interface MediaItem {
+  type: MediaItemType;
+  url: string;
+}
+
+export type ProductItemType =
+  (typeof ProductItemType)[keyof typeof ProductItemType];
+
+export const ProductItemType = {
+  barang: "barang",
+  jasa: "jasa",
+} as const;
+
+export interface Product {
+  id: number;
+  name: string;
+  sku: string;
+  price: number;
+  stock: number;
+  categories: string[];
+  description?: string | null;
+  imageUrl?: string | null;
+  mediaItems?: MediaItem[];
+  defaultSalesTaxId?: number | null;
+  defaultPurchaseTaxId?: number | null;
+  itemType: ProductItemType;
+  unit: string;
+  unitOptions?: string[];
+  subcategory?: string | null;
+  isActive: boolean;
+  createdAt: string;
+  weightKg?: number | null;
+  volumeCbm?: number | null;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  goodsType?: string | null;
+}
+
+export interface PaginatedProducts {
+  data: Product[];
+  pagination: Pagination;
+}
+
+export interface Supplier {
+  id: number;
+  name: string;
+  country?: string | null;
+  contactEmail?: string | null;
+  contactPerson?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  taxId?: string | null;
+  defaultPurchaseTaxId?: number | null;
+  serviceType?: string | null;
+  isActive: boolean;
+  logo: string;
+  eta?: string | null;
+  fee?: number | null;
+  markup?: number | null;
+  note?: string | null;
+  sortOrder: number;
+  createdAt: string;
+  companyId?: number | null;
+  hasInternalTruck?: boolean;
+  internalTruckPrice?: number | null;
+  assignedCompanyIds?: number[];
+}
+
+export interface PaginatedSuppliers {
+  success: boolean;
+  data: Supplier[];
+  pagination: Pagination;
+}
+
+export type SupplierDeleteImpactDependencies = {
+  logisticQuotes?: number;
+  purchaseOrders?: number;
+  fulfillments?: number;
+};
+
+export type SupplierDeleteImpactRecommendedAction =
+  (typeof SupplierDeleteImpactRecommendedAction)[keyof typeof SupplierDeleteImpactRecommendedAction];
+
+export const SupplierDeleteImpactRecommendedAction = {
+  delete: "delete",
+  archive: "archive",
+} as const;
+
+export interface SupplierDeleteImpact {
+  canHardDelete?: boolean;
+  hasTransactionHistory?: boolean;
+  dependencies?: SupplierDeleteImpactDependencies;
+  recommendedAction?: SupplierDeleteImpactRecommendedAction;
+}
+
+export type ShipmentStatus =
+  (typeof ShipmentStatus)[keyof typeof ShipmentStatus];
+
+export const ShipmentStatus = {
+  pending: "pending",
+  picked_up: "picked_up",
+  in_transit: "in_transit",
+  out_for_delivery: "out_for_delivery",
+  delivered: "delivered",
+  failed: "failed",
+} as const;
+
+export interface Shipment {
+  id: number;
+  orderId?: number;
+  trackingNumber: string;
+  carrier: string;
+  status: ShipmentStatus;
+  origin: string;
+  destination: string;
+  estimatedDelivery?: string;
+  createdAt: string;
+}
+
+export interface PaginatedShipments {
+  data: Shipment[];
+  pagination: Pagination;
+}
+
+export type SalesDocumentKind =
+  (typeof SalesDocumentKind)[keyof typeof SalesDocumentKind];
+
+export const SalesDocumentKind = {
+  quote: "quote",
+  order: "order",
+} as const;
+
+export type SalesDocumentStatus =
+  (typeof SalesDocumentStatus)[keyof typeof SalesDocumentStatus];
+
+export const SalesDocumentStatus = {
+  draft: "draft",
+  sent: "sent",
+  confirmed: "confirmed",
+  done: "done",
+  cancelled: "cancelled",
+} as const;
+
+export type SalesDocumentInvoiceStatus =
+  (typeof SalesDocumentInvoiceStatus)[keyof typeof SalesDocumentInvoiceStatus];
+
+export const SalesDocumentInvoiceStatus = {
+  none: "none",
+  to_invoice: "to_invoice",
+  invoiced: "invoiced",
+} as const;
+
+export type SalesDocumentDeliveryStatus =
+  (typeof SalesDocumentDeliveryStatus)[keyof typeof SalesDocumentDeliveryStatus];
+
+export const SalesDocumentDeliveryStatus = {
+  none: "none",
+  to_deliver: "to_deliver",
+  delivered: "delivered",
+} as const;
+
+export type SalesDocumentTransportMode =
+  | (typeof SalesDocumentTransportMode)[keyof typeof SalesDocumentTransportMode]
+  | null;
+
+export const SalesDocumentTransportMode = {
+  sea: "sea",
+  air: "air",
+  land: "land",
+  multimodal: "multimodal",
+} as const;
+
+export type SalesDocumentPaymentStatus =
+  (typeof SalesDocumentPaymentStatus)[keyof typeof SalesDocumentPaymentStatus];
+
+export const SalesDocumentPaymentStatus = {
+  unpaid: "unpaid",
+  partial: "partial",
+  paid: "paid",
+} as const;
+
+export interface SalesDocument {
+  id: number;
+  docNumber: string;
+  kind: SalesDocumentKind;
+  status: SalesDocumentStatus;
+  invoiceStatus: SalesDocumentInvoiceStatus;
+  deliveryStatus: SalesDocumentDeliveryStatus;
+  customerId?: number | null;
+  customerName: string;
+  totalAmount: number;
+  taxRateId?: number | null;
+  taxAmount: number;
+  grandTotal: number;
+  origin?: string | null;
+  destination?: string | null;
+  transportMode?: SalesDocumentTransportMode;
+  etd?: string | null;
+  eta?: string | null;
+  validUntil?: string | null;
+  expectedDate?: string | null;
+  notes?: string | null;
+  confirmedAt?: string | null;
+  customerAddress?: string | null;
+  paymentStatus: SalesDocumentPaymentStatus;
+  amountPaid: number;
+  createdAt: string;
+  updatedAt: string;
+  aiGenerated?: boolean;
+  aiSourceWaPhone?: string | null;
+  aiSourceCorrespondenceId?: number | null;
+}
+
+export interface PaginatedSalesDocuments {
+  data: SalesDocument[];
+  pagination: Pagination;
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -19,6 +252,8 @@ export interface AuthUser {
   firstName?: string | null;
   lastName?: string | null;
   profileImageUrl?: string | null;
+  role?: string | null;
+  companyId?: number | null;
 }
 
 export interface GetCurrentAuthUserResponse {
@@ -83,46 +318,6 @@ export interface CreateProductCategoryBody {
   name: string;
 }
 
-export type MediaItemType = (typeof MediaItemType)[keyof typeof MediaItemType];
-
-export const MediaItemType = {
-  image: "image",
-  video: "video",
-} as const;
-
-export interface MediaItem {
-  type: MediaItemType;
-  url: string;
-}
-
-export type ProductItemType =
-  (typeof ProductItemType)[keyof typeof ProductItemType];
-
-export const ProductItemType = {
-  barang: "barang",
-  jasa: "jasa",
-} as const;
-
-export interface Product {
-  id: number;
-  name: string;
-  sku: string;
-  price: number;
-  stock: number;
-  categories: string[];
-  description?: string | null;
-  imageUrl?: string | null;
-  mediaItems?: MediaItem[];
-  defaultSalesTaxId?: number | null;
-  defaultPurchaseTaxId?: number | null;
-  itemType: ProductItemType;
-  unit: string;
-  unitOptions?: string[];
-  subcategory?: string | null;
-  isActive: boolean;
-  createdAt: string;
-}
-
 export type CreateProductBodyItemType =
   (typeof CreateProductBodyItemType)[keyof typeof CreateProductBodyItemType];
 
@@ -147,6 +342,12 @@ export interface CreateProductBody {
   unitOptions?: string[];
   subcategory?: string | null;
   isActive?: boolean;
+  weightKg?: number | null;
+  volumeCbm?: number | null;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  goodsType?: string | null;
 }
 
 export interface LineItem {
@@ -251,30 +452,11 @@ export interface CreateStockItemBody {
   hsCode?: string;
 }
 
-export interface Supplier {
-  id: number;
-  name: string;
-  country?: string | null;
-  contactEmail?: string | null;
-  phone?: string | null;
-  address?: string | null;
-  taxId?: string | null;
-  defaultPurchaseTaxId?: number | null;
-  serviceType?: string | null;
-  isActive: boolean;
-  logo: string;
-  eta?: string | null;
-  fee?: number | null;
-  markup?: number | null;
-  note?: string | null;
-  sortOrder: number;
-  createdAt: string;
-}
-
 export interface CreateSupplierBody {
   name: string;
   country?: string | null;
   contactEmail?: string | null;
+  contactPerson?: string | null;
   phone?: string | null;
   address?: string | null;
   taxId?: string | null;
@@ -287,55 +469,82 @@ export interface CreateSupplierBody {
   markup?: number | null;
   note?: string | null;
   sortOrder?: number;
+  hasInternalTruck?: boolean | null;
+  internalTruckPrice?: number | null;
 }
 
 export interface VendorCatalogItem {
   id: number;
   vendorId: number;
+  vendorName?: string | null;
+  masterItemId?: number | null;
   type: string;
   name: string;
   description?: string | null;
   unit?: string | null;
+  kategori?: string | null;
+  subcategory?: string | null;
+  isCommodityTag: boolean;
+  sortOrder: number;
+  templateKind?: string | null;
+  categoryKey?: string | null;
+  serviceType?: string | null;
   priceBase: number;
   markupPct: number;
+  priceSell?: number | null;
+  priceSellOverride?: number | null;
+  profit?: number | null;
+  currency: string;
+  stockStatus?: string | null;
+  stockQty?: number | null;
+  moq?: number | null;
+  leadTime?: string | null;
+  validityDate?: string | null;
+  location?: string | null;
+  origin?: string | null;
+  status: string;
+  isPublished: boolean;
   isActive: boolean;
-  sortOrder: number;
+  isFeatured: boolean;
+  featuredUntil?: string | null;
+  viewCount: number;
+  quoteCount: number;
+  orderCount: number;
+  sourceSubmissionId?: number | null;
+  publishedAt?: string | null;
   createdAt: string;
+  updatedAt?: string | null;
 }
 
 export interface CreateVendorCatalogItemBody {
   type?: string;
-  name: string;
+  name?: string;
   description?: string | null;
   unit?: string | null;
+  kategori?: string | null;
+  subcategory?: string | null;
   priceBase?: number;
-  markupPct?: number;
+  priceSellOverride?: number | null;
   isActive?: boolean;
+  isCommodityTag?: boolean;
   sortOrder?: number;
-}
-
-export type ShipmentStatus =
-  (typeof ShipmentStatus)[keyof typeof ShipmentStatus];
-
-export const ShipmentStatus = {
-  pending: "pending",
-  picked_up: "picked_up",
-  in_transit: "in_transit",
-  out_for_delivery: "out_for_delivery",
-  delivered: "delivered",
-  failed: "failed",
-} as const;
-
-export interface Shipment {
-  id: number;
-  orderId?: number;
-  trackingNumber: string;
-  carrier: string;
-  status: ShipmentStatus;
-  origin: string;
-  destination: string;
-  estimatedDelivery?: string;
-  createdAt: string;
+  linkMasterItemId?: number | null;
+  templateKind?: string | null;
+  categoryKey?: string | null;
+  serviceType?: string | null;
+  currency?: string;
+  stockStatus?: string | null;
+  stockQty?: number | null;
+  moq?: number | null;
+  leadTime?: string | null;
+  validityDate?: string | null;
+  location?: string | null;
+  origin?: string | null;
+  status?: string;
+  isPublished?: boolean;
+  isFeatured?: boolean;
+  featuredUntil?: string | null;
+  sourceSubmissionId?: number | null;
 }
 
 export interface CreateShipmentBody {
@@ -492,99 +701,6 @@ export interface CreateSalesDocumentLineBody {
   unitPrice: number;
 }
 
-export type SalesDocumentKind =
-  (typeof SalesDocumentKind)[keyof typeof SalesDocumentKind];
-
-export const SalesDocumentKind = {
-  quote: "quote",
-  order: "order",
-} as const;
-
-export type SalesDocumentStatus =
-  (typeof SalesDocumentStatus)[keyof typeof SalesDocumentStatus];
-
-export const SalesDocumentStatus = {
-  draft: "draft",
-  sent: "sent",
-  confirmed: "confirmed",
-  done: "done",
-  cancelled: "cancelled",
-} as const;
-
-export type SalesDocumentInvoiceStatus =
-  (typeof SalesDocumentInvoiceStatus)[keyof typeof SalesDocumentInvoiceStatus];
-
-export const SalesDocumentInvoiceStatus = {
-  none: "none",
-  to_invoice: "to_invoice",
-  invoiced: "invoiced",
-} as const;
-
-export type SalesDocumentDeliveryStatus =
-  (typeof SalesDocumentDeliveryStatus)[keyof typeof SalesDocumentDeliveryStatus];
-
-export const SalesDocumentDeliveryStatus = {
-  none: "none",
-  to_deliver: "to_deliver",
-  delivered: "delivered",
-} as const;
-
-export type SalesDocumentTransportMode =
-  | (typeof SalesDocumentTransportMode)[keyof typeof SalesDocumentTransportMode]
-  | null;
-
-export const SalesDocumentTransportMode = {
-  sea: "sea",
-  air: "air",
-  land: "land",
-  multimodal: "multimodal",
-} as const;
-
-export type SalesDocumentPaymentStatus =
-  (typeof SalesDocumentPaymentStatus)[keyof typeof SalesDocumentPaymentStatus];
-
-export const SalesDocumentPaymentStatus = {
-  unpaid: "unpaid",
-  partial: "partial",
-  paid: "paid",
-} as const;
-
-export interface SalesDocument {
-  id: number;
-  docNumber: string;
-  kind: SalesDocumentKind;
-  status: SalesDocumentStatus;
-  invoiceStatus: SalesDocumentInvoiceStatus;
-  deliveryStatus: SalesDocumentDeliveryStatus;
-  customerId?: number | null;
-  customerName: string;
-  totalAmount: number;
-  taxRateId?: number | null;
-  taxAmount: number;
-  grandTotal: number;
-  origin?: string | null;
-  destination?: string | null;
-  transportMode?: SalesDocumentTransportMode;
-  etd?: string | null;
-  eta?: string | null;
-  validUntil?: string | null;
-  expectedDate?: string | null;
-  notes?: string | null;
-  confirmedAt?: string | null;
-  customerAddress?: string | null;
-  paymentStatus: SalesDocumentPaymentStatus;
-  amountPaid: number;
-  createdAt: string;
-  updatedAt: string;
-  aiGenerated?: boolean;
-  aiSourceWaPhone?: string | null;
-  aiSourceCorrespondenceId?: number | null;
-  invoiceNumber?: string | null;
-  invoiceDate?: string | null;
-  dueDate?: string | null;
-  cancelledAt?: string | null;
-}
-
 export type SalesDocumentDetail = SalesDocument & {
   lines: SalesDocumentLine[];
 };
@@ -726,10 +842,6 @@ export interface PurchaseDocument {
   amountPaid: number;
   createdAt: string;
   updatedAt: string;
-  billNumber?: string | null;
-  billDate?: string | null;
-  dueDate?: string | null;
-  cancelledAt?: string | null;
 }
 
 export type PurchaseDocumentDetail = PurchaseDocument & {
@@ -902,56 +1014,10 @@ export const AccountType = {
   expense: "expense",
 } as const;
 
-export interface Company {
-  id: number;
-  name: string;
-  code: string;
-  isHolding: boolean;
-  parentCompanyId?: number | null;
-  address?: string | null;
-  npwp?: string | null;
-  logoUrl?: string | null;
-  isActive: boolean;
-  createdAt: string;
-}
-
-export interface CreateCompanyBody {
-  name: string;
-  code: string;
-  isHolding?: boolean;
-  parentCompanyId?: number | null;
-  address?: string | null;
-  npwp?: string | null;
-  logoUrl?: string | null;
-  isActive?: boolean;
-}
-
-export interface UpdateCompanyBody {
-  name?: string;
-  code?: string;
-  isHolding?: boolean;
-  parentCompanyId?: number | null;
-  address?: string | null;
-  npwp?: string | null;
-  logoUrl?: string | null;
-  isActive?: boolean;
-}
-
-export interface ListAccountsParams {
-  companyId?: number;
-}
-
-export interface ListJournalsParams {
-  companyId?: number;
-}
-
-export interface ListTaxesParams {
-  companyId?: number;
-}
-
 export interface Account {
   id: number;
-  companyId: number;
+  companyId: number | null;
+  companyCode: string | null;
   code: string;
   name: string;
   type: AccountType;
@@ -1011,7 +1077,6 @@ export const AccountingJournalType = {
 
 export interface AccountingJournal {
   id: number;
-  companyId: number;
   code: string;
   name: string;
   type: AccountingJournalType;
@@ -1120,7 +1185,6 @@ export type AccountingEntryStatus =
 export const AccountingEntryStatus = {
   draft: "draft",
   posted: "posted",
-  cancelled: "cancelled",
 } as const;
 
 export type AccountingEntrySource =
@@ -1136,7 +1200,6 @@ export const AccountingEntrySource = {
   ecommerce_order: "ecommerce_order",
   stock_received: "stock_received",
   manual_payment: "manual_payment",
-  reversal: "reversal",
 } as const;
 
 export interface AccountingEntry {
@@ -1230,7 +1293,6 @@ export interface AccountingPayment {
   sourceDocId?: number | null;
   createdById?: string | null;
   createdAt: string;
-  paymentNumber?: string | null;
 }
 
 export type AccountingPaymentDetail = AccountingPayment & {
@@ -1265,11 +1327,13 @@ export interface AccountingSettings {
   purchaseExpenseAccountId?: number | null;
   defaultBankAccountId?: number | null;
   defaultCashAccountId?: number | null;
+  qrisAccountId?: number | null;
   ppnOutputAccountId?: number | null;
   ppnInputAccountId?: number | null;
   salesJournalId?: number | null;
   purchaseJournalId?: number | null;
   bankJournalId?: number | null;
+  qrisJournalId?: number | null;
   cashJournalId?: number | null;
   defaultSalesTaxId?: number | null;
   defaultPurchaseTaxId?: number | null;
@@ -1289,11 +1353,13 @@ export interface UpdateAccountingSettingsBody {
   purchaseExpenseAccountId?: number | null;
   defaultBankAccountId?: number | null;
   defaultCashAccountId?: number | null;
+  qrisAccountId?: number | null;
   ppnOutputAccountId?: number | null;
   ppnInputAccountId?: number | null;
   salesJournalId?: number | null;
   purchaseJournalId?: number | null;
   bankJournalId?: number | null;
+  qrisJournalId?: number | null;
   cashJournalId?: number | null;
   defaultSalesTaxId?: number | null;
   defaultPurchaseTaxId?: number | null;
@@ -1307,6 +1373,8 @@ export interface UpdateAccountingSettingsBody {
 
 export interface TrialBalanceRow {
   accountId: number;
+  companyId: number | null;
+  companyCode: string | null;
   code: string;
   name: string;
   type: string;
@@ -1361,14 +1429,21 @@ export interface ProfitLossReport {
   from?: string | null;
   to?: string | null;
   revenues: PnlRow[];
+  cogs: PnlRow[];
+  operatingExpenses: PnlRow[];
   expenses: PnlRow[];
   totalRevenue: number;
+  totalCogs: number;
+  totalOperatingExpense: number;
   totalExpense: number;
+  grossProfit: number;
   netIncome: number;
 }
 
 export interface BalanceSheetRow {
   accountId: number;
+  companyId: number | null;
+  companyCode: string | null;
   code: string;
   name: string;
   amount: number;
@@ -1588,6 +1663,11 @@ export interface FreightShipment {
   totalExpenses?: string | null;
   createdById?: string | null;
   createdAt: string;
+  estimatedRevenue?: string | null;
+  estimatedCost?: string | null;
+  actualRevenue?: string | null;
+  invoiceStatus?: string | null;
+  vendorBillStatus?: string | null;
 }
 
 export interface FreightShipmentProfitability {
@@ -1596,6 +1676,10 @@ export interface FreightShipmentProfitability {
   profit: number;
   margin?: number | null;
   invoiceStatus: string;
+  vendorBillStatus?: string | null;
+  estimatedRevenue?: number | null;
+  estimatedCost?: number | null;
+  actualRevenue?: number | null;
 }
 
 export type FreightAttachmentFileType =
@@ -1929,6 +2013,10 @@ export const ExpenseExpenseType = {
   vendor_bill: "vendor_bill",
   reimbursement: "reimbursement",
   internal: "internal",
+  routine: "routine",
+  kasbon: "kasbon",
+  talangan: "talangan",
+  fixed_asset: "fixed_asset",
 } as const;
 
 export type ExpenseStatus = (typeof ExpenseStatus)[keyof typeof ExpenseStatus];
@@ -1937,6 +2025,7 @@ export const ExpenseStatus = {
   draft: "draft",
   submitted: "submitted",
   approved: "approved",
+  pending_approval: "pending_approval",
   posted: "posted",
   paid: "paid",
   rejected: "rejected",
@@ -1951,6 +2040,11 @@ export interface Expense {
   salesDocId?: number | null;
   shipmentId?: number | null;
   categoryId?: number | null;
+  categoryName?: string | null;
+  sourceAccountId?: number | null;
+  sourceAccountName?: string | null;
+  vendorId?: number | null;
+  vendorName?: string | null;
   description?: string | null;
   qty: number;
   unit?: string | null;
@@ -1992,11 +2086,16 @@ export const CreateExpenseBodyExpenseType = {
   vendor_bill: "vendor_bill",
   reimbursement: "reimbursement",
   internal: "internal",
+  routine: "routine",
+  kasbon: "kasbon",
+  talangan: "talangan",
+  fixed_asset: "fixed_asset",
 } as const;
 
 export interface CreateExpenseBody {
   date: string;
   vendorEmployee?: string | null;
+  vendorId?: number | null;
   expenseType?: CreateExpenseBodyExpenseType;
   salesDocId?: number | null;
   shipmentId?: number | null;
@@ -2010,6 +2109,7 @@ export interface CreateExpenseBody {
   notes?: string | null;
   expenseAccountId?: number | null;
   payableAccountId?: number | null;
+  sourceAccountId?: number | null;
 }
 
 export interface CreateExpenseAttachmentBody {
@@ -2240,11 +2340,19 @@ export interface LogisticOrder {
   approvedVendorName?: string | null;
   finalSellingPrice?: number | null;
   quotationSentAt?: string | null;
-  linkedSalesDocId?: number | null;
-  linkedSalesDocNumber?: string | null;
-  optionsToken?: string | null;
   createdAt: string;
+  updatedAt: string;
 }
+
+export type LogisticOrderItemPriceSnapshot = { [key: string]: unknown } | null;
+
+export type LogisticOrderItemCalculationInput = {
+  [key: string]: unknown;
+} | null;
+
+export type LogisticOrderItemTemplateSnapshot = {
+  [key: string]: unknown;
+} | null;
 
 export interface LogisticOrderItem {
   id: number;
@@ -2256,6 +2364,13 @@ export interface LogisticOrderItem {
   calculationResult: unknown;
   subtotal: number;
   createdAt: string;
+  itemSource?: string | null;
+  serviceType?: string | null;
+  priceSnapshot?: LogisticOrderItemPriceSnapshot;
+  vendorCatalogItemId?: number | null;
+  vendorId?: number | null;
+  calculationInput?: LogisticOrderItemCalculationInput;
+  templateSnapshot?: LogisticOrderItemTemplateSnapshot;
 }
 
 export type LogisticOrderDetail = LogisticOrder & {
@@ -2276,6 +2391,7 @@ export interface CreateLogisticOrderBody {
   customerName: string;
   email: string;
   phone: string;
+  orderType?: string | null;
   shipmentType: string;
   origin: string;
   destination: string;
@@ -2288,6 +2404,7 @@ export interface CreateLogisticOrderBody {
   notes?: string | null;
   paymentType?: string | null;
   paymentMethod?: string | null;
+  senderName?: string | null;
   namaPenerima?: string | null;
   nomorPenerima?: string | null;
   jamOrder?: string | null;
@@ -2299,6 +2416,7 @@ export interface CreateLogisticOrderBody {
 
 export interface UpdateLogisticOrderStatusBody {
   status: string;
+  clientUpdatedAt?: string;
 }
 
 export interface LogisticOrderSummary {
@@ -2611,6 +2729,67 @@ export type ListProductsParams = {
   itemType?: string;
   subcategory?: string;
   isActive?: string;
+  page?: number;
+  limit?: number;
+};
+
+export type ListSuppliersParams = {
+  /**
+   * Filter by company_id value. Use "__unassigned__" for vendors with no company assigned. Alias of `companyId`.
+   */
+  filterCompanyId?: string;
+  /**
+   * Same as filterCompanyId; preferred name going forward.
+   */
+  companyId?: string;
+  /**
+   * Free-text search across name, contact person, email, phone, and tax id.
+   */
+  search?: string;
+  status?: ListSuppliersStatus;
+  sortBy?: ListSuppliersSortBy;
+  sortOrder?: ListSuppliersSortOrder;
+  page?: number;
+  /**
+   * Max 1000, default 25.
+   */
+  limit?: number;
+  offset?: number;
+};
+
+export type ListSuppliersStatus =
+  (typeof ListSuppliersStatus)[keyof typeof ListSuppliersStatus];
+
+export const ListSuppliersStatus = {
+  all: "all",
+  active: "active",
+  inactive: "inactive",
+} as const;
+
+export type ListSuppliersSortBy =
+  (typeof ListSuppliersSortBy)[keyof typeof ListSuppliersSortBy];
+
+export const ListSuppliersSortBy = {
+  name: "name",
+  createdAt: "createdAt",
+} as const;
+
+export type ListSuppliersSortOrder =
+  (typeof ListSuppliersSortOrder)[keyof typeof ListSuppliersSortOrder];
+
+export const ListSuppliersSortOrder = {
+  asc: "asc",
+  desc: "desc",
+} as const;
+
+export type GetSupplierDeleteImpact200 = {
+  success?: boolean;
+  data?: SupplierDeleteImpact;
+};
+
+export type ListShipmentsParams = {
+  page?: number;
+  limit?: number;
 };
 
 export type ListFreightShipmentsParams = {
@@ -2631,6 +2810,8 @@ export type ListSalesDocumentsParams = {
   invoiceStatus?: ListSalesDocumentsInvoiceStatus;
   paymentStatus?: ListSalesDocumentsPaymentStatus;
   search?: string;
+  page?: number;
+  limit?: number;
 };
 
 export type ListSalesDocumentsKind =
@@ -2732,6 +2913,8 @@ export type ListAccountingPaymentsParams = {
   to?: string;
   sourceType?: string | null;
   sourceDocId?: number | null;
+  refDocNumber?: string | null;
+  company?: string | null;
 };
 
 export type ListAccountingPaymentsPaymentType =
@@ -2899,7 +3082,6 @@ export type ListExpensesParams = {
   search?: string;
   from?: string;
   to?: string;
-  company?: number;
 };
 
 export type GetExpenseSummaryParams = {
@@ -2923,6 +3105,7 @@ export const ExpenseActionBodyAction = {
 export type ExpenseActionBody = {
   action: ExpenseActionBodyAction;
   reason?: string | null;
+  paymentMethod?: string | null;
 };
 
 export type ListPortalProductOrdersParams = {

@@ -15,7 +15,7 @@ paths = [ "/bizportal/" ]
 localPort = 18442
 
 [services.development]
-run = "pnpm --filter @workspace/bizportal run dev"
+run = "bash start-dev.sh"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/bizportal", "run", "build" ]

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCompany } from "@/contexts/CompanyContext";
-import { Plus, Eye, ClipboardCheck } from "lucide-react";
+import { ArrowLeft, Plus, Eye, ClipboardCheck } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 export default function QcListPage() {
@@ -18,6 +18,7 @@ export default function QcListPage() {
     <AppShell>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
+          <Link href="/purchase"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
           <div>
             <h1 className="text-2xl font-bold">QC Inspection</h1>
             <p className="text-sm text-muted-foreground">Pemeriksaan kualitas barang diterima</p>

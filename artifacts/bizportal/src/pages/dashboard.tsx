@@ -1,10 +1,11 @@
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState, useEffect, type ElementType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { getLastResponseTime, useListLogisticOrders } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ShoppingCart, DollarSign, Truck, Package, Activity, AlertTriangle, ChevronRight, Ship, ArrowRight, Clock, RefreshCw, TrendingUp, TrendingDown, Minus, PackageOpen, ChevronDown, ChevronUp, FilePlus, X, Users, CheckCircle2, CircleDot, FileText, BarChart2, ExternalLink, Building2, Globe, LayoutGrid } from "lucide-react";
+import { ShoppingCart, DollarSign, Truck, Package, Activity, AlertTriangle, ChevronRight, Ship, ArrowRight, Clock, RefreshCw, TrendingUp, TrendingDown, Minus, PackageOpen, ChevronDown, ChevronUp, FilePlus, X, Users, CheckCircle2, CircleDot, FileText, BarChart2, ExternalLink, Globe, LayoutGrid, Receipt, GripVertical, Settings2, Eye, EyeOff } from "lucide-react";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useUpdateLogisticOrderStatus, useCreateSalesDocument, getListLogisticOrdersQueryKey } from "@workspace/api-client-react";
@@ -17,6 +18,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useLanguage } from "@/contexts/LanguageContext";
+import GeofenceAlertBanner from "@/components/logistics/GeofenceAlertBanner";
+import { OrderProgressBar } from "@/components/logistics/OrderProgressBar";
+import { TasksWidget } from "@/components/dashboard/TasksWidget";
+import { RecentActivitiesWidget } from "@/components/dashboard/RecentActivitiesWidget";
+import { AiInsightsWidget } from "@/components/dashboard/AiInsightsWidget";
+import { OrderPipelineWidget } from "@/components/dashboard/OrderPipelineWidget";
+import { QuickActionsWidget } from "@/components/dashboard/QuickActionsWidget";
+import { SportCenterWidget } from "@/components/dashboard/SportCenterWidget";
+import { AccountingWidget } from "@/components/dashboard/AccountingWidget";
+import { LogisticsWidget } from "@/components/dashboard/LogisticsWidget";
+import { PurchasingWidget } from "@/components/dashboard/PurchasingWidget";
+import { SalesWidget } from "@/components/dashboard/SalesWidget";
+import { ProfitLossComparisonWidget } from "@/components/dashboard/ProfitLossComparisonWidget";
+import { QuickCreateWidget } from "@/components/dashboard/QuickCreateWidget";
+import { QuickAccessWidget } from "@/components/dashboard/QuickAccessWidget";
+import { RecentPagesWidget } from "@/components/dashboard/RecentPagesWidget";
+import { MyWorkspaceWidget } from "@/components/dashboard/MyWorkspaceWidget";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
 
 interface ResponseTimeEntry {
   timestamp: string;
@@ -48,6 +67,31 @@ const RT_WINDOWS = [
   { label: "30 hari", value: "30d" },
 ] as const;
 type RtWindow = typeof RT_WINDOWS[number]["value"];
+
+function DeferredDashboardWidgets({ children }: { children: React.ReactNode }) {
+  const ready = useAfterFirstPaint(700);
+
+  if (!ready) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" aria-label="Memuat widget dashboard">
+        <Card>
+          <CardContent className="space-y-3 p-5">
+            <Skeleton className="h-5 w-36" />
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="space-y-3 p-5">
+            <Skeleton className="h-5 w-44" />
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
 
 async function fetchResponseTimeStats(window: RtWindow): Promise<PathStat[]> {
   const res = await fetch(`/api/dashboard/response-time-stats?window=${window}`);
@@ -123,7 +167,6 @@ interface DashboardSummary {
   totalRevenue: number;
   totalShipments: number;
   totalStockValue: number;
-  todayTransactions: number;
   lowStockCount: number;
   activeFreightCount: number;
   awaitingQuoteCount: number;
@@ -144,6 +187,7 @@ interface DashboardSummary {
 export default function DashboardPage() {
   const { t } = useLanguage();
   const { companyQueryParam, isConsolidated, activeCompany } = useCompany();
+  const secondaryReady = useAfterFirstPaint(450);
   const [intervalValue, setIntervalValue] = useState<IntervalValue>(getStoredInterval);
 
   const refetchInterval = intervalValue === "off" ? false : Number(intervalValue);
@@ -155,6 +199,7 @@ export default function DashboardPage() {
       if (!res.ok) throw new Error("Gagal mengambil data dashboard");
       return res.json() as Promise<DashboardSummary>;
     },
+    staleTime: 60_000,
     refetchInterval,
   });
 
@@ -209,21 +254,23 @@ export default function DashboardPage() {
     }
   };
 
-  const { data: rtEntries = [], refetch: refetchRt } = useQuery({
+  const { data: rtEntries = [] } = useQuery({
     queryKey: ["dashboard-response-times"],
     queryFn: fetchResponseTimeTrend,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    enabled: secondaryReady,
   });
 
   const [rtWindow, setRtWindow] = useState<RtWindow>("24h");
 
-  const { data: rtStats = [], refetch: refetchStats } = useQuery({
+  const { data: rtStats = [] } = useQuery({
     queryKey: ["dashboard-response-time-stats", rtWindow],
     queryFn: () => fetchResponseTimeStats(rtWindow),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    enabled: secondaryReady,
   });
-
-  useEffect(() => {
-    if (dataUpdatedAt) { void refetchRt(); void refetchStats(); }
-  }, [dataUpdatedAt, refetchRt, refetchStats]);
 
   const activeFreightCount = summary?.activeFreightCount ?? 0;
   const awaitingQuoteCount = summary?.awaitingQuoteCount ?? 0;
@@ -231,7 +278,7 @@ export default function DashboardPage() {
   const companyBreakdown = summary?.companyBreakdown ?? [];
 
   const { data: portalOrders = [], isLoading: portalLoading, refetch: refetchPortal } = useListLogisticOrders(undefined, {
-    query: { queryKey: ["dashboard-portal-orders"], refetchInterval },
+    query: { queryKey: getListLogisticOrdersQueryKey(), refetchInterval, enabled: secondaryReady },
   });
 
   interface DashDriver { id: number; name: string; phone: string | null; vehiclePlate: string | null; vehicleType: string | null; isActive: boolean; }
@@ -242,7 +289,9 @@ export default function DashboardPage() {
       const res = await fetch("/api/drivers");
       return res.ok ? res.json() as Promise<DashDriver[]> : [];
     },
+    staleTime: 30_000,
     refetchInterval,
+    enabled: secondaryReady,
   });
   const { data: dashJobs = [] } = useQuery<DashActiveJob[]>({
     queryKey: ["dashboard-driver-jobs"],
@@ -250,7 +299,9 @@ export default function DashboardPage() {
       const res = await fetch("/api/drivers/jobs/list");
       return res.ok ? res.json() as Promise<DashActiveJob[]> : [];
     },
+    staleTime: 30_000,
     refetchInterval,
+    enabled: secondaryReady,
   });
   const activeJobByDriver = dashJobs.reduce<Record<number, DashActiveJob>>((acc, job) => {
     if (job.status !== "COMPLETED" && job.status !== "CANCELLED") {
@@ -264,6 +315,9 @@ export default function DashboardPage() {
   const portalNew = portalOrders.filter((o) => o.status === "New Order").length;
   const portalInProgress = portalOrders.filter((o) => o.status === "In Progress").length;
   const portalCompleted = portalOrders.filter((o) => o.status === "Completed").length;
+  const portalCancelled = portalOrders.filter((o) => o.status === "Cancelled").length;
+  const portalLoadingForView = !secondaryReady || portalLoading;
+  const driversLoadingForView = !secondaryReady || driversLoading;
 
   const [selectedPortalStatus, setSelectedPortalStatus] = useState<string | null>(null);
   const [soDialog, setSoDialog] = useState<LogisticOrder | null>(null);
@@ -281,8 +335,9 @@ export default function DashboardPage() {
 
   function handlePortalStatusChange(id: number, status: string) {
     setUpdatingId(id);
+    const order = portalOrders.find((o) => o.id === id);
     updateStatus.mutate(
-      { id, data: { status } },
+      { id, data: { status, clientUpdatedAt: order?.updatedAt } },
       {
         onSuccess: () => {
           toast({ title: t.common.success });
@@ -371,76 +426,89 @@ export default function DashboardPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{t.dashboard.title}</h1>
-              {isConsolidated ? (
-                <Badge className="bg-purple-100 text-purple-800 border border-purple-200 gap-1 text-xs font-medium">
-                  <LayoutGrid className="h-3 w-3" /> Holding Consolidated
-                </Badge>
-              ) : activeCompany ? (
-                <Badge className="bg-indigo-100 text-indigo-800 border border-indigo-200 gap-1 text-xs font-medium">
-                  <Building2 className="h-3 w-3" /> {activeCompany.companyName}
-                </Badge>
-              ) : null}
-            </div>
-            <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">{t.dashboard.subtitle}</p>
-          </div>
-          <div className="flex flex-col items-end gap-1.5 shrink-0">
-            <div className="flex items-center gap-2">
-              <Select value={intervalValue} onValueChange={handleIntervalChange}>
-                <SelectTrigger
-                  className="h-8 w-[120px] text-xs"
-                  data-testid="dashboard-refresh-interval-select"
+        <PageHeader
+          title={t.dashboard.title}
+          description={t.dashboard.subtitle}
+          favoriteEnabled
+          actions={
+            <div className="flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-2">
+                {isConsolidated && (
+                  <Badge className="bg-purple-100 text-purple-800 border border-purple-200 gap-1 text-xs font-medium">
+                    <LayoutGrid className="h-3 w-3" /> Holding Consolidated
+                  </Badge>
+                )}
+                <Select value={intervalValue} onValueChange={handleIntervalChange}>
+                  <SelectTrigger
+                    className="h-8 w-[120px] text-xs"
+                    data-testid="dashboard-refresh-interval-select"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INTERVAL_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value} className="text-xs">
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRefresh}
+                  disabled={isFetching}
+                  data-testid="dashboard-refresh-btn"
+                  className="gap-1.5 h-8"
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INTERVAL_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value} className="text-xs">
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRefresh}
-                disabled={isFetching}
-                data-testid="dashboard-refresh-btn"
-                className="gap-1.5 h-8"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} />
-                {isFetching ? t.common.loading : t.common.refresh}
-              </Button>
+                  <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} />
+                  {isFetching ? t.common.loading : t.common.refresh}
+                </Button>
+              </div>
+              {!isLoading && lastUpdated && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <span>{t.dashboard.updatedAt}: {formatLastUpdated(lastUpdated)}</span>
+                  {secondsLeft !== null && (
+                    <>
+                      <span className="text-muted-foreground/40">·</span>
+                      <span className="flex items-center gap-0.5">
+                        <Clock className="h-3 w-3" />
+                        {t.dashboard.refreshIn} {formatCountdown(secondsLeft)}
+                      </span>
+                    </>
+                  )}
+                  {responseTime && (
+                    <>
+                      <span className="text-muted-foreground/40">·</span>
+                      <span className={`flex items-center gap-0.5 ${responseTimeColor}`}>
+                        <Activity className="h-3 w-3" />
+                        {t.dashboard.loadedIn} {responseTime}
+                      </span>
+                    </>
+                  )}
+                </p>
+              )}
             </div>
-            {!isLoading && lastUpdated && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                <span>{t.dashboard.updatedAt}: {formatLastUpdated(lastUpdated)}</span>
-                {secondsLeft !== null && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <span className="flex items-center gap-0.5">
-                      <Clock className="h-3 w-3" />
-                      {t.dashboard.refreshIn} {formatCountdown(secondsLeft)}
-                    </span>
-                  </>
-                )}
-                {responseTime && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <span className={`flex items-center gap-0.5 ${responseTimeColor}`}>
-                      <Activity className="h-3 w-3" />
-                      {t.dashboard.loadedIn} {responseTime}
-                    </span>
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-        </div>
+          }
+        />
+
+        {/* ── Geofence Alert Banner ── */}
+        <GeofenceAlertBanner />
+
+        {/* ── Quick Nav ── */}
+        <DashboardQuickNav />
+
+        {/* ── Quick Create ── */}
+        <QuickCreateWidget />
+
+        {/* ── Quick Access (Favorites) ── */}
+        <QuickAccessWidget />
+
+        {/* ── Recently Opened ── */}
+        <RecentPagesWidget />
+
+        {/* ── My Workspace ── */}
+        <MyWorkspaceWidget />
 
         {/* ── KPI Hero Section ── */}
         {(() => {
@@ -697,7 +765,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {summary.perCompany.map((co) => {
-                const barW = Math.max(co.contribution, 2);
+                const barW = Math.max(co.contributionPct, 2);
                 return (
                   <div key={co.companyId} className="space-y-1">
                     <div className="flex items-center justify-between text-sm">
@@ -712,7 +780,7 @@ export default function DashboardPage() {
                         <span className="font-semibold text-emerald-700 tabular-nums">
                           {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(co.revenueThisMonth)}
                         </span>
-                        <span className="text-xs font-medium text-purple-700 w-8 text-right">{co.contribution}%</span>
+                        <span className="text-xs font-medium text-purple-700 w-8 text-right">{co.contributionPct}%</span>
                       </div>
                     </div>
                     <div className="h-1.5 rounded-full bg-muted overflow-hidden">
@@ -782,7 +850,7 @@ export default function DashboardPage() {
                     `}
                   >
                     <p className="text-xs text-muted-foreground mb-1 font-medium">{s.label}</p>
-                    {portalLoading
+                    {portalLoadingForView
                       ? <Skeleton className="h-7 w-10 bg-muted" />
                       : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
                     }
@@ -810,7 +878,7 @@ export default function DashboardPage() {
                   </Button>
                 </div>
 
-                {portalLoading ? (
+                {portalLoadingForView ? (
                   <div className="p-4 space-y-2">
                     {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full bg-muted" />)}
                   </div>
@@ -821,56 +889,71 @@ export default function DashboardPage() {
                 ) : (
                   <div className="divide-y divide-border/60">
                     {portalDetailOrders.map((o) => (
-                      <div key={o.id} className="px-4 py-3 flex flex-wrap md:flex-nowrap items-start md:items-center gap-3">
-                        {/* Order info */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs text-muted-foreground">{o.orderNumber}</span>
-                            <Badge className={`text-[10px] px-1.5 py-0 border ${STATUS_COLORS_PORTAL[o.status] ?? "bg-gray-100 text-gray-700 border-gray-200"}`}>
-                              {o.status}
-                            </Badge>
+                      <div key={o.id} className="px-4 pt-3 pb-2">
+                        <div className="flex flex-wrap md:flex-nowrap items-start md:items-center gap-3">
+                          {/* Order info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs text-muted-foreground">{o.orderNumber}</span>
+                              <Badge className={`text-[10px] px-1.5 py-0 border ${STATUS_COLORS_PORTAL[o.status] ?? "bg-gray-100 text-gray-700 border-gray-200"}`}>
+                                {o.status}
+                              </Badge>
+                            </div>
+                            <p className="text-sm font-medium truncate mt-0.5">{o.customerName}
+                              {o.companyName ? <span className="text-muted-foreground font-normal"> · {o.companyName}</span> : null}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">{o.origin} → {o.destination} · {o.shipmentType}</p>
                           </div>
-                          <p className="text-sm font-medium truncate mt-0.5">{o.customerName}
-                            {o.companyName ? <span className="text-muted-foreground font-normal"> · {o.companyName}</span> : null}
-                          </p>
-                          <p className="text-xs text-muted-foreground truncate">{o.origin} → {o.destination} · {o.shipmentType}</p>
-                        </div>
 
-                        {/* Amount + date */}
-                        <div className="text-right shrink-0 hidden sm:block">
-                          <p className="text-sm font-semibold">
-                            {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(o.grandTotal)}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(o.createdAt).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
-                          </p>
-                        </div>
+                          {/* Amount + date */}
+                          <div className="text-right shrink-0 hidden sm:block">
+                            <p className="text-sm font-semibold">
+                              {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(o.grandTotal)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(o.createdAt).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
+                            </p>
+                          </div>
 
-                        {/* Actions */}
-                        <div className="flex items-center gap-2 shrink-0">
-                          <StatusSelect
-                            value={o.status}
-                            onValueChange={(v) => handlePortalStatusChange(o.id, v)}
-                            disabled={updatingId === o.id}
-                          >
-                            <StatusSelectTrigger className="h-7 w-32 text-xs">
-                              <StatusSelectValue />
-                            </StatusSelectTrigger>
-                            <StatusSelectContent>
-                              {STATUS_OPTIONS_PORTAL.map((s) => (
-                                <StatusSelectItem key={s} value={s} className="text-xs">{s}</StatusSelectItem>
-                              ))}
-                            </StatusSelectContent>
-                          </StatusSelect>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="gap-1.5 text-xs h-7 whitespace-nowrap"
-                            onClick={() => setSoDialog(o)}
-                            disabled={o.status === "Cancelled"}
-                          >
-                            <FilePlus className="h-3.5 w-3.5" /> {t.dashboard.createSalesOrder}
-                          </Button>
+                          {/* Actions */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <StatusSelect
+                              value={o.status}
+                              onValueChange={(v) => handlePortalStatusChange(o.id, v)}
+                              disabled={updatingId === o.id}
+                            >
+                              <StatusSelectTrigger className="h-7 w-32 text-xs">
+                                <StatusSelectValue />
+                              </StatusSelectTrigger>
+                              <StatusSelectContent>
+                                {STATUS_OPTIONS_PORTAL.map((s) => (
+                                  <StatusSelectItem key={s} value={s} className="text-xs">{s}</StatusSelectItem>
+                                ))}
+                              </StatusSelectContent>
+                            </StatusSelect>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 text-xs h-7 whitespace-nowrap"
+                              onClick={() => setSoDialog(o)}
+                              disabled={o.status === "Cancelled"}
+                            >
+                              <FilePlus className="h-3.5 w-3.5" /> {t.dashboard.createSalesOrder}
+                            </Button>
+                          </div>
+                        </div>
+                        {/* Progress bar */}
+                        <div className="mt-2">
+                          <OrderProgressBar
+                            orderId={o.id}
+                            onUpdate={() => refetchPortal()}
+                            order={{
+                              status: o.status,
+                              latestRfq: (o as any).latestRfq ?? null,
+                              fulfillmentStatus: (o as any).fulfillmentStatus ?? null,
+                              linkedSalesDocId: (o as any).linkedSalesDocId ?? null,
+                            }}
+                          />
                         </div>
                       </div>
                     ))}
@@ -920,7 +1003,7 @@ export default function DashboardPage() {
                     {s.icon}
                     <p className="text-xs text-muted-foreground font-medium">{s.label}</p>
                   </div>
-                  {driversLoading
+                  {driversLoadingForView
                     ? <Skeleton className="h-7 w-10 bg-muted" />
                     : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
                   }
@@ -929,7 +1012,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Driver list */}
-            {driversLoading ? (
+            {driversLoadingForView ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full bg-muted" />)}
               </div>
@@ -1011,15 +1094,6 @@ export default function DashboardPage() {
           />
 
           <StatCard
-            title={t.pos.txCount}
-            href="/pos"
-            icon={<Activity className="h-4 w-4 text-amber-500" />}
-            isLoading={isLoading}
-            value={formatNumber(summary?.todayTransactions || 0)}
-            testId="stat-today-tx"
-          />
-
-          <StatCard
             title={t.dashboard.activeCustomers}
             href="/trading"
             icon={<AlertTriangle className="h-4 w-4 text-destructive" />}
@@ -1087,12 +1161,41 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {rtEntries.length > 0 && (
-          <ResponseTimeTrendCard entries={rtEntries} />
-        )}
-        {rtStats.length > 0 && (
-          <ResponseTimeStatsCard stats={rtStats} window={rtWindow} onWindowChange={setRtWindow} />
-        )}
+        {/* ── Dashboard Widgets ── */}
+        <DeferredDashboardWidgets>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <SalesWidget />
+            <SportCenterWidget />
+            <AccountingWidget />
+            <ProfitLossComparisonWidget />
+            <LogisticsWidget />
+            <PurchasingWidget />
+            <TasksWidget />
+            <RecentActivitiesWidget />
+            <AiInsightsWidget />
+            <OrderPipelineWidget
+              isLoading={isLoading || portalLoadingForView}
+              portalNew={portalNew}
+              portalInProgress={portalInProgress}
+              portalCompleted={portalCompleted}
+              portalCancelled={portalCancelled}
+              portalTotal={portalOrders.length}
+              quotesActive={summary?.quotesActive ?? 0}
+              salesOrdersConfirmed={summary?.salesOrdersConfirmed ?? 0}
+              salesOrdersThisMonth={summary?.salesOrdersThisMonth ?? 0}
+            />
+            <div className="lg:col-span-2">
+              <QuickActionsWidget />
+            </div>
+          </div>
+
+          {rtEntries.length > 0 && (
+            <ResponseTimeTrendCard entries={rtEntries} />
+          )}
+          {rtStats.length > 0 && (
+            <ResponseTimeStatsCard stats={rtStats} window={rtWindow} onWindowChange={setRtWindow} />
+          )}
+        </DeferredDashboardWidgets>
       </div>
 
       {/* Create Sales Order Dialog */}
@@ -1136,14 +1239,14 @@ export default function DashboardPage() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSoDialog(null)}>{t.common.cancel}</Button>
-            {soDialog?.linkedSalesDocId ? (
+            {(soDialog as any)?.linkedSalesDocId ? (
               <Button
                 variant="secondary"
                 className="gap-2"
                 onClick={() => { setSoDialog(null); window.location.href = "/sales/orders"; }}
               >
                 <ExternalLink className="h-4 w-4" />
-                Lihat SO: {soDialog.linkedSalesDocNumber}
+                Lihat SO: {(soDialog as any).linkedSalesDocNumber}
               </Button>
             ) : (
               <Button onClick={handleCreateSalesOrder} disabled={createSalesDoc.isPending} className="gap-2">
@@ -1161,7 +1264,7 @@ export default function DashboardPage() {
 interface StatCardProps {
   title: string;
   href: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   isLoading: boolean;
   value: string;
   valueClassName?: string;
@@ -1387,6 +1490,344 @@ function RevenueSparkline({ data }: { data: { month: string; revenue: number }[]
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Dashboard Quick Nav ────────────────────────────────────────────────────────
+
+interface DashNavItem { label: string; href: string; }
+interface DashNavCard { label: string; icon: ElementType; color: string; bg: string; items: DashNavItem[]; }
+
+const DASH_NAV_CARDS: DashNavCard[] = [
+  {
+    label: "Logistics",
+    icon: Truck,
+    color: "text-cyan-500",
+    bg: "bg-cyan-500/10",
+    items: [
+      { label: "Semua Shipment",  href: "/logistics/freight" },
+      { label: "Air Freight",     href: "/logistics/air-freight" },
+      { label: "Ocean Freight",   href: "/logistics/ocean-freight" },
+      { label: "Trucking",        href: "/logistics/trucking" },
+      { label: "Portal Orders",   href: "/logistics/portal-orders" },
+    ],
+  },
+  {
+    label: "Sales",
+    icon: ShoppingCart,
+    color: "text-emerald-500",
+    bg: "bg-emerald-500/10",
+    items: [
+      { label: "Sales Orders",   href: "/sales/orders" },
+      { label: "Quotations",     href: "/sales/quotations" },
+      { label: "Invoice",        href: "/sales/invoices" },
+      { label: "Customers",      href: "/sales/customers" },
+      { label: "Sales Items",    href: "/sales/items" },
+    ],
+  },
+  {
+    label: "Purchase",
+    icon: Package,
+    color: "text-amber-500",
+    bg: "bg-amber-500/10",
+    items: [
+      { label: "Purchase Orders", href: "/purchase/orders" },
+      { label: "Vendors",         href: "/purchase/vendors" },
+      { label: "Bills",           href: "/purchase/bills" },
+      { label: "RFQ",             href: "/purchase/rfq" },
+      { label: "Goods Receipt",   href: "/purchase/gr" },
+    ],
+  },
+  {
+    label: "Accounting",
+    icon: DollarSign,
+    color: "text-green-500",
+    bg: "bg-green-500/10",
+    items: [
+      { label: "Dashboard",      href: "/accounting/dashboard" },
+      { label: "Jurnal",         href: "/accounting/journals" },
+      { label: "Pembayaran",     href: "/accounting/payments" },
+      { label: "Profit & Loss",  href: "/accounting/reports/profit-loss" },
+      { label: "Trial Balance",  href: "/accounting/reports/trial-balance" },
+    ],
+  },
+  {
+    label: "Expense",
+    icon: Receipt,
+    color: "text-rose-500",
+    bg: "bg-rose-500/10",
+    items: [
+      { label: "Daftar Expense", href: "/expense" },
+      { label: "Kasbon",         href: "/expense/kasbon" },
+      { label: "Talangan",       href: "/expense/talangan" },
+      { label: "Anggaran",       href: "/expense/budget" },
+      { label: "Laporan",        href: "/expense/reports" },
+    ],
+  },
+  {
+    label: "Laporan",
+    icon: BarChart2,
+    color: "text-indigo-500",
+    bg: "bg-indigo-500/10",
+    items: [
+      { label: "Sales Report",    href: "/reports/sales" },
+      { label: "Purchase Report", href: "/reports/purchase" },
+      { label: "AR Aging",        href: "/reports/ar-aging" },
+      { label: "AP Aging",        href: "/reports/ap-aging" },
+      { label: "Audit Log",       href: "/reports/audit-log" },
+    ],
+  },
+  {
+    label: "Sport Center",
+    icon: Users,
+    color: "text-teal-500",
+    bg: "bg-teal-500/10",
+    items: [
+      { label: "Dashboard",     href: "/sport-center/dashboard" },
+      { label: "Bookings",      href: "/sport-center/bookings" },
+      { label: "Members",       href: "/sport-center/members" },
+      { label: "Pembayaran",    href: "/sport-center/payments" },
+      { label: "Laporan",       href: "/sport-center/reports" },
+    ],
+  },
+  {
+    label: "Tenant",
+    icon: FileText,
+    color: "text-orange-500",
+    bg: "bg-orange-500/10",
+    items: [
+      { label: "Dashboard",     href: "/tenant/dashboard" },
+      { label: "Daftar Tenant", href: "/tenant/tenants" },
+      { label: "Unit",          href: "/tenant/units" },
+      { label: "Pembayaran",    href: "/tenant/payments" },
+      { label: "Invoice",       href: "/tenant/invoices" },
+    ],
+  },
+];
+
+const QUICKNAV_ORDER_KEY = "dashboard_quicknav_order_v1";
+const QUICKNAV_HIDDEN_KEY = "dashboard_quicknav_hidden_v1";
+
+function loadCardOrder(): string[] {
+  try {
+    const saved = localStorage.getItem(QUICKNAV_ORDER_KEY);
+    if (saved) {
+      const parsed: string[] = JSON.parse(saved);
+      const validLabels = DASH_NAV_CARDS.map((c) => c.label);
+      const filtered = parsed.filter((l) => validLabels.includes(l));
+      const missing = validLabels.filter((l) => !filtered.includes(l));
+      return [...filtered, ...missing];
+    }
+  } catch {}
+  return DASH_NAV_CARDS.map((c) => c.label);
+}
+
+function loadHiddenCards(): Set<string> {
+  try {
+    const saved = localStorage.getItem(QUICKNAV_HIDDEN_KEY);
+    if (saved) {
+      const parsed: string[] = JSON.parse(saved);
+      return new Set(parsed);
+    }
+  } catch {}
+  return new Set();
+}
+
+function DashboardQuickNav() {
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem("dashboard_quicknav_open") !== "false"; } catch { return true; }
+  });
+  const [editMode, setEditMode] = useState(false);
+  const [cardOrder, setCardOrder] = useState<string[]>(loadCardOrder);
+  const [hiddenCards, setHiddenCards] = useState<Set<string>>(loadHiddenCards);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const toggle = () => setOpen((v) => {
+    const next = !v;
+    try { localStorage.setItem("dashboard_quicknav_open", String(next)); } catch {}
+    if (!next) setEditMode(false);
+    return next;
+  });
+
+  const orderedCards = cardOrder
+    .map((label) => DASH_NAV_CARDS.find((c) => c.label === label))
+    .filter(Boolean) as typeof DASH_NAV_CARDS;
+
+  const visibleCards = orderedCards.filter((c) => !hiddenCards.has(c.label));
+
+  const toggleHidden = (label: string) => {
+    setHiddenCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      try { localStorage.setItem(QUICKNAV_HIDDEN_KEY, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverIndex(index);
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === dropIndex) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    const newOrder = [...cardOrder];
+    const [moved] = newOrder.splice(dragIndex, 1);
+    newOrder.splice(dropIndex, 0, moved);
+    setCardOrder(newOrder);
+    try { localStorage.setItem(QUICKNAV_ORDER_KEY, JSON.stringify(newOrder)); } catch {}
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    setDragOverIndex(null);
+  };
+
+  const resetAll = () => {
+    const defaultOrder = DASH_NAV_CARDS.map((c) => c.label);
+    setCardOrder(defaultOrder);
+    setHiddenCards(new Set());
+    try {
+      localStorage.removeItem(QUICKNAV_ORDER_KEY);
+      localStorage.removeItem(QUICKNAV_HIDDEN_KEY);
+    } catch {}
+  };
+
+  const hiddenCount = hiddenCards.size;
+
+  return (
+    <div className="rounded-xl border bg-card">
+      <div className="flex items-center justify-between px-4 py-3">
+        <button
+          onClick={toggle}
+          className="flex items-center gap-2 hover:text-foreground text-foreground transition-colors"
+        >
+          <span className="text-sm font-semibold">Navigasi Cepat</span>
+          {!editMode && hiddenCount > 0 && (
+            <span className="text-xs text-muted-foreground/60 font-normal">({hiddenCount} disembunyikan)</span>
+          )}
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </button>
+        {open && (
+          <div className="flex items-center gap-2">
+            {editMode && (
+              <button
+                onClick={resetAll}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded-md hover:bg-muted/60"
+              >
+                Reset Semua
+              </button>
+            )}
+            <button
+              onClick={() => setEditMode((v) => !v)}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors font-medium ${
+                editMode
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "text-amber-400 border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 hover:border-amber-400"
+              }`}
+            >
+              <Settings2 className="h-3 w-3" />
+              {editMode ? "Selesai" : "Kustomisasi"}
+            </button>
+          </div>
+        )}
+      </div>
+      {open && (
+        <div className="px-4 pb-4">
+          {editMode && (
+            <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1.5">
+              <GripVertical className="h-3 w-3" />
+              Drag untuk ubah urutan · klik ikon mata untuk sembunyikan/tampilkan
+            </p>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {(editMode ? orderedCards : visibleCards).map(({ label, icon: Icon, color, bg, items }, index) => {
+              const isHidden = hiddenCards.has(label);
+              const isDragging = editMode && dragIndex === index;
+              const isDragOver = editMode && dragOverIndex === index && dragIndex !== index;
+              return (
+                <div
+                  key={label}
+                  draggable={editMode && !isHidden}
+                  onDragStart={editMode && !isHidden ? (e) => handleDragStart(e, index) : undefined}
+                  onDragOver={editMode && !isHidden ? (e) => handleDragOver(e, index) : undefined}
+                  onDrop={editMode && !isHidden ? (e) => handleDrop(e, index) : undefined}
+                  onDragEnd={editMode ? handleDragEnd : undefined}
+                  className={`rounded-xl border bg-background p-4 flex flex-col gap-3 transition-all duration-150 ${
+                    editMode && !isHidden ? "cursor-grab active:cursor-grabbing" : ""
+                  } ${isDragging ? "opacity-40 scale-95" : "opacity-100"} ${
+                    isDragOver ? "border-primary ring-2 ring-primary/30 bg-primary/5" : ""
+                  } ${isHidden ? "opacity-40" : ""}`}
+                >
+                  <div className="flex items-center gap-2">
+                    {editMode && !isHidden && (
+                      <GripVertical className="h-4 w-4 text-muted-foreground/50 shrink-0 -ml-1" />
+                    )}
+                    <div className={`rounded-lg p-2 ${bg} shrink-0`}>
+                      <Icon className={`h-4 w-4 ${color}`} />
+                    </div>
+                    <p className="text-sm font-semibold text-foreground leading-tight flex-1 min-w-0 truncate">{label}</p>
+                    {editMode && (
+                      <button
+                        onClick={() => toggleHidden(label)}
+                        className={`shrink-0 rounded-md p-1 transition-colors ${
+                          isHidden
+                            ? "text-muted-foreground/40 hover:text-muted-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                        }`}
+                        title={isHidden ? "Tampilkan" : "Sembunyikan"}
+                      >
+                        {isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
+                  </div>
+                  {!editMode && (
+                    <div className="flex flex-col gap-0.5">
+                      {items.map((item) => (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className="group flex items-center justify-between rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                        >
+                          <span>{item.label}</span>
+                          <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                  {editMode && (
+                    <div className="flex flex-col gap-0.5">
+                      {items.slice(0, 2).map((item) => (
+                        <span key={item.href} className="px-2 py-1 text-xs text-muted-foreground/60 truncate">
+                          {item.label}
+                        </span>
+                      ))}
+                      {items.length > 2 && (
+                        <span className="px-2 text-xs text-muted-foreground/40">+{items.length - 2} lainnya</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

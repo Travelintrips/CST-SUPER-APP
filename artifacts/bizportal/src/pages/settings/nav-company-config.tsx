@@ -7,7 +7,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCompany } from "@/contexts/CompanyContext";
-import { LayoutGrid, RotateCcw, Save, Building2 } from "lucide-react";
+import { ArrowLeft, LayoutGrid, RotateCcw, Save, Building2 } from "lucide-react";
+import { Link } from "wouter";
 
 type NavCompanyConfig = Record<string, string[]>;
 
@@ -79,6 +80,7 @@ const CONFIGURABLE_NAV: ConfigModule[] = [
       { title: "Neraca", href: "/accounting/reports/balance-sheet", defaultCodes: [] },
       { title: "Rekonsiliasi", href: "/accounting/reconciliation", defaultCodes: [] },
       { title: "Pengaturan Akunting", href: "/accounting/settings", defaultCodes: [] },
+      { title: "Governance & Audit Control", href: "/accounting/governance", defaultCodes: [] },
       { title: "Holding Dashboard", href: "/holding/dashboard", defaultCodes: [HOLDING_SENTINEL] },
       { title: "Holding P&L", href: "/holding/pl-report", defaultCodes: [HOLDING_SENTINEL] },
     ],
@@ -202,6 +204,8 @@ export default function NavCompanyConfigPage() {
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
           <div>
+            <Link href="/settings"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <LayoutGrid className="h-6 w-6" />
               Konfigurasi Menu per Perusahaan

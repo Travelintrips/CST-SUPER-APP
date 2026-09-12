@@ -78,7 +78,7 @@ router.post("/stock/adjust", async (req: Request, res: Response) => {
   const cur = await db.execute(sql`
     SELECT qty::float FROM wh_stock
     WHERE product_id = ${productId} AND warehouse_id = ${warehouseId}
-    AND (rack_id = ${rack} OR (rack_id IS NULL AND ${rack} IS NULL))
+    AND (rack_id = ${rack}::int OR (rack_id IS NULL AND ${rack}::int IS NULL))
   `);
   const qtyBefore = Number(cur.rows[0]?.qty ?? 0);
   const qtyAfter = qtyBefore + qty;

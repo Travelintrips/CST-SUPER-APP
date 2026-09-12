@@ -3,6 +3,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import type { IncomingMessage, ServerResponse } from "http";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import compression from "compression";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { pinoHttp } from "pino-http";
@@ -10,10 +11,22 @@ import router from "./routes";
 import authRouter from "./routes/auth";
 import companiesRouter from "./routes/companies";
 import { shortLinkRedirectRouter } from "./routes/shortLinkRedirect";
+import { adminActionRouter } from "./routes/adminAction";
+import mktAdminRouter from "./routes/mktAdmin";
+import mktPortalRouter from "./routes/mktPortal";
+import mktQaFixtureRouter from "./routes/mktQaFixture";
+import { marketplaceRouter } from "./routes/marketplace";
+import { treasuryRouter } from "./routes/treasury.js";
+import translationsRouter from "./routes/translations";
+import { aiTranslateRouter } from "./routes/aiTranslate";
 import { authMiddleware } from "./middlewares/authMiddleware";
+import { pool as _sysPool } from "@workspace/db";
 import { bearerRateLimiter } from "./middlewares/bearerRateLimiter";
+import { authRateLimiter } from "./middlewares/securityRateLimiter";
+import { correlationIdMiddleware } from "./middlewares/correlationId";
 import { logger } from "./lib/logger";
 import { recordResponseTime } from "./lib/responseTimeLog";
+import { portalCsrfProtection } from "./middlewares/portalCsrfProtection";
 
 const app: Express = express();
 
@@ -21,6 +34,86 @@ const app: Express = express();
 // This makes req.ip reflect the real client IP from X-Forwarded-For instead
 // of the proxy's internal address, which is required for IP-based rate limiting.
 app.set("trust proxy", 1);
+
+// ── Correlation ID — assign / echo X-Request-ID on every request ─────────────
+app.use(correlationIdMiddleware);
+
+// ── Gzip compression ─────────────────────────────────────────────────────────
+app.use(compression());
+
+// ── Security headers ──────────────────────────────────────────────────────────
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  const isProd = process.env["REPLIT_DEPLOYMENT"] === "1";
+
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  if (isProd) {
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+  }
+
+  // CSP: allow Replit preview in dev, restrict to own domain in prod
+  const frameAncestors = isProd
+    ? "'self' https://cstlogistic.co.id https://www.cstlogistic.co.id https://bizportal.cstlogistic.co.id"
+    : "'self' https://replit.com https://*.replit.dev https://*.sisko.replit.dev";
+
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: https: blob:",
+      "connect-src 'self' https: wss: ws:",
+      "media-src 'self' https: blob:",
+      "worker-src 'self' blob:",
+      `frame-ancestors ${frameAncestors}`,
+      "object-src 'none'",
+      "base-uri 'self'",
+    ].join("; "),
+  );
+
+  next();
+});
+
+// ── Dynamic sitemap.xml ────────────────────────────────────────────────────────
+app.get("/sitemap.xml", (_req: Request, res: Response) => {
+  const base = process.env["APP_URL"]
+    ? process.env["APP_URL"].replace(/\/$/, "")
+    : process.env["REPLIT_DEV_DOMAIN"]
+      ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
+      : "https://cstlogistic.co.id";
+
+  const today = new Date().toISOString().split("T")[0];
+  const pages = [
+    { loc: "/",                 priority: "1.0", changefreq: "daily"   },
+    { loc: "/services",         priority: "0.9", changefreq: "weekly"  },
+    { loc: "/products",         priority: "0.8", changefreq: "weekly"  },
+    { loc: "/freight-forwarding", priority: "0.8", changefreq: "weekly" },
+    { loc: "/pabean",           priority: "0.8", changefreq: "weekly"  },
+    { loc: "/calculator",       priority: "0.7", changefreq: "monthly" },
+    { loc: "/track",            priority: "0.7", changefreq: "monthly" },
+    { loc: "/contact",          priority: "0.6", changefreq: "monthly" },
+    { loc: "/privacy-policy",   priority: "0.3", changefreq: "yearly"  },
+  ];
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${pages.map((p) => `  <url>
+    <loc>${base}${p.loc}</loc>
+    <lastmod>${today}</lastmod>
+    <changefreq>${p.changefreq}</changefreq>
+    <priority>${p.priority}</priority>
+  </url>`).join("\n")}
+</urlset>`;
+
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.send(xml);
+});
 
 app.use((req, res, next) => {
   const startNs = process.hrtime.bigint();
@@ -39,6 +132,9 @@ app.use((req, res, next) => {
 app.use(
   pinoHttp({
     logger,
+    // Reuse the correlation ID already set by correlationIdMiddleware so every
+    // pino-http log line carries the same reqId as the X-Request-ID header.
+    genReqId: (req) => (req as IncomingMessage & { id?: string }).id,
     serializers: {
       req(req: IncomingMessage & { id?: string }) {
         return {
@@ -74,6 +170,14 @@ const CORS_ALLOWED_ORIGINS: Set<string> = new Set(
     process.env["REPLIT_DEV_DOMAIN"] && !process.env["REPLIT_DEPLOYMENT"]
       ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
       : null,
+    // Extra origins — comma-separated, e.g. Vercel frontend domains
+    // Set CORS_EXTRA_ORIGINS=https://bizportal.vercel.app,https://portal.vercel.app
+    ...(process.env["CORS_EXTRA_ORIGINS"]
+      ? process.env["CORS_EXTRA_ORIGINS"]
+          .split(",")
+          .map((o) => o.trim())
+          .filter((o) => o.length > 0)
+      : []),
   ].filter((o): o is string => typeof o === "string" && o.length > 0),
 );
 
@@ -96,6 +200,22 @@ app.use(
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(cookieParser());
+// Cookie-authenticated unsafe requests must prove a same-site portal origin.
+// Bearer-only API clients and public callbacks remain unaffected.
+app.use(portalCsrfProtection);
+
+// ─── Process liveness ─────────────────────────────────────────────────────────
+// Register this before bearer/auth middleware. It answers only whether this
+// Node process can accept an HTTP request; it must not wait for the database,
+// migrations, external services, session storage, or any authentication work.
+app.get("/api/health/live", (_req: Request, res: Response) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.status(200).json({
+    status: "ok",
+    service: "api",
+    uptime_seconds: Math.floor(process.uptime()),
+  });
+});
 
 // Rate-limit bearer-token requests before any auth processing.
 // Applies only to requests carrying "Authorization: Bearer ..." headers
@@ -105,6 +225,12 @@ app.use(bearerRateLimiter);
 
 // Replit Auth middleware — populates req.user and req.isAuthenticated()
 app.use(authMiddleware);
+
+// Part A — Rate limit auth endpoints (login, callback, auth/*, logout) before authRouter
+app.use(
+  ["/api/login", "/api/callback", "/api/auth", "/api/logout"],
+  authRateLimiter,
+);
 
 // Auth routes (login/callback/logout/mobile-auth) — mounted under /api
 app.use("/api", authRouter);
@@ -138,6 +264,75 @@ if (fs.existsSync(CUSTOMER_PORTAL_DIST)) {
   app.use(express.static(CUSTOMER_PORTAL_DIST, { index: false }));
 }
 
+// ─── Health check + Dev-mode root ─────────────────────────────────────────────
+// /healthz always returns 200 — used by Replit's workflow port health-check.
+app.get("/healthz", (_req: Request, res: Response) => {
+  res.status(200).json({ status: "ok" });
+});
+
+// /api (root) — Replit deployment healthcheck target, harus selalu 200.
+app.get("/api", (_req: Request, res: Response) => {
+  res.status(200).json({ status: "ok" });
+});
+
+// ─── System health endpoints (no-auth, always fast) ───────────────────────────
+// GET /system/health — lightweight liveness check.
+// GET /system/status — richer status including DB, bundle, active modules.
+const _systemStartedAt = Date.now();
+const _ACTIVE_MODULES = [
+  "sales", "purchase", "accounting", "logistics", "freight",
+  "expenses", "correspondences", "ecommerce", "trading",
+  "fleet-intelligence", "ai-governance", "sport-center", "tenant",
+  "portal", "media", "whatsapp", "webhooks",
+] as const;
+
+app.get("/system/health", (_req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime_seconds: Math.floor((Date.now() - _systemStartedAt) / 1000),
+  });
+});
+
+app.get("/system/status", async (_req: Request, res: Response) => {
+  const t0 = Date.now();
+  let dbStatus: "ok" | "error" = "ok";
+  let dbLatencyMs: number | null = null;
+  try {
+    const client = await _sysPool.connect();
+    const q0 = Date.now();
+    await client.query("SELECT 1");
+    dbLatencyMs = Date.now() - q0;
+    client.release();
+  } catch {
+    dbStatus = "error";
+  }
+
+  const bundleExists = fs.existsSync(path.resolve(__dirname, "index.mjs"));
+
+  res.status(200).json({
+    status: dbStatus === "error" ? "degraded" : "ok",
+    timestamp: new Date().toISOString(),
+    uptime_seconds: Math.floor((Date.now() - _systemStartedAt) / 1000),
+    api: { status: "ok" },
+    db: { status: dbStatus, latency_ms: dbLatencyMs },
+    bundle: { status: bundleExists ? "ok" : "missing" },
+    active_modules: _ACTIVE_MODULES,
+    env: process.env["NODE_ENV"] ?? "development",
+    response_time_ms: Date.now() - t0,
+  });
+});
+
+// In development, frontend apps run as separate Vite processes so
+// customer-portal/dist doesn't exist yet. Return 200 with a redirect meta tag
+// so Replit's proxy health-check passes (302 causes health-check failures).
+app.get("/", (_req: Request, res: Response, next: NextFunction) => {
+  if (fs.existsSync(CUSTOMER_PORTAL_DIST)) return next();
+  const bizportalDist = path.join(ARTIFACTS_DIR, "bizportal/dist/public");
+  if (fs.existsSync(bizportalDist)) return next();
+  res.status(200).send(`<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=/bizportal/"></head><body><a href="/bizportal/">BizPortal</a></body></html>`);
+});
+
 // ─── BizPortal Static Serving ────────────────────────────────────────────────
 // BizPortal is built with base="/bizportal/" so all asset hrefs are /bizportal/...
 // The API server handles /bizportal/* so that:
@@ -160,6 +355,26 @@ if (fs.existsSync(BIZPORTAL_DIST)) {
   // SPA fallback: any /bizportal/* path that isn't a file → index.html
   app.use("/bizportal/{*path}", (_req: Request, res: Response) => {
     res.sendFile(path.join(BIZPORTAL_DIST, "index.html"));
+  });
+}
+
+// ─── Logistic Order Static Serving ───────────────────────────────────────────
+// logistic-order is built with base="/logistic-order/" — serves as redirect shim
+// pointing to customer portal routes (/book, /track, /logistic-admin).
+
+const LOGISTIC_ORDER_DIST = path.resolve(
+  ARTIFACTS_DIR,
+  "logistic-order/dist/public",
+);
+
+if (fs.existsSync(LOGISTIC_ORDER_DIST)) {
+  app.use(
+    "/logistic-order",
+    express.static(LOGISTIC_ORDER_DIST, { index: "index.html" }),
+  );
+
+  app.use("/logistic-order/{*path}", (_req: Request, res: Response) => {
+    res.sendFile(path.join(LOGISTIC_ORDER_DIST, "index.html"));
   });
 }
 
@@ -189,7 +404,17 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use(shortLinkRedirectRouter);
+app.use(adminActionRouter);
 app.use("/api/companies", companiesRouter);
+app.use("/api/translations", translationsRouter);
+app.use("/api/ai-translate", aiTranslateRouter);
+app.use("/api", treasuryRouter);
+// ── Marketplace routes (Phase 2A–2E) ─────────────────────────────────────────
+app.use("/api/marketplace", marketplaceRouter);
+app.use("/api/mkt/admin", mktAdminRouter);
+app.use("/api/mkt/portal", mktPortalRouter);
+// QA Fixture Manager — DEV only (backend triple guard enforces HTTP 403 in prod)
+app.use("/api/admin/marketplace/qa", mktQaFixtureRouter);
 app.use("/api", router);
 
 // ─── Customer Portal SPA Fallback ────────────────────────────────────────────
@@ -212,8 +437,10 @@ if (fs.existsSync(CUSTOMER_PORTAL_DIST)) {
 
 // Global error handler — logs unhandled errors and returns JSON
 app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const reqId = (req as express.Request & { id?: string }).id;
   logger.error(
     {
+      reqId,
       err: { message: err.message, stack: err.stack, name: err.name },
       method: req.method,
       url: req.url,
@@ -222,8 +449,12 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
   );
   if (res.headersSent) return;
   const isProd = process.env["NODE_ENV"] === "production";
-  res.status(500).json({
+  const statusCode = Number((err as Error & { statusCode?: number }).statusCode);
+  res.status(
+    Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500 ? statusCode : 500,
+  ).json({
     message: "Internal Server Error",
+    reqId,
     ...(isProd ? {} : { error: err.message }),
   });
 });

@@ -26,21 +26,27 @@ import {
   useDeleteExpenseCategory,
   useSeedExpenseCategories,
   useListAccounts,
+  useListTaxes,
   getListExpenseCategoriesQueryKey,
   type ExpenseCategory,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2, Tags, RefreshCw } from "lucide-react";
+import { ArrowLeft, Pencil, Plus, Trash2, Tags, RefreshCw } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Link } from "wouter";
 
 const EMPTY_FORM = {
   name: "",
   code: "",
+  categoryType: "both" as "expense" | "income" | "both",
   expenseAccountId: null as number | null,
   payableAccountId: null as number | null,
+  defaultTaxId: null as number | null,
+  defaultAmount: "" as string,
+  defaultCoaId: null as number | null,
   requiresAttachment: false,
   isActive: true,
 };
@@ -51,6 +57,7 @@ export default function ExpenseCategoriesPage() {
   const { t } = useLanguage();
   const { data: cats = [] } = useListExpenseCategories();
   const { data: accounts = [] } = useListAccounts();
+  const { data: taxes = [] } = useListTaxes();
   const createMut = useCreateExpenseCategory();
   const updateMut = useUpdateExpenseCategory();
   const deleteMut = useDeleteExpenseCategory();
@@ -73,8 +80,12 @@ export default function ExpenseCategoriesPage() {
     setForm({
       name: c.name,
       code: c.code,
+      categoryType: ((c as any).categoryType ?? "both") as "expense" | "income" | "both",
       expenseAccountId: c.expenseAccountId ?? null,
       payableAccountId: c.payableAccountId ?? null,
+      defaultTaxId: (c as any).defaultTaxId ?? null,
+      defaultAmount: (c as any).defaultAmount ? String(Number((c as any).defaultAmount)) : "",
+      defaultCoaId: (c as any).defaultCoaId ?? null,
       requiresAttachment: c.requiresAttachment,
       isActive: c.isActive,
     });
@@ -89,8 +100,12 @@ export default function ExpenseCategoriesPage() {
       const body = {
         name: form.name,
         code: form.code.toUpperCase(),
+        categoryType: form.categoryType,
         expenseAccountId: form.expenseAccountId || undefined,
         payableAccountId: form.payableAccountId || undefined,
+        defaultTaxId: form.defaultTaxId || undefined,
+        defaultAmount: form.defaultAmount ? Number(form.defaultAmount) : undefined,
+        defaultCoaId: form.defaultCoaId || undefined,
         requiresAttachment: form.requiresAttachment,
         isActive: form.isActive,
       };
@@ -139,6 +154,8 @@ export default function ExpenseCategoriesPage() {
           <div className="flex items-center gap-3">
             <Tags size={22} className="text-primary" />
             <div>
+              <Link href="/expense"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
               <h1 className="text-xl font-bold">Kategori Biaya</h1>
               <p className="text-sm text-muted-foreground">Kelola kategori pengelompokan biaya operasional</p>
             </div>
@@ -162,8 +179,9 @@ export default function ExpenseCategoriesPage() {
                 <TableRow>
                   <TableHead>Kode</TableHead>
                   <TableHead>Nama</TableHead>
-                  <TableHead>Akun Biaya</TableHead>
-                  <TableHead>Akun Hutang</TableHead>
+                  <TableHead>Jenis</TableHead>
+                  <TableHead>Akun Biaya (DR)</TableHead>
+                  <TableHead>Pajak Default</TableHead>
                   <TableHead>Lampiran</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="w-20"></TableHead>
@@ -177,12 +195,25 @@ export default function ExpenseCategoriesPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {cats.map((c) => (
+                {cats.map((c) => {
+                  const defaultTax = taxes.find((t) => t.id === (c as any).defaultTaxId);
+                  return (
                   <TableRow key={c.id}>
                     <TableCell className="font-mono text-xs">{c.code}</TableCell>
                     <TableCell className="font-medium">{c.name}</TableCell>
+                    <TableCell>
+                      {(c as any).categoryType === "income"
+                        ? <Badge className="bg-emerald-900/40 text-emerald-300 border-emerald-700 text-xs">Penerimaan</Badge>
+                        : (c as any).categoryType === "expense"
+                        ? <Badge className="bg-red-900/40 text-red-300 border-red-700 text-xs">Pengeluaran</Badge>
+                        : <Badge variant="outline" className="text-muted-foreground text-xs">Keduanya</Badge>}
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{getAccountName(c.expenseAccountId)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{getAccountName(c.payableAccountId)}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {defaultTax
+                        ? <span className="text-amber-400 text-xs">{defaultTax.name} ({Number(defaultTax.rate)}%)</span>
+                        : <span className="text-xs text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell>
                       {c.requiresAttachment
                         ? <Badge variant="outline" className="text-amber-400 border-amber-500 text-xs">Wajib</Badge>
@@ -204,7 +235,8 @@ export default function ExpenseCategoriesPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </CardContent>
@@ -230,6 +262,21 @@ export default function ExpenseCategoriesPage() {
                   className={codeTaken === true ? "border-destructive focus-visible:ring-destructive" : ""} />
                 <CodeCheckIndicator checking={codeChecking} taken={codeTaken} />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Jenis Transaksi</Label>
+              <Select
+                value={form.categoryType}
+                onValueChange={(v) => setForm((f) => ({ ...f, categoryType: v as any }))}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">Pengeluaran & Penerimaan</SelectItem>
+                  <SelectItem value="expense">Pengeluaran saja</SelectItem>
+                  <SelectItem value="income">Penerimaan saja</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Tentukan apakah kategori ini muncul di form Pengeluaran, Penerimaan, atau keduanya.</p>
             </div>
             <div className="space-y-1.5">
               <Label>Akun Biaya (Debit)</Label>
@@ -264,6 +311,54 @@ export default function ExpenseCategoriesPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Akun Sumber Pembayaran Default</Label>
+              <Select
+                value={form.defaultCoaId?.toString() ?? "none"}
+                onValueChange={(v) => setForm((f) => ({ ...f, defaultCoaId: v === "none" ? null : Number(v) }))}
+              >
+                <SelectTrigger><SelectValue placeholder="Pilih akun kas/bank..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Tidak dipilih —</SelectItem>
+                  {accounts.filter((a) => a.type === "asset" && (a.name.toLowerCase().includes("kas") || a.name.toLowerCase().includes("bank"))).map((a) => (
+                    <SelectItem key={a.id} value={a.id.toString()}>
+                      {a.code} — {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Akun kas/bank yang otomatis terpilih saat membuat biaya dari kategori ini.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Pajak Default (Auto-fill)</Label>
+              <Select
+                value={form.defaultTaxId?.toString() ?? "none"}
+                onValueChange={(v) => setForm((f) => ({ ...f, defaultTaxId: v === "none" ? null : Number(v) }))}
+              >
+                <SelectTrigger><SelectValue placeholder="Tanpa pajak default" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Tanpa pajak default —</SelectItem>
+                  {taxes.map((t) => (
+                    <SelectItem key={t.id} value={t.id.toString()}>
+                      {t.name} ({Number(t.rate)}%)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Saat kategori ini dipilih di form Biaya Rutin, pajak akan ter-isi otomatis.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Harga Default (Auto-fill Nominal)</Label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="0 (kosong = tidak ada default)"
+                value={form.defaultAmount}
+                onChange={(e) => setForm((f) => ({ ...f, defaultAmount: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">Saat kategori ini dipilih di form Biaya Rutin, nominal akan ter-isi otomatis dengan nilai ini.</p>
             </div>
             <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
               <div>

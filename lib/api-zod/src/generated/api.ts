@@ -25,6 +25,8 @@ export const GetCurrentAuthUserResponse = zod.object({
       firstName: zod.string().nullish(),
       lastName: zod.string().nullish(),
       profileImageUrl: zod.string().nullish(),
+      role: zod.string().nullish(),
+      companyId: zod.number().nullish(),
     }),
     zod.null(),
   ]),
@@ -121,40 +123,60 @@ export const GetDashboardSummaryResponse = zod.object({
 /**
  * @summary List all products / master items
  */
+export const listProductsQueryPageDefault = 1;
+export const listProductsQueryLimitDefault = 50;
+
 export const ListProductsQueryParams = zod.object({
   search: zod.coerce.string().optional(),
   itemType: zod.coerce.string().optional(),
   subcategory: zod.coerce.string().optional(),
   isActive: zod.coerce.string().optional(),
+  page: zod.coerce.number().default(listProductsQueryPageDefault),
+  limit: zod.coerce.number().default(listProductsQueryLimitDefault),
 });
 
-export const ListProductsResponseItem = zod.object({
-  id: zod.number(),
-  name: zod.string(),
-  sku: zod.string(),
-  price: zod.number(),
-  stock: zod.number(),
-  categories: zod.array(zod.string()),
-  description: zod.string().nullish(),
-  imageUrl: zod.string().nullish(),
-  mediaItems: zod
-    .array(
-      zod.object({
-        type: zod.enum(["image", "video"]),
-        url: zod.string(),
-      }),
-    )
-    .optional(),
-  defaultSalesTaxId: zod.number().nullish(),
-  defaultPurchaseTaxId: zod.number().nullish(),
-  itemType: zod.enum(["barang", "jasa"]),
-  unit: zod.string(),
-  unitOptions: zod.array(zod.string()).optional(),
-  subcategory: zod.string().nullish(),
-  isActive: zod.boolean(),
-  createdAt: zod.string(),
+export const ListProductsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      sku: zod.string(),
+      price: zod.number(),
+      stock: zod.number(),
+      categories: zod.array(zod.string()),
+      description: zod.string().nullish(),
+      imageUrl: zod.string().nullish(),
+      mediaItems: zod
+        .array(
+          zod.object({
+            type: zod.enum(["image", "video"]),
+            url: zod.string(),
+          }),
+        )
+        .optional(),
+      defaultSalesTaxId: zod.number().nullish(),
+      defaultPurchaseTaxId: zod.number().nullish(),
+      itemType: zod.enum(["barang", "jasa"]),
+      unit: zod.string(),
+      unitOptions: zod.array(zod.string()).optional(),
+      subcategory: zod.string().nullish(),
+      isActive: zod.boolean(),
+      createdAt: zod.string(),
+      weightKg: zod.number().nullish(),
+      volumeCbm: zod.number().nullish(),
+      lengthCm: zod.number().nullish(),
+      widthCm: zod.number().nullish(),
+      heightCm: zod.number().nullish(),
+      goodsType: zod.string().nullish(),
+    }),
+  ),
+  pagination: zod.object({
+    page: zod.number(),
+    limit: zod.number(),
+    total: zod.number(),
+    totalPages: zod.number(),
+  }),
 });
-export const ListProductsResponse = zod.array(ListProductsResponseItem);
 
 /**
  * @summary Create a product
@@ -182,6 +204,12 @@ export const CreateProductBody = zod.object({
   unitOptions: zod.array(zod.string()).optional(),
   subcategory: zod.string().nullish(),
   isActive: zod.boolean().optional(),
+  weightKg: zod.number().nullish(),
+  volumeCbm: zod.number().nullish(),
+  lengthCm: zod.number().nullish(),
+  widthCm: zod.number().nullish(),
+  heightCm: zod.number().nullish(),
+  goodsType: zod.string().nullish(),
 });
 
 /**
@@ -216,6 +244,12 @@ export const GetProductResponse = zod.object({
   subcategory: zod.string().nullish(),
   isActive: zod.boolean(),
   createdAt: zod.string(),
+  weightKg: zod.number().nullish(),
+  volumeCbm: zod.number().nullish(),
+  lengthCm: zod.number().nullish(),
+  widthCm: zod.number().nullish(),
+  heightCm: zod.number().nullish(),
+  goodsType: zod.string().nullish(),
 });
 
 /**
@@ -248,6 +282,12 @@ export const UpdateProductBody = zod.object({
   unitOptions: zod.array(zod.string()).optional(),
   subcategory: zod.string().nullish(),
   isActive: zod.boolean().optional(),
+  weightKg: zod.number().nullish(),
+  volumeCbm: zod.number().nullish(),
+  lengthCm: zod.number().nullish(),
+  widthCm: zod.number().nullish(),
+  heightCm: zod.number().nullish(),
+  goodsType: zod.string().nullish(),
 });
 
 export const UpdateProductResponse = zod.object({
@@ -275,6 +315,12 @@ export const UpdateProductResponse = zod.object({
   subcategory: zod.string().nullish(),
   isActive: zod.boolean(),
   createdAt: zod.string(),
+  weightKg: zod.number().nullish(),
+  volumeCbm: zod.number().nullish(),
+  lengthCm: zod.number().nullish(),
+  widthCm: zod.number().nullish(),
+  heightCm: zod.number().nullish(),
+  goodsType: zod.string().nullish(),
 });
 
 /**
@@ -533,28 +579,68 @@ export const DeleteStockItemResponse = zod.object({
 });
 
 /**
- * @summary List all suppliers
+ * @summary List all suppliers (paginated)
  */
-export const ListSuppliersResponseItem = zod.object({
-  id: zod.number(),
-  name: zod.string(),
-  country: zod.string().nullish(),
-  contactEmail: zod.string().nullish(),
-  phone: zod.string().nullish(),
-  address: zod.string().nullish(),
-  taxId: zod.string().nullish(),
-  defaultPurchaseTaxId: zod.number().nullish(),
-  serviceType: zod.string().nullish(),
-  isActive: zod.boolean(),
-  logo: zod.string(),
-  eta: zod.string().nullish(),
-  fee: zod.number().nullish(),
-  markup: zod.number().nullish(),
-  note: zod.string().nullish(),
-  sortOrder: zod.number(),
-  createdAt: zod.string(),
+export const ListSuppliersQueryParams = zod.object({
+  filterCompanyId: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      'Filter by company_id value. Use \"__unassigned__\" for vendors with no company assigned. Alias of `companyId`.',
+    ),
+  companyId: zod.coerce
+    .string()
+    .optional()
+    .describe("Same as filterCompanyId; preferred name going forward."),
+  search: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Free-text search across name, contact person, email, phone, and tax id.",
+    ),
+  status: zod.enum(["all", "active", "inactive"]).optional(),
+  sortBy: zod.enum(["name", "createdAt"]).optional(),
+  sortOrder: zod.enum(["asc", "desc"]).optional(),
+  page: zod.coerce.number().optional(),
+  limit: zod.coerce.number().optional().describe("Max 1000, default 25."),
+  offset: zod.coerce.number().optional(),
 });
-export const ListSuppliersResponse = zod.array(ListSuppliersResponseItem);
+
+export const ListSuppliersResponse = zod.object({
+  success: zod.boolean(),
+  data: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      country: zod.string().nullish(),
+      contactEmail: zod.string().nullish(),
+      contactPerson: zod.string().nullish(),
+      phone: zod.string().nullish(),
+      address: zod.string().nullish(),
+      taxId: zod.string().nullish(),
+      defaultPurchaseTaxId: zod.number().nullish(),
+      serviceType: zod.string().nullish(),
+      isActive: zod.boolean(),
+      logo: zod.string(),
+      eta: zod.string().nullish(),
+      fee: zod.number().nullish(),
+      markup: zod.number().nullish(),
+      note: zod.string().nullish(),
+      sortOrder: zod.number(),
+      createdAt: zod.string(),
+      companyId: zod.number().nullish(),
+      hasInternalTruck: zod.boolean().optional(),
+      internalTruckPrice: zod.number().nullish(),
+      assignedCompanyIds: zod.array(zod.number()).optional(),
+    }),
+  ),
+  pagination: zod.object({
+    page: zod.number(),
+    limit: zod.number(),
+    total: zod.number(),
+    totalPages: zod.number(),
+  }),
+});
 
 /**
  * @summary Add a supplier
@@ -563,6 +649,7 @@ export const CreateSupplierBody = zod.object({
   name: zod.string(),
   country: zod.string().nullish(),
   contactEmail: zod.string().nullish(),
+  contactPerson: zod.string().nullish(),
   phone: zod.string().nullish(),
   address: zod.string().nullish(),
   taxId: zod.string().nullish(),
@@ -575,6 +662,33 @@ export const CreateSupplierBody = zod.object({
   markup: zod.number().nullish(),
   note: zod.string().nullish(),
   sortOrder: zod.number().optional(),
+  hasInternalTruck: zod.boolean().nullish(),
+  internalTruckPrice: zod.number().nullish(),
+});
+
+/**
+ * @summary Check whether a vendor can be hard-deleted or would be archived
+ */
+export const GetSupplierDeleteImpactParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetSupplierDeleteImpactResponse = zod.object({
+  success: zod.boolean().optional(),
+  data: zod
+    .object({
+      canHardDelete: zod.boolean().optional(),
+      hasTransactionHistory: zod.boolean().optional(),
+      dependencies: zod
+        .object({
+          logisticQuotes: zod.number().optional(),
+          purchaseOrders: zod.number().optional(),
+          fulfillments: zod.number().optional(),
+        })
+        .optional(),
+      recommendedAction: zod.enum(["delete", "archive"]).optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -587,15 +701,44 @@ export const ListVendorCatalogParams = zod.object({
 export const ListVendorCatalogResponseItem = zod.object({
   id: zod.number(),
   vendorId: zod.number(),
+  vendorName: zod.string().nullish(),
+  masterItemId: zod.number().nullish(),
   type: zod.string(),
   name: zod.string(),
   description: zod.string().nullish(),
   unit: zod.string().nullish(),
+  kategori: zod.string().nullish(),
+  subcategory: zod.string().nullish(),
+  isCommodityTag: zod.boolean(),
+  sortOrder: zod.number(),
+  templateKind: zod.string().nullish(),
+  categoryKey: zod.string().nullish(),
+  serviceType: zod.string().nullish(),
   priceBase: zod.number(),
   markupPct: zod.number(),
+  priceSell: zod.number().nullish(),
+  priceSellOverride: zod.number().nullish(),
+  profit: zod.number().nullish(),
+  currency: zod.string(),
+  stockStatus: zod.string().nullish(),
+  stockQty: zod.number().nullish(),
+  moq: zod.number().nullish(),
+  leadTime: zod.string().nullish(),
+  validityDate: zod.string().nullish(),
+  location: zod.string().nullish(),
+  origin: zod.string().nullish(),
+  status: zod.string(),
+  isPublished: zod.boolean(),
   isActive: zod.boolean(),
-  sortOrder: zod.number(),
+  isFeatured: zod.boolean(),
+  featuredUntil: zod.string().nullish(),
+  viewCount: zod.number(),
+  quoteCount: zod.number(),
+  orderCount: zod.number(),
+  sourceSubmissionId: zod.number().nullish(),
+  publishedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string().nullish(),
 });
 export const ListVendorCatalogResponse = zod.array(
   ListVendorCatalogResponseItem,
@@ -610,13 +753,33 @@ export const CreateVendorCatalogItemParams = zod.object({
 
 export const CreateVendorCatalogItemBody = zod.object({
   type: zod.string().optional(),
-  name: zod.string(),
+  name: zod.string().optional(),
   description: zod.string().nullish(),
   unit: zod.string().nullish(),
+  kategori: zod.string().nullish(),
+  subcategory: zod.string().nullish(),
   priceBase: zod.number().optional(),
-  markupPct: zod.number().optional(),
+  priceSellOverride: zod.number().nullish(),
   isActive: zod.boolean().optional(),
+  isCommodityTag: zod.boolean().optional(),
   sortOrder: zod.number().optional(),
+  linkMasterItemId: zod.number().nullish(),
+  templateKind: zod.string().nullish(),
+  categoryKey: zod.string().nullish(),
+  serviceType: zod.string().nullish(),
+  currency: zod.string().optional(),
+  stockStatus: zod.string().nullish(),
+  stockQty: zod.number().nullish(),
+  moq: zod.number().nullish(),
+  leadTime: zod.string().nullish(),
+  validityDate: zod.string().nullish(),
+  location: zod.string().nullish(),
+  origin: zod.string().nullish(),
+  status: zod.string().optional(),
+  isPublished: zod.boolean().optional(),
+  isFeatured: zod.boolean().optional(),
+  featuredUntil: zod.string().nullish(),
+  sourceSubmissionId: zod.number().nullish(),
 });
 
 /**
@@ -628,27 +791,76 @@ export const UpdateVendorCatalogItemParams = zod.object({
 
 export const UpdateVendorCatalogItemBody = zod.object({
   type: zod.string().optional(),
-  name: zod.string(),
+  name: zod.string().optional(),
   description: zod.string().nullish(),
   unit: zod.string().nullish(),
+  kategori: zod.string().nullish(),
+  subcategory: zod.string().nullish(),
   priceBase: zod.number().optional(),
-  markupPct: zod.number().optional(),
+  priceSellOverride: zod.number().nullish(),
   isActive: zod.boolean().optional(),
+  isCommodityTag: zod.boolean().optional(),
   sortOrder: zod.number().optional(),
+  linkMasterItemId: zod.number().nullish(),
+  templateKind: zod.string().nullish(),
+  categoryKey: zod.string().nullish(),
+  serviceType: zod.string().nullish(),
+  currency: zod.string().optional(),
+  stockStatus: zod.string().nullish(),
+  stockQty: zod.number().nullish(),
+  moq: zod.number().nullish(),
+  leadTime: zod.string().nullish(),
+  validityDate: zod.string().nullish(),
+  location: zod.string().nullish(),
+  origin: zod.string().nullish(),
+  status: zod.string().optional(),
+  isPublished: zod.boolean().optional(),
+  isFeatured: zod.boolean().optional(),
+  featuredUntil: zod.string().nullish(),
+  sourceSubmissionId: zod.number().nullish(),
 });
 
 export const UpdateVendorCatalogItemResponse = zod.object({
   id: zod.number(),
   vendorId: zod.number(),
+  vendorName: zod.string().nullish(),
+  masterItemId: zod.number().nullish(),
   type: zod.string(),
   name: zod.string(),
   description: zod.string().nullish(),
   unit: zod.string().nullish(),
+  kategori: zod.string().nullish(),
+  subcategory: zod.string().nullish(),
+  isCommodityTag: zod.boolean(),
+  sortOrder: zod.number(),
+  templateKind: zod.string().nullish(),
+  categoryKey: zod.string().nullish(),
+  serviceType: zod.string().nullish(),
   priceBase: zod.number(),
   markupPct: zod.number(),
+  priceSell: zod.number().nullish(),
+  priceSellOverride: zod.number().nullish(),
+  profit: zod.number().nullish(),
+  currency: zod.string(),
+  stockStatus: zod.string().nullish(),
+  stockQty: zod.number().nullish(),
+  moq: zod.number().nullish(),
+  leadTime: zod.string().nullish(),
+  validityDate: zod.string().nullish(),
+  location: zod.string().nullish(),
+  origin: zod.string().nullish(),
+  status: zod.string(),
+  isPublished: zod.boolean(),
   isActive: zod.boolean(),
-  sortOrder: zod.number(),
+  isFeatured: zod.boolean(),
+  featuredUntil: zod.string().nullish(),
+  viewCount: zod.number(),
+  quoteCount: zod.number(),
+  orderCount: zod.number(),
+  sourceSubmissionId: zod.number().nullish(),
+  publishedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string().nullish(),
 });
 
 /**
@@ -673,6 +885,7 @@ export const UpdateSupplierBody = zod.object({
   name: zod.string(),
   country: zod.string().nullish(),
   contactEmail: zod.string().nullish(),
+  contactPerson: zod.string().nullish(),
   phone: zod.string().nullish(),
   address: zod.string().nullish(),
   taxId: zod.string().nullish(),
@@ -685,6 +898,8 @@ export const UpdateSupplierBody = zod.object({
   markup: zod.number().nullish(),
   note: zod.string().nullish(),
   sortOrder: zod.number().optional(),
+  hasInternalTruck: zod.boolean().nullish(),
+  internalTruckPrice: zod.number().nullish(),
 });
 
 export const UpdateSupplierResponse = zod.object({
@@ -692,6 +907,7 @@ export const UpdateSupplierResponse = zod.object({
   name: zod.string(),
   country: zod.string().nullish(),
   contactEmail: zod.string().nullish(),
+  contactPerson: zod.string().nullish(),
   phone: zod.string().nullish(),
   address: zod.string().nullish(),
   taxId: zod.string().nullish(),
@@ -705,6 +921,10 @@ export const UpdateSupplierResponse = zod.object({
   note: zod.string().nullish(),
   sortOrder: zod.number(),
   createdAt: zod.string(),
+  companyId: zod.number().nullish(),
+  hasInternalTruck: zod.boolean().optional(),
+  internalTruckPrice: zod.number().nullish(),
+  assignedCompanyIds: zod.array(zod.number()).optional(),
 });
 
 /**
@@ -721,25 +941,42 @@ export const DeleteSupplierResponse = zod.object({
 /**
  * @summary List all shipments
  */
-export const ListShipmentsResponseItem = zod.object({
-  id: zod.number(),
-  orderId: zod.number().optional(),
-  trackingNumber: zod.string(),
-  carrier: zod.string(),
-  status: zod.enum([
-    "pending",
-    "picked_up",
-    "in_transit",
-    "out_for_delivery",
-    "delivered",
-    "failed",
-  ]),
-  origin: zod.string(),
-  destination: zod.string(),
-  estimatedDelivery: zod.string().optional(),
-  createdAt: zod.string(),
+export const listShipmentsQueryPageDefault = 1;
+export const listShipmentsQueryLimitDefault = 50;
+
+export const ListShipmentsQueryParams = zod.object({
+  page: zod.coerce.number().default(listShipmentsQueryPageDefault),
+  limit: zod.coerce.number().default(listShipmentsQueryLimitDefault),
 });
-export const ListShipmentsResponse = zod.array(ListShipmentsResponseItem);
+
+export const ListShipmentsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.number(),
+      orderId: zod.number().optional(),
+      trackingNumber: zod.string(),
+      carrier: zod.string(),
+      status: zod.enum([
+        "pending",
+        "picked_up",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "failed",
+      ]),
+      origin: zod.string(),
+      destination: zod.string(),
+      estimatedDelivery: zod.string().optional(),
+      createdAt: zod.string(),
+    }),
+  ),
+  pagination: zod.object({
+    page: zod.number(),
+    limit: zod.number(),
+    total: zod.number(),
+    totalPages: zod.number(),
+  }),
+});
 
 /**
  * @summary Create a shipment
@@ -843,6 +1080,11 @@ export const ListFreightShipmentsResponseItem = zod.object({
   totalExpenses: zod.string().nullish(),
   createdById: zod.string().nullish(),
   createdAt: zod.string(),
+  estimatedRevenue: zod.string().nullish(),
+  estimatedCost: zod.string().nullish(),
+  actualRevenue: zod.string().nullish(),
+  invoiceStatus: zod.string().nullish(),
+  vendorBillStatus: zod.string().nullish(),
 });
 export const ListFreightShipmentsResponse = zod.array(
   ListFreightShipmentsResponseItem,
@@ -936,6 +1178,11 @@ export const GetFreightShipmentResponse = zod
     totalExpenses: zod.string().nullish(),
     createdById: zod.string().nullish(),
     createdAt: zod.string(),
+    estimatedRevenue: zod.string().nullish(),
+    estimatedCost: zod.string().nullish(),
+    actualRevenue: zod.string().nullish(),
+    invoiceStatus: zod.string().nullish(),
+    vendorBillStatus: zod.string().nullish(),
   })
   .and(
     zod.object({
@@ -1081,6 +1328,11 @@ export const UpdateFreightShipmentResponse = zod.object({
   totalExpenses: zod.string().nullish(),
   createdById: zod.string().nullish(),
   createdAt: zod.string(),
+  estimatedRevenue: zod.string().nullish(),
+  estimatedCost: zod.string().nullish(),
+  actualRevenue: zod.string().nullish(),
+  invoiceStatus: zod.string().nullish(),
+  vendorBillStatus: zod.string().nullish(),
 });
 
 /**
@@ -1107,6 +1359,10 @@ export const GetFreightShipmentProfitabilityResponse = zod.object({
   profit: zod.number(),
   margin: zod.number().nullish(),
   invoiceStatus: zod.string(),
+  vendorBillStatus: zod.string().nullish(),
+  estimatedRevenue: zod.number().nullish(),
+  estimatedCost: zod.number().nullish(),
+  actualRevenue: zod.number().nullish(),
 });
 
 /**
@@ -1658,6 +1914,9 @@ export const DeleteCustomerResponse = zod.object({
 /**
  * @summary List sales documents (quotations and orders)
  */
+export const listSalesDocumentsQueryPageDefault = 1;
+export const listSalesDocumentsQueryLimitDefault = 50;
+
 export const ListSalesDocumentsQueryParams = zod.object({
   kind: zod.enum(["quote", "order"]).optional(),
   status: zod
@@ -1666,42 +1925,51 @@ export const ListSalesDocumentsQueryParams = zod.object({
   invoiceStatus: zod.enum(["none", "to_invoice", "invoiced"]).optional(),
   paymentStatus: zod.enum(["unpaid", "partial", "paid"]).optional(),
   search: zod.coerce.string().optional(),
+  page: zod.coerce.number().default(listSalesDocumentsQueryPageDefault),
+  limit: zod.coerce.number().default(listSalesDocumentsQueryLimitDefault),
 });
 
-export const ListSalesDocumentsResponseItem = zod.object({
-  id: zod.number(),
-  docNumber: zod.string(),
-  kind: zod.enum(["quote", "order"]),
-  status: zod.enum(["draft", "sent", "confirmed", "done", "cancelled"]),
-  invoiceStatus: zod.enum(["none", "to_invoice", "invoiced"]),
-  deliveryStatus: zod.enum(["none", "to_deliver", "delivered"]),
-  customerId: zod.number().nullish(),
-  customerName: zod.string(),
-  totalAmount: zod.number(),
-  taxRateId: zod.number().nullish(),
-  taxAmount: zod.number(),
-  grandTotal: zod.number(),
-  origin: zod.string().nullish(),
-  destination: zod.string().nullish(),
-  transportMode: zod.enum(["sea", "air", "land", "multimodal"]).nullish(),
-  etd: zod.string().nullish(),
-  eta: zod.string().nullish(),
-  validUntil: zod.string().nullish(),
-  expectedDate: zod.string().nullish(),
-  notes: zod.string().nullish(),
-  confirmedAt: zod.string().nullish(),
-  customerAddress: zod.string().nullish(),
-  paymentStatus: zod.enum(["unpaid", "partial", "paid"]),
-  amountPaid: zod.number(),
-  createdAt: zod.string(),
-  updatedAt: zod.string(),
-  aiGenerated: zod.boolean().optional(),
-  aiSourceWaPhone: zod.string().nullish(),
-  aiSourceCorrespondenceId: zod.number().nullish(),
+export const ListSalesDocumentsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.number(),
+      docNumber: zod.string(),
+      kind: zod.enum(["quote", "order"]),
+      status: zod.enum(["draft", "sent", "confirmed", "done", "cancelled"]),
+      invoiceStatus: zod.enum(["none", "to_invoice", "invoiced"]),
+      deliveryStatus: zod.enum(["none", "to_deliver", "delivered"]),
+      customerId: zod.number().nullish(),
+      customerName: zod.string(),
+      totalAmount: zod.number(),
+      taxRateId: zod.number().nullish(),
+      taxAmount: zod.number(),
+      grandTotal: zod.number(),
+      origin: zod.string().nullish(),
+      destination: zod.string().nullish(),
+      transportMode: zod.enum(["sea", "air", "land", "multimodal"]).nullish(),
+      etd: zod.string().nullish(),
+      eta: zod.string().nullish(),
+      validUntil: zod.string().nullish(),
+      expectedDate: zod.string().nullish(),
+      notes: zod.string().nullish(),
+      confirmedAt: zod.string().nullish(),
+      customerAddress: zod.string().nullish(),
+      paymentStatus: zod.enum(["unpaid", "partial", "paid"]),
+      amountPaid: zod.number(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+      aiGenerated: zod.boolean().optional(),
+      aiSourceWaPhone: zod.string().nullish(),
+      aiSourceCorrespondenceId: zod.number().nullish(),
+    }),
+  ),
+  pagination: zod.object({
+    page: zod.number(),
+    limit: zod.number(),
+    total: zod.number(),
+    totalPages: zod.number(),
+  }),
 });
-export const ListSalesDocumentsResponse = zod.array(
-  ListSalesDocumentsResponseItem,
-);
 
 /**
  * @summary Create a sales document (quotation or order)
@@ -2510,6 +2778,8 @@ export const SimulatePaymentPaidResponse = zod.object({
  */
 export const ListAccountsResponseItem = zod.object({
   id: zod.number(),
+  companyId: zod.number().nullable(),
+  companyCode: zod.string().nullable(),
   code: zod.string(),
   name: zod.string(),
   type: zod.enum(["asset", "liability", "equity", "revenue", "expense"]),
@@ -2549,6 +2819,8 @@ export const UpdateAccountBody = zod.object({
 
 export const UpdateAccountResponse = zod.object({
   id: zod.number(),
+  companyId: zod.number().nullable(),
+  companyCode: zod.string().nullable(),
   code: zod.string(),
   name: zod.string(),
   type: zod.enum(["asset", "liability", "equity", "revenue", "expense"]),
@@ -2813,6 +3085,8 @@ export const ListAccountingPaymentsQueryParams = zod.object({
   to: zod.date().optional(),
   sourceType: zod.coerce.string().nullish(),
   sourceDocId: zod.coerce.number().nullish(),
+  refDocNumber: zod.coerce.string().nullish(),
+  company: zod.coerce.string().nullish(),
 });
 
 export const ListAccountingPaymentsResponseItem = zod.object({
@@ -3184,11 +3458,13 @@ export const GetAccountingSettingsResponse = zod.object({
   purchaseExpenseAccountId: zod.number().nullish(),
   defaultBankAccountId: zod.number().nullish(),
   defaultCashAccountId: zod.number().nullish(),
+  qrisAccountId: zod.number().nullish(),
   ppnOutputAccountId: zod.number().nullish(),
   ppnInputAccountId: zod.number().nullish(),
   salesJournalId: zod.number().nullish(),
   purchaseJournalId: zod.number().nullish(),
   bankJournalId: zod.number().nullish(),
+  qrisJournalId: zod.number().nullish(),
   cashJournalId: zod.number().nullish(),
   defaultSalesTaxId: zod.number().nullish(),
   defaultPurchaseTaxId: zod.number().nullish(),
@@ -3211,11 +3487,13 @@ export const UpdateAccountingSettingsBody = zod.object({
   purchaseExpenseAccountId: zod.number().nullish(),
   defaultBankAccountId: zod.number().nullish(),
   defaultCashAccountId: zod.number().nullish(),
+  qrisAccountId: zod.number().nullish(),
   ppnOutputAccountId: zod.number().nullish(),
   ppnInputAccountId: zod.number().nullish(),
   salesJournalId: zod.number().nullish(),
   purchaseJournalId: zod.number().nullish(),
   bankJournalId: zod.number().nullish(),
+  qrisJournalId: zod.number().nullish(),
   cashJournalId: zod.number().nullish(),
   defaultSalesTaxId: zod.number().nullish(),
   defaultPurchaseTaxId: zod.number().nullish(),
@@ -3235,11 +3513,13 @@ export const UpdateAccountingSettingsResponse = zod.object({
   purchaseExpenseAccountId: zod.number().nullish(),
   defaultBankAccountId: zod.number().nullish(),
   defaultCashAccountId: zod.number().nullish(),
+  qrisAccountId: zod.number().nullish(),
   ppnOutputAccountId: zod.number().nullish(),
   ppnInputAccountId: zod.number().nullish(),
   salesJournalId: zod.number().nullish(),
   purchaseJournalId: zod.number().nullish(),
   bankJournalId: zod.number().nullish(),
+  qrisJournalId: zod.number().nullish(),
   cashJournalId: zod.number().nullish(),
   defaultSalesTaxId: zod.number().nullish(),
   defaultPurchaseTaxId: zod.number().nullish(),
@@ -3294,6 +3574,8 @@ export const GetTrialBalanceResponse = zod.object({
   rows: zod.array(
     zod.object({
       accountId: zod.number(),
+      companyId: zod.number().nullable(),
+      companyCode: zod.string().nullable(),
       code: zod.string(),
       name: zod.string(),
       type: zod.string(),
@@ -3361,6 +3643,22 @@ export const GetProfitLossResponse = zod.object({
       amount: zod.number(),
     }),
   ),
+  cogs: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      code: zod.string(),
+      name: zod.string(),
+      amount: zod.number(),
+    }),
+  ),
+  operatingExpenses: zod.array(
+    zod.object({
+      accountId: zod.number(),
+      code: zod.string(),
+      name: zod.string(),
+      amount: zod.number(),
+    }),
+  ),
   expenses: zod.array(
     zod.object({
       accountId: zod.number(),
@@ -3370,7 +3668,10 @@ export const GetProfitLossResponse = zod.object({
     }),
   ),
   totalRevenue: zod.number(),
+  totalCogs: zod.number(),
+  totalOperatingExpense: zod.number(),
   totalExpense: zod.number(),
+  grossProfit: zod.number(),
   netIncome: zod.number(),
 });
 
@@ -3386,6 +3687,8 @@ export const GetBalanceSheetResponse = zod.object({
   assets: zod.array(
     zod.object({
       accountId: zod.number(),
+      companyId: zod.number().nullable(),
+      companyCode: zod.string().nullable(),
       code: zod.string(),
       name: zod.string(),
       amount: zod.number(),
@@ -3394,6 +3697,8 @@ export const GetBalanceSheetResponse = zod.object({
   liabilities: zod.array(
     zod.object({
       accountId: zod.number(),
+      companyId: zod.number().nullable(),
+      companyCode: zod.string().nullable(),
       code: zod.string(),
       name: zod.string(),
       amount: zod.number(),
@@ -3402,6 +3707,8 @@ export const GetBalanceSheetResponse = zod.object({
   equity: zod.array(
     zod.object({
       accountId: zod.number(),
+      companyId: zod.number().nullable(),
+      companyCode: zod.string().nullable(),
       code: zod.string(),
       name: zod.string(),
       amount: zod.number(),
@@ -4180,10 +4487,23 @@ export const ListExpensesResponseItem = zod.object({
   expenseNumber: zod.string(),
   date: zod.string(),
   vendorEmployee: zod.string().nullish(),
-  expenseType: zod.enum(["vendor_bill", "reimbursement", "internal"]),
+  expenseType: zod.enum([
+    "vendor_bill",
+    "reimbursement",
+    "internal",
+    "routine",
+    "kasbon",
+    "talangan",
+    "fixed_asset",
+  ]),
   salesDocId: zod.number().nullish(),
   shipmentId: zod.number().nullish(),
   categoryId: zod.number().nullish(),
+  categoryName: zod.string().nullish(),
+  sourceAccountId: zod.number().nullish(),
+  sourceAccountName: zod.string().nullish(),
+  vendorId: zod.number().nullish(),
+  vendorName: zod.string().nullish(),
   description: zod.string().nullish(),
   qty: zod.number(),
   unit: zod.string().nullish(),
@@ -4197,6 +4517,7 @@ export const ListExpensesResponseItem = zod.object({
     "draft",
     "submitted",
     "approved",
+    "pending_approval",
     "posted",
     "paid",
     "rejected",
@@ -4218,8 +4539,17 @@ export const ListExpensesResponse = zod.array(ListExpensesResponseItem);
 export const CreateExpenseBody = zod.object({
   date: zod.string(),
   vendorEmployee: zod.string().nullish(),
+  vendorId: zod.number().nullish(),
   expenseType: zod
-    .enum(["vendor_bill", "reimbursement", "internal"])
+    .enum([
+      "vendor_bill",
+      "reimbursement",
+      "internal",
+      "routine",
+      "kasbon",
+      "talangan",
+      "fixed_asset",
+    ])
     .optional(),
   salesDocId: zod.number().nullish(),
   shipmentId: zod.number().nullish(),
@@ -4233,6 +4563,7 @@ export const CreateExpenseBody = zod.object({
   notes: zod.string().nullish(),
   expenseAccountId: zod.number().nullish(),
   payableAccountId: zod.number().nullish(),
+  sourceAccountId: zod.number().nullish(),
 });
 
 /**
@@ -4286,10 +4617,23 @@ export const GetExpenseResponse = zod
     expenseNumber: zod.string(),
     date: zod.string(),
     vendorEmployee: zod.string().nullish(),
-    expenseType: zod.enum(["vendor_bill", "reimbursement", "internal"]),
+    expenseType: zod.enum([
+      "vendor_bill",
+      "reimbursement",
+      "internal",
+      "routine",
+      "kasbon",
+      "talangan",
+      "fixed_asset",
+    ]),
     salesDocId: zod.number().nullish(),
     shipmentId: zod.number().nullish(),
     categoryId: zod.number().nullish(),
+    categoryName: zod.string().nullish(),
+    sourceAccountId: zod.number().nullish(),
+    sourceAccountName: zod.string().nullish(),
+    vendorId: zod.number().nullish(),
+    vendorName: zod.string().nullish(),
     description: zod.string().nullish(),
     qty: zod.number(),
     unit: zod.string().nullish(),
@@ -4303,6 +4647,7 @@ export const GetExpenseResponse = zod
       "draft",
       "submitted",
       "approved",
+      "pending_approval",
       "posted",
       "paid",
       "rejected",
@@ -4353,8 +4698,17 @@ export const UpdateExpenseParams = zod.object({
 export const UpdateExpenseBody = zod.object({
   date: zod.string(),
   vendorEmployee: zod.string().nullish(),
+  vendorId: zod.number().nullish(),
   expenseType: zod
-    .enum(["vendor_bill", "reimbursement", "internal"])
+    .enum([
+      "vendor_bill",
+      "reimbursement",
+      "internal",
+      "routine",
+      "kasbon",
+      "talangan",
+      "fixed_asset",
+    ])
     .optional(),
   salesDocId: zod.number().nullish(),
   shipmentId: zod.number().nullish(),
@@ -4368,6 +4722,7 @@ export const UpdateExpenseBody = zod.object({
   notes: zod.string().nullish(),
   expenseAccountId: zod.number().nullish(),
   payableAccountId: zod.number().nullish(),
+  sourceAccountId: zod.number().nullish(),
 });
 
 export const UpdateExpenseResponse = zod.object({
@@ -4375,10 +4730,23 @@ export const UpdateExpenseResponse = zod.object({
   expenseNumber: zod.string(),
   date: zod.string(),
   vendorEmployee: zod.string().nullish(),
-  expenseType: zod.enum(["vendor_bill", "reimbursement", "internal"]),
+  expenseType: zod.enum([
+    "vendor_bill",
+    "reimbursement",
+    "internal",
+    "routine",
+    "kasbon",
+    "talangan",
+    "fixed_asset",
+  ]),
   salesDocId: zod.number().nullish(),
   shipmentId: zod.number().nullish(),
   categoryId: zod.number().nullish(),
+  categoryName: zod.string().nullish(),
+  sourceAccountId: zod.number().nullish(),
+  sourceAccountName: zod.string().nullish(),
+  vendorId: zod.number().nullish(),
+  vendorName: zod.string().nullish(),
   description: zod.string().nullish(),
   qty: zod.number(),
   unit: zod.string().nullish(),
@@ -4392,6 +4760,7 @@ export const UpdateExpenseResponse = zod.object({
     "draft",
     "submitted",
     "approved",
+    "pending_approval",
     "posted",
     "paid",
     "rejected",
@@ -4427,6 +4796,7 @@ export const ExpenseActionParams = zod.object({
 export const ExpenseActionBody = zod.object({
   action: zod.enum(["submit", "approve", "reject", "post", "pay", "reset"]),
   reason: zod.string().nullish(),
+  paymentMethod: zod.string().nullish(),
 });
 
 export const ExpenseActionResponse = zod.object({
@@ -4434,10 +4804,23 @@ export const ExpenseActionResponse = zod.object({
   expenseNumber: zod.string(),
   date: zod.string(),
   vendorEmployee: zod.string().nullish(),
-  expenseType: zod.enum(["vendor_bill", "reimbursement", "internal"]),
+  expenseType: zod.enum([
+    "vendor_bill",
+    "reimbursement",
+    "internal",
+    "routine",
+    "kasbon",
+    "talangan",
+    "fixed_asset",
+  ]),
   salesDocId: zod.number().nullish(),
   shipmentId: zod.number().nullish(),
   categoryId: zod.number().nullish(),
+  categoryName: zod.string().nullish(),
+  sourceAccountId: zod.number().nullish(),
+  sourceAccountName: zod.string().nullish(),
+  vendorId: zod.number().nullish(),
+  vendorName: zod.string().nullish(),
   description: zod.string().nullish(),
   qty: zod.number(),
   unit: zod.string().nullish(),
@@ -4451,6 +4834,7 @@ export const ExpenseActionResponse = zod.object({
     "draft",
     "submitted",
     "approved",
+    "pending_approval",
     "posted",
     "paid",
     "rejected",
@@ -4676,6 +5060,7 @@ export const CreateLogisticOrderBody = zod.object({
   customerName: zod.string(),
   email: zod.string(),
   phone: zod.string(),
+  orderType: zod.string().nullish(),
   shipmentType: zod.string(),
   origin: zod.string(),
   destination: zod.string(),
@@ -4688,22 +5073,10 @@ export const CreateLogisticOrderBody = zod.object({
   notes: zod.string().nullish(),
   paymentType: zod.string().nullish(),
   paymentMethod: zod.string().nullish(),
+  senderName: zod.string().nullish(),
   namaPenerima: zod.string().nullish(),
   nomorPenerima: zod.string().nullish(),
   jamOrder: zod.string().nullish(),
-  // [MULTI-MODE] transport mode fields
-  transportMode: zod.string().nullish(),
-  originDistrict: zod.string().nullish(),
-  destDistrict: zod.string().nullish(),
-  pickupDate: zod.string().nullish(),
-  pickupTime: zod.string().nullish(),
-  truckType: zod.string().nullish(),
-  originPort: zod.string().nullish(),
-  destPort: zod.string().nullish(),
-  weightKg: zod.number().nullish(),
-  incoterm: zod.string().nullish(),
-  etd: zod.string().nullish(),
-  eta: zod.string().nullish(),
   subtotal: zod.number(),
   tax: zod.number(),
   grandTotal: zod.number(),
@@ -4766,6 +5139,7 @@ export const ListLogisticOrdersResponseItem = zod.object({
   finalSellingPrice: zod.number().nullish(),
   quotationSentAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 export const ListLogisticOrdersResponse = zod.array(
   ListLogisticOrdersResponseItem,
@@ -4830,6 +5204,7 @@ export const GetLogisticOrderByNumberResponse = zod
     finalSellingPrice: zod.number().nullish(),
     quotationSentAt: zod.string().nullish(),
     createdAt: zod.string(),
+    updatedAt: zod.string(),
   })
   .and(
     zod.object({
@@ -4844,6 +5219,13 @@ export const GetLogisticOrderByNumberResponse = zod
           calculationResult: zod.unknown(),
           subtotal: zod.number(),
           createdAt: zod.string(),
+          itemSource: zod.string().nullish(),
+          serviceType: zod.string().nullish(),
+          priceSnapshot: zod.record(zod.string(), zod.unknown()).nullish(),
+          vendorCatalogItemId: zod.number().nullish(),
+          vendorId: zod.number().nullish(),
+          calculationInput: zod.record(zod.string(), zod.unknown()).nullish(),
+          templateSnapshot: zod.record(zod.string(), zod.unknown()).nullish(),
         }),
       ),
     }),
@@ -4893,6 +5275,7 @@ export const GetLogisticOrderResponse = zod
     finalSellingPrice: zod.number().nullish(),
     quotationSentAt: zod.string().nullish(),
     createdAt: zod.string(),
+    updatedAt: zod.string(),
   })
   .and(
     zod.object({
@@ -4907,6 +5290,13 @@ export const GetLogisticOrderResponse = zod
           calculationResult: zod.unknown(),
           subtotal: zod.number(),
           createdAt: zod.string(),
+          itemSource: zod.string().nullish(),
+          serviceType: zod.string().nullish(),
+          priceSnapshot: zod.record(zod.string(), zod.unknown()).nullish(),
+          vendorCatalogItemId: zod.number().nullish(),
+          vendorId: zod.number().nullish(),
+          calculationInput: zod.record(zod.string(), zod.unknown()).nullish(),
+          templateSnapshot: zod.record(zod.string(), zod.unknown()).nullish(),
         }),
       ),
     }),
@@ -5149,6 +5539,7 @@ export const ApproveLogisticOrderQuoteResponse = zod.object({
   finalSellingPrice: zod.number().nullish(),
   quotationSentAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 
 /**
@@ -5160,6 +5551,7 @@ export const UpdateLogisticOrderStatusParams = zod.object({
 
 export const UpdateLogisticOrderStatusBody = zod.object({
   status: zod.string(),
+  clientUpdatedAt: zod.string().optional(),
 });
 
 export const UpdateLogisticOrderStatusResponse = zod.object({
@@ -5198,6 +5590,7 @@ export const UpdateLogisticOrderStatusResponse = zod.object({
   finalSellingPrice: zod.number().nullish(),
   quotationSentAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 
 /**
@@ -5247,6 +5640,7 @@ export const UpdateLogisticOrderTypeResponse = zod.object({
   finalSellingPrice: zod.number().nullish(),
   quotationSentAt: zod.string().nullish(),
   createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 
 /**

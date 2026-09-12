@@ -13,11 +13,13 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import {
-  Clock, CheckCircle2, XCircle, Users, ChevronDown, ChevronRight,
-  Building2, Truck, UserCheck, User, Phone, Mail, MapPin, FileText,
-  Eye, AlertCircle, RefreshCw, CreditCard, Car,
+  Clock, CheckCircle2, XCircle, Users, Building2, Truck, UserCheck,
+  User, Phone, Mail, MapPin, FileText, Eye, AlertCircle, RefreshCw,
+  CreditCard, Car, Link2, MessageCircle, Package, Copy, ExternalLink,
+  ShieldCheck, ShieldAlert, History, ArrowLeft, Download, FolderOpen,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { BackButton } from "@/components/ui/back-button";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,8 +35,40 @@ type UserProfile = {
   completedAt: string | null;
 };
 
-type VendorProfile = { companyName: string | null; nib: string | null; npwp: string | null; serviceType: string | null };
-type DriverProfile = { licenseNumber: string | null; vehicleType: string | null; plateNumber: string | null; simUrl: string | null; stnkUrl: string | null };
+type VendorProfile = {
+  companyName: string | null;
+  businessType: string | null;
+  companyDescription: string | null;
+  nib: string | null;
+  npwp: string | null;
+  siup: string | null;
+  tdp: string | null;
+  serviceType: string | null;
+  // Contact
+  picName: string | null;
+  picPosition: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+  // Address
+  province: string | null;
+  city: string | null;
+  district: string | null;
+  postalCode: string | null;
+  fullAddress: string | null;
+  // Bank
+  bankName: string | null;
+  bankAccountName: string | null;
+  bankAccountNumber: string | null;
+  // Bridge fields (present after vendor lifecycle runs)
+  supplierId: number | null;
+  catalogSubmissionLinkId: number | null;
+  catalogSubmissionLinkToken: string | null;
+  catalogSubmissionLinkUrl: string | null;
+  verificationStatus: string | null;
+  approvedAt: string | null;
+};
+type DriverProfile  = { licenseNumber: string | null; vehicleType: string | null; plateNumber: string | null; simUrl: string | null; stnkUrl: string | null };
 type EmployeeProfile = { companyName: string | null; branch: string | null; department: string | null; division: string | null; position: string | null };
 
 type ApprovalItem = {
@@ -54,6 +88,43 @@ type ApprovalItem = {
 };
 
 type Stats = { pending: number; approved: number; rejected: number; total: number };
+
+type IdentityDoc = {
+  id: number | null;
+  docType: string;
+  url: string;
+  fileName: string | null;
+  source: "identity_documents" | "vendor_profile";
+  createdAt: string | null;
+};
+
+type VendorLifecycleResult = {
+  ok: boolean;
+  status: string;
+  createdSupplierId: number | null;
+  createdSupplierName: string | null;
+  supplierAlreadyExisted: boolean;
+  submissionLinkId: number | null;
+  submissionLinkToken: string | null;
+  submissionLinkUrl: string | null;
+  waNotificationSent: boolean;
+};
+
+// ── Audit Entry Type ──────────────────────────────────────────────────────────
+
+type AuditEntry = {
+  id: number;
+  userId: string | null;
+  userEmail: string | null;
+  action: string;
+  module: string;
+  referenceId: string | null;
+  oldData: Record<string, unknown> | null;
+  newData: Record<string, unknown> | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string;
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +161,200 @@ const accountTypeBadge = (t: string) => {
   );
 };
 
-// ── Detail Section ────────────────────────────────────────────────────────────
+// ── Vendor Bridge Status Panel ────────────────────────────────────────────────
+
+function VendorBridgePanel({ vp }: { vp: VendorProfile }) {
+  const isLinked = !!vp.supplierId;
+
+  const submissionUrl = vp.catalogSubmissionLinkUrl ?? null;
+
+  const copyLink = (url: string) => {
+    navigator.clipboard.writeText(url).then(() =>
+      toast({ title: "Link submission disalin ke clipboard" })
+    );
+  };
+
+  return (
+    <div className={`rounded-lg border p-3 text-sm space-y-2 ${isLinked ? "bg-blue-50 border-blue-200" : "bg-gray-50 border-gray-200"}`}>
+      <div className="flex items-center gap-2 font-semibold text-xs text-muted-foreground uppercase tracking-wide">
+        <Package className="h-3.5 w-3.5" /> Status Supplier Bridge
+      </div>
+      <div className="flex items-center gap-2">
+        {isLinked
+          ? <ShieldCheck className="h-4 w-4 text-blue-600 shrink-0" />
+          : <ShieldAlert className="h-4 w-4 text-gray-400 shrink-0" />}
+        <span className={isLinked ? "text-blue-700 font-medium" : "text-muted-foreground"}>
+          {isLinked ? `Terhubung ke Supplier #${vp.supplierId}` : "Belum terhubung ke supplier"}
+        </span>
+      </div>
+      {vp.verificationStatus && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Status Verifikasi:</span>
+          <Badge className={vp.verificationStatus === "verified"
+            ? "bg-green-100 text-green-700 text-xs"
+            : "bg-gray-100 text-gray-600 text-xs"}>
+            {vp.verificationStatus}
+          </Badge>
+        </div>
+      )}
+      {submissionUrl ? (
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground font-medium">Link Submission Katalog:</div>
+          <div className="flex items-center gap-2">
+            <code className="text-xs bg-white border rounded px-2 py-1 flex-1 truncate font-mono text-blue-700">
+              {submissionUrl}
+            </code>
+            <Button size="icon" variant="outline" className="h-6 w-6 shrink-0" onClick={() => copyLink(submissionUrl)}>
+              <Copy className="h-3 w-3" />
+            </Button>
+            <a href={submissionUrl} target="_blank" rel="noopener noreferrer">
+              <Button size="icon" variant="outline" className="h-6 w-6 shrink-0">
+                <ExternalLink className="h-3 w-3" />
+              </Button>
+            </a>
+          </div>
+          {vp.catalogSubmissionLinkId && (
+            <div className="text-xs text-muted-foreground">
+              Link ID: <span className="font-mono">#{vp.catalogSubmissionLinkId}</span>
+              {vp.catalogSubmissionLinkToken && (
+                <> · Token: <span className="font-mono">{vp.catalogSubmissionLinkToken.slice(0, 8)}…</span></>
+              )}
+            </div>
+          )}
+        </div>
+      ) : vp.catalogSubmissionLinkId ? (
+        <div className="text-xs text-muted-foreground">
+          Link Katalog ID: <span className="font-mono font-medium">#{vp.catalogSubmissionLinkId}</span>
+        </div>
+      ) : null}
+      {vp.approvedAt && (
+        <div className="text-xs text-muted-foreground">Disetujui: {fmt(vp.approvedAt)}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Post-Approval Vendor Result Dialog ───────────────────────────────────────
+
+function VendorLifecycleResultDialog({
+  result,
+  vendorName,
+  onClose,
+}: {
+  result: VendorLifecycleResult;
+  vendorName: string;
+  onClose: () => void;
+}) {
+  const copyLink = () => {
+    if (result.submissionLinkUrl) {
+      navigator.clipboard.writeText(result.submissionLinkUrl).then(() =>
+        toast({ title: "Link submission disalin" })
+      );
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-green-700">
+            <CheckCircle2 className="h-5 w-5" /> Vendor Disetujui — Bridge Berhasil
+          </DialogTitle>
+          <DialogDescription>
+            Lifecycle vendor selesai. Berikut detail yang dihasilkan otomatis:
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Supplier info */}
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-blue-800">
+              <Building2 className="h-4 w-4" /> Supplier Record
+            </div>
+            <div className="text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nama Supplier</span>
+                <span className="font-medium">{result.createdSupplierName ?? vendorName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">ID Supplier</span>
+                <span className="font-mono font-medium">#{result.createdSupplierId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Status</span>
+                <Badge className={result.supplierAlreadyExisted
+                  ? "bg-gray-100 text-gray-700 text-xs"
+                  : "bg-green-100 text-green-700 text-xs"}>
+                  {result.supplierAlreadyExisted ? "Data Diperbarui" : "Baru Dibuat"}
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          {/* Submission link */}
+          {result.submissionLinkUrl && (
+            <div className="rounded-lg bg-indigo-50 border border-indigo-200 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-indigo-800">
+                <Link2 className="h-4 w-4" /> Link Katalog Submission
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Link ini dikirim ke vendor via WhatsApp. Vendor menggunakan link ini untuk upload produk/layanan.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="text-xs bg-white border rounded px-2 py-1 flex-1 truncate font-mono text-indigo-700">
+                  {result.submissionLinkUrl}
+                </code>
+                <Button size="icon" variant="outline" className="h-7 w-7 shrink-0" onClick={copyLink}>
+                  <Copy className="h-3 w-3" />
+                </Button>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Link ID: <span className="font-mono">#{result.submissionLinkId}</span>
+                {" · "}Token: <span className="font-mono">{result.submissionLinkToken?.slice(0, 8)}…
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* WA notification status */}
+          <div className={`rounded-lg border p-3 flex items-start gap-3 ${
+            result.waNotificationSent
+              ? "bg-green-50 border-green-200"
+              : "bg-yellow-50 border-yellow-200"
+          }`}>
+            <MessageCircle className={`h-4 w-4 mt-0.5 shrink-0 ${result.waNotificationSent ? "text-green-600" : "text-yellow-600"}`} />
+            <div className="text-sm">
+              <div className={`font-medium ${result.waNotificationSent ? "text-green-700" : "text-yellow-700"}`}>
+                {result.waNotificationSent
+                  ? "Notifikasi WhatsApp terkirim"
+                  : "Notifikasi WhatsApp tidak terkirim"}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {result.waNotificationSent
+                  ? "Vendor telah menerima pesan beserta link submission katalog."
+                  : "Nomor telepon tidak ditemukan atau layanan WA tidak aktif. Kirim link secara manual."}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Tutup</Button>
+          {result.submissionLinkUrl && (
+            <Button
+              className="gap-2"
+              onClick={() => window.open(result.submissionLinkUrl!, "_blank")}
+            >
+              <ExternalLink className="h-4 w-4" /> Buka Form Vendor
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Detail Section helpers ────────────────────────────────────────────────────
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -109,9 +373,81 @@ function TypeProfileDetail({ accountType, profile }: { accountType: string; prof
     return (
       <div className="space-y-2">
         <InfoRow label="Nama Perusahaan" value={vp.companyName} />
+        {vp.businessType && <InfoRow label="Jenis Usaha" value={vp.businessType} />}
+        {vp.companyDescription && <InfoRow label="Deskripsi" value={vp.companyDescription} />}
         <InfoRow label="NIB" value={vp.nib} />
         <InfoRow label="NPWP" value={vp.npwp} />
+        {vp.siup && <InfoRow label="NIB" value={vp.siup} />}
+        {vp.tdp && <InfoRow label="TDP" value={vp.tdp} />}
         <InfoRow label="Jenis Layanan" value={vp.serviceType} />
+        {(vp.picName || vp.picPosition) && (
+          <InfoRow label="PIC" value={[vp.picName, vp.picPosition].filter(Boolean).join(" — ")} />
+        )}
+        {vp.phone && (
+          <InfoRow label="Telepon" value={
+            <span className="flex items-center gap-1"><Phone className="h-3 w-3 text-muted-foreground" />{vp.phone}</span>
+          } />
+        )}
+        {vp.whatsapp && (
+          <InfoRow label="WhatsApp" value={
+            <span className="flex items-center gap-1"><MessageCircle className="h-3 w-3 text-muted-foreground" />{vp.whatsapp}</span>
+          } />
+        )}
+        {vp.email && (
+          <InfoRow label="Email" value={
+            <span className="flex items-center gap-1"><Mail className="h-3 w-3 text-muted-foreground" />{vp.email}</span>
+          } />
+        )}
+        {vp.fullAddress && (
+          <InfoRow label="Alamat" value={
+            <span className="flex items-start gap-1"><MapPin className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />{vp.fullAddress}{[vp.district, vp.city, vp.province, vp.postalCode].filter(Boolean).length > 0 && `, ${[vp.district, vp.city, vp.province, vp.postalCode].filter(Boolean).join(", ")}`}</span>
+          } />
+        )}
+        {(vp.bankName || vp.bankAccountName || vp.bankAccountNumber) && (
+          <InfoRow label="Rekening" value={[vp.bankName, vp.bankAccountName, vp.bankAccountNumber].filter(Boolean).join(" · ")} />
+        )}
+        {/* Verification & Bridge fields */}
+        {vp.verificationStatus && (
+          <InfoRow label="Status Verifikasi" value={
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+              vp.verificationStatus === "verified"
+                ? "bg-green-100 text-green-700"
+                : vp.verificationStatus === "unverified"
+                ? "bg-gray-100 text-gray-600"
+                : "bg-amber-100 text-amber-700"
+            }`}>
+              {vp.verificationStatus === "verified"
+                ? <ShieldCheck className="h-3 w-3" />
+                : <ShieldAlert className="h-3 w-3" />}
+              {vp.verificationStatus}
+            </span>
+          } />
+        )}
+        {vp.supplierId && (
+          <InfoRow label="Supplier ID" value={
+            <span className="font-mono text-xs bg-muted/40 px-2 py-0.5 rounded">#{vp.supplierId}</span>
+          } />
+        )}
+        {vp.approvedAt && (
+          <InfoRow label="Tanggal Approval" value={fmt(vp.approvedAt)} />
+        )}
+        {vp.catalogSubmissionLinkUrl ? (
+          <InfoRow label="Link Submission" value={
+            <a
+              href={vp.catalogSubmissionLinkUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-blue-600 hover:underline text-xs font-mono break-all"
+            >
+              <ExternalLink className="h-3 w-3 shrink-0" />
+              {vp.catalogSubmissionLinkUrl}
+            </a>
+          } />
+        ) : vp.catalogSubmissionLinkId ? (
+          <InfoRow label="Link Submission" value={
+            <span className="text-xs text-muted-foreground font-mono">Link ID #{vp.catalogSubmissionLinkId} (URL belum tersedia)</span>
+          } />
+        ) : null}
       </div>
     );
   }
@@ -158,6 +494,207 @@ function TypeProfileDetail({ accountType, profile }: { accountType: string; prof
   return null;
 }
 
+// ── Identity Documents Panel ──────────────────────────────────────────────────
+
+const DOC_TYPE_LABELS: Record<string, string> = {
+  ktp:       "KTP",
+  npwp:      "NPWP",
+  siup:      "NIB",
+  tdp:       "TDP",
+  nib:       "NIB",
+  legality:  "Legalitas Perusahaan",
+  sim:       "SIM",
+  stnk:      "STNK",
+  akta:      "Akta Perusahaan",
+  skdp:      "SKDP",
+};
+
+function docTypeLabel(t: string) {
+  return DOC_TYPE_LABELS[t] ?? t.replace(/_/g, " ").toUpperCase();
+}
+
+function isImageUrl(url: string) {
+  return /\.(jpg|jpeg|png|webp|heic|heif|gif)(\?|$)/i.test(url) || url.startsWith("/api/storage");
+}
+
+function IdentityDocsPanel({ approvalId }: { approvalId: number }) {
+  const { data, isLoading, error } = useQuery<{ docs: IdentityDoc[] }>({
+    queryKey: ["approval-identity-docs", approvalId],
+    queryFn: async () => {
+      const res = await fetch(`/api/portal/admin/approvals/${approvalId}/identity-docs`, { credentials: "include" });
+      if (!res.ok) throw new Error("Gagal memuat dokumen");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const docs = data?.docs ?? [];
+
+  if (isLoading) return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+      <RefreshCw className="h-3 w-3 animate-spin" /> Memuat dokumen…
+    </div>
+  );
+
+  if (error) return (
+    <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-md px-3 py-2">
+      <AlertCircle className="h-3.5 w-3.5 shrink-0" /> Gagal memuat daftar dokumen
+    </div>
+  );
+
+  if (docs.length === 0) return (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/20 rounded-lg p-3">
+      <FolderOpen className="h-4 w-4 shrink-0" />
+      Belum ada dokumen yang diupload
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      {docs.map((doc, i) => (
+        <div key={doc.id ?? i} className="rounded-lg border bg-muted/10 overflow-hidden">
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 py-2 bg-muted/20 border-b">
+            <div className="flex items-center gap-2">
+              <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs font-semibold">{docTypeLabel(doc.docType)}</span>
+              {doc.source === "vendor_profile" && (
+                <Badge className="text-[10px] bg-blue-100 text-blue-700 border-blue-200 h-4 px-1.5">dari profil vendor</Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              <a
+                href={doc.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline px-2 py-0.5 rounded hover:bg-blue-50"
+              >
+                <Eye className="h-3 w-3" /> Lihat
+              </a>
+              <a
+                href={doc.url}
+                download={doc.fileName ?? undefined}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-0.5 rounded hover:bg-muted/40"
+              >
+                <Download className="h-3 w-3" /> Unduh
+              </a>
+            </div>
+          </div>
+
+          {/* Preview (images only) */}
+          {isImageUrl(doc.url) && (
+            <div className="p-2">
+              <img
+                src={doc.url}
+                alt={docTypeLabel(doc.docType)}
+                className="w-full max-h-48 object-contain rounded"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            </div>
+          )}
+
+          {/* File name */}
+          {doc.fileName && (
+            <div className="px-3 py-1.5 text-[11px] text-muted-foreground font-mono truncate border-t">
+              {doc.fileName}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Audit Trail Panel ────────────────────────────────────────────────────────
+
+function AuditTrailPanel({ approvalId }: { approvalId: number }) {
+  const { data, isLoading } = useQuery<{ ok: boolean; data: AuditEntry[]; count: number }>({
+    queryKey: ["approval-audit", approvalId],
+    queryFn: async () => {
+      const res = await fetch(`/api/portal/admin/approvals/${approvalId}/audit`, { credentials: "include" });
+      if (!res.ok) throw new Error("Gagal memuat riwayat");
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const entries = data?.data ?? [];
+
+  return (
+    <div>
+      <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+        <History className="h-4 w-4" /> Riwayat Keputusan
+      </h4>
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+          <RefreshCw className="h-3 w-3 animate-spin" /> Memuat riwayat…
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="text-xs text-muted-foreground italic bg-muted/20 rounded-lg px-3 py-2">
+          Belum ada riwayat keputusan yang tercatat.
+        </div>
+      ) : (
+        <div className="relative pl-4 space-y-3">
+          {/* Timeline vertical line */}
+          <div className="absolute left-[7px] top-2 bottom-2 w-px bg-slate-200" />
+
+          {entries.map((entry, i) => {
+            const isApproved = entry.action === "portal_onboarding_approved";
+            const nd = (entry.newData ?? {}) as Record<string, unknown>;
+            const reviewer = (nd["reviewedBy"] as string | null) ?? entry.userEmail ?? "Admin";
+            const note = nd["adminNote"] as string | null;
+
+            return (
+              <div key={entry.id ?? i} className="relative flex gap-3">
+                {/* Timeline dot */}
+                <div className={`absolute -left-4 mt-1 w-3.5 h-3.5 rounded-full border-2 border-white shrink-0 ${
+                  isApproved ? "bg-green-500" : "bg-red-500"
+                }`} />
+
+                <div className={`flex-1 rounded-lg border p-3 text-sm space-y-1 ${
+                  isApproved
+                    ? "bg-green-50 border-green-200"
+                    : "bg-red-50 border-red-200"
+                }`}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 font-semibold">
+                      {isApproved
+                        ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
+                        : <XCircle className="h-3.5 w-3.5 text-red-600 shrink-0" />}
+                      <span className={isApproved ? "text-green-700" : "text-red-700"}>
+                        {isApproved ? "Disetujui" : "Ditolak"}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-muted-foreground tabular-nums">{fmt(entry.createdAt)}</span>
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    Direview oleh:{" "}
+                    <span className="font-medium text-foreground">{reviewer}</span>
+                  </div>
+
+                  {note && (
+                    <div className="text-xs text-muted-foreground">
+                      Catatan:{" "}
+                      <span className="font-medium text-foreground">{note}</span>
+                    </div>
+                  )}
+
+                  {entry.ipAddress && entry.ipAddress !== "unknown" && (
+                    <div className="text-[10px] text-muted-foreground/60 font-mono">
+                      IP: {entry.ipAddress}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Detail Dialog ─────────────────────────────────────────────────────────────
 
 function DetailDialog({
@@ -179,7 +716,8 @@ function DetailDialog({
   const [reviewedBy, setReviewedBy] = useState("");
   const [confirmAction, setConfirmAction] = useState<"approve" | "reject" | null>(null);
 
-  const up = item.userProfile;
+  const up  = item.userProfile;
+  const vp  = item.accountType === "vendor" ? (item.typeProfile as VendorProfile | null) : null;
   const isPending = item.status === "pending";
 
   return (
@@ -255,6 +793,14 @@ function DetailDialog({
             </div>
           )}
 
+          {/* Dokumen Identitas */}
+          <div>
+            <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <FileText className="h-4 w-4" /> Dokumen yang Diupload
+            </h4>
+            <IdentityDocsPanel approvalId={item.id} />
+          </div>
+
           {/* Type-specific */}
           <div>
             <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
@@ -267,6 +813,16 @@ function DetailDialog({
               <TypeProfileDetail accountType={item.accountType} profile={item.typeProfile} />
             </div>
           </div>
+
+          {/* Vendor Bridge Status (for approved vendors that have been linked) */}
+          {item.accountType === "vendor" && item.status === "approved" && vp && (
+            <div>
+              <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                <Link2 className="h-4 w-4" /> Marketplace Bridge
+              </h4>
+              <VendorBridgePanel vp={vp} />
+            </div>
+          )}
 
           {/* Review result (if already reviewed) */}
           {!isPending && (
@@ -282,6 +838,10 @@ function DetailDialog({
             </div>
           )}
 
+          {/* Audit Trail */}
+          <Separator />
+          <AuditTrailPanel approvalId={item.id} />
+
           {/* Action form (only pending) */}
           {isPending && (
             <>
@@ -295,16 +855,13 @@ function DetailDialog({
                   </p>
                   <p className="text-sm text-muted-foreground">
                     {confirmAction === "approve"
-                      ? `Akun ${accountTypeLabel(item.accountType)} untuk ${up?.fullName ?? item.customerName} akan diaktifkan.`
+                      ? item.accountType === "vendor"
+                        ? `Akun vendor ${up?.fullName ?? item.customerName} akan disetujui. Sistem akan otomatis membuat Supplier record dan link submission katalog, lalu mengirim notifikasi WhatsApp.`
+                        : `Akun ${accountTypeLabel(item.accountType)} untuk ${up?.fullName ?? item.customerName} akan diaktifkan.`
                       : `Permohonan akun ${accountTypeLabel(item.accountType)} untuk ${up?.fullName ?? item.customerName} akan ditolak.`}
                   </p>
                   <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setConfirmAction(null)}
-                      disabled={isActing}
-                    >
+                    <Button size="sm" variant="outline" onClick={() => setConfirmAction(null)} disabled={isActing}>
                       Batal
                     </Button>
                     <Button
@@ -316,13 +873,21 @@ function DetailDialog({
                       }}
                       disabled={isActing}
                     >
-                      {isActing ? "Memproses..." : (confirmAction === "approve" ? "Ya, Setujui" : "Ya, Tolak")}
+                      {isActing
+                        ? (item.accountType === "vendor" && confirmAction === "approve" ? "Membuat supplier & link…" : "Memproses...")
+                        : (confirmAction === "approve" ? "Ya, Setujui" : "Ya, Tolak")}
                     </Button>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-3">
                   <h4 className="text-sm font-semibold">Review & Keputusan</h4>
+                  {item.accountType === "vendor" && (
+                    <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-md p-2.5">
+                      <Package className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      Menyetujui vendor akan otomatis membuat Supplier record, generate link submission katalog, dan mengirim notifikasi WhatsApp ke vendor.
+                    </div>
+                  )}
                   <div>
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Catatan Admin (opsional)</label>
                     <Textarea
@@ -383,6 +948,7 @@ export default function PortalOnboardingApprovalsPage() {
   const [statusFilter, setStatusFilter] = useState("pending");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedItem, setSelectedItem] = useState<ApprovalItem | null>(null);
+  const [vendorLifecycleResult, setVendorLifecycleResult] = useState<{ result: VendorLifecycleResult; vendorName: string } | null>(null);
 
   const params = new URLSearchParams();
   if (statusFilter !== "all") params.set("status", statusFilter);
@@ -391,7 +957,7 @@ export default function PortalOnboardingApprovalsPage() {
   const { data = [], isLoading, refetch } = useQuery<ApprovalItem[]>({
     queryKey: ["portal-onboarding-approvals", statusFilter, typeFilter],
     queryFn: async () => {
-      const res = await fetch(`/api/portal/admin/approvals?${params}`);
+      const res = await fetch(`/api/portal/admin/approvals?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
@@ -401,7 +967,7 @@ export default function PortalOnboardingApprovalsPage() {
   const { data: stats = { pending: 0, approved: 0, rejected: 0, total: 0 } } = useQuery<Stats>({
     queryKey: ["portal-onboarding-approvals-stats"],
     queryFn: async () => {
-      const res = await fetch("/api/portal/admin/approvals/stats");
+      const res = await fetch("/api/portal/admin/approvals/stats", { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
@@ -417,15 +983,29 @@ export default function PortalOnboardingApprovalsPage() {
     mutationFn: async ({ id, status, adminNote, reviewedBy }: { id: number; status: string; adminNote: string; reviewedBy: string }) => {
       const res = await fetch(`/api/portal/admin/approvals/${id}`, {
         method: "PATCH",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, adminNote: adminNote || undefined, reviewedBy: reviewedBy || "Admin" }),
       });
       if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      return res.json() as Promise<VendorLifecycleResult>;
     },
-    onSuccess: (_, vars) => {
-      toast({ title: vars.status === "approved" ? "✅ Akun disetujui" : "❌ Permohonan ditolak" });
+    onSuccess: (data, vars) => {
       invalidate();
+      if (vars.status === "approved") {
+        toast({ title: "✅ Akun disetujui" });
+        // Show vendor lifecycle result dialog if this was a vendor approval
+        if (data.createdSupplierId != null) {
+          const item = selectedItem;
+          const vendorName = data.createdSupplierName
+            ?? (item?.typeProfile as VendorProfile | null)?.companyName
+            ?? item?.customerName
+            ?? "Vendor";
+          setVendorLifecycleResult({ result: data, vendorName });
+        }
+      } else {
+        toast({ title: "❌ Permohonan ditolak" });
+      }
       setSelectedItem(null);
     },
     onError: (e) => toast({ title: "Gagal memproses", description: String((e as Error).message), variant: "destructive" }),
@@ -433,7 +1013,11 @@ export default function PortalOnboardingApprovalsPage() {
 
   return (
     <AppShell>
+      <BackButton />
       <div className="space-y-6 p-6">
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => window.history.back()}>
+          <ArrowLeft className="h-4 w-4 mr-1" />Kembali
+        </Button>
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -553,6 +1137,7 @@ export default function PortalOnboardingApprovalsPage() {
                       <TableHead>Email</TableHead>
                       <TableHead>Tipe Akun</TableHead>
                       <TableHead>Perusahaan / Kendaraan</TableHead>
+                      <TableHead>Supplier Bridge</TableHead>
                       <TableHead>Tanggal Daftar</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
@@ -561,8 +1146,9 @@ export default function PortalOnboardingApprovalsPage() {
                   <TableBody>
                     {data.map((item) => {
                       const up = item.userProfile;
+                      const vp = item.accountType === "vendor" ? (item.typeProfile as VendorProfile | null) : null;
                       const extraInfo =
-                        item.accountType === "vendor" ? (item.typeProfile as VendorProfile)?.companyName :
+                        item.accountType === "vendor" ? vp?.companyName :
                         item.accountType === "driver" ? (item.typeProfile as DriverProfile)?.plateNumber :
                         item.accountType === "employee" ? (item.typeProfile as EmployeeProfile)?.companyName :
                         null;
@@ -580,6 +1166,24 @@ export default function PortalOnboardingApprovalsPage() {
                           <TableCell>{accountTypeBadge(item.accountType)}</TableCell>
                           <TableCell>
                             <div className="text-sm text-muted-foreground">{extraInfo ?? "—"}</div>
+                          </TableCell>
+                          <TableCell>
+                            {item.accountType === "vendor" && vp ? (
+                              vp.supplierId ? (
+                                <div className="flex items-center gap-1 text-xs text-blue-700">
+                                  <ShieldCheck className="h-3.5 w-3.5 text-blue-500" />
+                                  #{vp.supplierId}
+                                </div>
+                              ) : item.status === "approved" ? (
+                                <span className="text-xs text-yellow-600 flex items-center gap-1">
+                                  <ShieldAlert className="h-3.5 w-3.5" /> Belum sync
+                                </span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                           <TableCell>
                             <div className="text-sm">{fmt(item.createdAt)}</div>
@@ -617,6 +1221,15 @@ export default function PortalOnboardingApprovalsPage() {
           onApprove={(id, note, by) => actMutation.mutate({ id, status: "approved", adminNote: note, reviewedBy: by })}
           onReject={(id, note, by) => actMutation.mutate({ id, status: "rejected", adminNote: note, reviewedBy: by })}
           isActing={actMutation.isPending}
+        />
+      )}
+
+      {/* Vendor Lifecycle Result Dialog */}
+      {vendorLifecycleResult && (
+        <VendorLifecycleResultDialog
+          result={vendorLifecycleResult.result}
+          vendorName={vendorLifecycleResult.vendorName}
+          onClose={() => setVendorLifecycleResult(null)}
         />
       )}
     </AppShell>

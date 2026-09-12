@@ -1,6 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -550,9 +549,6 @@ export function FreightScanDialog({ open, onOpenChange, onApply }: Props) {
     }
     return () => stopCamera();
   }, [open, stopCamera]);
-
-  const isScanningOrIdle =
-    scanState.kind === "idle" || scanState.kind === "scanning";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

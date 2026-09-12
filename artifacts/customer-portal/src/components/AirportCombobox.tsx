@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { searchAirports, type Airport } from "@/lib/airports-data";
 import { PlaneTakeoff } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type Props = {
   value: string;
@@ -10,7 +11,9 @@ type Props = {
   className?: string;
 };
 
-export function AirportCombobox({ value, onChange, placeholder = "Kode IATA atau Kota", className }: Props) {
+export function AirportCombobox({ value, onChange, placeholder, className }: Props) {
+  const { t } = useLanguage();
+  const resolvedPlaceholder = placeholder ?? t("combobox.airport", "Kode IATA atau Kota");
   const [query, setQuery] = useState(value || "");
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<Airport[]>([]);
@@ -55,7 +58,7 @@ export function AirportCombobox({ value, onChange, placeholder = "Kode IATA atau
         value={query}
         onChange={handleInputChange}
         onFocus={() => setOpen(true)}
-        placeholder={placeholder}
+        placeholder={resolvedPlaceholder}
         className="mt-1 uppercase font-mono tracking-wider"
         autoComplete="off"
       />

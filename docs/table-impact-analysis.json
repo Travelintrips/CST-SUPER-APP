@@ -1,0 +1,2595 @@
+{
+  "generated_at": "2026-06-23T08:16:27.538Z",
+  "generator": "scripts/pre-delete-impact-analysis.mjs",
+  "summary": {
+    "total": 77,
+    "by_risk": {
+      "SAFE": 48,
+      "LOW": 13,
+      "HIGH": 11,
+      "CRITICAL": 2,
+      "MEDIUM": 3
+    },
+    "rename_safe": 61,
+    "blocked": 16
+  },
+  "tables": [
+    {
+      "table_name": "ai_tasks",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"ai_tasks\" RENAME TO \"zz_deleted_ai_tasks\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_ai_tasks\" RENAME TO \"ai_tasks\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "attendance_records",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"attendance_records\" RENAME TO \"zz_deleted_attendance_records\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_attendance_records\" RENAME TO \"attendance_records\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "bank_account_balances",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"bank_account_balances\" RENAME TO \"zz_deleted_bank_account_balances\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_bank_account_balances\" RENAME TO \"bank_account_balances\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "bank_closing_periods",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"bank_closing_periods\" RENAME TO \"zz_deleted_bank_closing_periods\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_bank_closing_periods\" RENAME TO \"bank_closing_periods\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "bank_coa_rules",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"bank_coa_rules\" RENAME TO \"zz_deleted_bank_coa_rules\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_bank_coa_rules\" RENAME TO \"bank_coa_rules\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "bank_recon_audit_logs",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"bank_recon_audit_logs\" RENAME TO \"zz_deleted_bank_recon_audit_logs\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_bank_recon_audit_logs\" RENAME TO \"bank_recon_audit_logs\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "banners",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"banners\" RENAME TO \"zz_deleted_banners\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_banners\" RENAME TO \"banners\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "blast_session_logs",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"blast_session_logs\" RENAME TO \"zz_deleted_blast_session_logs\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_blast_session_logs\" RENAME TO \"blast_session_logs\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "cashier_shifts",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"cashier_shifts\" RENAME TO \"zz_deleted_cashier_shifts\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_cashier_shifts\" RENAME TO \"cashier_shifts\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "cms_blocks",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"cms_blocks\" RENAME TO \"zz_deleted_cms_blocks\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_cms_blocks\" RENAME TO \"cms_blocks\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "cms_media",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"cms_media\" RENAME TO \"zz_deleted_cms_media\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_cms_media\" RENAME TO \"cms_media\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "cms_pages",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"cms_pages\" RENAME TO \"zz_deleted_cms_pages\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_cms_pages\" RENAME TO \"cms_pages\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "cms_settings",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"cms_settings\" RENAME TO \"zz_deleted_cms_settings\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_cms_settings\" RENAME TO \"cms_settings\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "company_settings",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"company_settings\" RENAME TO \"zz_deleted_company_settings\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_company_settings\" RENAME TO \"company_settings\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "customer_contexts",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"customer_contexts\" RENAME TO \"zz_deleted_customer_contexts\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_customer_contexts\" RENAME TO \"customer_contexts\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "data_template_fields",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"data_template_fields\" RENAME TO \"zz_deleted_data_template_fields\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_data_template_fields\" RENAME TO \"data_template_fields\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "data_templates",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"data_templates\" RENAME TO \"zz_deleted_data_templates\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_data_templates\" RENAME TO \"data_templates\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "dispatcher_logs",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"dispatcher_logs\" RENAME TO \"zz_deleted_dispatcher_logs\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_dispatcher_logs\" RENAME TO \"dispatcher_logs\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "document_audits",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"document_audits\" RENAME TO \"zz_deleted_document_audits\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_document_audits\" RENAME TO \"document_audits\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "document_template_fields",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"document_template_fields\" RENAME TO \"zz_deleted_document_template_fields\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_document_template_fields\" RENAME TO \"document_template_fields\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "document_templates",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"document_templates\" RENAME TO \"zz_deleted_document_templates\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_document_templates\" RENAME TO \"document_templates\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "draft_agreements_wa_log",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"draft_agreements_wa_log\" RENAME TO \"zz_deleted_draft_agreements_wa_log\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_draft_agreements_wa_log\" RENAME TO \"draft_agreements_wa_log\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "employee_kasbon",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 1,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "pre-delete-impact-analysis.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel kasbon karyawan tidak ditemukan di kode manapun. 1 row data. Kemungkinan tabel ad-hoc.",
+        "special_notes": [
+          "Tidak ada referensi di artifacts/, lib/, atau packages/",
+          "1 row data — perlu backup sebelum rename",
+          "Tidak ada FK masuk maupun keluar"
+        ]
+      },
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"employee_kasbon\" RENAME TO \"zz_deleted_employee_kasbon\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_employee_kasbon\" RENAME TO \"employee_kasbon\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "employees",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 15,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "pre-delete-impact-analysis.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel HR yang tidak ditemukan referensinya di kode TypeScript/React manapun. 15 rows data. Kemungkinan dibuat untuk modul HR yang tidak jadi diimplementasikan.",
+        "special_notes": [
+          "Tidak ada referensi di artifacts/, lib/, atau packages/",
+          "15 rows data — perlu backup sebelum rename",
+          "Tidak ada FK masuk maupun keluar",
+          "Kandidat ARCHIVE via rename setelah backup data"
+        ]
+      },
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"employees\" RENAME TO \"zz_deleted_employees\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_employees\" RENAME TO \"employees\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "finance_payment_events",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 11,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"finance_payment_events\" RENAME TO \"zz_deleted_finance_payment_events\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_finance_payment_events\" RENAME TO \"finance_payment_events\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "fleet_accounting_journals",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (2 file)",
+        "Drizzle Schema (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/fleetIntelligence.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/fleetIntelligence.ts"
+        ],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "fleet_expenses",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "fleet_ledger_entries",
+      "audit_status": "ARCHIVE",
+      "row_count": 17,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (2 file)",
+        "API Lib (3 file)",
+        "Migration (4 file)",
+        "DB Views (v_ledger_balance_view, v_ledger_journal_view)",
+        "DB Functions (fn_sync_entry_line_to_ledger)",
+        "DB Triggers (trg_fleet_ledger_immutable, trg_fleet_ledger_immutable, trg_ledger_period_lock)"
+      ],
+      "last_used_module": "ledger.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/ledger.ts",
+          "artifacts/api-server/src/routes/reconciliation.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/src/lib/accounting.ts",
+          "artifacts/api-server/src/lib/financialClosingMigration.ts",
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0010_financial_core_stabilization.sql",
+          "lib/db/drizzle/0011_fleet_ingestion_reliability.sql",
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [
+          "v_ledger_balance_view",
+          "v_ledger_journal_view"
+        ],
+        "db_funcs": [
+          "fn_sync_entry_line_to_ledger"
+        ],
+        "db_triggers": [
+          "trg_fleet_ledger_immutable",
+          "trg_fleet_ledger_immutable",
+          "trg_ledger_period_lock"
+        ]
+      },
+      "deep_trace": {
+        "summary": "Tabel ledger yang digunakan oleh financialClosingMigration.ts dan ledger.ts. Berisi 17 rows historis. Nama berbeda dari ledger_entries (tabel accounting pusat).",
+        "special_notes": [
+          "financialClosingMigration.ts: CREATE TABLE fleet_ledger_entries + ALTER TABLE",
+          "ledger.ts: JOIN query melibatkan fleet_ledger_entries",
+          "accounting.ts: referensi untuk posting jurnal fleet",
+          "reconciliation.ts: dipakai di reconciliation report fleet",
+          "17 rows data historis — harus dimigrasi ke accounting_entries sebelum rename"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer; DB View aktif: v_ledger_balance_view, v_ledger_journal_view; DB Trigger aktif: trg_fleet_ledger_immutable, trg_fleet_ledger_immutable, trg_ledger_period_lock; Deep trace: financialClosingMigration.ts: CREATE TABLE fleet_ledger_entries + ALTER TABLE"
+    },
+    {
+      "table_name": "fleet_outstanding_import_log",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "fleet_partners",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 3,
+      "fk_references_out": 0,
+      "risk": "CRITICAL",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (2 file)",
+        "Drizzle Schema (1 file)",
+        "Scheduler/Worker (1 file)",
+        "Migration (2 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/fleetIntelligence.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/fleetIntelligence.ts"
+        ],
+        "scheduler": [
+          "artifacts/api-server/src/lib/fleetNotificationWorker.ts"
+        ],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "AKTIF digunakan di fleetIntelligence.ts. Inline migration CREATE TABLE dan route CRUD (GET/POST/PUT). FK masuk dari fleet_vehicles, fleet_reports, fleet_drivers (ON DELETE SET NULL).",
+        "special_notes": [
+          "fleetIntelligence.ts L118: CREATE TABLE IF NOT EXISTS fleet_partners — inline migration masih aktif",
+          "fleetIntelligence.ts L652: SELECT * FROM fleet_partners — query aktif",
+          "fleetIntelligence.ts L668: INSERT INTO fleet_partners — CRUD aktif",
+          "fleet_vehicles, fleet_reports, fleet_drivers memiliki FK ke fleet_partners (ON DELETE SET NULL)",
+          "fleetNotificationWorker.ts referensi fleet_partners melalui join"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk CRITICAL — tabel masih aktif digunakan; Deep trace: fleetIntelligence.ts L118: CREATE TABLE IF NOT EXISTS fleet_partners — inline migration masih aktif"
+    },
+    {
+      "table_name": "fleet_pipeline_health",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0011_fleet_ingestion_reliability.sql",
+          "lib/db/drizzle/0012_fix_fleet_v7_schema.sql",
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "fleet_reconciliation_reports",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0011_fleet_ingestion_reliability.sql",
+          "lib/db/drizzle/0012_fix_fleet_v7_schema.sql",
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "fleet_vehicles",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 2,
+      "fk_references_out": 2,
+      "risk": "CRITICAL",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (2 file)",
+        "Drizzle Schema (1 file)",
+        "Migration (2 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/fleetIntelligence.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/fleetIntelligence.ts"
+        ],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "AKTIF digunakan di fleetIntelligence.ts. Inline migration + query gabungan dengan gojek_raw_transactions. FK masuk dari fleet_transactions (vehicle_id).",
+        "special_notes": [
+          "fleetIntelligence.ts L133: CREATE TABLE IF NOT EXISTS fleet_vehicles — inline migration aktif",
+          "fleetIntelligence.ts L2255: SELECT gabungan fleet_vehicles + gojek_raw_transactions",
+          "fleetIntelligence.ts L2279,2301,2319,2339: INSERT INTO fleet_vehicles aktif",
+          "fleet_transactions memiliki FK ke fleet_vehicles (ON DELETE SET NULL)"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk CRITICAL — tabel masih aktif digunakan; Deep trace: fleetIntelligence.ts L133: CREATE TABLE IF NOT EXISTS fleet_vehicles — inline migration aktif"
+    },
+    {
+      "table_name": "fleet_wa_logs",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (2 file)",
+        "Drizzle Schema (1 file)",
+        "Scheduler/Worker (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/fleetIntelligence.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/fleetIntelligence.ts"
+        ],
+        "scheduler": [
+          "artifacts/api-server/src/lib/fleetNotificationWorker.ts"
+        ],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "follow_up_logs",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"follow_up_logs\" RENAME TO \"zz_deleted_follow_up_logs\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_follow_up_logs\" RENAME TO \"follow_up_logs\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "gym_memberships",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"gym_memberships\" RENAME TO \"zz_deleted_gym_memberships\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_gym_memberships\" RENAME TO \"gym_memberships\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "intent_master",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"intent_master\" RENAME TO \"zz_deleted_intent_master\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_intent_master\" RENAME TO \"intent_master\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "keyword_rules",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"keyword_rules\" RENAME TO \"zz_deleted_keyword_rules\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_keyword_rules\" RENAME TO \"keyword_rules\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "leave_requests",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"leave_requests\" RENAME TO \"zz_deleted_leave_requests\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_leave_requests\" RENAME TO \"leave_requests\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "operational_checklists",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"operational_checklists\" RENAME TO \"zz_deleted_operational_checklists\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_operational_checklists\" RENAME TO \"operational_checklists\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "operational_expenses",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"operational_expenses\" RENAME TO \"zz_deleted_operational_expenses\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_operational_expenses\" RENAME TO \"operational_expenses\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "order_asuransi",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 19,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"order_asuransi\" RENAME TO \"zz_deleted_order_asuransi\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_order_asuransi\" RENAME TO \"order_asuransi\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "otp_tokens",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"otp_tokens\" RENAME TO \"zz_deleted_otp_tokens\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_otp_tokens\" RENAME TO \"otp_tokens\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "page_products",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 2,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"page_products\" RENAME TO \"zz_deleted_page_products\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_page_products\" RENAME TO \"page_products\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "payment_receipts",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 11,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "LOW",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"payment_receipts\" RENAME TO \"zz_deleted_payment_receipts\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_payment_receipts\" RENAME TO \"payment_receipts\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "promo_registrations",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"promo_registrations\" RENAME TO \"zz_deleted_promo_registrations\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_promo_registrations\" RENAME TO \"promo_registrations\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "public_tokens",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"public_tokens\" RENAME TO \"zz_deleted_public_tokens\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_public_tokens\" RENAME TO \"public_tokens\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "registration_link_wa_log",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"registration_link_wa_log\" RENAME TO \"zz_deleted_registration_link_wa_log\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_registration_link_wa_log\" RENAME TO \"registration_link_wa_log\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sc_admin_notes",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sc_admin_notes\" RENAME TO \"zz_deleted_sc_admin_notes\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sc_admin_notes\" RENAME TO \"sc_admin_notes\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sc_blocked_schedules",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sc_blocked_schedules\" RENAME TO \"zz_deleted_sc_blocked_schedules\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sc_blocked_schedules\" RENAME TO \"sc_blocked_schedules\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sc_facility_images",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sc_facility_images\" RENAME TO \"zz_deleted_sc_facility_images\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sc_facility_images\" RENAME TO \"sc_facility_images\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sc_payments",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (2 file)",
+        "API Lib (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "routes.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/modules/sport-center/routes.ts",
+          "artifacts/api-server/src/modules/sport-center/supabaseSync.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "sc_promos",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sc_promos\" RENAME TO \"zz_deleted_sc_promos\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sc_promos\" RENAME TO \"sc_promos\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sc_settings",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sc_settings\" RENAME TO \"zz_deleted_sc_settings\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sc_settings\" RENAME TO \"sc_settings\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "service_catalog",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"service_catalog\" RENAME TO \"zz_deleted_service_catalog\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_service_catalog\" RENAME TO \"service_catalog\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "service_circuit_states",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"service_circuit_states\" RENAME TO \"zz_deleted_service_circuit_states\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_service_circuit_states\" RENAME TO \"service_circuit_states\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "service_registry",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"service_registry\" RENAME TO \"zz_deleted_service_registry\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_service_registry\" RENAME TO \"service_registry\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "shipment_events",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [
+        "Migration (2 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy logistik. Tidak ada referensi kode aktif. 0 rows.",
+        "special_notes": [
+          "Tidak ditemukan di kode manapun selain mungkin schema creation",
+          "0 rows — aman untuk rename"
+        ]
+      },
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"shipment_events\" RENAME TO \"zz_deleted_shipment_events\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_shipment_events\" RENAME TO \"shipment_events\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "shipment_stages",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "MEDIUM",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (4 file)",
+        "Drizzle Schema (2 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "freight.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/freight.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/src/lib/contextOrchestrator.ts",
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/shipmentStages.d.ts",
+          "lib/db/dist/schema/index.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/index.ts",
+          "lib/db/src/schema/shipmentStages.ts"
+        ],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0000_init_supabase.sql",
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy logistics. Drizzle schema masih ada. contextOrchestrator.ts L474 masih query tabel ini dalam AI context builder.",
+        "special_notes": [
+          "lib/db/src/schema/shipmentStages.ts: pgTable('shipment_stages') — masih dalam schema",
+          "lib/db/src/schema/index.ts L20: export * from './shipmentStages' — masih di-export",
+          "contextOrchestrator.ts L474: FROM shipment_stages — QUERY AKTIF di AI context",
+          "0 rows — tapi query aktif di contextOrchestrator berarti rename akan error saat AI context dijalankan",
+          "PERLU: update contextOrchestrator.ts sebelum rename"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk MEDIUM — masih ada referensi di schema/migration/AI; Deep trace: lib/db/src/schema/shipmentStages.ts: pgTable('shipment_stages') — masih dalam schema"
+    },
+    {
+      "table_name": "shipment_trackings",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [
+        "Migration (2 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy logistik. Tidak ada referensi kode aktif. 0 rows.",
+        "special_notes": [
+          "Tidak ditemukan di kode manapun",
+          "0 rows — aman untuk rename"
+        ]
+      },
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"shipment_trackings\" RENAME TO \"zz_deleted_shipment_trackings\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_shipment_trackings\" RENAME TO \"shipment_trackings\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "shipments",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Frontend (19 file)",
+        "API Routes (8 file)",
+        "API Lib (13 file)",
+        "Drizzle Schema (3 file)",
+        "Migration (7 file)"
+      ],
+      "last_used_module": "customerQuoteFlow.ts",
+      "refs_by_layer": {
+        "frontend": [
+          "artifacts/bizportal/src/hooks/useAlertWebSocket.ts",
+          "artifacts/bizportal/src/lib/translations.ts",
+          "artifacts/bizportal/src/pages/ai-scan-settings.tsx",
+          "artifacts/bizportal/src/pages/dashboard.tsx",
+          "artifacts/bizportal/src/pages/email-inbox.tsx",
+          "artifacts/bizportal/src/pages/expense/editor.tsx",
+          "artifacts/bizportal/src/pages/expense/index.tsx",
+          "artifacts/bizportal/src/pages/logistics-freight-detail.tsx",
+          "artifacts/bizportal/src/pages/logistics-freight-editor.tsx",
+          "artifacts/bizportal/src/pages/logistics-freight.tsx",
+          "artifacts/bizportal/src/pages/logistics-portal-order-detail.tsx",
+          "artifacts/bizportal/src/pages/logistics-rfq-step14-16.tsx",
+          "artifacts/bizportal/src/pages/logistics.tsx",
+          "artifacts/bizportal/src/pages/logistics/shipments.tsx",
+          "artifacts/bizportal/src/pages/sales/quotation-editor.tsx",
+          "artifacts/bizportal/src/routes.tsx",
+          "artifacts/customer-portal/src/i18n/translations.ts",
+          "artifacts/customer-portal/src/pages/home.tsx",
+          "artifacts/customer-portal/src/pages/shipment-timeline.tsx"
+        ],
+        "api_routes": [
+          "artifacts/api-server/src/routes/customerQuoteFlow.ts",
+          "artifacts/api-server/src/routes/dashboard.ts",
+          "artifacts/api-server/src/routes/freight.ts",
+          "artifacts/api-server/src/routes/logistics.ts",
+          "artifacts/api-server/src/routes/portal.ts",
+          "artifacts/api-server/src/routes/settings.ts",
+          "artifacts/api-server/src/routes/index.ts",
+          "artifacts/api-server/src/routes/logisticOrders.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/src/lib/alertsBroadcast.ts",
+          "artifacts/api-server/src/lib/contextOrchestrator.ts",
+          "artifacts/api-server/src/lib/financialEventBus.ts",
+          "artifacts/api-server/src/lib/freightAccountingMigration.ts",
+          "artifacts/api-server/src/lib/freightAuditMigration.ts",
+          "artifacts/api-server/src/lib/rlsMigration.ts",
+          "artifacts/api-server/src/lib/services/logisticOrderStatusService.ts",
+          "artifacts/api-server/dist/index.mjs",
+          "lib/api-client-react/src/generated/api.ts",
+          "lib/api-zod/src/generated/api.ts",
+          "lib/db/dist/schema/shipments.d.ts",
+          "lib/db/dist/schema/freightShipments.d.ts",
+          "lib/db/dist/schema/index.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/freightShipments.ts",
+          "lib/db/src/schema/index.ts",
+          "lib/db/src/schema/shipments.ts"
+        ],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0000_init_supabase.sql",
+          "lib/db/drizzle/0001_special_squadron_supreme.sql",
+          "lib/db/migrations/next-release-drop-legacy-tables.sql",
+          "scripts/regression-phase4.mjs",
+          "scripts/regression-phase5.mjs",
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy logistics (bukan freight_shipments). Schema Drizzle masih ada di lib/db/src/schema/shipments.ts tapi komentar menyatakan sudah dinonaktifkan. Tidak ada query aktif ditemukan.",
+        "special_notes": [
+          "lib/db/src/schema/shipments.ts: masih ada definisi pgTable('shipments') tapi sudah di-mark deprecated",
+          "lib/db/src/schema/index.ts L8: export * from './shipments' — masih di-export",
+          "Tidak ada route aktif yang query tabel ini",
+          "0 rows — aman untuk rename setelah schema cleanup",
+          "PERLU: hapus dari lib/db/src/schema/index.ts sebelum rename"
+        ]
+      },
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"shipments\" RENAME TO \"zz_deleted_shipments\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_shipments\" RENAME TO \"shipments\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sport_center_bookings",
+      "audit_status": "ARCHIVE",
+      "row_count": 2,
+      "fk_references_in": 0,
+      "fk_references_out": 1,
+      "risk": "MEDIUM",
+      "referenced_by": [
+        "API Routes (3 file)",
+        "API Lib (1 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "migration.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/modules/sport-center/migration.ts",
+          "artifacts/api-server/src/modules/sport-center/routes.ts",
+          "artifacts/api-server/src/modules/sport-center/supabaseSync.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/backfill-sport-statcard.mjs",
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy sport center (versi lama). Digunakan sebagai SOURCE DATA oleh sport-center migration script untuk migrasi ke sport_bookings (tabel baru). Juga digunakan sebagai target sync dari Supabase.",
+        "special_notes": [
+          "modules/sport-center/migration.ts L323: READ dari sport_center_bookings sebagai sumber migrasi",
+          "modules/sport-center/migration.ts L341,378: SELECT FROM sport_center_bookings untuk sync data",
+          "modules/sport-center/routes.ts L4749: INSERT INTO sport_center_bookings — masih menulis ke tabel ini saat sync",
+          "2 rows data — perlu diverifikasi sudah termigrasikan ke sport_bookings sebelum rename",
+          "PERLU: pastikan data sudah ter-sync ke sport_bookings sebelum rename"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk MEDIUM — masih ada referensi di schema/migration/AI; Deep trace: modules/sport-center/migration.ts L323: READ dari sport_center_bookings sebagai sumber migrasi"
+    },
+    {
+      "table_name": "sport_center_expenses",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [
+        "Migration (1 file)"
+      ],
+      "last_used_module": "audit-unused-supabase-tables.mjs",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"sport_center_expenses\" RENAME TO \"zz_deleted_sport_center_expenses\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_sport_center_expenses\" RENAME TO \"sport_center_expenses\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "sport_center_facilities",
+      "audit_status": "ARCHIVE",
+      "row_count": 2,
+      "fk_references_in": 1,
+      "fk_references_out": 0,
+      "risk": "MEDIUM",
+      "referenced_by": [
+        "API Routes (2 file)",
+        "API Lib (1 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "routes.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/modules/sport-center/routes.ts",
+          "artifacts/api-server/src/modules/sport-center/supabaseSync.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/backfill-sport-statcard.mjs",
+          "scripts/audit-unused-supabase-tables.mjs",
+          "scripts/pre-delete-impact-analysis.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": {
+        "summary": "Tabel legacy sport center. Digunakan di routes.ts sebagai sumber data Supabase. FK masuk (1 referensi).",
+        "special_notes": [
+          "modules/sport-center/routes.ts L4716: SELECT FROM sport_center_facilities — query aktif ke Supabase",
+          "1 FK masuk — perlu diselidiki constraint apa",
+          "2 rows data",
+          "PERLU: migrasi query ke sport_facilities sebelum rename"
+        ]
+      },
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk MEDIUM — masih ada referensi di schema/migration/AI; Deep trace: modules/sport-center/routes.ts L4716: SELECT FROM sport_center_facilities — query aktif ke Supabase"
+    },
+    {
+      "table_name": "sport_center_memberships",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (1 file)"
+      ],
+      "last_used_module": "routes.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/modules/sport-center/routes.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "system_settings",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 1,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"system_settings\" RENAME TO \"zz_deleted_system_settings\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_system_settings\" RENAME TO \"system_settings\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "task_assignments",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"task_assignments\" RENAME TO \"zz_deleted_task_assignments\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_task_assignments\" RENAME TO \"task_assignments\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "task_attachments",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"task_attachments\" RENAME TO \"zz_deleted_task_attachments\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_task_attachments\" RENAME TO \"task_attachments\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "task_comments",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"task_comments\" RENAME TO \"zz_deleted_task_comments\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_task_comments\" RENAME TO \"task_comments\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "task_timeline",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"task_timeline\" RENAME TO \"zz_deleted_task_timeline\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_task_timeline\" RENAME TO \"task_timeline\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "team_members",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"team_members\" RENAME TO \"zz_deleted_team_members\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_team_members\" RENAME TO \"team_members\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "transaction_datetime_normalized",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 3,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Routes (1 file)",
+        "API Lib (1 file)",
+        "Migration (3 file)"
+      ],
+      "last_used_module": "fleetIntelligence.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [
+          "artifacts/api-server/src/routes/fleetIntelligence.ts"
+        ],
+        "api_lib": [
+          "artifacts/api-server/dist/index.mjs"
+        ],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/drizzle/0011_fleet_ingestion_reliability.sql",
+          "lib/db/drizzle/0012_fix_fleet_v7_schema.sql",
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    },
+    {
+      "table_name": "user_site_access",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"user_site_access\" RENAME TO \"zz_deleted_user_site_access\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_user_site_access\" RENAME TO \"user_site_access\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "wa_send_logs",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 12,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "LOW",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"wa_send_logs\" RENAME TO \"zz_deleted_wa_send_logs\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_wa_send_logs\" RENAME TO \"wa_send_logs\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "whatsapp_messages",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"whatsapp_messages\" RENAME TO \"zz_deleted_whatsapp_messages\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_whatsapp_messages\" RENAME TO \"whatsapp_messages\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "whatsapp_notifications",
+      "audit_status": "DELETE_CANDIDATE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "SAFE",
+      "referenced_by": [],
+      "last_used_module": "(tidak ditemukan di kode)",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [],
+        "schema": [],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": true,
+      "rename_sql": "ALTER TABLE \"whatsapp_notifications\" RENAME TO \"zz_deleted_whatsapp_notifications\";",
+      "rollback_sql": "ALTER TABLE \"zz_deleted_whatsapp_notifications\" RENAME TO \"whatsapp_notifications\";",
+      "block_reason": null
+    },
+    {
+      "table_name": "workflow_events",
+      "audit_status": "ARCHIVE",
+      "row_count": 0,
+      "fk_references_in": 0,
+      "fk_references_out": 0,
+      "risk": "HIGH",
+      "referenced_by": [
+        "API Lib (4 file)",
+        "Drizzle Schema (2 file)",
+        "Migration (2 file)"
+      ],
+      "last_used_module": "phase1Migration.ts",
+      "refs_by_layer": {
+        "frontend": [],
+        "api_routes": [],
+        "api_lib": [
+          "artifacts/api-server/src/lib/phase1Migration.ts",
+          "artifacts/api-server/dist/index.mjs",
+          "lib/db/dist/schema/workflowEvents.d.ts",
+          "lib/db/dist/schema/index.d.ts"
+        ],
+        "schema": [
+          "lib/db/src/schema/index.ts",
+          "lib/db/src/schema/workflowEvents.ts"
+        ],
+        "scheduler": [],
+        "ai": [],
+        "export": [],
+        "migrations": [
+          "lib/db/migrations/next-release-drop-legacy-tables.sql",
+          "scripts/audit-unused-supabase-tables.mjs"
+        ],
+        "db_views": [],
+        "db_funcs": [],
+        "db_triggers": []
+      },
+      "deep_trace": null,
+      "rename_safe": false,
+      "rename_sql": null,
+      "rollback_sql": null,
+      "block_reason": "Risk HIGH — masih ada referensi di API layer"
+    }
+  ]
+}

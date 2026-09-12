@@ -5,6 +5,19 @@ import { salesDocumentsTable } from "./salesDocuments";
 import { purchaseDocumentsTable } from "./purchaseDocuments";
 import { companiesTable } from "./companies";
 
+// ─── Unified Logistics — service category enum ───────────────────────────────
+// Ditambahkan 2026-06-11 sebagai bagian dari Unified Shipment Core.
+// Semua shipment dari modul apapun (air, ocean, trucking, ppjk) dapat mengisi
+// service_category agar bisa difilter & dilaporkan secara terpadu.
+export const freightServiceCategoryEnum = pgEnum("freight_service_category", [
+  "FF_UDARA",           // Air Freight Forwarding
+  "FF_LAUT",            // Sea/Ocean Freight Forwarding
+  "PPJK",               // Customs Clearance (Pengusaha Pengurusan Jasa Kepabeanan)
+  "TRUCKING",           // Darat / Trucking
+  "MULTIMODAL",         // Kombinasi lebih dari satu moda
+  "GENERAL_FORWARDING", // Forwarding umum / belum dikategorikan
+]);
+
 export const freightShipmentStatusEnum = pgEnum("freight_shipment_status", [
   "draft", "rfq_sent", "confirmed", "in_transit", "completed", "cancelled",
 ]);
@@ -46,12 +59,24 @@ export const freightShipmentsTable = pgTable("freight_shipments", {
   transportMode: text("transport_mode"),
   cargoType: text("cargo_type"),
   containerNo: text("container_no"),
+  freightCost: numeric("freight_cost", { precision: 14, scale: 2 }).default("0"),
   salesDocId: integer("sales_doc_id").references(() => salesDocumentsTable.id, { onDelete: "set null" }),
   purchaseDocId: integer("purchase_doc_id").references(() => purchaseDocumentsTable.id, { onDelete: "set null" }),
   approvedVendorName: text("approved_vendor_name"),
   createdById: text("created_by_id"),
   companyId: integer("company_id").references(() => companiesTable.id, { onDelete: "set null" }),
+  // ── Unified Shipment Core (ditambahkan 2026-06-11) ──────────────────────────
+  // Semua kolom nullable agar data lama tidak rusak.
+  serviceCategory: freightServiceCategoryEnum("service_category"),
+  sourceModule: text("source_module"),       // 'air_freight'|'ocean_freight'|'logistic_order'|'freight'|'manual'
+  sourceOrderId: integer("source_order_id"), // ID dari tabel sumber (nullable, tanpa FK constraint agar lintas tabel)
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // ── FASE 10: Accounting Linkage (ditambahkan 2026-06-11) ────────────────────
+  estimatedRevenue: numeric("estimated_revenue", { precision: 14, scale: 2 }),
+  estimatedCost:    numeric("estimated_cost",    { precision: 14, scale: 2 }),
+  actualRevenue:    numeric("actual_revenue",    { precision: 14, scale: 2 }),
+  invoiceStatus:    text("invoice_status").notNull().default("none"),     // 'none'|'to_invoice'|'invoiced'
+  vendorBillStatus: text("vendor_bill_status").notNull().default("none"), // 'none'|'to_bill'|'billed'
 });
 
 export const freightRfqsTable = pgTable("freight_rfqs", {
@@ -87,3 +112,4 @@ export const insertFreightQuoteSchema = createInsertSchema(freightQuotesTable).o
 export type FreightShipment = typeof freightShipmentsTable.$inferSelect;
 export type FreightRfq = typeof freightRfqsTable.$inferSelect;
 export type FreightQuote = typeof freightQuotesTable.$inferSelect;
+export type FreightServiceCategory = typeof freightServiceCategoryEnum.enumValues[number];

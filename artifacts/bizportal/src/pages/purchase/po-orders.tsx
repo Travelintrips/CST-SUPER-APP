@@ -26,8 +26,10 @@ import {
   BookOpen,
   ChevronRight,
   AlertCircle,
+  SquareArrowOutUpRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ArrowLeft } from "lucide-react";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -257,11 +259,18 @@ function PODetailPanel({ id }: { id: number }) {
           <div className="text-sm text-slate-400">{data.supplierName}</div>
           {data.notes && <div className="text-xs text-slate-500 mt-1 max-w-lg truncate">{data.notes}</div>}
         </div>
-        <Link href={`/purchase/orders/${data.id}`}>
-          <Button size="sm" variant="outline" className="border-slate-600 text-slate-300 hover:text-white flex-shrink-0">
-            <ExternalLink className="w-3.5 h-3.5 mr-1" /> Buka
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Link href={`/accounting/payments?refDocNumber=${encodeURIComponent(data.docNumber)}`}>
+            <Button size="sm" variant="ghost" className="border-slate-700 text-slate-400 hover:text-slate-200 gap-1.5">
+              <SquareArrowOutUpRight className="w-3.5 h-3.5" /> Lihat Pembayaran
+            </Button>
+          </Link>
+          <Link href={`/purchase/orders/${data.id}`}>
+            <Button size="sm" variant="outline" className="border-slate-600 text-slate-300 hover:text-white">
+              <ExternalLink className="w-3.5 h-3.5 mr-1" /> Buka
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="px-5 py-3 border-b border-slate-700/60 grid grid-cols-2 sm:grid-cols-4 gap-3 flex-shrink-0 bg-slate-800/30">
@@ -520,7 +529,7 @@ function PODetailPanel({ id }: { id: number }) {
 }
 
 export default function POOrdersPage() {
-  const { companyId } = useCompany();
+  const { activeCompanyId: companyId } = useCompany();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<POStatus>("all");
   const [receiveFilter, setReceiveFilter] = useState<ReceiveFilter>("all");
@@ -528,9 +537,8 @@ export default function POOrdersPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const { data: docs = [], isLoading } = useListPurchaseDocuments({
-    companyId: String(companyId),
     kind: "order",
-  });
+  } as any);
 
   const filtered = useMemo(() => {
     return docs.filter((d) => {
@@ -575,6 +583,8 @@ export default function POOrdersPage() {
         <div className="w-[380px] flex-shrink-0 border-r border-slate-700 flex flex-col bg-slate-900 overflow-hidden">
           <div className="p-4 border-b border-slate-700/60 flex-shrink-0">
             <div className="flex items-center justify-between mb-3">
+              <Link href="/purchase"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
               <h1 className="font-semibold text-white text-base">Purchase Orders</h1>
               <Link href="/purchase/orders/new">
                 <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white h-7 text-xs px-3">

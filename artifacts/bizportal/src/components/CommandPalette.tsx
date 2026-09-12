@@ -15,16 +15,17 @@ import {
 } from "@/components/ui/command";
 import {
   LayoutDashboard, Package, Truck, Calculator, Settings, Building2,
-  Users, TrendingUp, ShoppingBag, FileText, Receipt, ClipboardList,
+  TrendingUp, ShoppingBag, FileText, Receipt, ClipboardList,
   UserCircle, BookOpen, Wallet, FileSpreadsheet, Landmark, Mail,
-  Ship, Boxes, DollarSign, Tags, BarChart2,
+  Ship, Boxes, Tags, BarChart2,
   GitMerge, Bot, ScanLine, MessageCircle, Layers, ImageIcon,
-  Warehouse, LayoutGrid, PackageSearch, ArrowLeftRight, ClipboardCheck,
-  Activity, FlaskConical, GitBranch, RotateCcw, AlertTriangle,
-  PackageCheck, FileBarChart2, ShieldCheck, Shield, Calendar,
-  CalendarDays, Dumbbell, Network, Clock, X, Pin, PinOff,
+  PackageSearch, ClipboardCheck,
+  FlaskConical, RotateCcw,
+  PackageCheck, ShieldCheck, Shield,
+  Network, Clock, X, Pin, PinOff,
   type LucideIcon,
 } from "lucide-react";
+import { usePinnedPages } from "@/hooks/usePinnedPages";
 
 interface CommandEntry {
   title: string;
@@ -33,23 +34,14 @@ interface CommandEntry {
   group: string;
 }
 
-const COMMANDS: CommandEntry[] = [
+export const COMMANDS: CommandEntry[] = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, group: "Utama" },
-  { title: "POS Kasir", href: "/pos-kasir", icon: Calculator, group: "Utama" },
+
   { title: "Settings", href: "/settings", icon: Settings, group: "Utama" },
 
   { title: "Produk / Bahan Baku", href: "/products/items", icon: PackageSearch, group: "Produk & Recipe" },
   { title: "Recipe / BOM", href: "/products/recipes", icon: FlaskConical, group: "Produk & Recipe" },
 
-  { title: "Gudang", href: "/pos-inventory/warehouses", icon: Warehouse, group: "Inventory" },
-  { title: "Rak", href: "/pos-inventory/racks", icon: LayoutGrid, group: "Inventory" },
-  { title: "Stok", href: "/pos-inventory/stocks", icon: Boxes, group: "Inventory" },
-  { title: "Transfer Stok", href: "/pos-inventory/transfers", icon: ArrowLeftRight, group: "Inventory" },
-  { title: "Retur Barang", href: "/pos-inventory/returns", icon: RotateCcw, group: "Inventory" },
-  { title: "Barang Rusak / Hilang", href: "/pos-inventory/losses", icon: AlertTriangle, group: "Inventory" },
-  { title: "Stock Opname", href: "/pos-inventory/opname", icon: ClipboardCheck, group: "Inventory" },
-  { title: "Riwayat Pergerakan Stok", href: "/pos-inventory/mutations", icon: Activity, group: "Inventory" },
-  { title: "Cabang", href: "/pos-inventory/branches", icon: GitBranch, group: "Inventory" },
 
   { title: "Sales Dashboard", href: "/sales", icon: LayoutDashboard, group: "Sales" },
   { title: "Sales Items (Master)", href: "/sales/items", icon: Boxes, group: "Sales" },
@@ -67,7 +59,7 @@ const COMMANDS: CommandEntry[] = [
   { title: "QC Inspection", href: "/purchase/qc", icon: ClipboardCheck, group: "Purchase" },
   { title: "Purchase Return", href: "/purchase/returns", icon: RotateCcw, group: "Purchase" },
   { title: "Vendor Invoice (AP)", href: "/purchase/vendor-invoices", icon: Receipt, group: "Purchase" },
-  { title: "Payment Request", href: "/purchase/payment-requests", icon: Wallet, group: "Purchase" },
+  { title: "Bank Disbursement (Bayar Invoice)", href: "/accounting/bank-disbursements?mode=vendor_invoice", icon: Wallet, group: "Purchase" },
   { title: "Landed Cost", href: "/purchase/landed-costs", icon: Calculator, group: "Purchase" },
   { title: "Vendors", href: "/purchase/vendors", icon: UserCircle, group: "Purchase" },
 
@@ -80,8 +72,11 @@ const COMMANDS: CommandEntry[] = [
   { title: "General Ledger", href: "/accounting/reports/general-ledger", icon: BookOpen, group: "Accounting" },
   { title: "Profit & Loss", href: "/accounting/reports/profit-loss", icon: TrendingUp, group: "Accounting" },
   { title: "Balance Sheet", href: "/accounting/reports/balance-sheet", icon: Wallet, group: "Accounting" },
+  { title: "Profitabilitas Freight", href: "/accounting/reports/freight-profitability", icon: Ship, group: "Accounting" },
   { title: "Rekonsiliasi", href: "/accounting/reconciliation", icon: GitMerge, group: "Accounting" },
   { title: "Accounting Settings", href: "/accounting/settings", icon: Settings, group: "Accounting" },
+  { title: "Laporan WA Harian", href: "/accounting/wa-report-settings", icon: MessageCircle, group: "Accounting" },
+  { title: "Google Sheets Sync", href: "/accounting/gsheet", icon: FileSpreadsheet, group: "Accounting" },
 
   { title: "Logistic Shipments", href: "/logistics", icon: Truck, group: "Logistics" },
   { title: "Freight Forwarding", href: "/logistics/freight", icon: Ship, group: "Logistics" },
@@ -112,34 +107,40 @@ const COMMANDS: CommandEntry[] = [
   { title: "Pengguna", href: "/users", icon: UserCircle, group: "User & Organisasi" },
   { title: "Manajemen Role", href: "/settings/roles", icon: ShieldCheck, group: "User & Organisasi" },
   { title: "Aturan Approval", href: "/settings/approval-rules", icon: ClipboardCheck, group: "User & Organisasi" },
+  { title: "Approval Matrix", href: "/settings/approval-matrix", icon: ClipboardCheck, group: "User & Organisasi" },
   { title: "Struktur Organisasi", href: "/org", icon: Network, group: "User & Organisasi" },
 
   { title: "Holding Companies", href: "/holding", icon: Building2, group: "Holding" },
   { title: "Holding Dashboard", href: "/holding/dashboard", icon: LayoutDashboard, group: "Holding" },
   { title: "Holding P&L Report", href: "/holding/pl-report", icon: TrendingUp, group: "Holding" },
 
-  { title: "Sport Center Dashboard", href: "/sport-center", icon: Dumbbell, group: "Sport Center" },
-  { title: "Sport Center Booking", href: "/sport-center/bookings", icon: Calendar, group: "Sport Center" },
-  { title: "Sport Center Jadwal", href: "/sport-center/schedule", icon: CalendarDays, group: "Sport Center" },
-  { title: "Sport Center Produk & Layanan", href: "/sport-center/services", icon: Package, group: "Sport Center" },
-  { title: "Sport Center Laporan", href: "/sport-center/reports", icon: BarChart2, group: "Sport Center" },
 
   { title: "Trading", href: "/trading", icon: Package, group: "Lainnya" },
   { title: "Katalog Terpadu", href: "/katalog-terpadu", icon: Layers, group: "Lainnya" },
   { title: "Portal Product Orders", href: "/portal-product-orders", icon: ShoppingBag, group: "Lainnya" },
 ];
 
-// ── Storage helpers ─────────────────────────────────────────────────────────
+// ── Recent pages storage ─────────────────────────────────────────────────────
 
-const RECENT_KEY = "bizportal:recent-pages";
-const PINNED_KEY = "bizportal:pinned-pages";
-const MAX_RECENT = 8;
+export const RECENT_KEY = "bizportal:recent-pages";
+export const PINNED_KEY = "bizportal:pinned-pages";
+export const RECENT_TIMES_KEY = "bizportal:recent-times";
+const MAX_RECENT = 10;
 
-function readStore(key: string): string[] {
+export function readStore(key: string): string[] {
   try { return JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { return []; }
 }
+
 function writeStore(key: string, val: string[]) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore */ }
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+function readRecent(): string[] {
+  return readStore(RECENT_KEY);
+}
+
+function writeRecent(val: string[]) {
+  writeStore(RECENT_KEY, val);
 }
 
 function pushRecent(href: string) {
@@ -147,6 +148,11 @@ function pushRecent(href: string) {
   if (!known.has(href)) return;
   const prev = readStore(RECENT_KEY).filter((h) => h !== href);
   writeStore(RECENT_KEY, [href, ...prev].slice(0, MAX_RECENT));
+  try {
+    const times: Record<string, number> = JSON.parse(localStorage.getItem(RECENT_TIMES_KEY) ?? "{}");
+    times[href] = Date.now();
+    localStorage.setItem(RECENT_TIMES_KEY, JSON.stringify(times));
+  } catch {}
 }
 
 // ── Page tracker (mount in AppShell) ────────────────────────────────────────
@@ -195,13 +201,12 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [recentHrefs, setRecentHrefs] = useState<string[]>([]);
-  const [pinnedHrefs, setPinnedHrefs] = useState<string[]>([]);
+  const { pins: pinnedHrefs, togglePin } = usePinnedPages();
 
   useEffect(() => {
     if (open) {
       setSearch("");
-      setRecentHrefs(readStore(RECENT_KEY));
-      setPinnedHrefs(readStore(PINNED_KEY));
+      setRecentHrefs(readRecent());
     }
   }, [open]);
 
@@ -210,24 +215,16 @@ export function CommandPalette({ open, onOpenChange }: Props) {
     [navigate, onOpenChange],
   );
 
-  // ── Pin / unpin ────────────────────────────────────────────────
-  const togglePin = useCallback((href: string, e: React.MouseEvent) => {
+  const handleTogglePin = useCallback((href: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setPinnedHrefs((prev) => {
-      const next = prev.includes(href)
-        ? prev.filter((h) => h !== href)
-        : [...prev, href];
-      writeStore(PINNED_KEY, next);
-      return next;
-    });
-  }, []);
+    togglePin(href);
+  }, [togglePin]);
 
-  // ── Remove from recent ─────────────────────────────────────────
   const removeRecent = useCallback((href: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setRecentHrefs((prev) => {
       const next = prev.filter((h) => h !== href);
-      writeStore(RECENT_KEY, next);
+      writeRecent(next);
       return next;
     });
   }, []);
@@ -244,9 +241,6 @@ export function CommandPalette({ open, onOpenChange }: Props) {
   const showPinned = pinnedCmds.length > 0;
   const showRecent = !isSearching && recentCmds.length > 0;
   const groups = Array.from(new Set(COMMANDS.map((c) => c.group)));
-
-  const hasPinnedSeparator = showPinned;
-  const hasRecentSeparator = showRecent;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -278,7 +272,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                       <span className="text-[10px] text-muted-foreground/50 hidden sm:block shrink-0">
                         {c.group}
                       </span>
-                      <ActionBtn onClick={(e) => togglePin(c.href, e)} label="Lepas sematan">
+                      <ActionBtn onClick={(e) => handleTogglePin(c.href, e)} label="Lepas sematan">
                         <PinOff size={11} />
                       </ActionBtn>
                     </CommandItem>
@@ -305,7 +299,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                       <span className="text-[10px] text-muted-foreground/50 hidden sm:block shrink-0 pr-1">
                         {c.group}
                       </span>
-                      <ActionBtn onClick={(e) => togglePin(c.href, e)} label="Sematkan halaman">
+                      <ActionBtn onClick={(e) => handleTogglePin(c.href, e)} label="Sematkan halaman">
                         <Pin size={11} />
                       </ActionBtn>
                       <ActionBtn onClick={(e) => removeRecent(c.href, e)} label="Hapus dari riwayat">
@@ -324,7 +318,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 {gi > 0 && <CommandSeparator />}
                 <CommandGroup heading={group}>
                   {COMMANDS.filter((c) => c.group === group).map((c) => {
-                    const isPinned = pinnedHrefs.includes(c.href);
+                    const pinned = pinnedHrefs.includes(c.href);
                     return (
                       <CommandItem
                         key={c.href}
@@ -338,10 +332,10 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                           {c.href}
                         </span>
                         <ActionBtn
-                          onClick={(e) => togglePin(c.href, e)}
-                          label={isPinned ? "Lepas sematan" : "Sematkan halaman"}
+                          onClick={(e) => handleTogglePin(c.href, e)}
+                          label={pinned ? "Lepas sematan" : "Sematkan halaman"}
                         >
-                          {isPinned
+                          {pinned
                             ? <Pin size={11} className="text-primary fill-primary/30" />
                             : <Pin size={11} />}
                         </ActionBtn>

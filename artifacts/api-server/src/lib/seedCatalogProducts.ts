@@ -89,7 +89,7 @@ export async function seedCatalogProducts(): Promise<void> {
             target: productsTable.sku,
             set: {
               name: item.name,
-              price: item.price,
+              // Tidak overwrite harga — biarkan harga yang sudah diubah manual tetap
               unit: item.unit,
               unitOptions: JSON.stringify(item.unitOptions),
               subcategory: item.subcategory,

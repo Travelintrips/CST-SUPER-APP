@@ -231,15 +231,19 @@ paths:
         - in: query
           name: isActive
           schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
       responses:
         "200":
           description: Product list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Product"
+                $ref: "#/components/schemas/PaginatedProducts"
     post:
       operationId: createProduct
       tags: [ecommerce]
@@ -555,16 +559,67 @@ paths:
     get:
       operationId: listSuppliers
       tags: [trading]
-      summary: List all suppliers
+      summary: List all suppliers (paginated)
+      parameters:
+        - in: query
+          name: filterCompanyId
+          required: false
+          schema:
+            type: string
+          description: Filter by company_id value. Use "__unassigned__" for vendors with no company assigned. Alias of `companyId`.
+        - in: query
+          name: companyId
+          required: false
+          schema:
+            type: string
+          description: Same as filterCompanyId; preferred name going forward.
+        - in: query
+          name: search
+          required: false
+          schema:
+            type: string
+          description: Free-text search across name, contact person, email, phone, and tax id.
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [all, active, inactive]
+        - in: query
+          name: sortBy
+          required: false
+          schema:
+            type: string
+            enum: [name, createdAt]
+        - in: query
+          name: sortOrder
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+          description: Max 1000, default 25.
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
       responses:
         "200":
-          description: Suppliers
+          description: Paginated suppliers
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Supplier"
+                $ref: "#/components/schemas/PaginatedSuppliers"
     post:
       operationId: createSupplier
       tags: [trading]
@@ -582,6 +637,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Supplier"
+
+  /trading/suppliers/{id}/delete-impact:
+    get:
+      operationId: getSupplierDeleteImpact
+      tags: [trading]
+      summary: Check whether a vendor can be hard-deleted or would be archived
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Delete impact assessment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: "#/components/schemas/SupplierDeleteImpact"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
 
   /trading/suppliers/{id}/catalog:
     get:
@@ -740,15 +825,20 @@ paths:
       operationId: listShipments
       tags: [logistics]
       summary: List all shipments
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
       responses:
         "200":
           description: Shipments list
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Shipment"
+                $ref: "#/components/schemas/PaginatedShipments"
     post:
       operationId: createShipment
       tags: [logistics]
@@ -1344,15 +1434,21 @@ paths:
           required: false
           schema:
             type: string
+        - in: query
+          name: page
+          required: false
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, default: 50 }
       responses:
         "200":
           description: Sales documents
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SalesDocument"
+                $ref: "#/components/schemas/PaginatedSalesDocuments"
     post:
       operationId: createSalesDocument
       tags: [sales]
@@ -2109,6 +2205,12 @@ paths:
         - in: query
           name: sourceDocId
           schema: { type: integer, nullable: true }
+        - in: query
+          name: refDocNumber
+          schema: { type: string, nullable: true }
+        - in: query
+          name: company
+          schema: { type: string, nullable: true }
       responses:
         "200":
           description: List of payments
@@ -3034,6 +3136,7 @@ paths:
               properties:
                 action: { type: string, enum: [submit, approve, reject, post, pay, reset] }
                 reason: { type: string, nullable: true }
+                paymentMethod: { type: string, nullable: true }
               required: [action]
       responses:
         "200":
@@ -3543,6 +3646,74 @@ paths:
 
 components:
   schemas:
+    Pagination:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+
+    PaginatedProducts:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Product" }
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    PaginatedSuppliers:
+      type: object
+      required: [success, data, pagination]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Supplier" }
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    SupplierDeleteImpact:
+      type: object
+      properties:
+        canHardDelete:
+          type: boolean
+        hasTransactionHistory:
+          type: boolean
+        dependencies:
+          type: object
+          properties:
+            logisticQuotes: { type: integer }
+            purchaseOrders: { type: integer }
+            fulfillments: { type: integer }
+        recommendedAction:
+          type: string
+          enum: [delete, archive]
+
+    PaginatedShipments:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Shipment" }
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    PaginatedSalesDocuments:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/SalesDocument" }
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
     HealthStatus:
       type: object
       properties:
@@ -3565,6 +3736,8 @@ components:
         firstName: { type: string, nullable: true }
         lastName: { type: string, nullable: true }
         profileImageUrl: { type: string, nullable: true }
+        role: { type: string, nullable: true }
+        companyId: { type: integer, nullable: true }
       required: [id]
 
     GetCurrentAuthUserResponse:
@@ -3716,6 +3889,24 @@ components:
           type: boolean
         createdAt:
           type: string
+        weightKg:
+          type: number
+          nullable: true
+        volumeCbm:
+          type: number
+          nullable: true
+        lengthCm:
+          type: number
+          nullable: true
+        widthCm:
+          type: number
+          nullable: true
+        heightCm:
+          type: number
+          nullable: true
+        goodsType:
+          type: string
+          nullable: true
       required: [id, name, sku, price, stock, categories, itemType, unit, isActive, createdAt]
 
     CreateProductBody:
@@ -3763,6 +3954,24 @@ components:
           nullable: true
         isActive:
           type: boolean
+        weightKg:
+          type: number
+          nullable: true
+        volumeCbm:
+          type: number
+          nullable: true
+        lengthCm:
+          type: number
+          nullable: true
+        widthCm:
+          type: number
+          nullable: true
+        heightCm:
+          type: number
+          nullable: true
+        goodsType:
+          type: string
+          nullable: true
       required: [name, sku, price, itemType, unit]
 
     LineItem:
@@ -3930,6 +4139,9 @@ components:
         contactEmail:
           type: string
           nullable: true
+        contactPerson:
+          type: string
+          nullable: true
         phone:
           type: string
           nullable: true
@@ -3965,6 +4177,18 @@ components:
           type: integer
         createdAt:
           type: string
+        companyId:
+          type: integer
+          nullable: true
+        hasInternalTruck:
+          type: boolean
+        internalTruckPrice:
+          type: number
+          nullable: true
+        assignedCompanyIds:
+          type: array
+          items:
+            type: integer
       required: [id, name, isActive, logo, sortOrder, createdAt]
 
     CreateSupplierBody:
@@ -3978,6 +4202,9 @@ components:
         contactEmail:
           type: string
           nullable: true
+        contactPerson:
+          type: string
+          nullable: true
         phone:
           type: string
           nullable: true
@@ -4011,6 +4238,12 @@ components:
           nullable: true
         sortOrder:
           type: integer
+        hasInternalTruck:
+          type: boolean
+          nullable: true
+        internalTruckPrice:
+          type: number
+          nullable: true
       required: [name]
 
     VendorCatalogItem:
@@ -4020,6 +4253,12 @@ components:
           type: integer
         vendorId:
           type: integer
+        vendorName:
+          type: string
+          nullable: true
+        masterItemId:
+          type: integer
+          nullable: true
         type:
           type: string
         name:
@@ -4030,17 +4269,90 @@ components:
         unit:
           type: string
           nullable: true
+        kategori:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
+        isCommodityTag:
+          type: boolean
+        sortOrder:
+          type: integer
+        templateKind:
+          type: string
+          nullable: true
+        categoryKey:
+          type: string
+          nullable: true
+        serviceType:
+          type: string
+          nullable: true
         priceBase:
           type: number
         markupPct:
           type: number
+        priceSell:
+          type: number
+          nullable: true
+        priceSellOverride:
+          type: number
+          nullable: true
+        profit:
+          type: number
+          nullable: true
+        currency:
+          type: string
+        stockStatus:
+          type: string
+          nullable: true
+        stockQty:
+          type: number
+          nullable: true
+        moq:
+          type: number
+          nullable: true
+        leadTime:
+          type: string
+          nullable: true
+        validityDate:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        origin:
+          type: string
+          nullable: true
+        status:
+          type: string
+        isPublished:
+          type: boolean
         isActive:
           type: boolean
-        sortOrder:
+        isFeatured:
+          type: boolean
+        featuredUntil:
+          type: string
+          nullable: true
+        viewCount:
           type: integer
+        quoteCount:
+          type: integer
+        orderCount:
+          type: integer
+        sourceSubmissionId:
+          type: integer
+          nullable: true
+        publishedAt:
+          type: string
+          nullable: true
         createdAt:
           type: string
-      required: [id, vendorId, type, name, priceBase, markupPct, isActive, sortOrder, createdAt]
+        updatedAt:
+          type: string
+          nullable: true
+      required: [id, vendorId, type, name, priceBase, markupPct, isActive, isCommodityTag, sortOrder, status, isPublished, isFeatured, viewCount, quoteCount, orderCount, currency, createdAt]
 
     CreateVendorCatalogItemBody:
       type: object
@@ -4055,15 +4367,70 @@ components:
         unit:
           type: string
           nullable: true
+        kategori:
+          type: string
+          nullable: true
+        subcategory:
+          type: string
+          nullable: true
         priceBase:
           type: number
-        markupPct:
+        priceSellOverride:
           type: number
+          nullable: true
         isActive:
+          type: boolean
+        isCommodityTag:
           type: boolean
         sortOrder:
           type: integer
-      required: [name]
+        linkMasterItemId:
+          type: integer
+          nullable: true
+        templateKind:
+          type: string
+          nullable: true
+        categoryKey:
+          type: string
+          nullable: true
+        serviceType:
+          type: string
+          nullable: true
+        currency:
+          type: string
+        stockStatus:
+          type: string
+          nullable: true
+        stockQty:
+          type: number
+          nullable: true
+        moq:
+          type: number
+          nullable: true
+        leadTime:
+          type: string
+          nullable: true
+        validityDate:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        origin:
+          type: string
+          nullable: true
+        status:
+          type: string
+        isPublished:
+          type: boolean
+        isFeatured:
+          type: boolean
+        featuredUntil:
+          type: string
+          nullable: true
+        sourceSubmissionId:
+          type: integer
+          nullable: true
 
     Shipment:
       type: object
@@ -4773,6 +5140,8 @@ components:
       type: object
       properties:
         id: { type: integer }
+        companyId: { type: integer, nullable: true }
+        companyCode: { type: string, nullable: true }
         code: { type: string }
         name: { type: string }
         type:
@@ -4781,7 +5150,7 @@ components:
         parentId: { type: integer, nullable: true }
         isActive: { type: boolean }
         createdAt: { type: string }
-      required: [id, code, name, type, isActive, createdAt]
+      required: [id, companyId, companyCode, code, name, type, isActive, createdAt]
 
     CreateAccountBody:
       type: object
@@ -5024,11 +5393,13 @@ components:
         purchaseExpenseAccountId: { type: integer, nullable: true }
         defaultBankAccountId: { type: integer, nullable: true }
         defaultCashAccountId: { type: integer, nullable: true }
+        qrisAccountId: { type: integer, nullable: true }
         ppnOutputAccountId: { type: integer, nullable: true }
         ppnInputAccountId: { type: integer, nullable: true }
         salesJournalId: { type: integer, nullable: true }
         purchaseJournalId: { type: integer, nullable: true }
         bankJournalId: { type: integer, nullable: true }
+        qrisJournalId: { type: integer, nullable: true }
         cashJournalId: { type: integer, nullable: true }
         defaultSalesTaxId: { type: integer, nullable: true }
         defaultPurchaseTaxId: { type: integer, nullable: true }
@@ -5050,11 +5421,13 @@ components:
         purchaseExpenseAccountId: { type: integer, nullable: true }
         defaultBankAccountId: { type: integer, nullable: true }
         defaultCashAccountId: { type: integer, nullable: true }
+        qrisAccountId: { type: integer, nullable: true }
         ppnOutputAccountId: { type: integer, nullable: true }
         ppnInputAccountId: { type: integer, nullable: true }
         salesJournalId: { type: integer, nullable: true }
         purchaseJournalId: { type: integer, nullable: true }
         bankJournalId: { type: integer, nullable: true }
+        qrisJournalId: { type: integer, nullable: true }
         cashJournalId: { type: integer, nullable: true }
         defaultSalesTaxId: { type: integer, nullable: true }
         defaultPurchaseTaxId: { type: integer, nullable: true }
@@ -5069,13 +5442,15 @@ components:
       type: object
       properties:
         accountId: { type: integer }
+        companyId: { type: integer, nullable: true }
+        companyCode: { type: string, nullable: true }
         code: { type: string }
         name: { type: string }
         type: { type: string }
         debit: { type: number }
         credit: { type: number }
         balance: { type: number }
-      required: [accountId, code, name, type, debit, credit, balance]
+      required: [accountId, companyId, companyCode, code, name, type, debit, credit, balance]
 
     TrialBalanceReport:
       type: object
@@ -5143,22 +5518,33 @@ components:
         revenues:
           type: array
           items: { $ref: "#/components/schemas/PnlRow" }
+        cogs:
+          type: array
+          items: { $ref: "#/components/schemas/PnlRow" }
+        operatingExpenses:
+          type: array
+          items: { $ref: "#/components/schemas/PnlRow" }
         expenses:
           type: array
           items: { $ref: "#/components/schemas/PnlRow" }
         totalRevenue: { type: number }
+        totalCogs: { type: number }
+        totalOperatingExpense: { type: number }
         totalExpense: { type: number }
+        grossProfit: { type: number }
         netIncome: { type: number }
-      required: [revenues, expenses, totalRevenue, totalExpense, netIncome]
+      required: [revenues, cogs, operatingExpenses, expenses, totalRevenue, totalCogs, totalOperatingExpense, totalExpense, grossProfit, netIncome]
 
     BalanceSheetRow:
       type: object
       properties:
         accountId: { type: integer }
+        companyId: { type: integer, nullable: true }
+        companyCode: { type: string, nullable: true }
         code: { type: string }
         name: { type: string }
         amount: { type: number }
-      required: [accountId, code, name, amount]
+      required: [accountId, companyId, companyCode, code, name, amount]
 
     BalanceSheetReport:
       type: object
@@ -5326,6 +5712,11 @@ components:
         totalExpenses: { type: string, nullable: true }
         createdById: { type: string, nullable: true }
         createdAt: { type: string }
+        estimatedRevenue: { type: string, nullable: true }
+        estimatedCost: { type: string, nullable: true }
+        actualRevenue: { type: string, nullable: true }
+        invoiceStatus: { type: string, nullable: true }
+        vendorBillStatus: { type: string, nullable: true }
       required: [id, shipmentNumber, shipperName, consigneeName, commodity, origin, destination, status, createdAt]
 
     FreightShipmentProfitability:
@@ -5336,6 +5727,10 @@ components:
         profit: { type: number }
         margin: { type: number, nullable: true }
         invoiceStatus: { type: string }
+        vendorBillStatus: { type: string, nullable: true }
+        estimatedRevenue: { type: number, nullable: true }
+        estimatedCost: { type: number, nullable: true }
+        actualRevenue: { type: number, nullable: true }
       required: [revenue, totalCost, profit, invoiceStatus]
 
     FreightAttachment:
@@ -5552,10 +5947,15 @@ components:
         expenseNumber: { type: string }
         date: { type: string }
         vendorEmployee: { type: string, nullable: true }
-        expenseType: { type: string, enum: [vendor_bill, reimbursement, internal] }
+        expenseType: { type: string, enum: [vendor_bill, reimbursement, internal, routine, kasbon, talangan, fixed_asset] }
         salesDocId: { type: integer, nullable: true }
         shipmentId: { type: integer, nullable: true }
         categoryId: { type: integer, nullable: true }
+        categoryName: { type: string, nullable: true }
+        sourceAccountId: { type: integer, nullable: true }
+        sourceAccountName: { type: string, nullable: true }
+        vendorId: { type: integer, nullable: true }
+        vendorName: { type: string, nullable: true }
         description: { type: string, nullable: true }
         qty: { type: number }
         unit: { type: string, nullable: true }
@@ -5565,7 +5965,7 @@ components:
         taxAmount: { type: number }
         total: { type: number }
         currency: { type: string }
-        status: { type: string, enum: [draft, submitted, approved, posted, paid, rejected] }
+        status: { type: string, enum: [draft, submitted, approved, pending_approval, posted, paid, rejected] }
         notes: { type: string, nullable: true }
         entryId: { type: integer, nullable: true }
         expenseAccountId: { type: integer, nullable: true }
@@ -5605,7 +6005,8 @@ components:
       properties:
         date: { type: string }
         vendorEmployee: { type: string, nullable: true }
-        expenseType: { type: string, enum: [vendor_bill, reimbursement, internal] }
+        vendorId: { type: integer, nullable: true }
+        expenseType: { type: string, enum: [vendor_bill, reimbursement, internal, routine, kasbon, talangan, fixed_asset] }
         salesDocId: { type: integer, nullable: true }
         shipmentId: { type: integer, nullable: true }
         categoryId: { type: integer, nullable: true }
@@ -5618,6 +6019,7 @@ components:
         notes: { type: string, nullable: true }
         expenseAccountId: { type: integer, nullable: true }
         payableAccountId: { type: integer, nullable: true }
+        sourceAccountId: { type: integer, nullable: true }
       required: [date]
 
     CreateExpenseAttachmentBody:
@@ -5872,7 +6274,8 @@ components:
         finalSellingPrice: { type: number, nullable: true }
         quotationSentAt: { type: string, nullable: true }
         createdAt: { type: string }
-      required: [id, orderNumber, companyName, customerName, email, phone, shipmentType, origin, destination, source, subtotal, tax, grandTotal, status, createdAt]
+        updatedAt: { type: string }
+      required: [id, orderNumber, companyName, customerName, email, phone, shipmentType, origin, destination, source, subtotal, tax, grandTotal, status, createdAt, updatedAt]
 
     LogisticOrderItem:
       type: object
@@ -5886,6 +6289,13 @@ components:
         calculationResult: {}
         subtotal: { type: number }
         createdAt: { type: string }
+        itemSource: { type: string, nullable: true }
+        serviceType: { type: string, nullable: true }
+        priceSnapshot: { type: object, nullable: true, additionalProperties: true }
+        vendorCatalogItemId: { type: integer, nullable: true }
+        vendorId: { type: integer, nullable: true }
+        calculationInput: { type: object, nullable: true, additionalProperties: true }
+        templateSnapshot: { type: object, nullable: true, additionalProperties: true }
       required: [id, orderId, category, serviceName, calculatorType, inputData, calculationResult, subtotal, createdAt]
 
     LogisticOrderDetail:
@@ -5916,6 +6326,7 @@ components:
         customerName: { type: string }
         email: { type: string }
         phone: { type: string }
+        orderType: { type: string, nullable: true }
         shipmentType: { type: string }
         origin: { type: string }
         destination: { type: string }
@@ -5928,6 +6339,7 @@ components:
         notes: { type: string, nullable: true }
         paymentType: { type: string, nullable: true }
         paymentMethod: { type: string, nullable: true }
+        senderName: { type: string, nullable: true }
         namaPenerima: { type: string, nullable: true }
         nomorPenerima: { type: string, nullable: true }
         jamOrder: { type: string, nullable: true }
@@ -5943,6 +6355,7 @@ components:
       type: object
       properties:
         status: { type: string }
+        clientUpdatedAt: { type: string }
       required: [status]
 
     LogisticOrderSummary:

@@ -6,7 +6,9 @@
     "emitDeclarationOnly": true,
     "outDir": "dist",
     "rootDir": "src",
-    "lib": ["dom", "es2022"]
+    "lib": ["dom", "es2022"],
+    "typeRoots": ["../../node_modules/@types", "node_modules/@types"],
+    "types": ["react"]
   },
   "include": ["src"]
 }

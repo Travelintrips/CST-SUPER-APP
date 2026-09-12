@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./schema/accounting": "./src/schema/accounting.ts",
+    "./schema/coaProposals": "./src/schema/coaProposals.ts"
   },
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",

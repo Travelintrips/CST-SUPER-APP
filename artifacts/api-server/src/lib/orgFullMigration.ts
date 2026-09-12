@@ -17,15 +17,15 @@ async function insertIfNotExists(
   uniqueVal: string | number,
   insertSql: string,
 ): Promise<number> {
+  const safeVal = String(uniqueVal).replace(/'/g, "''");
   const existing = await db.execute(
-    sql.raw(`SELECT id FROM ${table} WHERE ${uniqueCol} = $1 LIMIT 1`),
-    [uniqueVal],
+    sql.raw(`SELECT id FROM ${table} WHERE ${uniqueCol} = '${safeVal}' LIMIT 1`),
   );
-  if ((existing.rows[0] as SeededRow | undefined)?.id) {
-    return (existing.rows[0] as SeededRow).id;
+  if ((existing.rows[0] as unknown as SeededRow | undefined)?.id) {
+    return (existing.rows[0] as unknown as SeededRow).id;
   }
   const inserted = await db.execute(sql.raw(insertSql));
-  return (inserted.rows[0] as SeededRow).id;
+  return (inserted.rows[0] as unknown as SeededRow).id;
 }
 
 export async function runOrgFullMigration(): Promise<void> {
@@ -136,7 +136,7 @@ export async function runOrgFullMigration(): Promise<void> {
       const existing = await db.execute(
         sql`SELECT id FROM branches WHERE company_id = ${b.company_id} AND code = ${b.code} LIMIT 1`,
       );
-      if (!(existing.rows[0] as SeededRow | undefined)?.id) {
+      if (!(existing.rows[0] as unknown as SeededRow | undefined)?.id) {
         await db.execute(sql`
           INSERT INTO branches (company_id, name, code, address)
           VALUES (${b.company_id}, ${b.name}, ${b.code}, ${b.address})
@@ -171,15 +171,15 @@ export async function runOrgFullMigration(): Promise<void> {
         sql`SELECT id FROM divisions WHERE company_id = ${d.company_id} AND code = ${d.code} LIMIT 1`,
       );
       let divId: number;
-      if ((existing.rows[0] as SeededRow | undefined)?.id) {
-        divId = (existing.rows[0] as SeededRow).id;
+      if ((existing.rows[0] as unknown as SeededRow | undefined)?.id) {
+        divId = (existing.rows[0] as unknown as SeededRow).id;
       } else {
         const ins = await db.execute(sql`
           INSERT INTO divisions (company_id, name, code, description)
           VALUES (${d.company_id}, ${d.name}, ${d.code}, ${d.desc})
           RETURNING id
         `);
-        divId = (ins.rows[0] as SeededRow).id;
+        divId = (ins.rows[0] as unknown as SeededRow).id;
       }
       divisionIdMap[d.code] = divId;
     }
@@ -224,15 +224,15 @@ export async function runOrgFullMigration(): Promise<void> {
         sql`SELECT id FROM departments WHERE company_id = ${d.company_id} AND code = ${d.code} LIMIT 1`,
       );
       let deptId: number;
-      if ((existing.rows[0] as SeededRow | undefined)?.id) {
-        deptId = (existing.rows[0] as SeededRow).id;
+      if ((existing.rows[0] as unknown as SeededRow | undefined)?.id) {
+        deptId = (existing.rows[0] as unknown as SeededRow).id;
       } else {
         const ins = await db.execute(sql`
           INSERT INTO departments (company_id, division_id, name, code)
           VALUES (${d.company_id}, ${divId}, ${d.name}, ${d.code})
           RETURNING id
         `);
-        deptId = (ins.rows[0] as SeededRow).id;
+        deptId = (ins.rows[0] as unknown as SeededRow).id;
       }
       deptIdMap[d.code] = deptId;
     }
@@ -253,7 +253,7 @@ export async function runOrgFullMigration(): Promise<void> {
       const existing = await db.execute(
         sql`SELECT id FROM sections WHERE company_id = ${s.company_id} AND code = ${s.code} LIMIT 1`,
       );
-      if (!(existing.rows[0] as SeededRow | undefined)?.id) {
+      if (!(existing.rows[0] as unknown as SeededRow | undefined)?.id) {
         await db.execute(sql`
           INSERT INTO sections (company_id, department_id, name, code)
           VALUES (${s.company_id}, ${deptId}, ${s.name}, ${s.code})
@@ -267,7 +267,14 @@ export async function runOrgFullMigration(): Promise<void> {
     await db.execute(sql`UPDATE divisions   SET is_active = TRUE WHERE is_active = FALSE OR is_active IS NULL`);
     await db.execute(sql`UPDATE departments SET is_active = TRUE WHERE is_active = FALSE OR is_active IS NULL`);
     await db.execute(sql`UPDATE sections    SET is_active = TRUE WHERE is_active = FALSE OR is_active IS NULL`);
-    await db.execute(sql`UPDATE suppliers   SET is_active = TRUE WHERE is_active = FALSE OR is_active IS NULL`);
+    // suppliers has CHECK constraint: is_active = (status = 'active').
+    // Blanket SET TRUE violates it for archived rows (status='archived', is_active=false).
+    // Derive is_active from status instead. IS DISTINCT FROM is NULL-safe.
+    await db.execute(sql`
+      UPDATE suppliers
+      SET is_active = (status = 'active')
+      WHERE is_active IS DISTINCT FROM (status = 'active')
+    `);
 
     logger.info("Org full migration: selesai (sections, users FK columns, branches, divisions, departments, sections seeded)");
   } catch (err) {

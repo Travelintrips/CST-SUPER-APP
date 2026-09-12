@@ -18,12 +18,14 @@ export interface Company {
 // Must not clash with any real company id (positive integers starting from 1).
 export const CONSOLIDATED_ID = 0;
 
-export type CompanyScope = number | typeof CONSOLIDATED_ID;
+export type CompanyScope = number | typeof CONSOLIDATED_ID | null;
 
 interface CompanyContextValue {
   companies: Company[];
   activeCompany: Company | null;
   activeCompanyId: CompanyScope;
+  /** Alias for activeCompanyId — same value */
+  selectedCompanyId: CompanyScope;
   isConsolidated: boolean;
   setActiveCompany: (company: Company) => void;
   setConsolidated: () => void;
@@ -37,30 +39,31 @@ interface CompanyContextValue {
 const CompanyContext = createContext<CompanyContextValue>({
   companies: [],
   activeCompany: null,
-  activeCompanyId: 1,
+  activeCompanyId: null,
+  selectedCompanyId: null,
   isConsolidated: false,
   setActiveCompany: () => {},
   setConsolidated: () => {},
   setConsolidatedMode: () => {},
   isLoading: false,
   refetch: () => {},
-  companyQueryParam: "companyId=1",
+  companyQueryParam: "",
 });
 
 const STORAGE_KEY = "biz_active_company_id";
 const CONSOLIDATED_STORAGE_VALUE = "all";
 
 export function CompanyProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useSupabaseAuth();
+  const { isAuthenticated, isApiAvailable } = useSupabaseAuth();
   const [companies, setCompanies] = useState<Company[]>([]);
 
   const [activeCompanyId, setActiveCompanyIdState] = useState<CompanyScope>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored === CONSOLIDATED_STORAGE_VALUE) return CONSOLIDATED_ID;
-      return stored ? Number(stored) : 1;
+      return stored ? Number(stored) : null;
     } catch {
-      return 1;
+      return null;
     }
   });
 
@@ -68,6 +71,8 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
   const fetchedRef = useRef(false);
 
   const fetchCompanies = useCallback(async () => {
+    if (!isApiAvailable) return;
+
     try {
       const res = await fetch("/api/companies", { credentials: "include" });
       if (!res.ok) return;
@@ -78,7 +83,7 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
           try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
         })();
         if (storedRaw === CONSOLIDATED_STORAGE_VALUE) return;
-        const storedId = storedRaw ? Number(storedRaw) : 1;
+        const storedId = storedRaw ? Number(storedRaw) : null;
         if (!data.find((c) => c.id === storedId)) {
           setActiveCompanyIdState(data[0].id);
         }
@@ -88,20 +93,20 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [activeCompanyId]);
+  }, [activeCompanyId, isApiAvailable]);
 
   useEffect(() => {
     if (isAuthenticated) { fetchedRef.current = false; }
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (isAuthenticated && !fetchedRef.current) {
+    if (isAuthenticated && isApiAvailable && !fetchedRef.current) {
       fetchedRef.current = true;
       void fetchCompanies();
     } else if (!isAuthenticated) {
       setIsLoading(false);
     }
-  }, [isAuthenticated, fetchCompanies]);
+  }, [isAuthenticated, isApiAvailable, fetchCompanies]);
 
   const setActiveCompany = useCallback((company: Company) => {
     setActiveCompanyIdState(company.id);
@@ -124,7 +129,11 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     ? CONSOLIDATED_ID
     : (activeCompany?.id ?? activeCompanyId);
 
-  const companyQueryParam = isConsolidated ? "companyId=all" : `companyId=${resolvedId}`;
+  const companyQueryParam = isConsolidated
+    ? "companyId=all"
+    : resolvedId != null
+      ? `companyId=${resolvedId}`
+      : "";
 
   return (
     <CompanyContext.Provider
@@ -132,6 +141,7 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
         companies,
         activeCompany,
         activeCompanyId: resolvedId,
+        selectedCompanyId: resolvedId,
         isConsolidated,
         setActiveCompany,
         setConsolidated,

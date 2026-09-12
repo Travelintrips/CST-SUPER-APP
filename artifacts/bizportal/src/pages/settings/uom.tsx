@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, Pencil, ArrowLeftRight } from "lucide-react";
+import { PageHeader } from "@/components/layout/PageHeader";
 
 interface UomRow {
   id: number;
@@ -186,10 +187,12 @@ export default function UomPage() {
   return (
     <AppShell>
       <div className="p-6 space-y-6 max-w-5xl mx-auto">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Manajemen UOM (Satuan)</h1>
-          <Button onClick={openAddUom}><Plus className="mr-2 h-4 w-4" /> Tambah UOM</Button>
-        </div>
+        <PageHeader
+          title="Manajemen UOM (Satuan)"
+          breadcrumb={[{ label: "Settings", href: "/settings" }, { label: "UOM" }]}
+          favoriteEnabled
+          actions={<Button onClick={openAddUom}><Plus className="mr-2 h-4 w-4" /> Tambah UOM</Button>}
+        />
 
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Memuat...</p>

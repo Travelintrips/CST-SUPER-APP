@@ -11,12 +11,13 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { ClipboardList, Plus, RefreshCw, CheckCircle, Clock, AlertTriangle, Edit } from "lucide-react";
+import { ArrowLeft, ClipboardList, Plus, RefreshCw, CheckCircle, Clock, AlertTriangle, Edit } from "lucide-react";
 import { useCompany } from "@/contexts/CompanyContext";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { Link } from "wouter";
 
-const DEPARTMENTS = ["Sales", "Operations", "Warehouse", "Customs", "Finance", "Customer Service", "Management"];
+const DEPARTMENTS_FALLBACK = ["Sales", "Operations", "Warehouse", "Customs", "Finance", "Customer Service", "Management"];
 const TASK_TYPES = ["follow_up", "document_check", "approval", "coordination", "pickup_arrange", "delivery_confirm", "invoice", "payment_follow", "complaint", "other"];
 const PRIORITIES = ["low", "normal", "high", "urgent"];
 const STATUSES = ["open", "in_progress", "completed", "cancelled"];
@@ -62,7 +63,7 @@ function isOverdue(deadline: string | null, status: string) {
 export default function InternalTasksPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { selectedCompany } = useCompany();
+  const { activeCompany: selectedCompany } = useCompany();
   const companyId = selectedCompany?.id;
 
   const [filterStatus, setFilterStatus] = useState("all");
@@ -79,6 +80,19 @@ export default function InternalTasksPage() {
     deadline: "",
     priority: "normal",
   });
+
+  const { data: orgDepts = [] } = useQuery<{ name: string }[]>({
+    queryKey: ["org-departments"],
+    queryFn: async () => {
+      const r = await fetch("/api/org/departments", { credentials: "include" });
+      if (!r.ok) return [];
+      return r.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const deptNames: string[] = orgDepts.length > 0
+    ? orgDepts.map(d => d.name)
+    : DEPARTMENTS_FALLBACK;
 
   const { data: tasks = [], isLoading, refetch } = useQuery({
     queryKey: ["internal-tasks", filterStatus, filterDept, companyId],
@@ -125,6 +139,8 @@ export default function InternalTasksPage() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
+            <Link href="/logistics"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <ClipboardList className="h-6 w-6 text-primary" />
               Internal Tasks
@@ -174,7 +190,7 @@ export default function InternalTasksPage() {
             <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Semua Dept</SelectItem>
-              {DEPARTMENTS.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              {deptNames.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -288,7 +304,7 @@ export default function InternalTasksPage() {
                   <Select value={form.department} onValueChange={v => setForm(f => ({ ...f, department: v }))}>
                     <SelectTrigger><SelectValue placeholder="Pilih dept..." /></SelectTrigger>
                     <SelectContent>
-                      {DEPARTMENTS.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                      {deptNames.map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>

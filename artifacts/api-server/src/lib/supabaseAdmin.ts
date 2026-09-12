@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-
-const isDev = process.env.NODE_ENV !== "production";
+import { createRequire as _cr } from "module";
+const _ws = (() => { try { return _cr(import.meta.url)("ws"); } catch { return globalThis.WebSocket; } })();
+type WsType = typeof globalThis.WebSocket;
 
 function normalizeSupabaseUrl(raw: string): string {
   if (!raw) return "";
@@ -8,17 +9,26 @@ function normalizeSupabaseUrl(raw: string): string {
   return `https://${raw}.supabase.co`;
 }
 
-// In development, prefer _DEV credentials; fall back to shared/prod if not set.
+// Always use the same project as the frontend (VITE_SUPABASE_URL / SUPABASE_URL).
+// SUPABASE_URL_DEV is intentionally ignored here — it was a different test project
+// that doesn't share JWT secrets with the frontend client, causing token verification
+// to fail silently. Both dev and prod must verify tokens against the same project.
 const url = normalizeSupabaseUrl(
-  (isDev ? process.env.SUPABASE_URL_DEV : undefined) ??
-  process.env.SUPABASE_URL ??
   process.env.VITE_SUPABASE_URL ??
+  process.env.SUPABASE_URL ??
   ""
 );
 const key =
-  (isDev ? process.env.SUPABASE_SERVICE_ROLE_KEY_DEV : undefined) ??
   process.env.SUPABASE_SERVICE_ROLE_KEY ??
+  process.env.SUPABASE_SERVICE_ROLE_KEY_DEV ??
   "";
+
+if (!url || !key) {
+  console.warn(
+    "[supabaseAdmin] WARNING: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — " +
+    "Supabase client will be unavailable. Any call via supabaseAdmin will throw."
+  );
+}
 
 let _client: SupabaseClient | null = null;
 
@@ -27,6 +37,7 @@ function getClient(): SupabaseClient | null {
   if (!_client) {
     _client = createClient(url, key, {
       auth: { autoRefreshToken: false, persistSession: false },
+      realtime: { transport: _ws as unknown as WsType },
     });
   }
   return _client;

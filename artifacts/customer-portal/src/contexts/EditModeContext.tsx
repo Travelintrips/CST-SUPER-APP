@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from "react";
-import { getAuthHeaders, isPortalAdmin } from "@/lib/auth";
+import { isPortalAdmin } from "@/lib/auth";
+import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 interface EditModeContextValue {
   editMode: boolean;
@@ -17,25 +19,86 @@ interface EditModeContextValue {
 
 const EditModeContext = createContext<EditModeContextValue | null>(null);
 
+// Paths that do not need CMS content — skip the portal/content fetch for these
+const STANDALONE_PREFIXES = [
+  "/vendor-mini-form", "/vendor-form", "/vendor-response", "/vendor-product-approval",
+  "/vendor-quote", "/vendor-confirm", "/vendor-fulfillment", "/vendor-job",
+  "/approve", "/confirm", "/customer-quote", "/order-task", "/customer-order",
+  "/admin-action", "/admin-review", "/order-track", "/fulfillment", "/q/",
+  "/privacy-policy", "/contact",
+];
+
+function isStandalonePath() {
+  const path = window.location.pathname;
+  return STANDALONE_PREFIXES.some((p) => path.includes(p));
+}
+
+// localStorage cache-first (stale-while-revalidate): CMS content (hero_bg,
+// hero_title, ...) previously only appeared after the /api/portal/content
+// round-trip resolved, so the first paint always showed the local default
+// image/text before swapping to the real one. Seeding state from the last
+// known-good cache removes that visible flash/delay on every visit after the
+// first; the network fetch below still runs and silently refreshes it.
+const contentCacheKey = (locale: string) => `portal_content_cache_${locale}`;
+
+function readContentCache(locale: string): Record<string, string> | null {
+  try {
+    const raw = localStorage.getItem(contentCacheKey(locale));
+    return raw ? (JSON.parse(raw) as Record<string, string>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeContentCache(locale: string, data: Record<string, string>) {
+  try {
+    localStorage.setItem(contentCacheKey(locale), JSON.stringify(data));
+  } catch {
+    /* ignore quota/serialization errors — cache is best-effort */
+  }
+}
+
 export function EditModeProvider({ children }: { children: ReactNode }) {
   const isAdmin = isPortalAdmin();
+  const { locale } = useLanguage();
   const [editMode, setEditMode] = useState(false);
-  const [content, setContent] = useState<Record<string, string>>({});
-  const [pendingContent, setPendingContent] = useState<Record<string, string>>({});
+  const [content, setContent] = useState<Record<string, string>>(() => readContentCache(locale) ?? {});
+  const [pendingContent, setPendingContent] = useState<Record<string, string>>(() => readContentCache(locale) ?? {});
   const [isSaving, setIsSaving] = useState(false);
-  const hasFetched = useRef(false);
 
   useEffect(() => {
-    if (hasFetched.current) return;
-    hasFetched.current = true;
-    fetch("/api/portal/content")
-      .then((r) => r.json())
+    // Skip CMS fetch for standalone public pages (mini form, vendor form, etc.)
+    if (isStandalonePath()) return;
+    // Content is scoped per-locale: an admin-authored override in one language
+    // must never leak into another (that was the root cause of the language
+    // switcher appearing to do nothing). Refetch whenever the active locale
+    // changes so content[] only ever contains values for the current language.
+    let cancelled = false;
+    // Paint immediately from cache (if any) for this locale, then revalidate.
+    const cached = readContentCache(locale);
+    if (cached) {
+      setContent(cached);
+      setPendingContent(cached);
+    }
+    // no-store: this endpoint is served with a public 5-minute Cache-Control
+    // for the public site; an admin who just saved content must see the fresh
+    // value immediately, not a stale cached response.
+    fetch(`/api/portal/content?locale=${encodeURIComponent(locale)}`, { cache: "no-store" })
+      .then((r) => {
+        if (!r.ok) return null; // Don't overwrite cache with error body on 4xx/5xx
+        return r.json() as Promise<Record<string, string>>;
+      })
       .then((data) => {
-        setContent(data as Record<string, string>);
-        setPendingContent(data as Record<string, string>);
+        if (!data || cancelled) return;
+        setContent(data);
+        setPendingContent(data);
+        writeContentCache(locale, data);
       })
       .catch(() => {});
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [locale]);
 
   const toggleEditMode = useCallback(() => {
     setEditMode((prev) => {
@@ -60,33 +123,57 @@ export function EditModeProvider({ children }: { children: ReactNode }) {
         if (pendingContent[k] !== content[k]) diff[k] = pendingContent[k];
       }
       if (Object.keys(diff).length === 0) return;
-      const headers = getAuthHeaders() as Record<string, string>;
-      await fetch("/api/portal/admin/content", {
+      const res = await fetch(`/api/portal/admin/content?locale=${encodeURIComponent(locale)}`, {
         method: "PUT",
-        headers: { ...headers, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(diff),
       });
-      setContent((prev) => ({ ...prev, ...diff }));
+      if (!res.ok) throw new Error(`Gagal menyimpan konten (${res.status})`);
+      setContent((prev) => {
+        const next = { ...prev, ...diff };
+        // Keep the local cache in sync with what was just saved — otherwise a
+        // reload of this tab, or opening a new tab, paints from the old
+        // cached snapshot until the network revalidation overwrites it,
+        // making a just-saved image/text look like it "reverted".
+        writeContentCache(locale, next);
+        return next;
+      });
     } finally {
       setIsSaving(false);
     }
-  }, [content, pendingContent]);
+  }, [content, pendingContent, locale]);
 
   const discardChanges = useCallback(() => {
     setPendingContent(content);
   }, [content]);
 
-  const uploadImage = useCallback(async (file: File): Promise<string> => {
-    const headers = getAuthHeaders() as Record<string, string>;
-    const resp = await fetch("/api/portal/admin/upload-url", {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ contentType: file.type }),
+  // ── Dynamic favicon update ──────────────────────────────────────────────
+  useEffect(() => {
+    const faviconUrl = content["site_favicon"];
+    if (!faviconUrl) return;
+    const selectors = ['link[rel="icon"]', 'link[rel="shortcut icon"]', 'link[rel="apple-touch-icon"]'];
+    selectors.forEach((sel) => {
+      const el = document.querySelector<HTMLLinkElement>(sel);
+         if (el) {
+         el.href = faviconUrl.startsWith("http")
+           ? faviconUrl
+           : (resolveImageUrl(faviconUrl) ?? faviconUrl);
+      }
     });
-    if (!resp.ok) throw new Error("Gagal mendapatkan upload URL");
-    const { uploadURL, objectPath } = await resp.json() as { uploadURL: string; objectPath: string };
-    await fetch(uploadURL, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
-    return objectPath;
+  }, [content]);
+
+  const uploadImage = useCallback(async (file: File): Promise<string> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const resp = await fetch("/api/portal/admin/upload", {
+      method: "POST",
+      credentials: "include", // no Content-Type — browser sets multipart boundary automatically
+      body: formData,
+    });
+    if (!resp.ok) throw new Error("Gagal mengunggah gambar");
+    const { url } = await resp.json() as { url: string };
+    return url;
   }, []);
 
   return (

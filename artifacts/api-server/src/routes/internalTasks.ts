@@ -2,10 +2,36 @@ import { Router } from "express";
 import { db, internalTasksTable, usersTable, logisticOrdersTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
 
 const router = Router();
+
+// Inline migration — idempotent
+db.execute(sql`
+  CREATE TABLE IF NOT EXISTS internal_tasks (
+    id            SERIAL PRIMARY KEY,
+    order_id      INTEGER REFERENCES logistic_orders(id) ON DELETE SET NULL,
+    order_number  TEXT,
+    ref_type      TEXT NOT NULL DEFAULT 'logistic_order',
+    ref_id        TEXT,
+    assigned_to   TEXT,
+    assigned_user_id INTEGER,
+    department    TEXT,
+    task_type     TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    description   TEXT,
+    deadline      TIMESTAMPTZ,
+    status        TEXT NOT NULL DEFAULT 'open',
+    priority      TEXT NOT NULL DEFAULT 'normal',
+    completed_at  TIMESTAMPTZ,
+    completed_by  TEXT,
+    company_id    INTEGER,
+    created_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`).catch(() => {});
 
 router.use(async (req, res, next) => {
   const ok = await requireClerkUser(req, res);

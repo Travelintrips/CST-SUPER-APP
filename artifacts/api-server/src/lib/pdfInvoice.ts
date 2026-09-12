@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import type { Response } from "express";
+import type { DocTemplate } from "./docTemplateLoader.js";
 
 export interface InvoiceLine {
   name: string;
@@ -30,10 +31,14 @@ export interface InvoiceData {
   notes?: string | null;
   lines: InvoiceLine[];
   totalAmount: number;
+  taxAmount?: number | null;
+  grandTotal?: number | null;
+  taxRate?: number | null;
   invoiceStatus?: string | null;
   deliveryStatus?: string | null;
   receiveStatus?: string | null;
   billStatus?: string | null;
+  template?: DocTemplate | null;
 }
 
 const idr = (n: number) =>
@@ -48,37 +53,77 @@ const fmtDate = (d?: string | null) => {
   }
 };
 
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return [15, 23, 42];
+  return [r, g, b];
+}
+
 function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceData): void {
+  const tpl = data.template;
+  const primaryColor = tpl?.primaryColor || "#0f172a";
+  const accentColor = tpl?.accentColor || "#3b82f6";
+  const footerText = tpl?.footerText || `Dicetak otomatis oleh BizPortal pada ${new Date().toLocaleString("id-ID")}`;
+  const defaultTerms = tpl?.defaultTerms || null;
+  const showSignature = tpl?.showSignature ?? false;
+  const showStamp = tpl?.showStamp ?? false;
+  const baseFontSize = Math.max(8, Math.min(14, tpl?.fontSize ?? 10));
+  const headerText = tpl?.headerText || null;
+
+  const companyName = (tpl?.companyName && tpl.companyName.trim()) ? tpl.companyName : (data.companyName || "BizPortal");
+  const companyAddress = (tpl?.companyAddress && tpl.companyAddress.trim()) ? tpl.companyAddress : (data.companyAddress || null);
+
   doc
-    .fontSize(20)
-    .fillColor("#0f172a")
-    .text(data.companyName || "BizPortal", { align: "left" });
-  if (data.companyAddress) {
+    .fontSize(baseFontSize + 10)
+    .fillColor(primaryColor)
+    .text(companyName, { align: "left" });
+
+  if (companyAddress) {
     doc
-      .fontSize(9)
+      .fontSize(baseFontSize - 1)
       .fillColor("#64748b")
-      .text(data.companyAddress, { align: "left" });
+      .text(companyAddress, { align: "left" });
   } else {
     doc
-      .fontSize(9)
+      .fontSize(baseFontSize - 1)
       .fillColor("#64748b")
       .text("Sistem Manajemen Bisnis Multi-Divisi", { align: "left" });
   }
+
+  if (tpl?.companyPhone && tpl.companyPhone.trim()) {
+    doc
+      .fontSize(baseFontSize - 1)
+      .fillColor("#64748b")
+      .text(`${tpl.companyPhone}${tpl.companyEmail ? "  ·  " + tpl.companyEmail : ""}`, { align: "left" });
+  }
+
   if (data.companyNpwp) {
     doc
-      .fontSize(9)
+      .fontSize(baseFontSize - 1)
       .fillColor("#475569")
       .font("Helvetica-Bold")
       .text(`NPWP: ${data.companyNpwp}`, { align: "left" })
       .font("Helvetica");
   }
+
+  if (headerText) {
+    doc
+      .moveDown(0.2)
+      .fontSize(baseFontSize - 1)
+      .fillColor("#64748b")
+      .text(headerText, { align: "left" });
+  }
+
   doc.moveDown(0.3);
 
   doc
-    .fontSize(16)
+    .fontSize(baseFontSize + 6)
     .fillColor("#0f172a")
     .text(data.title, { align: "right" })
-    .fontSize(10)
+    .fontSize(baseFontSize)
     .fillColor("#475569")
     .text(`No: ${data.docNumber}`, { align: "right" })
     .text(`Tanggal: ${fmtDate(data.createdAt)}`, { align: "right" })
@@ -88,20 +133,20 @@ function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceD
   doc
     .moveTo(48, doc.y)
     .lineTo(547, doc.y)
-    .strokeColor("#e2e8f0")
+    .strokeColor(accentColor)
     .stroke()
     .moveDown(0.5);
 
   const partyTop = doc.y;
   doc
-    .fontSize(9)
+    .fontSize(baseFontSize - 1)
     .fillColor("#64748b")
     .text(data.partyLabel.toUpperCase(), 48, partyTop)
-    .fontSize(11)
+    .fontSize(baseFontSize + 1)
     .fillColor("#0f172a")
     .text(data.partyName, 48, doc.y + 2);
   if (data.partyAddress)
-    doc.fontSize(9).fillColor("#475569").text(data.partyAddress, 48, doc.y + 2, { width: 240 });
+    doc.fontSize(baseFontSize - 1).fillColor("#475569").text(data.partyAddress, 48, doc.y + 2, { width: 240 });
   if (data.partyTaxId) {
     doc
       .font("Helvetica-Bold")
@@ -114,10 +159,10 @@ function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceD
   if (data.partyPhone) doc.text(`Telp: ${data.partyPhone}`, 48);
 
   doc
-    .fontSize(9)
+    .fontSize(baseFontSize - 1)
     .fillColor("#64748b")
     .text("DETAIL DOKUMEN", 320, partyTop)
-    .fontSize(10)
+    .fontSize(baseFontSize)
     .fillColor("#0f172a");
   if (data.validUntil) doc.text(`Berlaku Hingga: ${fmtDate(data.validUntil)}`, 320);
   if (data.expectedDate) doc.text(`Estimasi: ${fmtDate(data.expectedDate)}`, 320);
@@ -133,19 +178,20 @@ function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceD
   const colX = { name: 48, qty: 320, price: 380, sub: 470 };
   const colW = { name: 270, qty: 60, price: 90, sub: 77 };
 
+  const [hr, hg, hb] = hexToRgb(primaryColor);
   doc
     .rect(48, tableTop, 499, 22)
-    .fillColor("#0f172a")
+    .fillColor([hr, hg, hb] as any)
     .fill()
     .fillColor("#ffffff")
-    .fontSize(10)
+    .fontSize(baseFontSize)
     .text("Item", colX.name + 6, tableTop + 6, { width: colW.name })
     .text("Qty", colX.qty, tableTop + 6, { width: colW.qty, align: "right" })
     .text("Harga Satuan", colX.price, tableTop + 6, { width: colW.price, align: "right" })
     .text("Subtotal", colX.sub, tableTop + 6, { width: colW.sub, align: "right" });
 
   let y = tableTop + 28;
-  doc.fillColor("#0f172a").fontSize(10);
+  doc.fillColor("#0f172a").fontSize(baseFontSize);
   for (const line of data.lines) {
     if (y > 720) {
       doc.addPage();
@@ -155,11 +201,11 @@ function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceD
     if (line.description) {
       doc
         .font("Helvetica")
-        .fontSize(8)
+        .fontSize(baseFontSize - 2)
         .fillColor("#64748b")
         .text(line.description, colX.name + 6, doc.y + 1, { width: colW.name })
         .fillColor("#0f172a")
-        .fontSize(10);
+        .fontSize(baseFontSize);
     }
     const rowEndY = doc.y;
     doc
@@ -179,35 +225,105 @@ function _renderInvoiceDoc(doc: InstanceType<typeof PDFDocument>, data: InvoiceD
     doc.addPage();
     y = 48;
   }
-  doc
-    .moveDown(1)
-    .fontSize(11)
-    .fillColor("#0f172a")
-    .text("TOTAL", 380, y + 10, { width: 90, align: "right" })
-    .font("Helvetica-Bold")
-    .fontSize(14)
-    .text(idr(data.totalAmount), 470, y + 8, { width: 77, align: "right" });
 
-  if (data.notes) {
+  const hasTaxBreakdown = (data.taxAmount ?? 0) > 0 && (data.grandTotal ?? 0) > 0;
+  const taxPct = data.taxRate ?? 11;
+
+  if (hasTaxBreakdown) {
     doc
-      .moveDown(3)
       .font("Helvetica")
-      .fontSize(9)
+      .fontSize(baseFontSize)
+      .fillColor("#475569")
+      .text("Subtotal", 320, y + 10, { width: 147, align: "right" })
+      .text(idr(data.totalAmount), 470, y + 10, { width: 77, align: "right" });
+    y += 22;
+
+    doc
+      .text(`PPN ${taxPct}%`, 320, y + 6, { width: 147, align: "right" })
+      .text(idr(data.taxAmount!), 470, y + 6, { width: 77, align: "right" });
+    y += 20;
+
+    doc
+      .moveTo(320, y)
+      .lineTo(547, y)
+      .strokeColor("#cbd5e1")
+      .stroke();
+    y += 6;
+
+    doc
+      .fillColor("#0f172a")
+      .fontSize(baseFontSize + 1)
+      .text("Grand Total", 320, y + 6, { width: 147, align: "right" })
+      .font("Helvetica-Bold")
+      .fontSize(baseFontSize + 4)
+      .text(idr(data.grandTotal!), 470, y + 4, { width: 77, align: "right" });
+  } else {
+    doc
+      .moveDown(1)
+      .fontSize(baseFontSize + 1)
+      .fillColor("#0f172a")
+      .text("TOTAL", 380, y + 10, { width: 90, align: "right" })
+      .font("Helvetica-Bold")
+      .fontSize(baseFontSize + 4)
+      .text(idr(data.totalAmount), 470, y + 8, { width: 77, align: "right" });
+  }
+
+  const notesText = data.notes || (tpl?.defaultNotes && tpl.defaultNotes.trim() ? tpl.defaultNotes : null);
+  if (notesText) {
+    doc
+      .moveDown(2)
+      .font("Helvetica")
+      .fontSize(baseFontSize - 1)
       .fillColor("#64748b")
       .text("Catatan:", 48)
       .fillColor("#0f172a")
-      .text(data.notes, 48, doc.y + 2, { width: 499 });
+      .text(notesText, 48, doc.y + 2, { width: 499 });
+  }
+
+  if (defaultTerms) {
+    doc
+      .moveDown(1)
+      .font("Helvetica")
+      .fontSize(baseFontSize - 1)
+      .fillColor("#64748b")
+      .text("Syarat & Ketentuan:", 48)
+      .fillColor("#475569")
+      .text(defaultTerms, 48, doc.y + 2, { width: 499 });
+  }
+
+  if (showSignature || showStamp) {
+    const sigY = doc.y + 24;
+    if (sigY < 720) {
+      const cols = showSignature && showStamp ? 3 : 2;
+      const boxW = Math.floor(499 / cols);
+      const labels = ["Dibuat oleh", "Diterima oleh"];
+      if (showStamp) labels.push("Cap Perusahaan");
+
+      doc.moveDown(2);
+      const startY = doc.y;
+      labels.forEach((label, i) => {
+        const x = 48 + i * boxW;
+        doc
+          .fontSize(baseFontSize - 1)
+          .fillColor("#64748b")
+          .text(label, x, startY, { width: boxW, align: "center" });
+        doc
+          .moveTo(x + 10, startY + 40)
+          .lineTo(x + boxW - 10, startY + 40)
+          .strokeColor("#374151")
+          .stroke();
+        doc
+          .fontSize(baseFontSize - 2)
+          .fillColor("#9ca3af")
+          .text("( _________________________ )", x, startY + 44, { width: boxW, align: "center" });
+      });
+    }
   }
 
   doc
     .fontSize(8)
     .fillColor("#94a3b8")
-    .text(
-      `Dicetak otomatis oleh BizPortal pada ${new Date().toLocaleString("id-ID")}`,
-      48,
-      780,
-      { width: 499, align: "center" },
-    );
+    .text(footerText, 48, 780, { width: 499, align: "center" });
 }
 
 export function buildInvoicePdfBuffer(data: InvoiceData): Promise<Buffer> {

@@ -245,7 +245,7 @@ router.post("/stock/adjust", async (req: Request, res: Response) => {
   const cur = await db.execute(sql`
     SELECT qty::float FROM wh_stock
     WHERE product_id = ${productId} AND warehouse_id = ${warehouseId}
-    AND (rack_id = ${rack} OR (rack_id IS NULL AND ${rack} IS NULL))
+    AND (rack_id = ${rack}::int OR (rack_id IS NULL AND ${rack}::int IS NULL))
   `);
   const qtyBefore = Number(cur.rows[0]?.qty ?? 0);
   const qtyAfter = qtyBefore + qty;
@@ -853,7 +853,7 @@ router.post("/opname/:id/confirm", async (req: Request, res: Response) => {
     `);
     const totalValue = (diffLines.rows as any[]).reduce((s, r) => s + Math.abs(Number(r.diff_qty)) * Number(r.cost_price), 0);
     if (totalValue > 0) {
-      await postOpnameAdjust({ opnameId: id, opnameNumber: opname.opname_number, totalValue, createdById: null });
+      await postOpnameAdjust({ opnameId: id, opnameNumber: opname.opname_number, diffAmount: totalValue, createdById: null });
     }
   } catch (e) { console.error("[opname accounting]", e); }
 

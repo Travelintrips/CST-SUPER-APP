@@ -1,4 +1,6 @@
+import { assertSapSource } from "@/lib/sapLock";
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import {
   useListProducts,
   useCreateProduct,
@@ -32,7 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, ShoppingBag, Pencil, Trash2, Printer, Search, ChevronDown, X, RefreshCw, Clock } from "lucide-react";
+import { Plus, ShoppingBag, Pencil, Trash2, Printer, Search, ChevronDown, X, RefreshCw, Clock, ExternalLink, Database, Copy, CheckCheck, Link, Check } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -215,9 +217,10 @@ export default function EcommercePage() {
     syncUrl({ tab: value, categories: filterCategories });
   };
 
-  const { data: products, isLoading: isLoadingProducts } = useListProducts(undefined, {
+  const { data: _productsPaginated, isLoading: isLoadingProducts } = useListProducts({ limit: 500 }, {
     query: { queryKey: getListProductsQueryKey() }
   });
+  const products = _productsPaginated?.data;
 
   const { data: productCategories = [] as ProductCategory[], isLoading: isLoadingCategories } = useListProductCategories({
     query: { queryKey: getListProductCategoriesQueryKey() }
@@ -295,11 +298,11 @@ export default function EcommercePage() {
   const [editLineItemsTouched, setEditLineItemsTouched] = useState(false);
 
   const createSubtotal = createLineItems.reduce((s, li) => s + li.qty * li.unitPrice, 0);
-  const [createTaxRateId, setCreateTaxRateId] = useState<string>("");
+  const [createTaxRateId, setCreateTaxRateId] = useState<string>("none");
   const [createTaxAmount, setCreateTaxAmount] = useState(0);
 
   const [editSubtotal, setEditSubtotal] = useState(0);
-  const [editTaxRateId, setEditTaxRateId] = useState<string>("");
+  const [editTaxRateId, setEditTaxRateId] = useState<string>("none");
   const [editTaxAmount, setEditTaxAmount] = useState(0);
 
   const { data: allTaxes = [] as AccountingTax[] } = useListTaxes();
@@ -313,6 +316,17 @@ export default function EcommercePage() {
   const [editProdPurchaseTaxId, setEditProdPurchaseTaxId] = useState<number | null>(null);
   const [createProdCategories, setCreateProdCategories] = useState<string[]>([]);
   const [editProdCategories, setEditProdCategories] = useState<string[]>([]);
+
+  const [createWeightKg, setCreateWeightKg] = useState("");
+  const [createLengthCm, setCreateLengthCm] = useState("");
+  const [createWidthCm, setCreateWidthCm] = useState("");
+  const [createHeightCm, setCreateHeightCm] = useState("");
+  const [createGoodsType, setCreateGoodsType] = useState("");
+  const [editWeightKg, setEditWeightKg] = useState("");
+  const [editLengthCm, setEditLengthCm] = useState("");
+  const [editWidthCm, setEditWidthCm] = useState("");
+  const [editHeightCm, setEditHeightCm] = useState("");
+  const [editGoodsType, setEditGoodsType] = useState("");
 
   const [filterSalesTaxId, setFilterSalesTaxId] = useState<string>(() => initialParams.get("salesTax") ?? "all");
   const [filterPurchaseTaxId, setFilterPurchaseTaxId] = useState<string>(() => initialParams.get("purchaseTax") ?? "all");
@@ -417,6 +431,11 @@ export default function EcommercePage() {
         defaultPurchaseTaxId: createProdPurchaseTaxId,
         itemType: "barang",
         unit: "pcs",
+        weightKg: createWeightKg ? parseFloat(createWeightKg) : undefined,
+        lengthCm: createLengthCm ? parseFloat(createLengthCm) : undefined,
+        widthCm: createWidthCm ? parseFloat(createWidthCm) : undefined,
+        heightCm: createHeightCm ? parseFloat(createHeightCm) : undefined,
+        goodsType: createGoodsType || undefined,
       }
     }, {
       onSuccess: () => {
@@ -449,6 +468,11 @@ export default function EcommercePage() {
         defaultPurchaseTaxId: editProdPurchaseTaxId,
         itemType: editingProduct.itemType ?? "barang",
         unit: editingProduct.unit ?? "pcs",
+        weightKg: editWeightKg ? parseFloat(editWeightKg) : null,
+        lengthCm: editLengthCm ? parseFloat(editLengthCm) : null,
+        widthCm: editWidthCm ? parseFloat(editWidthCm) : null,
+        heightCm: editHeightCm ? parseFloat(editHeightCm) : null,
+        goodsType: editGoodsType || null,
       }
     }, {
       onSuccess: () => {
@@ -461,7 +485,10 @@ export default function EcommercePage() {
   };
 
   useEffect(() => {
-    if (!isProductDialogOpen) setCreateImageUrl(null);
+    if (!isProductDialogOpen) {
+      setCreateImageUrl(null);
+      setCreateWeightKg(""); setCreateLengthCm(""); setCreateWidthCm(""); setCreateHeightCm(""); setCreateGoodsType("");
+    }
   }, [isProductDialogOpen]);
 
   useEffect(() => {
@@ -469,6 +496,11 @@ export default function EcommercePage() {
     setEditProdSalesTaxId(editingProduct?.defaultSalesTaxId ?? null);
     setEditProdPurchaseTaxId(editingProduct?.defaultPurchaseTaxId ?? null);
     setEditProdCategories(editingProduct?.categories ?? []);
+    setEditWeightKg(editingProduct?.weightKg != null ? String(editingProduct.weightKg) : "");
+    setEditLengthCm(editingProduct?.lengthCm != null ? String(editingProduct.lengthCm) : "");
+    setEditWidthCm(editingProduct?.widthCm != null ? String(editingProduct.widthCm) : "");
+    setEditHeightCm(editingProduct?.heightCm != null ? String(editingProduct.heightCm) : "");
+    setEditGoodsType(editingProduct?.goodsType ?? "");
   }, [editingProduct]);
 
   const handleCreateCategory = (e: React.FormEvent<HTMLFormElement>) => {
@@ -673,10 +705,11 @@ export default function EcommercePage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">E-Commerce</h1>
-          <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">Kelola katalog toko online dan pesanan pelanggan.</p>
-        </div>
+        <PageHeader
+          title="E-Commerce"
+          description="Kelola katalog toko online dan pesanan pelanggan."
+          favoriteEnabled
+        />
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
           <TabsList className="w-full sm:w-auto">
@@ -693,7 +726,7 @@ export default function EcommercePage() {
                 <DialogTrigger asChild>
                   <Button data-testid="button-add-product"><Plus className="mr-2 h-4 w-4" /> Tambah Produk</Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg md:max-w-2xl max-h-[90vh] overflow-y-auto">
                   <form onSubmit={handleCreateProduct}>
                     <DialogHeader>
                       <DialogTitle>Tambah Produk Baru</DialogTitle>
@@ -702,7 +735,7 @@ export default function EcommercePage() {
                     <div className="grid gap-4 py-4">
                       <div className="grid gap-2"><Label htmlFor="name">Nama Produk</Label><Input id="name" name="name" required data-testid="input-product-name" /></div>
                       <div className="grid gap-2"><Label htmlFor="sku">SKU</Label><Input id="sku" name="sku" required data-testid="input-product-sku" /></div>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="grid gap-2"><Label htmlFor="price">Harga (IDR)</Label><Input id="price" name="price" type="number" min="0" required data-testid="input-product-price" /></div>
                         <div className="grid gap-2"><Label htmlFor="stock">Stok</Label><Input id="stock" name="stock" type="number" min="0" required data-testid="input-product-stock" /></div>
                       </div>
@@ -735,6 +768,7 @@ export default function EcommercePage() {
                         isUploading={createImageUploader.isUploading}
                         onPickFile={(file) => createImageUploader.uploadFile(file)}
                         onRemove={() => setCreateImageUrl(null)}
+                        onSetUrl={(url) => setCreateImageUrl(url)}
                         resolveImage={resolveImage}
                         idPrefix="create"
                       />
@@ -757,6 +791,38 @@ export default function EcommercePage() {
                             {purchaseTaxes.map((t) => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="grid gap-2 border rounded-md p-3 bg-muted/30">
+                        <Label className="text-sm font-semibold">Berat &amp; Dimensi Pengiriman</Label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="grid gap-1">
+                            <Label htmlFor="create-weight" className="text-xs">Berat (kg)</Label>
+                            <Input id="create-weight" type="number" min="0" step="0.001" placeholder="0.000" value={createWeightKg} onChange={e => setCreateWeightKg(e.target.value)} />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor="create-goods-type" className="text-xs">Jenis Barang</Label>
+                            <Input id="create-goods-type" placeholder="mis. Elektronik" value={createGoodsType} onChange={e => setCreateGoodsType(e.target.value)} />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          <div className="grid gap-1">
+                            <Label htmlFor="create-length" className="text-xs">Panjang (cm)</Label>
+                            <Input id="create-length" type="number" min="0" step="0.01" placeholder="0" value={createLengthCm} onChange={e => setCreateLengthCm(e.target.value)} />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor="create-width" className="text-xs">Lebar (cm)</Label>
+                            <Input id="create-width" type="number" min="0" step="0.01" placeholder="0" value={createWidthCm} onChange={e => setCreateWidthCm(e.target.value)} />
+                          </div>
+                          <div className="grid gap-1">
+                            <Label htmlFor="create-height" className="text-xs">Tinggi (cm)</Label>
+                            <Input id="create-height" type="number" min="0" step="0.01" placeholder="0" value={createHeightCm} onChange={e => setCreateHeightCm(e.target.value)} />
+                          </div>
+                        </div>
+                        {createWeightKg && parseFloat(createWeightKg) > 0 && createLengthCm && createWidthCm && createHeightCm && (
+                          <p className="text-xs text-muted-foreground">
+                            Volume: {((parseFloat(createLengthCm)||0)*(parseFloat(createWidthCm)||0)*(parseFloat(createHeightCm)||0)/1000000).toFixed(4)} m³
+                          </p>
+                        )}
                       </div>
                     </div>
                     <DialogFooter>
@@ -926,7 +992,7 @@ export default function EcommercePage() {
                       <TableRow>
                         <TableCell colSpan={9} className="h-24 text-center">
                           <div className="flex flex-col items-center justify-center text-muted-foreground">
-                            <img src="/images/logo.png" alt="CST Logistics" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                            <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                             <p>{(productSearch.trim() || filterSalesTaxId !== "all" || filterPurchaseTaxId !== "all" || filterCategories.length > 0) ? "Tidak ada produk yang cocok dengan pencarian atau filter ini." : "Belum ada produk. Tambahkan produk pertama Anda."}</p>
                           </div>
                         </TableCell>
@@ -963,6 +1029,23 @@ export default function EcommercePage() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
+                              <Button
+                                size="icon" variant="ghost"
+                                aria-label="Buku ke Portal"
+                                title="Buku ke Portal"
+                                onClick={() => {
+                                  const params = new URLSearchParams({
+                                    commodity: product.name,
+                                    productId: String(product.id),
+                                    qty: "1",
+                                    productPrice: String(product.price ?? 0),
+                                    unit: product.unit ?? "pcs",
+                                  });
+                                  window.open(`/book?${params}`, "_blank");
+                                }}
+                              >
+                                <ExternalLink className="h-4 w-4 text-blue-500" />
+                              </Button>
                               <Button size="icon" variant="ghost" onClick={() => setEditingProduct(product)} data-testid={`button-edit-product-${product.id}`} aria-label="Edit produk">
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -990,7 +1073,7 @@ export default function EcommercePage() {
                 ))
               ) : filteredProducts.length === 0 ? (
                 <Card><CardContent className="p-8 text-center">
-                  <img src="/images/logo.png" alt="CST Logistics" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                  <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                   <p className="text-sm text-muted-foreground">{(productSearch.trim() || filterSalesTaxId !== "all" || filterPurchaseTaxId !== "all" || filterCategories.length > 0) ? "Tidak ada produk yang cocok dengan pencarian atau filter ini." : "Belum ada produk. Tambahkan produk pertama Anda."}</p>
                 </CardContent></Card>
               ) : (
@@ -1092,7 +1175,7 @@ export default function EcommercePage() {
                 <DialogTrigger asChild>
                   <Button data-testid="button-add-order"><Plus className="mr-2 h-4 w-4" /> Tambah Order</Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg md:max-w-2xl max-h-[90vh] overflow-y-auto">
                   <form onSubmit={handleCreateOrder}>
                     <DialogHeader>
                       <DialogTitle>Buat Order Manual</DialogTitle>
@@ -1104,8 +1187,8 @@ export default function EcommercePage() {
                       <div className="grid gap-2"><Label htmlFor="customerPhone">No. WhatsApp / HP <span className="text-muted-foreground font-normal text-xs">(opsional, untuk notifikasi)</span></Label><Input id="customerPhone" name="customerPhone" type="tel" placeholder="628xxxxxxxxxx" data-testid="input-order-customer-phone" /></div>
                       <div className="grid gap-1">
                         <Label>Item Pesanan</Label>
-                        <div className="border rounded-md overflow-hidden">
-                          <table className="w-full text-sm">
+                        <div className="border rounded-md overflow-hidden overflow-x-auto">
+                          <table className="w-full text-sm min-w-[320px]">
                             <thead className="bg-muted text-muted-foreground">
                               <tr>
                                 <th className="text-left px-2 py-1.5 font-medium">Nama Item</th>
@@ -1175,7 +1258,7 @@ export default function EcommercePage() {
                           data-testid="input-order-total"
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="grid gap-2">
                           <Label htmlFor="create-tax-rate">Tarif PPN</Label>
                           <Select value={createTaxRateId} onValueChange={handleCreateTaxRateChange} data-testid="select-create-tax-rate">
@@ -1604,7 +1687,7 @@ export default function EcommercePage() {
 
       {/* EDIT PRODUCT DIALOG */}
       <Dialog open={!!editingProduct} onOpenChange={(open) => !open && setEditingProduct(null)}>
-        <DialogContent>
+        <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg md:max-w-2xl max-h-[90vh] overflow-y-auto">
           {editingProduct && (
             <form onSubmit={handleEditProduct}>
               <DialogHeader>
@@ -1614,7 +1697,7 @@ export default function EcommercePage() {
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2"><Label htmlFor="edit-name">Nama Produk</Label><Input id="edit-name" name="name" defaultValue={editingProduct.name} required data-testid="input-edit-product-name" /></div>
                 <div className="grid gap-2"><Label htmlFor="edit-sku">SKU</Label><Input id="edit-sku" name="sku" defaultValue={editingProduct.sku} required data-testid="input-edit-product-sku" /></div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2"><Label htmlFor="edit-price">Harga (IDR)</Label><Input id="edit-price" name="price" type="number" min="0" defaultValue={editingProduct.price} required data-testid="input-edit-product-price" /></div>
                   <div className="grid gap-2"><Label htmlFor="edit-stock">Stok</Label><Input id="edit-stock" name="stock" type="number" min="0" defaultValue={editingProduct.stock} required data-testid="input-edit-product-stock" /></div>
                 </div>
@@ -1647,6 +1730,7 @@ export default function EcommercePage() {
                   isUploading={editImageUploader.isUploading}
                   onPickFile={(file) => editImageUploader.uploadFile(file)}
                   onRemove={() => setEditImageUrl(null)}
+                  onSetUrl={(url) => setEditImageUrl(url)}
                   resolveImage={resolveImage}
                   idPrefix="edit"
                 />
@@ -1670,6 +1754,38 @@ export default function EcommercePage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className="grid gap-2 border rounded-md p-3 bg-muted/30">
+                  <Label className="text-sm font-semibold">Berat &amp; Dimensi Pengiriman</Label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid gap-1">
+                      <Label htmlFor="edit-weight" className="text-xs">Berat (kg)</Label>
+                      <Input id="edit-weight" type="number" min="0" step="0.001" placeholder="0.000" value={editWeightKg} onChange={e => setEditWeightKg(e.target.value)} />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label htmlFor="edit-goods-type" className="text-xs">Jenis Barang</Label>
+                      <Input id="edit-goods-type" placeholder="mis. Elektronik" value={editGoodsType} onChange={e => setEditGoodsType(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="grid gap-1">
+                      <Label htmlFor="edit-length" className="text-xs">Panjang (cm)</Label>
+                      <Input id="edit-length" type="number" min="0" step="0.01" placeholder="0" value={editLengthCm} onChange={e => setEditLengthCm(e.target.value)} />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label htmlFor="edit-width" className="text-xs">Lebar (cm)</Label>
+                      <Input id="edit-width" type="number" min="0" step="0.01" placeholder="0" value={editWidthCm} onChange={e => setEditWidthCm(e.target.value)} />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label htmlFor="edit-height" className="text-xs">Tinggi (cm)</Label>
+                      <Input id="edit-height" type="number" min="0" step="0.01" placeholder="0" value={editHeightCm} onChange={e => setEditHeightCm(e.target.value)} />
+                    </div>
+                  </div>
+                  {editWeightKg && parseFloat(editWeightKg) > 0 && editLengthCm && editWidthCm && editHeightCm && (
+                    <p className="text-xs text-muted-foreground">
+                      Volume: {((parseFloat(editLengthCm)||0)*(parseFloat(editWidthCm)||0)*(parseFloat(editHeightCm)||0)/1000000).toFixed(4)} m³
+                    </p>
+                  )}
+                </div>
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setEditingProduct(null)}>Batal</Button>
@@ -1684,7 +1800,7 @@ export default function EcommercePage() {
 
       {/* EDIT ORDER DIALOG */}
       <Dialog open={!!editingOrder} onOpenChange={(open) => !open && setEditingOrder(null)}>
-        <DialogContent>
+        <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg md:max-w-2xl max-h-[90vh] overflow-y-auto">
           {editingOrder && (
             <form onSubmit={handleEditOrder}>
               <DialogHeader>
@@ -1697,8 +1813,8 @@ export default function EcommercePage() {
                 <div className="grid gap-2"><Label htmlFor="edit-customer-phone">No. WhatsApp / HP <span className="text-muted-foreground font-normal text-xs">(opsional, untuk notifikasi)</span></Label><Input id="edit-customer-phone" name="customerPhone" type="tel" placeholder="628xxxxxxxxxx" defaultValue={editingOrder.customerPhone ?? ""} data-testid="input-edit-order-customer-phone" /></div>
                 <div className="grid gap-1">
                   <Label>Item Pesanan</Label>
-                  <div className="border rounded-md overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="border rounded-md overflow-hidden overflow-x-auto">
+                    <table className="w-full text-sm min-w-[320px]">
                       <thead className="bg-muted text-muted-foreground">
                         <tr>
                           <th className="text-left px-2 py-1.5 font-medium">Nama Item</th>
@@ -1770,7 +1886,7 @@ export default function EcommercePage() {
                     data-testid="input-edit-order-total"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="edit-tax-rate">Tarif PPN</Label>
                     <Select value={editTaxRateId} onValueChange={handleEditTaxRateChange} data-testid="select-edit-tax-rate">
@@ -1888,10 +2004,17 @@ function OrderInvoiceDialog({ order, formatIDR, onClose }: OrderInvoiceDialogPro
     day: 'numeric', month: 'long', year: 'numeric',
   });
   const lineItems = order.lineItems ?? null;
+  // SAP LOCK: ALL financial values from backend fields only.
+  // FORBIDDEN: subtotal + tax, reduce(), any derived computation.
+  // If grandTotal is missing from backend, show "—" (do NOT compute fallback).
   const subtotal = order.totalAmount;
   const tax = order.taxAmount ?? 0;
-  const grand = order.grandTotal ?? (subtotal + tax);
-  const taxPct = subtotal > 0 && tax > 0 ? Math.round((tax / subtotal) * 100) : 11;
+  const grand = order.grandTotal ?? null; // SAP LOCK — never compute from subtotal + tax
+  assertSapSource("grandTotal", grand);
+  // taxPct is display-only label; derived from backend taxAmount/totalAmount, not computed for posting
+  const taxPct = order.taxAmount != null && order.totalAmount > 0
+    ? Math.round((order.taxAmount / order.totalAmount) * 100)
+    : null;
 
   const handlePrint = () => {
     window.print();
@@ -1962,12 +2085,13 @@ function OrderInvoiceDialog({ order, formatIDR, onClose }: OrderInvoiceDialogPro
               <td style={{ padding: '8px 0', borderTop: '1px solid #ddd', textAlign: 'right' }}>{formatIDR(subtotal)}</td>
             </tr>
             <tr>
-              <td style={{ padding: '8px 0', borderTop: '1px solid #ddd' }}>PPN {taxPct}%</td>
+              <td style={{ padding: '8px 0', borderTop: '1px solid #ddd' }}>PPN{taxPct != null ? ` ${taxPct}%` : ''}</td>
               <td style={{ padding: '8px 0', borderTop: '1px solid #ddd', textAlign: 'right' }}>{formatIDR(tax)}</td>
             </tr>
             <tr>
               <td style={{ padding: '12px 0', borderTop: '2px solid #000', fontWeight: 700, fontSize: 16 }}>Grand Total</td>
-              <td style={{ padding: '12px 0', borderTop: '2px solid #000', textAlign: 'right', fontWeight: 700, fontSize: 16 }}>{formatIDR(grand)}</td>
+              {/* SAP LOCK: grand total from backend only — never computed */}
+              <td style={{ padding: '12px 0', borderTop: '2px solid #000', textAlign: 'right', fontWeight: 700, fontSize: 16 }}>{grand != null ? formatIDR(grand) : '—'}</td>
             </tr>
           </tbody>
         </table>
@@ -1983,7 +2107,7 @@ function OrderInvoiceDialog({ order, formatIDR, onClose }: OrderInvoiceDialogPro
       {createPortal(printContent, document.body)}
 
       <Dialog open onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-w-lg" data-testid="dialog-invoice">
+        <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-lg" data-testid="dialog-invoice">
           <DialogHeader>
             <DialogTitle>Invoice {orderId}</DialogTitle>
             <DialogDescription>Pratinjau invoice dengan rincian PPN sebelum dicetak.</DialogDescription>
@@ -2053,12 +2177,13 @@ function OrderInvoiceDialog({ order, formatIDR, onClose }: OrderInvoiceDialogPro
                 <span>{formatIDR(subtotal)}</span>
               </div>
               <div className="flex justify-between text-sm" data-testid="invoice-tax">
-                <span className="text-muted-foreground">PPN {taxPct}%</span>
+                <span className="text-muted-foreground">PPN{taxPct != null ? ` ${taxPct}%` : ''}</span>
                 <span>{formatIDR(tax)}</span>
               </div>
               <div className="flex justify-between font-bold text-base border-t pt-2" data-testid="invoice-grand-total">
                 <span>Grand Total</span>
-                <span>{formatIDR(grand)}</span>
+                {/* SAP LOCK: backend order.grandTotal only — never computed */}
+                <span>{grand != null ? formatIDR(grand) : '—'}</span>
               </div>
             </div>
           </div>
@@ -2092,13 +2217,26 @@ interface ProductImageFieldProps {
   isUploading: boolean;
   onPickFile: (file: File) => void;
   onRemove: () => void;
+  onSetUrl: (url: string) => void;
   resolveImage: (url?: string | null) => string | null;
   idPrefix: string;
 }
 
-function ProductImageField({ imageUrl, isUploading, onPickFile, onRemove, resolveImage, idPrefix }: ProductImageFieldProps) {
+function ProductImageField({ imageUrl, isUploading, onPickFile, onRemove, onSetUrl, resolveImage, idPrefix }: ProductImageFieldProps) {
   const inputId = `${idPrefix}-product-image-input`;
   const preview = resolveImage(imageUrl);
+  const [showUrlInput, setShowUrlInput] = React.useState(false);
+  const [urlValue, setUrlValue] = React.useState("");
+
+  const handleConfirmUrl = () => {
+    const trimmed = urlValue.trim();
+    if (trimmed) {
+      onSetUrl(trimmed);
+      setUrlValue("");
+      setShowUrlInput(false);
+    }
+  };
+
   return (
     <div className="grid gap-2">
       <Label>Foto Produk</Label>
@@ -2117,9 +2255,13 @@ function ProductImageField({ imageUrl, isUploading, onPickFile, onRemove, resolv
               e.target.value = "";
             }}
           />
-          <Button type="button" variant="outline" size="sm" disabled={isUploading} onClick={() => document.getElementById(inputId)?.click()} data-testid={`button-${idPrefix}-upload-image`}>
+          <Button type="button" variant="outline" size="sm" disabled={isUploading} onClick={() => { setShowUrlInput(false); document.getElementById(inputId)?.click(); }} data-testid={`button-${idPrefix}-upload-image`}>
             {isUploading ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ImagePlus className="h-4 w-4 mr-1.5" />}
             {isUploading ? "Mengunggah..." : imageUrl ? "Ganti Foto" : "Unggah Foto"}
+          </Button>
+          <Button type="button" variant="outline" size="sm" disabled={isUploading} onClick={() => setShowUrlInput((v) => !v)} data-testid={`button-${idPrefix}-url-image`}>
+            <Link className="h-4 w-4 mr-1.5" />
+            Gunakan Link
           </Button>
           {imageUrl && !isUploading && (
             <Button type="button" variant="ghost" size="sm" onClick={onRemove} className="text-muted-foreground hover:text-destructive" data-testid={`button-${idPrefix}-remove-image`}>
@@ -2128,7 +2270,26 @@ function ProductImageField({ imageUrl, isUploading, onPickFile, onRemove, resolv
           )}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">Format: JPG/PNG, maks 10MB.</p>
+      {showUrlInput && (
+        <div className="flex gap-2 items-center mt-1">
+          <Input
+            type="url"
+            placeholder="https://example.com/gambar.jpg"
+            value={urlValue}
+            onChange={(e) => setUrlValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleConfirmUrl(); } }}
+            className="flex-1 h-8 text-sm"
+            data-testid={`input-${idPrefix}-image-url`}
+          />
+          <Button type="button" size="sm" className="h-8 px-3" onClick={handleConfirmUrl} disabled={!urlValue.trim()}>
+            <Check className="h-4 w-4" />
+          </Button>
+          <Button type="button" size="sm" variant="ghost" className="h-8 px-2" onClick={() => { setShowUrlInput(false); setUrlValue(""); }}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">Format: JPG/PNG, maks 10MB. Atau tempel link URL gambar.</p>
     </div>
   );
 }

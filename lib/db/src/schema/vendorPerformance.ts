@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, text, index } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, text, timestamp, index } from "drizzle-orm/pg-core";
 import { suppliersTable } from "./suppliers";
 
 export const vendorPerformanceTable = pgTable("vendor_performance", {
@@ -17,6 +17,33 @@ export const vendorPerformanceTable = pgTable("vendor_performance", {
   totalComplaints: integer("total_complaints").notNull().default(0),
   recommendationScore: numeric("recommendation_score", { precision: 5, scale: 2 }).default("0"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  // Extended spec columns (additive)
+  totalRfqInvites: integer("total_rfq_invites").default(0),
+  totalSubmitted: integer("total_submitted").default(0),
+  totalSelected: integer("total_selected").default(0),
+  totalRejected: integer("total_rejected").default(0),
+  avgResponseHours: numeric("avg_response_hours", { precision: 10, scale: 2 }).default("0"),
+  onTimeOrders: integer("on_time_orders").default(0),
+  lateOrders: integer("late_orders").default(0),
+  podCompleteOrders: integer("pod_complete_orders").default(0),
+  score: numeric("score", { precision: 5, scale: 2 }).default("0"),
+  lastCalculatedAt: timestamp("last_calculated_at"),
+  // Financial metrics
+  totalRevenue: numeric("total_revenue", { precision: 18, scale: 2 }).default("0"),
+  totalCost: numeric("total_cost", { precision: 18, scale: 2 }).default("0"),
+  totalMargin: numeric("total_margin", { precision: 18, scale: 2 }).default("0"),
+  marginPct: numeric("margin_pct", { precision: 7, scale: 2 }).default("0"),
+  // POD counts
+  podUploadedCount: integer("pod_uploaded_count").default(0),
+  podMissingCount: integer("pod_missing_count").default(0),
+  // Invoice counts
+  invoiceIssuedCount: integer("invoice_issued_count").default(0),
+  invoiceDisputeCount: integer("invoice_dispute_count").default(0),
+  // Complaint count
+  customerComplaintCount: integer("customer_complaint_count").default(0),
+  // Preferred vendor score & grade
+  preferredVendorScore: numeric("preferred_vendor_score", { precision: 5, scale: 2 }).default("0"),
+  vendorGrade: text("vendor_grade").default("D"),
 }, (t) => [
   index("vendor_perf_vendor_idx").on(t.vendorId),
 ]);

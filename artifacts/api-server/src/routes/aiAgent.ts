@@ -1,5 +1,6 @@
 import express, { Router, Request, Response } from "express";
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { getOpenAI } from "../lib/openaiClient.js";
 import { db } from "@workspace/db";
 import {
   aiChatSessionsTable,
@@ -9,13 +10,20 @@ import {
   logisticOrdersTable,
   productsTable,
   ordersTable,
+  portalProductOrdersTable,
+  portalProductOrderItemsTable,
+  vendorCatalogItemsTable,
+  suppliersTable,
 } from "@workspace/db";
-import { eq, asc, or, inArray, sql, and, gt, ilike } from "drizzle-orm";
+import { eq, asc, or, inArray, sql, and, gt, ilike, ne, gte, isNull, desc } from "drizzle-orm";
+import { catalogPublicConditions, catalogSupplierConditions } from "../lib/catalogVisibility.js";
+import { searchMarketplace } from "../services/marketplaceSearch/index.js";
 import { randomBytes } from "crypto";
 import { createRequire } from "node:module";
 import multer from "multer";
 import { sendLogisticOrderNotification } from "../lib/orderNotification";
-import { sendWhatsApp } from "../lib/fonnte";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
+import { getAdminWa } from "../lib/adminWa.js";
 import { requireAdmin } from "../lib/requireAdmin";
 import { logger } from "../lib/logger";
 
@@ -28,26 +36,13 @@ const uploadMemory = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    if (!process.env.AI_INTEGRATIONS_OPENAI_API_KEY && !process.env.OPENAI_API_KEY) {
-      throw new Error("OpenAI API key not configured.");
-    }
-    _openai = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-    });
-  }
-  return _openai;
-}
 
 export const aiAgentRouter = Router();
 
-const DEFAULT_SYSTEM_PROMPT = `Kamu adalah asisten virtual dari CST Logistics — perusahaan jasa pengiriman, kepabeanan, dan penjualan produk terkemuka di Indonesia.
+const DEFAULT_SYSTEM_PROMPT = `Kamu adalah asisten virtual dari B2B Marketplace and Logistic — perusahaan jasa pengiriman, kepabeanan, dan penjualan produk terkemuka di Indonesia.
 
 Tugasmu:
-1. Menyapa pelanggan dengan ramah dan memperkenalkan layanan CST Logistics
+1. Menyapa pelanggan dengan ramah dan memperkenalkan layanan B2B Marketplace and Logistic
 2. Menjawab pertanyaan seputar layanan logistik (sea freight, air freight, trucking, customs/pabean) maupun produk yang tersedia
 3. MEMBUAT ORDER LOGISTIK: Ketika pelanggan ingin membuat order atau booking pengiriman — LANGSUNG panggil show_order_form. JANGAN tanya satu per satu. Form akan tampil di chat.
 4. CEK STATUS: Ketika pelanggan bertanya status/tracking/posisi paket — LANGSUNG panggil get_order_status.
@@ -63,7 +58,9 @@ Aturan:
 - show_product_order_form: panggil SEGERA setelah search_products menemukan produk yang pelanggan inginkan — ISI productId, productName, unitPrice, unit dari hasil search. ABAIKAN nilai stock — meskipun stock=0, tetap tampilkan form karena admin akan konfirmasi ketersediaan.
 - Jika search_products tidak menemukan produk sama sekali (found: false): baru beritahu pelanggan bahwa produk tidak tersedia
 - JANGAN katakan produk tidak tersedia hanya karena stock=0 — selalu tampilkan form
-- TOLAK SOPAN pertanyaan di luar layanan CST Logistics
+- TOLAK SOPAN pertanyaan di luar layanan B2B Marketplace and Logistic
+- LARANGAN KERAS: JANGAN panggil create_logistic_order atau show_order_form ketika pelanggan sedang memesan PRODUK (via show_product_order_form atau create_product_order). Order produk dan order pengiriman adalah dua hal berbeda. Hanya buat logistic order jika pelanggan secara eksplisit meminta layanan pengiriman/freight/trucking/customs.
+- JANGAN berasumsi pelanggan butuh layanan pengiriman hanya karena mereka membeli produk. Pelanggan yang membeli produk TIDAK otomatis perlu logistic order.
 
 Layanan yang tersedia:
 - Sea Freight (Laut): FCL dan LCL, domestik & internasional
@@ -113,7 +110,7 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "get_available_services",
-      description: "Dapatkan daftar layanan dan jenis pengiriman yang tersedia di CST Logistics",
+      description: "Dapatkan daftar layanan dan jenis pengiriman yang tersedia di B2B Marketplace and Logistic",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -149,13 +146,31 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_marketplace_categories",
+      description: "Dapatkan daftar kategori produk aktif di marketplace beserta jumlah produk per kategori. Gunakan saat pelanggan bertanya tentang apa saja yang dijual, kategori produk, atau ingin overview marketplace.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "search_products",
-      description: "Cari produk yang tersedia berdasarkan kata kunci nama, SKU, atau kategori. Gunakan saat pelanggan bertanya tentang produk, stok, atau harga produk.",
+      description: "Cari produk marketplace aktif. Mendukung Bahasa Indonesia dan Inggris, sinonim komoditas, typo ringan, dan kategori. Gunakan saat pelanggan bertanya tentang produk, stok, harga, atau HS Code.",
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Kata kunci pencarian (nama produk, SKU, atau kategori)" },
-          itemType: { type: "string", enum: ["barang", "jasa"], description: "Filter tipe item (opsional)" },
+          query: {
+            type: "string",
+            description: "Kata kunci pencarian dalam Bahasa Indonesia atau Inggris (nama produk, kategori, sinonim, atau HS Code)",
+          },
+          limit: {
+            type: "number",
+            description: "Jumlah produk yang dikembalikan (1–5). Default: 5.",
+          },
+          includeSuggestions: {
+            type: "boolean",
+            description: "Sertakan saran kategori jika produk tidak ditemukan. Default: false.",
+          },
         },
         required: ["query"],
       },
@@ -222,7 +237,7 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
           companyName: { type: "string", description: "Nama perusahaan (pakai '-' jika individu)" },
           shipmentType: {
             type: "string",
-            enum: ["Sea Freight", "Air Freight", "Trucking"],
+            enum: ["Sea Freight", "Air Freight", "Trucking", "FOB"],
             description: "Jenis pengiriman",
           },
           origin: { type: "string", description: "Kota/pelabuhan asal" },
@@ -337,6 +352,7 @@ async function handleToolCall(
         { type: "Sea Freight", description: "FCL & LCL, rute domestik & internasional via kapal", etaDomestic: "3-7 hari", etaInternational: "14-45 hari" },
         { type: "Air Freight", description: "Pengiriman cepat via udara", etaDomestic: "1-2 hari", etaInternational: "3-7 hari" },
         { type: "Trucking", description: "CDE, CDD, Fuso, Wingbox, Trailer untuk pengiriman darat", etaDomestic: "1-5 hari" },
+        { type: "FOB", description: "Free On Board — penjual bertanggung jawab hingga barang naik ke kapal di pelabuhan asal", etaInternational: "Sesuai jadwal kapal" },
         { type: "Customs/Pabean", description: "Layanan kepabeanan PIB, PEB, dan dokumen impor/ekspor" },
         { type: "Packing & Crating", description: "Pengemasan profesional untuk barang fragile atau heavy lift" },
       ],
@@ -456,7 +472,7 @@ async function handleToolCall(
         orderNumber,
         companyName: companyName || "-",
         customerName,
-        email: email || `${phone}@wa.cstlogistics.id`,
+        email: email || `${phone}@wa.b2bmarketplace.id`,
         phone,
         shipmentType,
         origin,
@@ -487,7 +503,7 @@ async function handleToolCall(
         orderNumber,
         customerName,
         companyName: companyName || "-",
-        email: email || `${phone}@wa.cstlogistics.id`,
+        email: email || `${phone}@wa.b2bmarketplace.id`,
         phone,
         shipmentType,
         origin,
@@ -508,7 +524,7 @@ async function handleToolCall(
         success: true,
         orderNumber,
         orderId: order.id,
-        message: `Order berhasil dibuat dengan nomor ${orderNumber}. Tim CST Logistics akan segera menghubungi Anda untuk konfirmasi harga.`,
+        message: `Order berhasil dibuat dengan nomor ${orderNumber}. Tim B2B Marketplace and Logistic akan segera menghubungi Anda untuk konfirmasi harga.`,
       });
     } catch (err) {
       logger.error({ err }, "AI agent create_logistic_order failed");
@@ -516,57 +532,65 @@ async function handleToolCall(
     }
   }
 
-  if (toolName === "search_products") {
+  if (toolName === "get_marketplace_categories") {
     try {
-      const { query, itemType } = args as { query: string; itemType?: string };
-      const q = query.trim();
-      const conds = [eq(productsTable.isActive, true)];
-      if (q) {
-        conds.push(or(
-          ilike(productsTable.name, `%${q}%`),
-          ilike(productsTable.sku, `%${q}%`),
-          ilike(productsTable.subcategory, `%${q}%`),
-          ilike(productsTable.description, `%${q}%`),
-        )!);
-      }
-      if (itemType) conds.push(eq(productsTable.itemType, itemType));
-
-      const products = await db
+      // Read-only query: active marketplace categories from vendor_catalog_items
+      const rows = await db
         .select({
-          id: productsTable.id,
-          name: productsTable.name,
-          sku: productsTable.sku,
-          price: productsTable.price,
-          stock: productsTable.stock,
-          unit: productsTable.unit,
-          description: productsTable.description,
-          itemType: productsTable.itemType,
+          kategori: vendorCatalogItemsTable.kategori,
+          categoryKey: vendorCatalogItemsTable.categoryKey,
+          count: sql<number>`count(*)::int`,
         })
-        .from(productsTable)
-        .where(and(...conds))
-        .orderBy(productsTable.name)
-        .limit(10);
+        .from(vendorCatalogItemsTable)
+        .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+        .where(and(
+          ...catalogPublicConditions(),
+          ...catalogSupplierConditions(),
+          or(
+            isNull(vendorCatalogItemsTable.validityDate),
+            gte(vendorCatalogItemsTable.validityDate, sql`CURRENT_DATE`),
+          )!,
+        ))
+        .groupBy(vendorCatalogItemsTable.kategori, vendorCatalogItemsTable.categoryKey)
+        .orderBy(desc(sql<number>`count(*)`))
+        .limit(8);
 
-      if (products.length === 0) {
-        return JSON.stringify({ found: false, message: `Tidak ada produk yang cocok dengan kata kunci "${q}".` });
-      }
+      const categories = rows
+        .filter((r) => r.kategori && Number(r.count) > 0)
+        .map((r) => ({
+          key: r.categoryKey ?? r.kategori,
+          name: r.kategori,
+          activeProductCount: Number(r.count),
+        }));
 
       return JSON.stringify({
-        found: true,
-        total: products.length,
-        products: products.map((p) => ({
-          id: p.id,
-          name: p.name,
-          sku: p.sku,
-          price: Number(p.price),
-          stock: p.stock,
-          unit: p.unit,
-          description: p.description ?? null,
-          itemType: p.itemType,
-        })),
+        found: categories.length > 0,
+        categories,
+        totalActiveProducts: categories.reduce((s, c) => s + c.activeProductCount, 0),
       });
     } catch (err) {
-      logger.error({ err }, "AI agent search_products failed");
+      logger.error({ err }, "AI agent get_marketplace_categories failed");
+      return JSON.stringify({ found: false, categories: [], totalActiveProducts: 0, error: "Gagal memuat kategori." });
+    }
+  }
+
+  if (toolName === "search_products") {
+    try {
+      const { query, limit, includeSuggestions } = args as {
+        query: string;
+        limit?: number;
+        includeSuggestions?: boolean;
+      };
+
+      const result = await searchMarketplace({
+        query: String(query ?? ""),
+        limit: limit ?? 5,
+        includeSuggestions: includeSuggestions ?? false,
+      });
+
+      return JSON.stringify(result);
+    } catch (err) {
+      logger.error({ err }, "AI agent search_products (semantic) failed");
       return JSON.stringify({ found: false, message: "Gagal mencari produk. Silakan coba lagi." });
     }
   }
@@ -858,7 +882,7 @@ aiAgentRouter.post("/quick-order", async (req: Request, res: Response) => {
       orderNumber,
       companyName: companyName || "-",
       customerName,
-      email: email || `${phone}@wa.cstlogistics.id`,
+      email: email || `${phone}@wa.b2bmarketplace.id`,
       phone,
       shipmentType,
       origin,
@@ -887,7 +911,7 @@ aiAgentRouter.post("/quick-order", async (req: Request, res: Response) => {
       orderNumber,
       customerName,
       companyName: companyName || "-",
-      email: email || `${phone}@wa.cstlogistics.id`,
+      email: email || `${phone}@wa.b2bmarketplace.id`,
       phone,
       shipmentType,
       origin,
@@ -959,17 +983,37 @@ aiAgentRouter.post("/quick-product-order", async (req: Request, res: Response) =
     const totalAmount = qty * priceNum;
     const itemsSummary = `${productName} x${qty}`;
 
-    const [order] = await db.insert(ordersTable).values({
+    // Generate order number PRD-YYMMDD-XXXXX
+    const now = new Date();
+    const yy = now.getFullYear().toString().slice(-2);
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const rand = Math.floor(Math.random() * 90000) + 10000;
+    const orderNumber = `PRD-${yy}${mm}${dd}-${rand}`;
+
+    // Simpan ke portal_product_orders agar muncul di halaman Portal Order Produk BizPortal
+    const [portalOrder] = await db.insert(portalProductOrdersTable).values({
+      orderNumber,
       customerName,
-      customerEmail: email || `${phone}@wa.cstlogistics.id`,
-      customerPhone: phone,
-      status: "pending",
-      totalAmount: String(totalAmount),
-      taxAmount: "0",
+      email: email || `${phone}@wa.b2bmarketplace.id`,
+      phone,
+      shippingAddress: "-",
+      notes: notes ? `[AI Chat] ${notes}` : "[AI Chat]",
+      subtotal: String(totalAmount),
       grandTotal: String(totalAmount),
-      items: itemsSummary,
-      lineItems: [{ name: productName, qty, unitPrice: priceNum }],
+      status: "New Order",
     }).returning();
+
+    await db.insert(portalProductOrderItemsTable).values({
+      orderId: portalOrder.id,
+      productId: productId ?? null,
+      productName,
+      productSku: null,
+      unit: null,
+      unitPrice: String(priceNum),
+      qty,
+      subtotal: String(totalAmount),
+    });
 
     if (notes) {
       await db.insert(aiChatMessagesTable).values({
@@ -979,10 +1023,37 @@ aiAgentRouter.post("/quick-product-order", async (req: Request, res: Response) =
       });
     }
 
+    // Kirim notifikasi WA ke admin (fire-and-forget)
+    getAdminWa().then((adminWa) => {
+      if (!adminWa) return;
+      const msg =
+        `🛒 *Order Produk Baru (AI Chat)*\n` +
+        `No. Order: ${orderNumber}\n` +
+        `Customer: ${customerName}\n` +
+        (phone ? `WhatsApp: ${phone}\n` : "") +
+        (email ? `Email: ${email}\n` : "") +
+        `Produk: ${productName} x${qty}\n` +
+        `Harga Satuan: Rp ${priceNum.toLocaleString("id-ID")}\n` +
+        `Total: Rp ${totalAmount.toLocaleString("id-ID")}` +
+        (notes ? `\nCatatan: ${notes}` : "");
+      return sendWhatsApp(adminWa, msg);
+    }).catch(() => undefined);
+
+    // Kirim konfirmasi WA ke customer
+    if (phone) {
+      const custMsg =
+        `✅ *Pesanan Anda Berhasil Diterima!*\n` +
+        `No. Order: *${orderNumber}*\n\n` +
+        `• ${productName} × ${qty} — Rp ${totalAmount.toLocaleString("id-ID")}\n\n` +
+        `Total: Rp ${totalAmount.toLocaleString("id-ID")}\n\n` +
+        `Tim kami akan segera menghubungi Anda untuk konfirmasi pengiriman. Terima kasih! 🙏`;
+      sendWhatsApp(phone, custMsg).catch(() => undefined);
+    }
+
     return res.status(201).json({
       success: true,
-      orderNumber: `PRD/${order.id}`,
-      orderId: order.id,
+      orderNumber,
+      orderId: portalOrder.id,
       sessionToken: session.sessionToken,
     });
   } catch (err) {
@@ -1650,7 +1721,7 @@ aiAgentRouter.post("/session/:token/admin-reply", async (req: Request, res: Resp
 
     if (order?.phone) {
       const waMsg =
-        `📦 *Balasan dari CST Logistics*\n` +
+        `📦 *Balasan dari B2B Marketplace and Logistic*\n` +
         (order.orderNumber ? `No. Order: ${order.orderNumber}\n\n` : `\n`) +
         message.trim();
       sendWhatsApp(order.phone, waMsg).catch((err: unknown) =>

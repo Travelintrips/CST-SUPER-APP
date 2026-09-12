@@ -5,37 +5,68 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCompany } from "@/contexts/CompanyContext";
+import { apiFetch } from "@/lib/api";
 import {
   useGetAccountingSettings, useUpdateAccountingSettings, useListAccounts, useListJournals, useListTaxes,
-  getGetAccountingSettingsQueryKey,
+  getGetAccountingSettingsQueryKey, getListAccountsQueryKey, getListJournalsQueryKey, getListTaxesQueryKey,
 } from "@workspace/api-client-react";
 import type { UpdateAccountingSettingsBody } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Settings as SettingsIcon, Upload, X } from "lucide-react";
+import { ArrowLeft, Settings as SettingsIcon, Upload, X, Send, CheckCircle2, Clock, Plus, Pencil, Trash2 } from "lucide-react";
 import { useUpload } from "@workspace/object-storage-web";
+import { Link } from "wouter";
 
 type SettingsForm = Required<UpdateAccountingSettingsBody>;
 
 const EMPTY: SettingsForm = {
   arAccountId: null, apAccountId: null, salesIncomeAccountId: null, purchaseExpenseAccountId: null,
   defaultBankAccountId: null, defaultCashAccountId: null,
+  qrisAccountId: null,
   ppnOutputAccountId: null, ppnInputAccountId: null,
   inventoryAccountId: null, cogsAccountId: null,
   salesJournalId: null, purchaseJournalId: null,
-  bankJournalId: null, cashJournalId: null,
+  bankJournalId: null, qrisJournalId: null, cashJournalId: null,
   defaultSalesTaxId: null, defaultPurchaseTaxId: null,
   companyName: null, companyAddress: null, companyNpwp: null, companyLogoUrl: null,
 };
 
+type RevenueMapping = {
+  id: number;
+  moduleKey: string;
+  serviceKey: string;
+  label: string;
+  revenueAccountId: number;
+  revenueAccountCode: string | null;
+  revenueAccountName: string | null;
+  isActive: boolean;
+};
+
+const REVENUE_MODULES = [
+  { value: "sport_center", label: "Sport Center" },
+  { value: "tenant", label: "Tenant / Rental" },
+  { value: "logistics", label: "Logistics / Freight" },
+  { value: "pos", label: "POS / Produk" },
+  { value: "other", label: "Usaha Lainnya" },
+];
+
 function getLogoServeUrl(objectPath: string) {
   if (objectPath.startsWith("/objects/")) return `/api/storage${objectPath}`;
   return objectPath;
+}
+
+interface WaReportSettings {
+  enabled: boolean;
+  sendHourWib: number;
+  recipients: string[];
+  lastSentDate: string | null;
+  lastStatus: string | null;
 }
 
 export default function AccountingSettingsPage() {
@@ -43,13 +74,89 @@ export default function AccountingSettingsPage() {
   const { toast } = useToast();
   const { t } = useLanguage();
   const { activeCompanyId } = useCompany();
-  const { data: settings, isLoading } = useGetAccountingSettings();
-  const { data: accounts } = useListAccounts();
-  const { data: journals } = useListJournals();
-  const { data: taxes } = useListTaxes();
-  const updateMut = useUpdateAccountingSettings();
+  const companyQuery = typeof activeCompanyId === "number" && activeCompanyId > 0
+    ? `?company=${activeCompanyId}`
+    : "";
+  const queryEnabled = companyQuery.length > 0;
+  const { data: settings, isLoading, error: settingsError } = useGetAccountingSettings({
+    query: {
+      queryKey: [...getGetAccountingSettingsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/settings${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: accounts, error: accountsError } = useListAccounts({
+    query: {
+      queryKey: [...getListAccountsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/accounts${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: journals, error: journalsError } = useListJournals({
+    query: {
+      queryKey: [...getListJournalsQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/journals${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const { data: taxes, error: taxesError } = useListTaxes({
+    query: {
+      queryKey: [...getListTaxesQueryKey(), activeCompanyId],
+      queryFn: () => apiFetch(`/api/accounting/taxes${companyQuery}`),
+      enabled: queryEnabled,
+    },
+  });
+  const updateMut = useUpdateAccountingSettings({
+    mutation: {
+      mutationFn: ({ data }) => apiFetch(`/api/accounting/settings${companyQuery}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    },
+  });
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [logoUploading, setLogoUploading] = useState(false);
+
+  // WA Report state
+  const [waSettings, setWaSettings] = useState<WaReportSettings | null>(null);
+  const [waSending, setWaSending] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/accounting/wa-report/settings", { credentials: "include" })
+      .then((r) => r.json())
+      .then((d) => setWaSettings(d as WaReportSettings))
+      .catch(() => {});
+  }, []);
+
+  const handleSendNow = async () => {
+    setWaSending(true);
+    try {
+      const res = await fetch("/api/accounting/wa-report/send-now", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json() as { ok: boolean; message: string; recipients: string[]; errors: string[] };
+      if (data.ok) {
+        toast({ title: "Laporan terkirim", description: `Ke: ${data.recipients.join(", ")}` });
+      } else if (data.errors?.length) {
+        toast({ title: "Sebagian gagal", description: data.errors.join("; "), variant: "destructive" });
+      } else {
+        toast({ title: "Tidak terkirim", description: data.message, variant: "destructive" });
+      }
+      // refresh status
+      fetch("/api/accounting/wa-report/settings", { credentials: "include" })
+        .then((r) => r.json())
+        .then((d) => setWaSettings(d as WaReportSettings))
+        .catch(() => {});
+    } catch (e) {
+      toast({ title: "Error", description: String(e), variant: "destructive" });
+    } finally {
+      setWaSending(false);
+    }
+  };
 
   const { uploadFile } = useUpload({
     onError: (err) => {
@@ -59,6 +166,16 @@ export default function AccountingSettingsPage() {
   });
 
   const [form, setForm] = useState<SettingsForm>(EMPTY);
+  const [revenueMappings, setRevenueMappings] = useState<RevenueMapping[]>([]);
+  const [mappingForm, setMappingForm] = useState({
+    moduleKey: "sport_center",
+    serviceKey: "*",
+    label: "",
+    revenueAccountId: null as number | null,
+    isActive: true,
+  });
+  const [editingMappingId, setEditingMappingId] = useState<number | null>(null);
+  const [mappingBusy, setMappingBusy] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -69,6 +186,7 @@ export default function AccountingSettingsPage() {
         purchaseExpenseAccountId: settings.purchaseExpenseAccountId ?? null,
         defaultBankAccountId: settings.defaultBankAccountId ?? null,
         defaultCashAccountId: settings.defaultCashAccountId ?? null,
+        qrisAccountId: settings.qrisAccountId ?? null,
         ppnOutputAccountId: settings.ppnOutputAccountId ?? null,
         ppnInputAccountId: settings.ppnInputAccountId ?? null,
         inventoryAccountId: settings.inventoryAccountId ?? null,
@@ -76,6 +194,7 @@ export default function AccountingSettingsPage() {
         salesJournalId: settings.salesJournalId ?? null,
         purchaseJournalId: settings.purchaseJournalId ?? null,
         bankJournalId: settings.bankJournalId ?? null,
+        qrisJournalId: settings.qrisJournalId ?? null,
         cashJournalId: settings.cashJournalId ?? null,
         defaultSalesTaxId: settings.defaultSalesTaxId ?? null,
         defaultPurchaseTaxId: settings.defaultPurchaseTaxId ?? null,
@@ -104,10 +223,104 @@ export default function AccountingSettingsPage() {
     try {
       await updateMut.mutateAsync({ data: form });
       toast({ title: t.common.success });
-      qc.invalidateQueries({ queryKey: getGetAccountingSettingsQueryKey() });
+      qc.invalidateQueries({ queryKey: [...getGetAccountingSettingsQueryKey(), activeCompanyId] });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       toast({ title: t.common.error, description: msg, variant: "destructive" });
+    }
+  };
+
+  const loadRevenueMappings = async () => {
+    if (!activeCompanyId) {
+      setRevenueMappings([]);
+      return;
+    }
+    const res = await fetch(`/api/accounting/revenue-mappings?companyId=${activeCompanyId}`, { credentials: "include" });
+    if (!res.ok) throw new Error("Gagal memuat mapping pendapatan");
+    setRevenueMappings(await res.json() as RevenueMapping[]);
+  };
+
+  useEffect(() => {
+    loadRevenueMappings().catch(() => {});
+  }, [activeCompanyId]);
+
+  const resetMappingForm = () => {
+    setEditingMappingId(null);
+    setMappingForm({
+      moduleKey: "sport_center",
+      serviceKey: "*",
+      label: "",
+      revenueAccountId: null,
+      isActive: true,
+    });
+  };
+
+  const saveRevenueMapping = async () => {
+    if (!activeCompanyId) {
+      toast({ title: "Pilih perusahaan aktif terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    if (!mappingForm.label.trim() || !mappingForm.revenueAccountId) {
+      toast({ title: "Lengkapi label dan akun pendapatan", variant: "destructive" });
+      return;
+    }
+    setMappingBusy(true);
+    try {
+      const path = editingMappingId
+        ? `/api/accounting/revenue-mappings/${editingMappingId}`
+        : "/api/accounting/revenue-mappings";
+      const res = await fetch(path, {
+        method: editingMappingId ? "PATCH" : "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...mappingForm,
+          companyId: activeCompanyId,
+          serviceKey: mappingForm.serviceKey.trim() || "*",
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRevenueMappings();
+      resetMappingForm();
+      toast({ title: "Mapping pendapatan tersimpan" });
+    } catch (e) {
+      toast({ title: "Gagal menyimpan mapping", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setMappingBusy(false);
+    }
+  };
+
+  const editRevenueMapping = (mapping: RevenueMapping) => {
+    setEditingMappingId(mapping.id);
+    setMappingForm({
+      moduleKey: mapping.moduleKey,
+      serviceKey: mapping.serviceKey,
+      label: mapping.label,
+      revenueAccountId: mapping.revenueAccountId,
+      isActive: mapping.isActive,
+    });
+  };
+
+  const deleteRevenueMapping = async (mapping: RevenueMapping) => {
+    if (!window.confirm(`Hapus mapping "${mapping.label}"?`)) return;
+    if (!activeCompanyId) {
+      toast({ title: "Pilih perusahaan aktif terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    setMappingBusy(true);
+    try {
+      const res = await fetch(`/api/accounting/revenue-mappings/${mapping.id}?companyId=${activeCompanyId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRevenueMappings();
+      if (editingMappingId === mapping.id) resetMappingForm();
+      toast({ title: "Mapping pendapatan dihapus" });
+    } catch (e) {
+      toast({ title: "Gagal menghapus mapping", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+    } finally {
+      setMappingBusy(false);
     }
   };
 
@@ -117,7 +330,7 @@ export default function AccountingSettingsPage() {
       <div>
         <Label>{label}</Label>
         <Select value={form[key] ? String(form[key]) : "none"} onValueChange={(v) => setForm({ ...form, [key]: v === "none" ? null : parseInt(v) })}>
-          <SelectTrigger data-testid={`select-${key}`}><SelectValue /></SelectTrigger>
+          <SelectTrigger data-testid={`select-${String(key)}`}><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="none">— Tidak ada —</SelectItem>
             {list.map((a) => (<SelectItem key={a.id} value={String(a.id)}>{a.code} {a.name}</SelectItem>))}
@@ -131,7 +344,7 @@ export default function AccountingSettingsPage() {
     <div>
       <Label>{label}</Label>
       <Select value={form[key] ? String(form[key]) : "none"} onValueChange={(v) => setForm({ ...form, [key]: v === "none" ? null : parseInt(v) })}>
-        <SelectTrigger data-testid={`select-${key}`}><SelectValue /></SelectTrigger>
+        <SelectTrigger data-testid={`select-${String(key)}`}><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="none">— Tidak ada —</SelectItem>
           {(journals ?? []).filter((j) => j.type === type).map((j) => (<SelectItem key={j.id} value={String(j.id)}>{j.code} - {j.name}</SelectItem>))}
@@ -144,7 +357,7 @@ export default function AccountingSettingsPage() {
     <div>
       <Label>{label}</Label>
       <Select value={form[key] ? String(form[key]) : "none"} onValueChange={(v) => setForm({ ...form, [key]: v === "none" ? null : parseInt(v) })}>
-        <SelectTrigger data-testid={`select-${key}`}><SelectValue /></SelectTrigger>
+        <SelectTrigger data-testid={`select-${String(key)}`}><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="none">— Tidak ada —</SelectItem>
           {(taxes ?? []).filter((t) => t.kind === kind && t.isActive).map((t) => (<SelectItem key={t.id} value={String(t.id)}>{t.name} ({t.rate}%)</SelectItem>))}
@@ -153,12 +366,21 @@ export default function AccountingSettingsPage() {
     </div>
   );
 
+  if (!queryEnabled) {
+    return <AppShell><div className="p-6 text-muted-foreground">Pilih satu perusahaan untuk mengatur mapping akunting.</div></AppShell>;
+  }
   if (isLoading) return <AppShell><div className="p-6">Memuat...</div></AppShell>;
+  const loadError = settingsError ?? accountsError ?? journalsError ?? taxesError;
+  if (loadError) {
+    return <AppShell><div className="p-6 text-destructive">Gagal memuat pengaturan akunting: {loadError instanceof Error ? loadError.message : String(loadError)}</div></AppShell>;
+  }
 
   return (
     <AppShell>
       <div className="space-y-6 p-6">
         <div>
+          <Link href="/settings"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
           <h1 className="text-2xl font-bold flex items-center gap-2"><SettingsIcon className="h-6 w-6" />Pengaturan Akunting</h1>
           <p className="text-sm text-muted-foreground">Mapping akun &amp; jurnal default untuk auto-posting semua modul</p>
         </div>
@@ -266,7 +488,7 @@ export default function AccountingSettingsPage() {
           <CardContent className="grid grid-cols-2 gap-4">
             {accSelect("arAccountId", "Piutang Usaha (AR)", ["asset"])}
             {accSelect("apAccountId", "Hutang Usaha (AP)", ["liability"])}
-            {accSelect("salesIncomeAccountId", "Pendapatan Penjualan", ["revenue"])}
+            {accSelect("salesIncomeAccountId", "Pendapatan Default / Fallback", ["revenue"])}
             {accSelect("purchaseExpenseAccountId", "Beban Pembelian / HPP", ["expense"])}
             {accSelect("ppnOutputAccountId", "PPN Keluaran", ["liability"])}
             {accSelect("ppnInputAccountId", "PPN Masukan", ["asset"])}
@@ -274,10 +496,108 @@ export default function AccountingSettingsPage() {
         </Card>
 
         <Card>
+          <CardHeader>
+            <CardTitle>Mapping Pendapatan per Modul / Layanan</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Mapping spesifik diprioritaskan sebelum akun Pendapatan Default / Fallback.
+              Gunakan <span className="font-mono">*</span> untuk semua layanan dalam modul.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+              <div>
+                <Label>Modul</Label>
+                <Select value={mappingForm.moduleKey} onValueChange={(value) => setMappingForm({ ...mappingForm, moduleKey: value })}>
+                  <SelectTrigger data-testid="select-revenue-mapping-module"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {REVENUE_MODULES.map((module) => <SelectItem key={module.value} value={module.value}>{module.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Service Key</Label>
+                <Input
+                  data-testid="input-revenue-mapping-service"
+                  value={mappingForm.serviceKey}
+                  onChange={(e) => setMappingForm({ ...mappingForm, serviceKey: e.target.value })}
+                  placeholder="* atau booking"
+                />
+              </div>
+              <div>
+                <Label>Nama Mapping</Label>
+                <Input
+                  data-testid="input-revenue-mapping-label"
+                  value={mappingForm.label}
+                  onChange={(e) => setMappingForm({ ...mappingForm, label: e.target.value })}
+                  placeholder="Pendapatan Booking Sport Center"
+                />
+              </div>
+              <div>
+                <Label>Akun Pendapatan</Label>
+                <Select
+                  value={mappingForm.revenueAccountId ? String(mappingForm.revenueAccountId) : "none"}
+                  onValueChange={(value) => setMappingForm({ ...mappingForm, revenueAccountId: value === "none" ? null : Number(value) })}
+                >
+                  <SelectTrigger data-testid="select-revenue-mapping-account"><SelectValue placeholder="Pilih akun" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Pilih akun —</SelectItem>
+                    {(accounts ?? []).filter((a) => a.isActive && a.type === "revenue").map((a) => (
+                      <SelectItem key={a.id} value={String(a.id)}>{a.code} {a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end gap-2">
+                <Button onClick={saveRevenueMapping} disabled={mappingBusy} className="flex-1" data-testid="button-save-revenue-mapping">
+                  {editingMappingId ? <Pencil className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
+                  {editingMappingId ? "Update" : "Tambah"}
+                </Button>
+                {editingMappingId && <Button variant="outline" onClick={resetMappingForm} disabled={mappingBusy}>Batal</Button>}
+              </div>
+            </div>
+
+            {revenueMappings.length === 0 ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                Belum ada mapping spesifik. Sistem memakai akun default/fallback.
+              </div>
+            ) : (
+              <div className="divide-y rounded-md border">
+                {revenueMappings.map((mapping) => (
+                  <div key={mapping.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+                    <div className="min-w-0">
+                      <div className="font-medium">{mapping.label}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {REVENUE_MODULES.find((module) => module.value === mapping.moduleKey)?.label ?? mapping.moduleKey}
+                        {" · service: "}
+                        <span className="font-mono">{mapping.serviceKey}</span>
+                        {" · "}
+                        <span className="font-mono">{mapping.revenueAccountCode ?? `#${mapping.revenueAccountId}`}</span>
+                        {" "}
+                        {mapping.revenueAccountName ?? ""}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={mapping.isActive ? "default" : "secondary"}>{mapping.isActive ? "Aktif" : "Nonaktif"}</Badge>
+                      <Button size="icon" variant="ghost" aria-label="Edit mapping" onClick={() => editRevenueMapping(mapping)} disabled={mappingBusy}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" aria-label="Hapus mapping" onClick={() => deleteRevenueMapping(mapping)} disabled={mappingBusy}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle>Akun Default — Kas, Bank &amp; Persediaan</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-4">
             {accSelect("defaultBankAccountId", "Bank Default", ["asset"])}
-            {accSelect("defaultCashAccountId", "Kas Default (POS tunai/QRIS)", ["asset"])}
+            {accSelect("defaultCashAccountId", "Kas Default (POS Tunai)", ["asset"])}
+            {accSelect("qrisAccountId", "Akun Clearing QRIS", ["asset"])}
             {accSelect("inventoryAccountId", "Persediaan Barang (Trading)", ["asset"])}
             {accSelect("cogsAccountId", "HPP / COGS", ["expense"])}
           </CardContent>
@@ -289,7 +609,8 @@ export default function AccountingSettingsPage() {
             {jSelect("salesJournalId", "Jurnal Penjualan", "sales")}
             {jSelect("purchaseJournalId", "Jurnal Pembelian", "purchase")}
             {jSelect("bankJournalId", "Jurnal Bank", "bank")}
-            {jSelect("cashJournalId", "Jurnal Kas (POS tunai/QRIS)", "cash")}
+            {jSelect("qrisJournalId", "Jurnal QRIS", "bank")}
+            {jSelect("cashJournalId", "Jurnal Kas (POS Tunai)", "cash")}
           </CardContent>
         </Card>
 
@@ -298,6 +619,63 @@ export default function AccountingSettingsPage() {
           <CardContent className="grid grid-cols-2 gap-4">
             {tSelect("defaultSalesTaxId", "Pajak Penjualan Default", "sale")}
             {tSelect("defaultPurchaseTaxId", "Pajak Pembelian Default", "purchase")}
+          </CardContent>
+        </Card>
+
+        {/* ── Laporan WA Harian ── */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-green-600" />
+              Laporan Harian WhatsApp
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Jadwal Otomatis</p>
+                <p className="text-xs text-muted-foreground">Setiap hari pukul 22:00 WIB</p>
+              </div>
+              {waSettings ? (
+                waSettings.enabled
+                  ? <Badge className="bg-green-100 text-green-700 border-green-200"><CheckCircle2 className="h-3 w-3 mr-1" />Aktif</Badge>
+                  : <Badge variant="secondary"><Clock className="h-3 w-3 mr-1" />Nonaktif</Badge>
+              ) : (
+                <Badge variant="outline">Memuat...</Badge>
+              )}
+            </div>
+
+            <div>
+              <p className="text-sm font-medium mb-1">Penerima</p>
+              <div className="flex gap-2 flex-wrap">
+                {waSettings?.recipients?.map((r) => (
+                  <Badge key={r} variant="outline" className="font-mono text-xs">{r}</Badge>
+                )) ?? <span className="text-xs text-muted-foreground">—</span>}
+              </div>
+            </div>
+
+            {waSettings?.lastSentDate && (
+              <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+                Terakhir dikirim: <span className="font-medium text-foreground">{waSettings.lastSentDate}</span>
+                {waSettings.lastStatus && (
+                  <span className="ml-2">— {waSettings.lastStatus}</span>
+                )}
+              </div>
+            )}
+
+            <div className="pt-1">
+              <Button
+                onClick={handleSendNow}
+                disabled={waSending}
+                className="gap-2"
+              >
+                <Send className="h-4 w-4" />
+                {waSending ? "Mengirim..." : "Kirim Laporan Sekarang"}
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1">
+                Mengirim laporan hari ini ke semua penerima di atas.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

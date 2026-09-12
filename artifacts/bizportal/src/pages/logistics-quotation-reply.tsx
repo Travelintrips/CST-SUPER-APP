@@ -42,8 +42,9 @@ import {
   Clock,
   Inbox,
   Reply,
-  Phone,
+  Phone, ArrowLeft,
 } from "lucide-react";
+import { Link } from "wouter";
 
 const BASE_URL = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -117,8 +118,6 @@ export default function LogisticsQuotationReplyPage() {
     serviceType: "",
     route: "",
     vendorPrice: "",
-    markupType: "percentage",
-    markupValue: "",
     finalPrice: "",
     pickupDate: "",
     deliveryDate: "",
@@ -140,26 +139,13 @@ export default function LogisticsQuotationReplyPage() {
   const [replySending, setReplySending] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  function calcFinalPrice(vendorPrice: string, markupType: string, markupValue: string): number {
-    const vp = parseFloat(vendorPrice.replace(/\./g, "").replace(",", ".")) || 0;
-    const mv = parseFloat(markupValue.replace(/\./g, "").replace(",", ".")) || 0;
-    if (markupType === "percentage") return vp + (vp * mv) / 100;
-    return vp + mv;
-  }
-
-  useEffect(() => {
-    if (form.vendorPrice !== "" && form.markupValue !== "") {
-      const fp = calcFinalPrice(form.vendorPrice, form.markupType, form.markupValue);
-      setForm((prev) => ({ ...prev, finalPrice: Math.round(fp).toString() }));
-    }
-  }, [form.vendorPrice, form.markupType, form.markupValue]);
 
   function buildPreview(): string {
     const fp = parseFloat(form.finalPrice) || 0;
     const fmt = (n: number) => `Rp ${Math.round(n).toLocaleString("id-ID")}`;
     return (
       `Halo ${form.customerName || "{customerName}"},\n\n` +
-      `Berikut quotation layanan CST Logistics:\n\n` +
+      `Berikut quotation layanan B2B Marketplace and Logistic:\n\n` +
       `No. RFQ       : ${form.rfqId || "-"}\n` +
       `Layanan       : ${form.serviceType || "-"}\n` +
       `Rute          : ${form.route || "-"}\n` +
@@ -169,7 +155,7 @@ export default function LogisticsQuotationReplyPage() {
       `Status        : ${form.status}\n` +
       (form.notes ? `\nCatatan:\n${form.notes}\n` : "") +
       `\nSilakan konfirmasi apabila quotation ini disetujui.\n\n` +
-      `Terima kasih,\nCST Logistics`
+      `Terima kasih,\nB2B Marketplace and Logistic`
     );
   }
 
@@ -279,8 +265,6 @@ export default function LogisticsQuotationReplyPage() {
           serviceType: form.serviceType || null,
           route: form.route || null,
           vendorPrice: form.vendorPrice ? parseFloat(form.vendorPrice) : null,
-          markupType: form.markupType,
-          markupValue: parseFloat(form.markupValue) || 0,
           finalPrice: parseFloat(form.finalPrice),
           pickupDate: form.pickupDate || null,
           deliveryDate: form.deliveryDate || null,
@@ -335,8 +319,6 @@ export default function LogisticsQuotationReplyPage() {
       serviceType: "",
       route: "",
       vendorPrice: "",
-      markupType: "percentage",
-      markupValue: "",
       finalPrice: "",
       pickupDate: "",
       deliveryDate: "",
@@ -367,6 +349,8 @@ export default function LogisticsQuotationReplyPage() {
         <div className="flex items-center gap-3">
           <MessageCircle className="h-6 w-6 text-green-600" />
           <div>
+            <Link href="/logistics/rfq"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold tracking-tight">Balasan Quotation via WhatsApp</h1>
             <p className="text-sm text-muted-foreground">
               Kirim quotation ke customer & lihat pesan masuk dari vendor/customer
@@ -443,53 +427,23 @@ export default function LogisticsQuotationReplyPage() {
 
                 <Card>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Harga & Markup</CardTitle>
+                    <CardTitle className="text-base">Harga</CardTitle>
                   </CardHeader>
                   <CardContent className="grid gap-4 sm:grid-cols-2">
-                    {field("Harga Vendor (Rp)", "vendorPrice", { placeholder: "5000000", type: "number" })}
+                    {field("Harga Vendor / Harga Dasar (Rp)", "vendorPrice", { placeholder: "5000000", type: "number" })}
 
                     <div className="space-y-1.5">
-                      <Label>Tipe Markup</Label>
-                      <Select
-                        value={form.markupType}
-                        onValueChange={(v) => setForm((p) => ({ ...p, markupType: v }))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="percentage">Persen (%)</SelectItem>
-                          <SelectItem value="nominal">Nominal (Rp)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label>
-                        Markup{" "}
-                        {form.markupType === "percentage" ? "(%" : "(Rp)"}
-                      </Label>
+                      <Label className="font-semibold text-green-700">Harga Jual ke Customer (Rp) *</Label>
                       <Input
                         type="number"
-                        placeholder={form.markupType === "percentage" ? "10" : "500000"}
-                        value={form.markupValue}
-                        onChange={(e) => setForm((p) => ({ ...p, markupValue: e.target.value }))}
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="font-semibold text-green-700">Harga Final Customer (Rp) *</Label>
-                      <Input
-                        type="number"
-                        placeholder="Dihitung otomatis"
+                        placeholder="Masukkan harga jual..."
                         value={form.finalPrice}
                         onChange={(e) => setForm((p) => ({ ...p, finalPrice: e.target.value }))}
                         className="border-green-300 focus:border-green-500 font-semibold"
                       />
-                      {form.vendorPrice && form.markupValue && (
+                      {form.vendorPrice && form.finalPrice && (
                         <p className="text-xs text-muted-foreground">
-                          {idr(parseFloat(form.vendorPrice))} + {form.markupType === "percentage" ? `${form.markupValue}%` : `Rp ${parseFloat(form.markupValue).toLocaleString("id-ID")}`}
-                          {" "}= <span className="text-green-700 font-semibold">{idr(parseFloat(form.finalPrice))}</span>
+                          Profit: <span className="text-green-700 font-semibold">{idr(parseFloat(form.finalPrice) - parseFloat(form.vendorPrice))}</span>
                         </p>
                       )}
                     </div>

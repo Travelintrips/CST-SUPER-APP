@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, integer, text, numeric, timestamp, boolean,
+  pgTable, serial, integer, text, numeric, timestamp, boolean, jsonb,
 } from "drizzle-orm/pg-core";
 import { logisticOrdersTable, logisticOrderRfqsTable } from "./logisticOrders";
 import { suppliersTable } from "./suppliers";
@@ -23,6 +23,13 @@ export const customerQuoteLinksTable = pgTable("customer_quote_links", {
   sentAt: timestamp("sent_at").defaultNow(),
   quotationPdfUrl: text("quotation_pdf_url"),
   quotationNumber: text("quotation_number"),
+  categoryKey: text("category_key"),
+  templateId: text("template_id"),
+  templateVersion: text("template_version"),
+  templateSnapshot: jsonb("template_snapshot").$type<Record<string, unknown> | null>(),
+  // ── Media Foundation ──────────────────────────────────────────────────────
+  mediaAssets: jsonb("media_assets").$type<Record<string, unknown>[]>().notNull().default([]),
+  revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -47,6 +54,7 @@ export const orderTaskLinksTable = pgTable("order_task_links", {
   label: text("label"),
   status: text("status").notNull().default("active"),
   expiredAt: timestamp("expired_at"),
+  revokedAt: timestamp("revoked_at"),
   openedAt: timestamp("opened_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -69,6 +77,8 @@ export const customerOrderLinksTable = pgTable("customer_order_links", {
   orderId: integer("order_id").notNull().references(() => logisticOrdersTable.id, { onDelete: "cascade" }),
   token: text("token").notNull().unique(),
   status: text("status").notNull().default("active"),
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

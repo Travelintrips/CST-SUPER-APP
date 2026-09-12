@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "wouter";
-import { Truck, CheckCircle2, XCircle, Camera, Clock, User, Phone, CarFront, FileText, AlertCircle, ArrowLeft, Package, MapPin, Calendar, Weight } from "lucide-react";
+import { Truck, CheckCircle2, XCircle, Camera, Clock, User, Phone, CarFront, FileText, AlertCircle, Package, MapPin, Calendar, Weight } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 function apiUrl(path: string) {
@@ -9,7 +10,6 @@ function apiUrl(path: string) {
 
 interface OrderInfo {
   orderNumber: string;
-
   origin: string;
   destination: string;
   commodity: string | null;
@@ -22,7 +22,6 @@ interface OrderInfo {
   vendorNameFromDb: string | null;
   alreadySubmitted: boolean;
 }
-
 
 const MONTHS_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agt","Sep","Okt","Nov","Des"];
 function formatDateID(dateStr: string | null): string {
@@ -73,6 +72,7 @@ function InputField({
 export default function VendorResponsePage() {
   const params = useParams<{ orderNumber: string }>();
   const orderNumber = params.orderNumber ?? "";
+  const { t } = useLanguage();
   const searchParams = typeof window !== "undefined"
     ? new URLSearchParams(window.location.search)
     : new URLSearchParams();
@@ -115,7 +115,7 @@ export default function VendorResponsePage() {
       localController.abort();
       if (!signal.aborted) {
         setLoading(false);
-        setNetworkError("Koneksi timeout (>15 detik). Periksa internet Anda lalu coba lagi.");
+        setNetworkError(t("vendorResponse.errorTimeout", "Koneksi timeout (>15 detik). Periksa internet Anda lalu coba lagi."));
       }
     }, 15000);
 
@@ -143,7 +143,7 @@ export default function VendorResponsePage() {
       .catch((err) => {
         clearTimeout(timeoutId);
         if (err?.name === "AbortError") return;
-        setNetworkError("Gagal memuat data. Periksa koneksi internet Anda.");
+        setNetworkError(t("vendorResponse.errorLoadData", "Gagal memuat data. Periksa koneksi internet Anda."));
       })
       .finally(() => setLoading(false));
   }
@@ -164,9 +164,9 @@ export default function VendorResponsePage() {
   }
 
   async function handleSubmit() {
-    if (!status) { setError("Pilih status READY atau NOT READY terlebih dahulu."); return; }
-    if (status === "READY" && !driverName.trim()) { setError("Nama driver wajib diisi jika status READY."); return; }
-    if (status === "READY" && !plateNumber.trim()) { setError("Plat nomor wajib diisi jika status READY."); return; }
+    if (!status) { setError(t("vendorResponse.errorSelectStatus", "Pilih status READY atau NOT READY terlebih dahulu.")); return; }
+    if (status === "READY" && !driverName.trim()) { setError(t("vendorResponse.errorDriverRequired", "Nama driver wajib diisi jika status READY.")); return; }
+    if (status === "READY" && !plateNumber.trim()) { setError(t("vendorResponse.errorPlateRequired", "Plat nomor wajib diisi jika status READY.")); return; }
     setError(null);
     setSubmitting(true);
 
@@ -210,13 +210,13 @@ export default function VendorResponsePage() {
 
       if (!res.ok) {
         const data = await res.json();
-        setError(data.error ?? "Terjadi kesalahan. Coba lagi.");
+        setError(data.error ?? t("vendorResponse.errorGeneral", "Terjadi kesalahan. Coba lagi."));
         return;
       }
 
       setSubmitted(true);
     } catch {
-      setError("Koneksi gagal. Periksa internet Anda dan coba lagi.");
+      setError(t("vendorResponse.errorConnFailed", "Koneksi gagal. Periksa internet Anda dan coba lagi."));
     } finally {
       setSubmitting(false);
     }
@@ -227,7 +227,7 @@ export default function VendorResponsePage() {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-slate-400 text-sm">Memuat data order...</p>
+          <p className="text-slate-400 text-sm">{t("vendorResponse.loading", "Memuat data order...")}</p>
         </div>
       </div>
     );
@@ -241,16 +241,16 @@ export default function VendorResponsePage() {
             <AlertCircle className="w-9 h-9 text-orange-400" />
           </div>
           <div>
-            <h2 className="text-white text-xl font-bold mb-2">Gagal Memuat</h2>
+            <h2 className="text-white text-xl font-bold mb-2">{t("vendorResponse.loadFailed", "Gagal Memuat")}</h2>
             <p className="text-slate-400 text-sm">{networkError}</p>
           </div>
           <button
             onClick={() => loadOrder()}
             className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-6 rounded-xl transition-colors"
           >
-            Coba Lagi
+            {t("vendorResponse.retry", "Coba Lagi")}
           </button>
-          <p className="text-slate-600 text-xs">No. order: <span className="font-mono text-slate-500">{orderNumber}</span></p>
+          <p className="text-slate-600 text-xs">{t("vendorResponse.orderNo", "No. order:")} <span className="font-mono text-slate-500">{orderNumber}</span></p>
         </div>
       </div>
     );
@@ -261,9 +261,11 @@ export default function VendorResponsePage() {
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
         <div className="text-center space-y-4">
           <AlertCircle className="w-16 h-16 text-red-400 mx-auto" />
-          <h2 className="text-white text-xl font-bold">Order Tidak Ditemukan</h2>
-          <p className="text-slate-400 text-sm">No. order <span className="font-mono text-blue-400">{orderNumber}</span> tidak ditemukan dalam sistem.</p>
-          <p className="text-slate-500 text-xs">Pastikan link yang Anda gunakan benar, atau hubungi admin CST Logistics.</p>
+          <h2 className="text-white text-xl font-bold">{t("vendorResponse.notFound", "Order Tidak Ditemukan")}</h2>
+          <p className="text-slate-400 text-sm">
+            {t("vendorResponse.orderNo", "No. order")} <span className="font-mono text-blue-400">{orderNumber}</span> {t("vendorResponse.notFoundDesc", "tidak ditemukan dalam sistem.")}
+          </p>
+          <p className="text-slate-500 text-xs">{t("vendorResponse.notFoundHint", "Pastikan link yang Anda gunakan benar, atau hubungi admin.")}</p>
         </div>
       </div>
     );
@@ -280,7 +282,7 @@ export default function VendorResponsePage() {
             </div>
             <div>
               <p className="text-xs text-slate-400 font-medium">CST LOGISTICS</p>
-              <p className="text-white text-sm font-bold">Vendor Response</p>
+              <p className="text-white text-sm font-bold">{t("vendorResponse.formTitle", "Vendor Response")}</p>
             </div>
           </div>
         </header>
@@ -297,25 +299,25 @@ export default function VendorResponsePage() {
 
           <div className="space-y-2">
             <h2 className="text-white text-2xl font-bold">
-              {status ? "Response Terkirim!" : "Sudah Direspon"}
+              {status ? t("vendorResponse.successTitle", "Response Terkirim!") : t("vendorResponse.alreadyRespondedTitle", "Sudah Direspon")}
             </h2>
             <p className="text-slate-400 text-sm">
               {status
-                ? "Response Anda untuk order berikut telah berhasil dikirim ke admin CST Logistics."
-                : "Response untuk order ini telah dikirimkan sebelumnya."}
+                ? t("vendorResponse.successDesc", "Response Anda untuk order berikut telah berhasil dikirim ke admin.")
+                : t("vendorResponse.alreadyRespondedDesc", "Response untuk order ini telah dikirimkan sebelumnya.")}
             </p>
           </div>
 
           <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 w-full max-w-sm text-left space-y-3">
-            <p className="text-xs text-slate-400 uppercase tracking-wide font-semibold">Ringkasan Response</p>
+            <p className="text-xs text-slate-400 uppercase tracking-wide font-semibold">{t("vendorResponse.responseSummaryTitle", "Ringkasan Response")}</p>
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-sm">No. Order</span>
+                <span className="text-slate-400 text-sm">{t("vendorResponse.noOrderLabel", "No. Order")}</span>
                 <span className="text-white text-sm font-mono font-bold">{orderNumber}</span>
               </div>
               {status && (
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Status</span>
+                  <span className="text-slate-400 text-sm">{t("vendorResponse.statusLabel", "Status")}</span>
                   <span className={`text-sm font-bold px-3 py-0.5 rounded-full ${isReady ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
                     {isReady ? "✅ READY" : "❌ NOT READY"}
                   </span>
@@ -323,32 +325,32 @@ export default function VendorResponsePage() {
               )}
               {quotedPrice && (
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Harga Penawaran</span>
+                  <span className="text-slate-400 text-sm">{t("vendorResponse.priceLabel", "Harga Penawaran")}</span>
                   <span className="text-emerald-400 text-sm font-bold">Rp {parseFloat(quotedPrice).toLocaleString("id-ID")}</span>
                 </div>
               )}
               {driverName && (
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Driver</span>
+                  <span className="text-slate-400 text-sm">{t("vendorResponse.driverLabel", "Driver")}</span>
                   <span className="text-white text-sm font-semibold">{driverName}</span>
                 </div>
               )}
               {plateNumber && (
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Plat Nomor</span>
+                  <span className="text-slate-400 text-sm">{t("vendorResponse.plateLabel", "Plat Nomor")}</span>
                   <span className="text-white text-sm font-mono font-bold">{plateNumber}</span>
                 </div>
               )}
               {estimatedPickupTime && (
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400 text-sm">Est. Pickup</span>
+                  <span className="text-slate-400 text-sm">{t("vendorResponse.pickupLabel", "Est. Pickup")}</span>
                   <span className="text-white text-sm font-semibold">{estimatedPickupTime}</span>
                 </div>
               )}
             </div>
           </div>
 
-          <p className="text-slate-500 text-xs">Admin akan menghubungi Anda segera. Terima kasih! 🙏</p>
+          <p className="text-slate-500 text-xs">{t("vendorResponse.adminContact", "Admin akan menghubungi Anda segera. Terima kasih! 🙏")}</p>
         </div>
       </div>
     );
@@ -364,7 +366,7 @@ export default function VendorResponsePage() {
           </div>
           <div className="min-w-0">
             <p className="text-xs text-slate-400 font-medium">CST LOGISTICS</p>
-            <p className="text-white text-sm font-bold truncate">Vendor Response Form</p>
+            <p className="text-white text-sm font-bold truncate">{t("vendorResponse.formTitle", "Vendor Response Form")}</p>
           </div>
           <div className="ml-auto">
             <span className="bg-blue-600/20 border border-blue-500/30 text-blue-400 text-xs font-mono font-bold px-2.5 py-1 rounded-lg">
@@ -380,23 +382,23 @@ export default function VendorResponsePage() {
         <div className="bg-gradient-to-br from-slate-800 to-slate-800/80 border border-slate-700 rounded-2xl overflow-hidden">
           <div className="bg-blue-600/10 border-b border-slate-700 px-4 py-3 flex items-center gap-2">
             <Package className="w-4 h-4 text-blue-400" />
-            <span className="text-blue-300 text-xs font-bold uppercase tracking-wider">Detail Order</span>
+            <span className="text-blue-300 text-xs font-bold uppercase tracking-wider">{t("vendorResponse.orderDetailTitle", "Detail Order")}</span>
           </div>
           <div className="px-4 py-2">
-            <InfoRow icon={<MapPin className="w-4 h-4" />} label="Rute" value={`${order?.origin ?? "-"} → ${order?.destination ?? "-"}`} />
+            <InfoRow icon={<MapPin className="w-4 h-4" />} label={t("vendorResponse.routeLabel", "Rute")} value={`${order?.origin ?? "-"} → ${order?.destination ?? "-"}`} />
             {order?.commodity && (
-              <InfoRow icon={<Package className="w-4 h-4" />} label="Kategori Barang" value={order.commodity} />
+              <InfoRow icon={<Package className="w-4 h-4" />} label={t("vendorResponse.cargoLabel", "Kategori Barang")} value={order.commodity} />
             )}
             {order?.grossWeight && (
-              <InfoRow icon={<Weight className="w-4 h-4" />} label="Gross Weight" value={`${parseFloat(order.grossWeight).toLocaleString("id-ID")} KG`} />
+              <InfoRow icon={<Weight className="w-4 h-4" />} label={t("vendorResponse.grossWeightLabel", "Gross Weight")} value={`${parseFloat(order.grossWeight).toLocaleString("id-ID")} KG`} />
             )}
             {order?.vehicleType && (
-              <InfoRow icon={<Truck className="w-4 h-4" />} label="Vehicle Type" value={order.vehicleType} />
+              <InfoRow icon={<Truck className="w-4 h-4" />} label={t("vendorResponse.vehicleTypeLabel", "Vehicle Type")} value={order.vehicleType} />
             )}
             {order?.vendorBasePrice != null && (
               <InfoRow
                 icon={<span className="text-lg leading-none">💰</span>}
-                label="Harga Vendor (Referensi)"
+                label={t("vendorResponse.vendorPriceRefLabel", "Harga Vendor (Referensi)")}
                 value={`Rp ${Math.round(order.vendorBasePrice).toLocaleString("id-ID")}`}
                 highlight
               />
@@ -404,7 +406,7 @@ export default function VendorResponsePage() {
             {(order?.requiredDate || order?.jamOrder) && (
               <InfoRow
                 icon={<Calendar className="w-4 h-4" />}
-                label="Jadwal Pickup"
+                label={t("vendorResponse.pickupScheduleLabel", "Jadwal Pickup")}
                 value={`${formatDateID(order?.requiredDate ?? null)}${order?.jamOrder ? ` | ${order.jamOrder.replace(".", ":")} WIB` : ""}`}
               />
             )}
@@ -415,25 +417,25 @@ export default function VendorResponsePage() {
         <div className="bg-slate-800/60 border border-slate-700 rounded-2xl overflow-hidden">
           <div className="bg-slate-700/50 border-b border-slate-700 px-4 py-3 flex items-center gap-2">
             <FileText className="w-4 h-4 text-emerald-400" />
-            <span className="text-emerald-300 text-xs font-bold uppercase tracking-wider">Form Response Vendor</span>
+            <span className="text-emerald-300 text-xs font-bold uppercase tracking-wider">{t("vendorResponse.formTitle", "Form Response Vendor")}</span>
           </div>
 
           <div className="px-4 py-5 space-y-5">
 
             {/* Vendor Name */}
             <InputField
-              label="Nama Perusahaan / Vendor"
+              label={t("vendorResponse.vendorNameLabel", "Nama Perusahaan / Vendor")}
               icon={<User className="w-3.5 h-3.5" />}
               value={vendorName}
               onChange={setVendorName}
-              placeholder="Contoh: PT Wangsamas Logistics"
+              placeholder={t("vendorResponse.vendorNamePh", "Contoh: PT Wangsamas Logistics")}
             />
 
             {/* Status Selection */}
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wide">
                 <span className="text-blue-400"><CheckCircle2 className="w-3.5 h-3.5" /></span>
-                Status Ketersediaan<span className="text-red-400">*</span>
+                {t("vendorResponse.availabilityLabel", "Status Ketersediaan")}<span className="text-red-400">*</span>
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <button
@@ -446,7 +448,7 @@ export default function VendorResponsePage() {
                 >
                   <CheckCircle2 className={`w-7 h-7 ${status === "READY" ? "text-green-400" : "text-slate-500"}`} />
                   ✅ READY
-                  <span className="text-xs font-normal opacity-70">Siap menjalankan order</span>
+                  <span className="text-xs font-normal opacity-70">{t("vendorResponse.readyCaption", "Siap menjalankan order")}</span>
                 </button>
                 <button
                   onClick={() => setStatus("NOT_READY")}
@@ -458,7 +460,7 @@ export default function VendorResponsePage() {
                 >
                   <XCircle className={`w-7 h-7 ${status === "NOT_READY" ? "text-red-400" : "text-slate-500"}`} />
                   ❌ NOT READY
-                  <span className="text-xs font-normal opacity-70">Tidak tersedia saat ini</span>
+                  <span className="text-xs font-normal opacity-70">{t("vendorResponse.notReadyCaption", "Tidak tersedia saat ini")}</span>
                 </button>
               </div>
             </div>
@@ -467,26 +469,26 @@ export default function VendorResponsePage() {
             {status === "READY" && (
               <div className="space-y-4 pt-1">
                 <div className="border-t border-slate-700 pt-4">
-                  <p className="text-xs text-slate-500 mb-4">Lengkapi informasi armada yang akan digunakan:</p>
+                  <p className="text-xs text-slate-500 mb-4">{t("vendorResponse.fleetInfo", "Lengkapi informasi armada yang akan digunakan:")}</p>
 
                   <div className="space-y-4">
                     <InputField
-                      label="Estimasi Waktu Pickup"
+                      label={t("vendorResponse.pickupTimeLabel", "Estimasi Waktu Pickup")}
                       icon={<Clock className="w-3.5 h-3.5" />}
                       value={estimatedPickupTime}
                       onChange={setEstimatedPickupTime}
-                      placeholder="Contoh: 20 Mei 2026 09:00 WIB"
+                      placeholder={t("vendorResponse.pickupTimePh", "Contoh: 20 Mei 2026 09:00 WIB")}
                     />
                     <InputField
-                      label="Nama Driver"
+                      label={t("vendorResponse.driverNameLabel", "Nama Driver")}
                       icon={<User className="w-3.5 h-3.5" />}
                       value={driverName}
                       onChange={setDriverName}
-                      placeholder="Nama lengkap driver"
+                      placeholder={t("vendorResponse.driverNamePh", "Nama lengkap driver")}
                       required
                     />
                     <InputField
-                      label="Nomor HP Driver"
+                      label={t("vendorResponse.driverPhoneLabel", "Nomor HP Driver")}
                       icon={<Phone className="w-3.5 h-3.5" />}
                       type="tel"
                       value={driverPhone}
@@ -494,7 +496,7 @@ export default function VendorResponsePage() {
                       placeholder="08xxxxxxxxxx"
                     />
                     <InputField
-                      label="Plat Nomor Kendaraan"
+                      label={t("vendorResponse.plateNumberLabel", "Plat Nomor Kendaraan")}
                       icon={<CarFront className="w-3.5 h-3.5" />}
                       value={plateNumber}
                       onChange={(v) => setPlateNumber(v.toUpperCase())}
@@ -504,7 +506,7 @@ export default function VendorResponsePage() {
                     <div className="space-y-1.5">
                       <label className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wide">
                         <span className="text-blue-400">💰</span>
-                        Harga Penawaran
+                        {t("vendorResponse.priceOfferLabel", "Harga Penawaran")}
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">Rp</span>
@@ -519,11 +521,11 @@ export default function VendorResponsePage() {
                       </div>
                     </div>
                     <InputField
-                      label="Jenis Kendaraan"
+                      label={t("vendorResponse.vehicleTypeLabel2", "Jenis Kendaraan")}
                       icon={<Truck className="w-3.5 h-3.5" />}
                       value={vehicleType}
                       onChange={setVehicleType}
-                      placeholder="Contoh: CDD Box, Tronton, Fuso"
+                      placeholder={t("vendorResponse.vehicleTypePh", "Contoh: CDD Box, Tronton, Fuso")}
                     />
                   </div>
                 </div>
@@ -534,12 +536,12 @@ export default function VendorResponsePage() {
             <div className="space-y-1.5">
               <label className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wide">
                 <span className="text-blue-400"><FileText className="w-3.5 h-3.5" /></span>
-                Catatan / Keterangan
+                {t("vendorResponse.notesLabel", "Catatan / Keterangan")}
               </label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Tambahkan catatan jika ada..."
+                placeholder={t("vendorResponse.notesPh", "Tambahkan catatan jika ada...")}
                 rows={3}
                 className="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors resize-none"
               />
@@ -549,8 +551,8 @@ export default function VendorResponsePage() {
             <div className="space-y-1.5">
               <label className="flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wide">
                 <span className="text-blue-400"><Camera className="w-3.5 h-3.5" /></span>
-                Foto Unit Kendaraan
-                <span className="text-slate-500 normal-case font-normal">(opsional)</span>
+                {t("vendorResponse.photoLabel", "Foto Unit Kendaraan")}
+                <span className="text-slate-500 normal-case font-normal">{t("vendorResponse.photoOptional", "(opsional)")}</span>
               </label>
               <input
                 ref={fileInputRef}
@@ -567,7 +569,7 @@ export default function VendorResponsePage() {
                     onClick={() => { setPhoto(null); setPhotoPreview(null); }}
                     className="absolute top-2 right-2 bg-slate-900/80 text-white text-xs px-2 py-1 rounded-lg hover:bg-red-600/80 transition-colors"
                   >
-                    Hapus
+                    {t("vendorResponse.photoRemove", "Hapus")}
                   </button>
                 </div>
               ) : (
@@ -576,8 +578,8 @@ export default function VendorResponsePage() {
                   className="w-full border-2 border-dashed border-slate-600 hover:border-blue-500 rounded-xl py-6 flex flex-col items-center gap-2 text-slate-400 hover:text-blue-400 transition-all"
                 >
                   <Camera className="w-8 h-8" />
-                  <span className="text-sm font-medium">Ambil / Pilih Foto</span>
-                  <span className="text-xs text-slate-500">JPG, PNG, max 10MB</span>
+                  <span className="text-sm font-medium">{t("vendorResponse.photoBtn", "Ambil / Pilih Foto")}</span>
+                  <span className="text-xs text-slate-500">{t("vendorResponse.photoHint", "JPG, PNG, max 10MB")}</span>
                 </button>
               )}
             </div>
@@ -603,18 +605,18 @@ export default function VendorResponsePage() {
               {submitting ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Mengirim...
+                  {t("vendorResponse.submitting", "Mengirim...")}
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="w-5 h-5" />
-                  Kirim Response
+                  {t("vendorResponse.submit", "Kirim Response")}
                 </>
               )}
             </button>
 
             <p className="text-xs text-slate-500 text-center">
-              Response Anda akan langsung diterima oleh tim admin CST Logistics.
+              {t("vendorResponse.submitNote", "Response Anda akan langsung diterima oleh tim admin.")}
             </p>
           </div>
         </div>

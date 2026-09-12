@@ -1,9 +1,9 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -23,7 +23,6 @@ import {
   Card,
   CardContent,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   AlertDialog,
@@ -39,7 +38,6 @@ import {
   FileScan,
   Plus,
   Loader2,
-  Upload,
   CheckCircle,
   AlertCircle,
   Pencil,
@@ -78,13 +76,25 @@ const DOC_TYPE_BADGE_COLOR: Record<CustomsDocType, string> = {
   other: "bg-zinc-100 text-zinc-800 dark:bg-zinc-900/30 dark:text-zinc-300",
 };
 
+const CUSTOMS_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  submitted: "Diajukan",
+  processing: "Diproses",
+  approved: "Disetujui",
+  rejected: "Ditolak",
+  completed: "Selesai",
+};
+
 interface CustomsDoc {
   id: number;
-  shipmentId: number;
+  shipmentId: number | null;
+  sourceModule: string | null;
+  sourceOrderId: number | null;
   docType: string;
   nomorAju: string | null;
   nomorDokumen: string | null;
   tanggalDokumen: string | null;
+  customsStatus: string | null;
   data: Record<string, unknown>;
   scanSource: string | null;
   notes: string | null;
@@ -156,19 +166,45 @@ async function apiFetch(url: string, options: RequestInit = {}) {
   return res.json();
 }
 
-function customsDocsKey(shipmentId: number) {
-  return ["freight-customs-docs", shipmentId];
+// ─── Source mode helpers ──────────────────────────────────────────────────────
+
+interface CustomsPanelSource {
+  shipmentId?: number;
+  sourceModule?: string;
+  sourceOrderId?: number;
+}
+
+function buildQueryUrl(source: CustomsPanelSource): string {
+  const p = new URLSearchParams();
+  if (source.shipmentId) p.set("shipmentId", String(source.shipmentId));
+  if (source.sourceModule) p.set("sourceModule", source.sourceModule);
+  if (source.sourceOrderId) p.set("sourceOrderId", String(source.sourceOrderId));
+  return `/api/logistics/customs-docs?${p.toString()}`;
+}
+
+function buildPostBody(source: CustomsPanelSource, payload: Record<string, unknown>) {
+  return {
+    ...payload,
+    ...(source.shipmentId ? { shipmentId: source.shipmentId } : {}),
+    ...(source.sourceModule ? { sourceModule: source.sourceModule } : {}),
+    ...(source.sourceOrderId ? { sourceOrderId: source.sourceOrderId } : {}),
+  };
+}
+
+function customsDocsKey(source: CustomsPanelSource) {
+  return ["customs-docs", source.shipmentId, source.sourceModule, source.sourceOrderId];
 }
 
 // ─── Empty form state ─────────────────────────────────────────────────────────
 
-function emptyForm(): Omit<CustomsDoc, "id" | "shipmentId" | "createdAt" | "updatedAt"> {
+function emptyForm() {
   return {
-    docType: "PIB",
+    docType: "PIB" as string,
     nomorAju: "",
     nomorDokumen: "",
     tanggalDokumen: "",
-    data: {},
+    customsStatus: "",
+    data: {} as Record<string, unknown>,
     scanSource: "manual",
     notes: "",
   };
@@ -177,53 +213,50 @@ function emptyForm(): Omit<CustomsDoc, "id" | "shipmentId" | "createdAt" | "upda
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface Props {
-  shipmentId: number;
+  shipmentId?: number;
+  sourceModule?: string;
+  sourceOrderId?: number;
+  title?: string;
 }
 
-export function FreightCustomsPanel({ shipmentId }: Props) {
+export function FreightCustomsPanel({ shipmentId, sourceModule, sourceOrderId, title }: Props) {
+  const source: CustomsPanelSource = { shipmentId, sourceModule, sourceOrderId };
   const qc = useQueryClient();
 
+  const enabled = !!(shipmentId || (sourceModule && sourceOrderId));
+
   const { data: docs = [], isLoading } = useQuery<CustomsDoc[]>({
-    queryKey: customsDocsKey(shipmentId),
-    queryFn: () => apiFetch(`/api/logistics/freight-shipments/${shipmentId}/customs-docs`),
-    enabled: !!shipmentId,
+    queryKey: customsDocsKey(source),
+    queryFn: () => apiFetch(buildQueryUrl(source)),
+    enabled,
   });
 
   const createMutation = useMutation({
-    mutationFn: (body: object) =>
-      apiFetch(`/api/logistics/freight-shipments/${shipmentId}/customs-docs`, {
+    mutationFn: (body: Record<string, unknown>) =>
+      apiFetch(`/api/logistics/customs-docs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildPostBody(source, body)),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: customsDocsKey(shipmentId) });
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: customsDocsKey(source) }); },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: object }) =>
-      apiFetch(`/api/logistics/freight-shipments/${shipmentId}/customs-docs/${id}`, {
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      apiFetch(`/api/logistics/customs-docs/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: customsDocsKey(shipmentId) });
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: customsDocsKey(source) }); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) =>
-      apiFetch(`/api/logistics/freight-shipments/${shipmentId}/customs-docs/${id}`, {
-        method: "DELETE",
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: customsDocsKey(shipmentId) });
-    },
+      apiFetch(`/api/logistics/customs-docs/${id}`, { method: "DELETE" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: customsDocsKey(source) }); },
   });
 
-  // Dialog states
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [editDoc, setEditDoc] = useState<CustomsDoc | null>(null);
   const [deleteDocId, setDeleteDocId] = useState<number | null>(null);
@@ -244,11 +277,11 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
       nomorAju: form.nomorAju || null,
       nomorDokumen: form.nomorDokumen || null,
       tanggalDokumen: form.tanggalDokumen || null,
+      customsStatus: form.customsStatus || null,
       data: form.data ?? {},
       scanSource: form.scanSource || "manual",
       notes: form.notes || null,
     };
-
     try {
       if (docId) {
         await updateMutation.mutateAsync({ id: docId, body: payload });
@@ -280,7 +313,7 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-semibold text-sm">Dokumen Kepabeanan</h3>
+          <h3 className="font-semibold text-sm">{title ?? "Dokumen Kepabeanan (PPJK)"}</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             PIB, PEB, SPPB, NPE, dan dokumen bea cukai lainnya
           </p>
@@ -319,7 +352,6 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
         ))}
       </div>
 
-      {/* Add Dialog */}
       <CustomsDocFormDialog
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
@@ -327,7 +359,6 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
         isSaving={createMutation.isPending}
       />
 
-      {/* Edit Dialog */}
       {editDoc && (
         <CustomsDocFormDialog
           open={!!editDoc}
@@ -338,7 +369,6 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
         />
       )}
 
-      {/* Delete Confirmation */}
       <AlertDialog open={!!deleteDocId} onOpenChange={(o) => { if (!o) setDeleteDocId(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -366,17 +396,10 @@ export function FreightCustomsPanel({ shipmentId }: Props) {
 // ─── Customs Doc Card ─────────────────────────────────────────────────────────
 
 function CustomsDocCard({
-  doc,
-  expanded,
-  onToggle,
-  onEdit,
-  onDelete,
+  doc, expanded, onToggle, onEdit, onDelete,
 }: {
-  doc: CustomsDoc;
-  expanded: boolean;
-  onToggle: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  doc: CustomsDoc; expanded: boolean;
+  onToggle: () => void; onEdit: () => void; onDelete: () => void;
 }) {
   const fields = getFieldsForDocType(doc.docType);
   const badgeClass = DOC_TYPE_BADGE_COLOR[doc.docType as CustomsDocType] ?? DOC_TYPE_BADGE_COLOR.other;
@@ -408,6 +431,11 @@ function CustomsDocCard({
               {doc.scanSource === "ai_scan" && (
                 <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
                   AI Scan
+                </span>
+              )}
+              {doc.customsStatus && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {CUSTOMS_STATUS_LABELS[doc.customsStatus] ?? doc.customsStatus}
                 </span>
               )}
               {doc.nomorDokumen && (
@@ -484,7 +512,6 @@ interface FormDialogProps {
 }
 
 function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving }: FormDialogProps) {
-  const [mode, setMode] = useState<"form" | "scan">(initialDoc ? "form" : "form");
   const [scanState, setScanState] = useState<ScanState>({ kind: "idle" });
   const [scanTruncation, setScanTruncation] = useState<{ phrase: string; lineIndex: number } | null>(null);
   const [scanCharLimitHit, setScanCharLimitHit] = useState(false);
@@ -496,6 +523,7 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
       nomorAju: initialDoc.nomorAju ?? "",
       nomorDokumen: initialDoc.nomorDokumen ?? "",
       tanggalDokumen: initialDoc.tanggalDokumen ?? "",
+      customsStatus: initialDoc.customsStatus ?? "",
       data: { ...(initialDoc.data ?? {}) },
       scanSource: initialDoc.scanSource ?? "manual",
       notes: initialDoc.notes ?? "",
@@ -503,13 +531,10 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
   }
 
   const [form, setForm] = useState(buildInitialForm);
-
-  // Reset form when dialog opens with different doc
   const [lastDocId, setLastDocId] = useState<number | undefined>(initialDoc?.id);
   if (initialDoc?.id !== lastDocId) {
     setLastDocId(initialDoc?.id);
     setForm(buildInitialForm());
-    setMode("form");
     setScanState({ kind: "idle" });
   }
 
@@ -530,7 +555,6 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
     setScanState({ kind: "uploading", fileName: file.name });
     setScanTruncation(null);
     setScanCharLimitHit(false);
-    setMode("form");
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -609,54 +633,35 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
                   </div>
                 </div>
                 <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    accept="application/pdf,image/*"
-                    className="sr-only"
-                    onChange={handleFileChange}
-                    disabled={scanState.kind === "uploading"}
-                  />
-                  <Button type="button" variant="outline" size="sm" asChild>
-                    <span className="gap-1.5">
-                      {scanState.kind === "uploading" ? (
-                        <><Loader2 className="w-4 h-4 animate-spin" /> Memproses...</>
-                      ) : (
-                        <><Upload className="w-4 h-4" /> Pilih File</>
-                      )}
-                    </span>
+                  <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFileChange} />
+                  <Button type="button" size="sm" variant="outline" className="gap-1.5 pointer-events-none">
+                    <FileScan className="w-4 h-4" /> Scan Dokumen
                   </Button>
                 </label>
               </div>
               {scanState.kind === "uploading" && (
-                <p className="text-xs text-muted-foreground mt-2">
-                  Memproses {(scanState as { kind: "uploading"; fileName: string }).fileName}… PDF teks ±5–10 dtk · foto ±30–60 dtk
-                </p>
+                <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Menganalisis {scanState.fileName}...
+                </div>
               )}
               {scanState.kind === "done" && (
-                <div className="space-y-1.5 mt-2">
-                  <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    Data berhasil diekstrak — silakan periksa form di bawah
-                  </div>
-                  {scanTruncation && (
-                    <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-500 mt-0.5" />
-                      <span>Teks PDF dipotong di baris {scanTruncation.lineIndex + 1} (<span className="font-medium">"{scanTruncation.phrase}"</span>) — data setelahnya tidak dikirim ke AI. Periksa field yang mungkin kosong.</span>
-                    </div>
-                  )}
-                  {scanCharLimitHit && !scanTruncation && (
-                    <div className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-500 mt-0.5" />
-                      <span>Dokumen panjang — teks dipotong di 5.000 karakter pertama. Data di halaman akhir mungkin tidak terbaca. Periksa field yang kosong.</span>
-                    </div>
-                  )}
+                <div className="flex items-center gap-2 mt-3 text-xs text-green-700">
+                  <CheckCircle className="w-3.5 h-3.5" /> Data berhasil diekstrak — periksa sebelum simpan
                 </div>
               )}
               {scanState.kind === "error" && (
-                <div className="flex items-center gap-1.5 mt-2 text-xs text-destructive">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  {(scanState as { kind: "error"; message: string }).message}
+                <div className="flex items-center gap-2 mt-3 text-xs text-destructive">
+                  <AlertCircle className="w-3.5 h-3.5" /> {scanState.message}
                 </div>
+              )}
+              {scanTruncation && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Dokumen dipotong pada baris {scanTruncation.lineIndex}: "{scanTruncation.phrase}"
+                </p>
+              )}
+              {scanCharLimitHit && (
+                <p className="text-xs text-amber-600 mt-1">Batas karakter tercapai — hanya sebagian dokumen yang dianalisis</p>
               )}
             </div>
           )}
@@ -665,94 +670,77 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Jenis Dokumen *</Label>
-              <Select
-                value={form.docType}
-                onValueChange={(v) => setForm((p) => ({ ...p, docType: v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+              <Select value={form.docType} onValueChange={(v) => setForm((p) => ({ ...p, docType: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {Object.entries(DOC_TYPE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
+                  {Object.entries(DOC_TYPE_LABELS).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>{k} — {v.split("—")[1]?.trim()}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-1.5">
-              <Label>Tanggal Dokumen</Label>
-              <Input
-                type="date"
-                value={form.tanggalDokumen ?? ""}
-                onChange={(e) => setForm((p) => ({ ...p, tanggalDokumen: e.target.value }))}
-              />
+              <Label>Status Kepabeanan</Label>
+              <Select value={form.customsStatus || "none"} onValueChange={(v) => setForm((p) => ({ ...p, customsStatus: v === "none" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Pilih status..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Tidak ada —</SelectItem>
+                  {Object.entries(CUSTOMS_STATUS_LABELS).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>{v}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          {/* Core fields */}
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1.5">
               <Label>Nomor Aju</Label>
-              <Input
-                placeholder="cth. 000001/ABC/2024"
-                value={form.nomorAju ?? ""}
-                onChange={(e) => setForm((p) => ({ ...p, nomorAju: e.target.value }))}
-              />
+              <Input value={form.nomorAju} onChange={(e) => setForm((p) => ({ ...p, nomorAju: e.target.value }))} placeholder="Nomor pengajuan" />
             </div>
             <div className="space-y-1.5">
-              <Label>Nomor {form.docType}</Label>
-              <Input
-                placeholder="Nomor dokumen resmi"
-                value={form.nomorDokumen ?? ""}
-                onChange={(e) => setForm((p) => ({ ...p, nomorDokumen: e.target.value }))}
-              />
+              <Label>Nomor Dokumen</Label>
+              <Input value={form.nomorDokumen} onChange={(e) => setForm((p) => ({ ...p, nomorDokumen: e.target.value }))} placeholder="Nomor dokumen resmi" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Tanggal Dokumen</Label>
+              <DatePicker value={form.tanggalDokumen} onChange={(v) => setForm((p) => ({ ...p, tanggalDokumen: v }))} />
             </div>
           </div>
 
-          {/* Dynamic fields based on doc type */}
+          {/* Dynamic fields */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.map((field) => {
-              const val = (form.data[field.key] as string | number | null | undefined) ?? "";
-              if (field.type === "textarea") {
-                return (
-                  <div key={field.key} className="col-span-2 space-y-1.5">
-                    <Label>{field.label}</Label>
-                    <Textarea
-                      rows={3}
-                      value={String(val)}
-                      onChange={(e) => setDataField(field.key, e.target.value)}
-                    />
-                  </div>
-                );
-              }
-              return (
-                <div key={field.key} className="space-y-1.5">
-                  <Label>{field.label}</Label>
-                  <Input
-                    type={field.type === "number" ? "number" : "text"}
-                    value={String(val)}
-                    onChange={(e) =>
-                      setDataField(
-                        field.key,
-                        field.type === "number" ? (e.target.value ? Number(e.target.value) : null) : e.target.value
-                      )
-                    }
+            {fields.map((f) => (
+              <div key={f.key} className={`space-y-1.5 ${f.type === "textarea" ? "sm:col-span-2" : ""}`}>
+                <Label>{f.label}</Label>
+                {f.type === "textarea" ? (
+                  <Textarea
+                    value={(form.data[f.key] as string) ?? ""}
+                    onChange={(e) => setDataField(f.key, e.target.value)}
+                    rows={2}
+                    className="resize-none"
                   />
-                </div>
-              );
-            })}
+                ) : (
+                  <Input
+                    type={f.type === "number" ? "number" : "text"}
+                    value={(form.data[f.key] as string | number) ?? ""}
+                    onChange={(e) => setDataField(f.key, f.type === "number" ? (e.target.value ? Number(e.target.value) : null) : e.target.value)}
+                  />
+                )}
+              </div>
+            ))}
           </div>
 
           {/* Notes */}
           <div className="space-y-1.5">
-            <Label>Catatan Internal</Label>
+            <Label>Catatan</Label>
             <Textarea
-              rows={2}
-              placeholder="Catatan tambahan (opsional)"
-              value={form.notes ?? ""}
+              value={form.notes}
               onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
+              rows={2}
+              className="resize-none"
+              placeholder="Catatan tambahan..."
             />
           </div>
         </div>
@@ -760,7 +748,8 @@ function CustomsDocFormDialog({ open, onOpenChange, initialDoc, onSave, isSaving
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Batal</Button>
           <Button onClick={() => onSave(form)} disabled={isSaving || !form.docType}>
-            {isSaving ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Menyimpan...</> : "Simpan Dokumen"}
+            {isSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            {isEdit ? "Simpan Perubahan" : "Tambah Dokumen"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -237,7 +237,7 @@ export default function VendorResponseForm() {
             </button>
 
             <p className="text-xs text-slate-500 text-center">
-              Response Anda akan langsung diterima oleh tim admin CST Logistics.
+              Response Anda akan langsung diterima oleh tim admin B2B Marketplace and Logistic.
             </p>
           </div>
         </div>

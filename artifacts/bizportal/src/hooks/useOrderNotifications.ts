@@ -1,4 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
+import {
+  getListLogisticOrdersQueryKey,
+  getGetLogisticOrderQueryKey,
+  getListFreightShipmentsQueryKey,
+  getGetFreightShipmentQueryKey,
+  getListSalesDocumentsQueryKey,
+  getGetSalesDocumentQueryKey,
+  getListPurchaseDocumentsQueryKey,
+  getListOrdersQueryKey,
+  getListLogisticOrderRfqsQueryKey,
+  getListLogisticOrderQuotesQueryKey,
+} from "@workspace/api-client-react";
 
 function playNotificationChime() {
   try {
@@ -30,10 +46,16 @@ const NOTIF_TITLES: Record<string, string> = {
   portal_sales: "🛍️ Order Portal",
   product: "📦 Order Produk",
   sales_update: "📄 Update Sales Order",
+  sales_new: "📋 Sales Baru",
   logistic_status: "🔄 Update Status Logistik",
   freight_new: "🚢 Freight Shipment Baru",
   freight_status: "🔄 Update Status Shipment",
   freight_stage: "📋 Update Stage Shipment",
+  purchase_rfq: "📥 RFQ Pembelian Baru",
+  purchase_po: "✅ Purchase Order Dikonfirmasi",
+  vendor_quote: "💬 Penawaran Vendor Masuk",
+  vendor_po_accepted: "✅ Vendor Konfirmasi PO",
+  sport_booking: "🏋️ Booking Sport Centre Baru",
 };
 
 function showBrowserNotification(notification: OrderNotification) {
@@ -54,12 +76,36 @@ function showBrowserNotification(notification: OrderNotification) {
   }
 }
 
+export interface GeofenceAlertItem {
+  id: string;
+  driverId: number;
+  driverName: string;
+  jobId: number;
+  jobNumber: string;
+  deviationKm: number;
+  thresholdKm: number;
+  lat: number;
+  lng: number;
+  pickupAddress: string | null;
+  deliveryAddress: string | null;
+  triggeredAt: string;
+}
+
+export interface GeofenceResolvedNotice {
+  id: string;
+  driverName: string;
+  jobNumber: string;
+  at: string;
+}
+
 export interface OrderNotification {
   id: string;
   dbId?: number | null;
   type: "logistic" | "portal_sales" | "product" | "sales_update" | "logistic_status"
       | "freight_new" | "freight_status" | "freight_stage"
-      | "sport_booking" | "ecommerce";
+      | "sport_booking" | "ecommerce"
+      | "sales_new" | "purchase_rfq" | "purchase_po" | "vendor_quote"
+      | "vendor_po_accepted";
   orderId: number;
   orderNumber: string;
   customerName: string;
@@ -80,6 +126,10 @@ export interface OrderNotification {
   bookingDate?: string;
   startTime?: string;
   endTime?: string;
+  docKind?: string;
+  rfqNumber?: string;
+  vendorPrice?: number;
+  quotePosition?: number;
   createdAt: string;
   readAt: number | null;
 }
@@ -120,12 +170,19 @@ function dbRowToNotif(row: Record<string, unknown>): OrderNotification {
     bookingDate: payload.bookingDate as string | undefined,
     startTime: payload.startTime as string | undefined,
     endTime: payload.endTime as string | undefined,
+    docKind: payload.docKind as string | undefined,
+    rfqNumber: payload.rfqNumber as string | undefined,
+    vendorPrice: payload.vendorPrice as number | undefined,
+    quotePosition: payload.quotePosition as number | undefined,
     createdAt: (row.created_at as string) ?? new Date().toISOString(),
     readAt: row.read_at ? new Date(row.read_at as string).getTime() : null,
   };
 }
 
 export function useOrderNotifications() {
+  const { isAuthenticated } = useSupabaseAuth();
+  const secondaryReady = useAfterFirstPaint(900);
+  const queryClient = useQueryClient();
   const [notifications, setNotifications] = useState<OrderNotification[]>([]);
   const [connected, setConnected] = useState(false);
   const [lastFreightEventAt, setLastFreightEventAt] = useState<number | null>(null);
@@ -133,21 +190,45 @@ export function useOrderNotifications() {
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
     typeof Notification !== "undefined" ? Notification.permission : "denied"
   );
+  const [geofenceAlertMap, setGeofenceAlertMap] = useState<Map<string, GeofenceAlertItem>>(new Map());
+  const [resolvedGeofenceNotices, setResolvedGeofenceNotices] = useState<GeofenceResolvedNotice[]>([]);
+  const geofenceAlertMapRef = useRef<Map<string, GeofenceAlertItem>>(new Map());
   const esRef = useRef<EventSource | null>(null);
   const onNewOrderRef = useRef<((n: OrderNotification) => void) | null>(null);
   const initializedRef = useRef(false);
+  const seenDbIds = useRef(new Set<number>());
 
   const unreadCount = notifications.filter((n) => n.readAt === null).length;
 
+  // Fetch active geofence alerts on mount
+  useEffect(() => {
+    if (!isAuthenticated || !secondaryReady) return;
+    fetch("/api/drivers/geofence-alerts", { credentials: "include" })
+      .then((r) => r.ok ? r.json() as Promise<GeofenceAlertItem[]> : [])
+      .then((alerts) => {
+        if (!alerts.length) return;
+        const map = new Map<string, GeofenceAlertItem>();
+        for (const a of alerts) map.set(a.id, a);
+        geofenceAlertMapRef.current = map;
+        setGeofenceAlertMap(new Map(map));
+      })
+      .catch(() => {});
+  }, [isAuthenticated, secondaryReady]);
+
   // Fetch persisted notifications from DB on mount
   useEffect(() => {
+    if (!isAuthenticated || !secondaryReady) return;
     if (initializedRef.current) return;
     initializedRef.current = true;
     fetch("/api/notifications?limit=50&read=all", { credentials: "include" })
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
         if (json?.data && Array.isArray(json.data)) {
-          setNotifications(json.data.map(dbRowToNotif));
+          const notifs = json.data.map(dbRowToNotif);
+          for (const n of notifs) {
+            if (n.dbId != null) seenDbIds.current.add(n.dbId);
+          }
+          setNotifications(notifs);
         }
         if (typeof json?.unreadTotal === "number") {
           setDbUnreadTotal(json.unreadTotal);
@@ -157,10 +238,11 @@ export function useOrderNotifications() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [isAuthenticated, secondaryReady]);
 
   // Polling setiap 60 detik — sync unread count dari DB
   useEffect(() => {
+    if (!isAuthenticated || !secondaryReady) return;
     const poll = async () => {
       try {
         const r = await fetch("/api/notifications/unread-count", { credentials: "include" });
@@ -190,7 +272,7 @@ export function useOrderNotifications() {
 
     const timer = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [isAuthenticated, secondaryReady]);
 
   const markAllRead = useCallback(() => {
     setNotifications((prev) =>
@@ -204,10 +286,6 @@ export function useOrderNotifications() {
   }, []);
 
   const markSingleRead = useCallback((dbId: number) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.dbId === dbId && n.readAt === null ? { ...n, readAt: Date.now() } : n))
-    );
-    setDbUnreadTotal((prev) => Math.max(0, prev - 1));
     setNotifications((prev) => {
       const wasUnread = prev.some((n) => n.dbId === dbId && n.readAt === null);
       if (wasUnread) setDbUnreadTotal((t) => Math.max(0, t - 1));
@@ -222,10 +300,15 @@ export function useOrderNotifications() {
   const clearAll = useCallback(() => {
     setNotifications([]);
     setDbUnreadTotal(0);
+    seenDbIds.current.clear();
   }, []);
 
   const setOnNewOrder = useCallback((fn: (n: OrderNotification) => void) => {
     onNewOrderRef.current = fn;
+  }, []);
+
+  const dismissGeofenceResolved = useCallback((id: string) => {
+    setResolvedGeofenceNotices((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
   const requestNotifPermission = useCallback(async () => {
@@ -236,11 +319,12 @@ export function useOrderNotifications() {
   }, []);
 
   function pushNotification(notification: OrderNotification) {
-    setNotifications((prev) =>
-      [notification, ...prev].slice(0, MAX_NOTIFICATIONS)
-    );
+    // Dedup: jika notifikasi dengan dbId yang sama sudah ada (SSE + polling overlap), skip
+    if (notification.dbId != null && seenDbIds.current.has(notification.dbId)) return;
+    if (notification.dbId != null) seenDbIds.current.add(notification.dbId);
+
+    setNotifications((prev) => [notification, ...prev].slice(0, MAX_NOTIFICATIONS));
     setDbUnreadTotal((prev) => prev + 1);
-    setDbUnreadTotal((t) => t + 1);
     if (FREIGHT_TYPES.includes(notification.type)) {
       setLastFreightEventAt(Date.now());
     }
@@ -250,6 +334,7 @@ export function useOrderNotifications() {
   }
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     let retryTimer: ReturnType<typeof setTimeout>;
     let mounted = true;
 
@@ -304,6 +389,7 @@ export function useOrderNotifications() {
             createdAt: data.createdAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
         } catch { }
       });
 
@@ -323,6 +409,10 @@ export function useOrderNotifications() {
             createdAt: data.updatedAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
+          if (data.orderId) {
+            queryClient.invalidateQueries({ queryKey: getGetLogisticOrderQueryKey(data.orderId) });
+          }
         } catch { }
       });
 
@@ -343,6 +433,10 @@ export function useOrderNotifications() {
             createdAt: data.updatedAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListSalesDocumentsQueryKey() });
+          if (data.orderId ?? data.docId) {
+            queryClient.invalidateQueries({ queryKey: getGetSalesDocumentQueryKey(data.orderId ?? data.docId) });
+          }
         } catch { }
       });
 
@@ -365,6 +459,7 @@ export function useOrderNotifications() {
             createdAt: data.createdAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListFreightShipmentsQueryKey() });
         } catch { }
       });
 
@@ -386,6 +481,10 @@ export function useOrderNotifications() {
             createdAt: data.updatedAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListFreightShipmentsQueryKey() });
+          if (data.shipmentId) {
+            queryClient.invalidateQueries({ queryKey: getGetFreightShipmentQueryKey(data.shipmentId) });
+          }
         } catch { }
       });
 
@@ -407,6 +506,9 @@ export function useOrderNotifications() {
             createdAt: data.updatedAt ?? new Date().toISOString(),
             readAt: null,
           });
+          if (data.shipmentId) {
+            queryClient.invalidateQueries({ queryKey: getGetFreightShipmentQueryKey(data.shipmentId) });
+          }
         } catch { }
       });
 
@@ -450,6 +552,158 @@ export function useOrderNotifications() {
             createdAt: data.createdAt ?? new Date().toISOString(),
             readAt: null,
           });
+          queryClient.invalidateQueries({ queryKey: getListOrdersQueryKey() });
+        } catch { }
+      });
+
+      es.addEventListener("sales_doc_created", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data);
+          pushNotification({
+            id: generateId(),
+            dbId: data.dbId ?? null,
+            type: "sales_new",
+            orderId: data.orderId,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            companyName: data.companyName ?? null,
+            grandTotal: data.grandTotal,
+            docKind: data.docKind,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            readAt: null,
+          });
+          queryClient.invalidateQueries({ queryKey: getListSalesDocumentsQueryKey() });
+        } catch { }
+      });
+
+      es.addEventListener("purchase_doc_created", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data);
+          pushNotification({
+            id: generateId(),
+            dbId: data.dbId ?? null,
+            type: data.type === "purchase_po" ? "purchase_po" : "purchase_rfq",
+            orderId: data.orderId,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            companyName: null,
+            grandTotal: data.grandTotal,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            readAt: null,
+          });
+          queryClient.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey() });
+        } catch { }
+      });
+
+      es.addEventListener("purchase_doc_confirmed", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data);
+          pushNotification({
+            id: generateId(),
+            dbId: data.dbId ?? null,
+            type: "purchase_po",
+            orderId: data.orderId,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            companyName: null,
+            grandTotal: data.grandTotal,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            readAt: null,
+          });
+          queryClient.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey() });
+        } catch { }
+      });
+
+      es.addEventListener("vendor_po_accepted", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data);
+          pushNotification({
+            id: generateId(),
+            dbId: data.dbId ?? null,
+            type: "vendor_po_accepted",
+            orderId: data.orderId,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            companyName: null,
+            grandTotal: data.grandTotal,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            readAt: null,
+          });
+          queryClient.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey() });
+        } catch { }
+      });
+
+      es.addEventListener("vendor_quote_received", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data);
+          pushNotification({
+            id: generateId(),
+            dbId: data.dbId ?? null,
+            type: "vendor_quote",
+            orderId: data.orderId,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            companyName: null,
+            rfqNumber: data.rfqNumber,
+            vendorPrice: data.vendorPrice,
+            quotePosition: data.quotePosition,
+            createdAt: data.createdAt ?? new Date().toISOString(),
+            readAt: null,
+          });
+          if (data.orderId) {
+            queryClient.invalidateQueries({ queryKey: getListLogisticOrderRfqsQueryKey(data.orderId) });
+            queryClient.invalidateQueries({ queryKey: getListLogisticOrderQuotesQueryKey(data.orderId) });
+            queryClient.invalidateQueries({ queryKey: getGetLogisticOrderQueryKey(data.orderId) });
+            queryClient.invalidateQueries({ queryKey: ["vendor-offers", data.orderId] });
+          }
+        } catch { }
+      });
+
+      es.addEventListener("geofence_alert", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data) as GeofenceAlertItem;
+          const isNew = !geofenceAlertMapRef.current.has(data.id);
+          geofenceAlertMapRef.current = new Map(geofenceAlertMapRef.current).set(data.id, data);
+          setGeofenceAlertMap(new Map(geofenceAlertMapRef.current));
+          window.dispatchEvent(new CustomEvent("geofence_alert", { detail: data }));
+          if (isNew) {
+            toast.warning(`⚠️ Geofence Alert: ${data.driverName}`, {
+              description: `Menyimpang ${data.deviationKm.toFixed(1)} km dari rute · Job #${data.jobNumber}`,
+              duration: 10_000,
+              action: { label: "Lihat", onClick: () => { window.location.href = "/bizportal/logistics/drivers"; } },
+            });
+          }
+        } catch { }
+      });
+
+      es.addEventListener("geofence_alert_update", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data) as GeofenceAlertItem;
+          geofenceAlertMapRef.current = new Map(geofenceAlertMapRef.current).set(data.id, data);
+          setGeofenceAlertMap(new Map(geofenceAlertMapRef.current));
+          window.dispatchEvent(new CustomEvent("geofence_alert_update", { detail: data }));
+        } catch { }
+      });
+
+      es.addEventListener("geofence_resolved", (e: MessageEvent) => {
+        if (!mounted) return;
+        try {
+          const data = JSON.parse(e.data) as { id: string; driverName: string; jobNumber: string };
+          geofenceAlertMapRef.current.delete(data.id);
+          geofenceAlertMapRef.current = new Map(geofenceAlertMapRef.current);
+          setGeofenceAlertMap(new Map(geofenceAlertMapRef.current));
+          setResolvedGeofenceNotices((prev) => [
+            { id: data.id, driverName: data.driverName, jobNumber: data.jobNumber, at: new Date().toISOString() },
+            ...prev.slice(0, 4),
+          ]);
+          window.dispatchEvent(new CustomEvent("geofence_resolved", { detail: data }));
         } catch { }
       });
 
@@ -470,9 +724,12 @@ export function useOrderNotifications() {
       esRef.current?.close();
       esRef.current = null;
     };
-  }, []);
+  }, [isAuthenticated, queryClient]);
 
-  return { notifications, unreadCount, dbUnreadTotal, connected, markAllRead, markSingleRead, clearAll, setOnNewOrder, lastFreightEventAt };
+  const geofenceAlerts = [...geofenceAlertMap.values()].sort(
+    (a, b) => b.triggeredAt.localeCompare(a.triggeredAt)
+  );
+
   return {
     notifications,
     unreadCount,
@@ -485,5 +742,8 @@ export function useOrderNotifications() {
     lastFreightEventAt,
     notifPermission,
     requestNotifPermission,
+    geofenceAlerts,
+    resolvedGeofenceNotices,
+    dismissGeofenceResolved,
   };
 }

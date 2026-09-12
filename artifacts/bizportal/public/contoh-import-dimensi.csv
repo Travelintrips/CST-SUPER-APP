@@ -1,0 +1,6 @@
+sku,berat_kg,panjang_cm,lebar_cm,tinggi_cm,jenis_barang
+GBA-1KG-001,1,30,20,15,general
+GBA-5KG-001,5,40,30,25,general
+SVC-AIR-001,0,,,,general
+SVC-SEA-001,0,,,,general
+PRD-BOX-001,0.5,25,15,10,general

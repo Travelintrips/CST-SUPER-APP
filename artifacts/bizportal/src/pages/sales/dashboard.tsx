@@ -1,5 +1,6 @@
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,31 +17,32 @@ const idr = (n: number) =>
 export default function SalesDashboardPage() {
   const { t } = useLanguage();
   const { data: summary } = useGetSalesSummary();
-  const { data: recentDocs } = useListSalesDocuments();
-
-  const recent = (recentDocs ?? []).slice(0, 8);
+  const { data: _recentPaginated } = useListSalesDocuments({ limit: 8 });
+  const recent = _recentPaginated?.data ?? [];
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">{t.sales.title}</h1>
-            <p className="text-sm text-muted-foreground">{t.sales.subtitle}</p>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/sales/quotations">
-              <Button variant="outline" data-testid="link-go-quotations">
-                <FileText className="mr-2 h-4 w-4" /> {t.sales.quotation}
-              </Button>
-            </Link>
-            <Link href="/sales/quotations">
-              <Button data-testid="button-new-quote">
-                <Plus className="mr-2 h-4 w-4" /> {t.sales.newQuotation}
-              </Button>
-            </Link>
-          </div>
-        </div>
+      <div className="space-y-6">
+        <PageHeader
+          title={t.sales.title}
+          description={t.sales.subtitle}
+          breadcrumb={[{ label: "Dashboard", href: "/dashboard" }, { label: "Sales" }]}
+          favoriteEnabled
+          actions={
+            <div className="flex gap-2">
+              <Link href="/sales/quotations">
+                <Button variant="outline" data-testid="link-go-quotations">
+                  <FileText className="mr-2 h-4 w-4" /> {t.sales.quotation}
+                </Button>
+              </Link>
+              <Link href="/sales/quotations">
+                <Button data-testid="button-new-quote">
+                  <Plus className="mr-2 h-4 w-4" /> {t.sales.newQuotation}
+                </Button>
+              </Link>
+            </div>
+          }
+        />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Link href="/sales/quotations" className="block group focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-lg">

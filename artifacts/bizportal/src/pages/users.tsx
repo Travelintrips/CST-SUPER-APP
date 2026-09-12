@@ -1,31 +1,31 @@
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { getListUsersQueryKey, getGetCurrentUserQueryKey } from "@workspace/api-client-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Pencil, Users, ShieldAlert, ShieldCheck, X, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { Pencil, Users, ShieldAlert, ShieldCheck, X, Plus, Trash2, Building2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { Link } from "wouter";
 
-const ROLES = ["admin", "ecommerce", "trading", "logistics", "pos", "pos-kasir", "pos-inventory"] as const;
+const ROLES = ["admin", "ecommerce", "trading", "logistics"] as const;
 type Role = typeof ROLES[number];
 
 const ROLE_LABELS: Record<string, string> = {
-  admin:           "Admin",
-  ecommerce:       "E-Commerce",
-  trading:         "Trading",
-  logistics:       "Logistik",
-  pos:             "POS Kasir",
-  "pos-kasir":     "Kasir POS",
-  "pos-inventory": "Inventori POS",
+  admin:     "Admin",
+  ecommerce: "E-Commerce",
+  trading:   "Trading",
+  logistics: "Logistik",
 };
 
 const roleColor = (role: string) => {
@@ -34,9 +34,7 @@ const roleColor = (role: string) => {
     case "ecommerce":      return "bg-blue-500/10 text-blue-500 border-blue-500/20";
     case "trading":        return "bg-emerald-500/10 text-emerald-500 border-emerald-500/20";
     case "logistics":      return "bg-indigo-500/10 text-indigo-500 border-indigo-500/20";
-    case "pos":            return "bg-amber-500/10 text-amber-500 border-amber-500/20";
-    case "pos-kasir":      return "bg-orange-500/10 text-orange-500 border-orange-500/20";
-    case "pos-inventory":  return "bg-yellow-500/10 text-yellow-600 border-yellow-500/20";
+
     default:               return "bg-muted text-muted-foreground";
   }
 };
@@ -49,13 +47,6 @@ interface UserRow {
   divisionId: number | null; divisionName: string | null;
   departmentId: number | null; departmentName: string | null;
   sectionId: number | null; sectionName: string | null;
-}
-
-interface KasirRow {
-  id: number; name: string; email: string; phone: string | null;
-  status: "pending" | "approved" | "rejected";
-  branchId: number | null; branchName: string | null;
-  createdAt: string;
 }
 
 interface CustomRole { id: number; name: string; color: string }
@@ -71,14 +62,6 @@ async function apiFetch(path: string, opts?: RequestInit) {
   return res.json();
 }
 
-const kasirStatusBadge = (status: KasirRow["status"]) => {
-  switch (status) {
-    case "approved": return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1"><CheckCircle2 className="h-3 w-3" />Aktif</Badge>;
-    case "pending":  return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20 gap-1"><Clock className="h-3 w-3" />Menunggu</Badge>;
-    case "rejected": return <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/20 gap-1"><XCircle className="h-3 w-3" />Ditolak</Badge>;
-  }
-};
-
 export default function UsersPage() {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
@@ -88,53 +71,51 @@ export default function UsersPage() {
     queryKey: getListUsersQueryKey(),
     queryFn: () => apiFetch("/users"),
     retry: false,
-  });
-
-  const { data: kasirs = [], isLoading: kasirLoading } = useQuery<KasirRow[]>({
-    queryKey: ["pos-kasir-admin-cashiers"],
-    queryFn: () => apiFetch("/pos-kasir/admin/cashiers"),
-    retry: false,
-  });
-
-  const kasirStatusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: string }) =>
-      apiFetch(`/pos-kasir/admin/cashiers/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pos-kasir-admin-cashiers"] });
-      toast({ title: "Status kasir diperbarui" });
-    },
-    onError: () => toast({ title: "Gagal memperbarui status", variant: "destructive" }),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: customRoles = [] } = useQuery<CustomRole[]>({
     queryKey: ["custom-roles"],
     queryFn: () => apiFetch("/custom-roles"),
     retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: companies = [] } = useQuery<{ id: number; companyName: string; companyCode: string }[]>({
     queryKey: ["companies"],
     queryFn: () => apiFetch("/companies"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: branches = [] } = useQuery<OrgItem[]>({
     queryKey: ["org/branches", "all"],
     queryFn: () => apiFetch("/org/branches?companyId=all"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: divisions = [] } = useQuery<OrgItem[]>({
     queryKey: ["org/divisions", "all"],
     queryFn: () => apiFetch("/org/divisions?companyId=all"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: departments = [] } = useQuery<OrgItem[]>({
     queryKey: ["org/departments", "all"],
     queryFn: () => apiFetch("/org/departments?companyId=all"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: sections = [] } = useQuery<OrgItem[]>({
     queryKey: ["org/sections", "all"],
     queryFn: () => apiFetch("/org/sections?companyId=all"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const [editing, setEditing]           = useState<UserRow | null>(null);
@@ -147,7 +128,75 @@ export default function UsersPage() {
   const [editDivisionId, setEditDivisionId]   = useState<string>("");
   const [editDepartmentId, setEditDepartmentId] = useState<string>("");
   const [editSectionId, setEditSectionId]     = useState<string>("");
+  /** Admin-only: set of company IDs this admin is allowed to access. Empty = all companies. */
+  const [editAllowedCompanies, setEditAllowedCompanies] = useState<number[]>([]);
   const [saving, setSaving]                   = useState(false);
+
+  // Load allowed-companies for the user currently being edited
+  const { data: currentAllowedCompanies = [] } = useQuery<{ company_id: number }[]>({
+    queryKey: ["user-allowed-companies", editing?.id],
+    queryFn: () => apiFetch(`/users/${editing!.id}/allowed-companies`),
+    enabled: !!editing?.id,
+    staleTime: 0,
+  });
+
+  // Sync allowed companies state when query data arrives — useEffect avoids render-phase setState
+  useEffect(() => {
+    if (editing?.id) {
+      setEditAllowedCompanies(currentAllowedCompanies.map((r) => r.company_id));
+    }
+  }, [editing?.id, currentAllowedCompanies]);
+
+  function toggleAllowedCompany(companyId: number, checked: boolean) {
+    setEditAllowedCompanies((prev) =>
+      checked ? [...prev, companyId] : prev.filter((id) => id !== companyId),
+    );
+  }
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm, setCreateForm] = useState({ email: "", name: "", role: "ecommerce" as Role });
+  const [creating, setCreating]     = useState(false);
+
+  const createMut = useMutation({
+    mutationFn: (data: { email: string; name: string; role: string }) =>
+      apiFetch("/users", { method: "POST", body: JSON.stringify(data) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
+      setCreateOpen(false);
+      setCreateForm({ email: "", name: "", role: "ecommerce" });
+      toast({ title: "User berhasil ditambahkan" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Gagal", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch(`/users/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
+      toast({ title: "User dihapus" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Gagal hapus", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!createForm.email.trim()) return;
+    setCreating(true);
+    try {
+      await createMut.mutateAsync(createForm);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = (u: UserRow) => {
+    if (!confirm(`Hapus user "${u.name}" (${u.email})? Tindakan ini tidak bisa dibatalkan.`)) return;
+    deleteMut.mutate(u.id);
+  };
 
   const selectedCompanyId = editCompanyId && editCompanyId !== "none" ? Number(editCompanyId) : null;
   const filteredBranches    = branches.filter(b => !selectedCompanyId || (b as any).company_id === selectedCompanyId);
@@ -166,6 +215,7 @@ export default function UsersPage() {
     setEditDivisionId(u.divisionId != null ? String(u.divisionId) : "none");
     setEditDepartmentId(u.departmentId != null ? String(u.departmentId) : "none");
     setEditSectionId(u.sectionId != null ? String(u.sectionId) : "none");
+    setEditAllowedCompanies([]); // will be overwritten when query returns
   };
 
   const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -201,9 +251,24 @@ export default function UsersPage() {
         }
       }
 
+      // Save allowed-companies list for admin users
+      if (editRole === "admin") {
+        await apiFetch(`/users/${editing.id}/allowed-companies`, {
+          method: "PUT",
+          body: JSON.stringify({ companyIds: editAllowedCompanies }),
+        });
+      } else {
+        // Non-admin users don't need a company allowlist — clear any existing
+        await apiFetch(`/users/${editing.id}/allowed-companies`, {
+          method: "PUT",
+          body: JSON.stringify({ companyIds: [] }),
+        });
+      }
+
       queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
       queryClient.invalidateQueries({ queryKey: getGetCurrentUserQueryKey() });
       queryClient.invalidateQueries({ queryKey: ["custom-roles"] });
+      queryClient.invalidateQueries({ queryKey: ["user-allowed-companies", editing.id] });
       setEditing(null);
       toast({ title: "Berhasil disimpan" });
     } catch {
@@ -214,15 +279,22 @@ export default function UsersPage() {
   };
 
   const isForbidden = (error as any)?.status === 403 || (error as any)?.message?.includes("403");
-  const allLoading = isLoading || kasirLoading;
+  const allLoading = isLoading;
 
   return (
     <AppShell>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{t.users.title}</h1>
-          <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">{t.users.subtitle}</p>
-        </div>
+        <PageHeader
+          title={t.users.title}
+          description={t.users.subtitle}
+          breadcrumb={[{ label: "Settings", href: "/settings" }, { label: "Users" }]}
+          favoriteEnabled
+          actions={
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" /> Tambah User
+            </Button>
+          }
+        />
 
         {isForbidden ? (
           <Card><CardContent className="p-8 text-center space-y-2">
@@ -295,58 +367,14 @@ export default function UsersPage() {
                               <Button size="icon" variant="ghost" onClick={() => openEdit(u)} aria-label={t.common.edit}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
+                              <Button size="icon" variant="ghost" onClick={() => handleDelete(u)} aria-label="Hapus">
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
                             </TableCell>
                           </TableRow>
                         ))}
 
-                        {/* Kasir POS users */}
-                        {kasirs.map((k) => (
-                          <TableRow key={`kasir-${k.id}`}>
-                            <TableCell className="font-medium">{k.name}</TableCell>
-                            <TableCell className="text-muted-foreground text-sm">{k.email}</TableCell>
-                            <TableCell>
-                              <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-500/20 text-xs">
-                                Kasir POS
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{kasirStatusBadge(k.status)}</TableCell>
-                            <TableCell>
-                              {k.phone
-                                ? <span className="text-xs text-muted-foreground">{k.phone}</span>
-                                : <span className="text-xs text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-sm">
-                              {k.branchName
-                                ? <span className="text-xs">{k.branchName}</span>
-                                : <span className="text-muted-foreground">—</span>}
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">
-                              {new Date(k.createdAt).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                {k.status !== "approved" && (
-                                  <Button size="sm" variant="outline"
-                                    className="text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10 h-7 px-2 text-xs"
-                                    onClick={() => kasirStatusMutation.mutate({ id: k.id, status: "approved" })}
-                                    disabled={kasirStatusMutation.isPending}>
-                                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Setujui
-                                  </Button>
-                                )}
-                                {k.status !== "rejected" && (
-                                  <Button size="sm" variant="outline"
-                                    className="text-red-500 border-red-500/30 hover:bg-red-500/10 h-7 px-2 text-xs"
-                                    onClick={() => kasirStatusMutation.mutate({ id: k.id, status: "rejected" })}
-                                    disabled={kasirStatusMutation.isPending}>
-                                    <XCircle className="h-3.5 w-3.5 mr-1" />Tolak
-                                  </Button>
-                                )}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-
-                        {!allLoading && (users?.length ?? 0) === 0 && kasirs.length === 0 && (
+                        {!allLoading && (users?.length ?? 0) === 0 && (
                           <TableRow>
                             <TableCell colSpan={8} className="h-24 text-center">
                               <div className="flex flex-col items-center justify-center text-muted-foreground">
@@ -390,53 +418,74 @@ export default function UsersPage() {
                         {u.divisionName && <span className="text-xs text-muted-foreground">{u.divisionName}</span>}
                         {u.departmentName && <span className="text-xs text-muted-foreground">/ {u.departmentName}</span>}
                       </div>
-                      <Button size="sm" variant="outline" className="w-full" onClick={() => openEdit(u)}>
-                        <Pencil className="h-3.5 w-3.5 mr-1.5" /> {t.common.edit}
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" className="flex-1" onClick={() => openEdit(u)}>
+                          <Pencil className="h-3.5 w-3.5 mr-1.5" /> {t.common.edit}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => handleDelete(u)} className="text-destructive hover:text-destructive">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </CardContent></Card>
                   ))}
 
-                  {kasirs.map((k) => (
-                    <Card key={`kasir-${k.id}`}><CardContent className="p-4 space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 mb-0.5">
-                            <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-500/20 text-[10px] px-1.5 py-0">Kasir POS</Badge>
-                          </div>
-                          <p className="font-medium truncate">{k.name}</p>
-                          <p className="text-xs text-muted-foreground truncate mt-0.5">{k.email}</p>
-                          {k.phone && <p className="text-xs text-muted-foreground">{k.phone}</p>}
-                        </div>
-                        {kasirStatusBadge(k.status)}
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
-                        {k.branchName && <span>Cabang: {k.branchName}</span>}
-                        <span>Daftar: {new Date(k.createdAt).toLocaleDateString("id-ID")}</span>
-                      </div>
-                      <div className="flex gap-2">
-                        {k.status !== "approved" && (
-                          <Button size="sm" variant="outline" className="flex-1 text-emerald-600 border-emerald-500/30"
-                            onClick={() => kasirStatusMutation.mutate({ id: k.id, status: "approved" })}
-                            disabled={kasirStatusMutation.isPending}>
-                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />Setujui
-                          </Button>
-                        )}
-                        {k.status !== "rejected" && (
-                          <Button size="sm" variant="outline" className="flex-1 text-red-500 border-red-500/30"
-                            onClick={() => kasirStatusMutation.mutate({ id: k.id, status: "rejected" })}
-                            disabled={kasirStatusMutation.isPending}>
-                            <XCircle className="h-3.5 w-3.5 mr-1" />Tolak
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent></Card>
-                  ))}
                 </>
               )}
             </div>
           </>
         )}
       </div>
+
+      {/* Create User dialog */}
+      <Dialog open={createOpen} onOpenChange={(v) => { setCreateOpen(v); if (!v) setCreateForm({ email: "", name: "", role: "ecommerce" }); }}>
+        <DialogContent className="max-w-md">
+          <form onSubmit={handleCreate}>
+            <DialogHeader>
+              <DialogTitle>Tambah User Baru</DialogTitle>
+              <DialogDescription>User akan bisa login menggunakan akun Google sesuai email yang didaftarkan.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3 py-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="create-email" className="text-xs">Email <span className="text-destructive">*</span></Label>
+                <Input
+                  id="create-email"
+                  type="email"
+                  placeholder="user@example.com"
+                  value={createForm.email}
+                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+                  required
+                  className="text-sm"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="create-name" className="text-xs">Nama</Label>
+                <Input
+                  id="create-name"
+                  placeholder="Nama lengkap (opsional)"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                  className="text-sm"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="create-role" className="text-xs">Role Sistem <span className="text-destructive">*</span></Label>
+                <Select value={createForm.role} onValueChange={(v) => setCreateForm({ ...createForm, role: v as Role })}>
+                  <SelectTrigger id="create-role" className="text-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABELS[r] ?? r}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Batal</Button>
+              <Button type="submit" disabled={creating}>
+                {creating ? "Menyimpan..." : "Tambah"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit dialog (BizPortal users) */}
       <Dialog open={!!editing} onOpenChange={(open) => !open && setEditing(null)}>
@@ -544,6 +593,45 @@ export default function UsersPage() {
                   <Label htmlFor="user-division" className="text-xs">{t.users.divisionOptional} <span className="text-muted-foreground">(teks bebas, opsional)</span></Label>
                   <Input id="user-division" value={editDivision} onChange={(e) => setEditDivision(e.target.value)} placeholder="cth. Jakarta Pusat" className="text-sm" />
                 </div>
+
+                {/* Allowed companies — admin only */}
+                {editRole === "admin" && (
+                  <div className="border-t pt-3 mt-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Building2 className="h-3.5 w-3.5 text-violet-500" />
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Akses Perusahaan (Admin)</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Centang perusahaan yang boleh diakses admin ini. Biarkan kosong untuk akses ke semua perusahaan.
+                    </p>
+                    <div className="space-y-2 max-h-48 overflow-y-auto rounded border p-3">
+                      {companies.map((c) => (
+                        <div key={c.id} className="flex items-center gap-2">
+                          <Checkbox
+                            id={`allow-co-${c.id}`}
+                            checked={editAllowedCompanies.includes(c.id)}
+                            onCheckedChange={(checked) => toggleAllowedCompany(c.id, !!checked)}
+                          />
+                          <label htmlFor={`allow-co-${c.id}`} className="text-sm cursor-pointer flex items-center gap-2">
+                            <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{c.companyCode}</code>
+                            {c.companyName}
+                          </label>
+                        </div>
+                      ))}
+                    </div>
+                    {editAllowedCompanies.length === 0 && (
+                      <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        Tidak ada yang dipilih = akses ke semua perusahaan
+                      </p>
+                    )}
+                    {editAllowedCompanies.length > 0 && (
+                      <p className="text-xs text-violet-600 mt-2">
+                        Dibatasi ke {editAllowedCompanies.length} perusahaan: {companies.filter(c => editAllowedCompanies.includes(c.id)).map(c => c.companyCode).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setEditing(null)}>{t.common.cancel}</Button>

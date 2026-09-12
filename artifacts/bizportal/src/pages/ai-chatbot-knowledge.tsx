@@ -35,8 +35,9 @@ import {
   FileUp,
   Sparkles,
   CheckCheck,
-  ListChecks,
+  ListChecks, ArrowLeft,
 } from "lucide-react";
+import { Link } from "wouter";
 
 interface KnowledgeEntry {
   id: number;
@@ -122,11 +123,7 @@ export default function AiChatbotKnowledgePage() {
   const [bulkSaving, setBulkSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    void loadEntries();
-  }, []);
-
-  async function loadEntries() {
+  const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/ai-agent/knowledge-base", { credentials: "include" });
@@ -138,7 +135,11 @@ export default function AiChatbotKnowledgePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadEntries();
+  }, [loadEntries]);
 
   function openCreate() {
     setEditingId(null);
@@ -404,6 +405,8 @@ export default function AiChatbotKnowledgePage() {
               <BookOpen className="h-5 w-5 text-emerald-600" />
             </div>
             <div>
+              <Link href="/settings"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
               <h1 className="text-xl font-semibold text-gray-900">Knowledge Base Chatbot</h1>
               <p className="text-sm text-gray-500">SOP, FAQ, dan informasi referensi otomatis chatbot</p>
             </div>

@@ -397,6 +397,94 @@ export interface Translations {
     totalLiabilities: string;
     equity: string;
   };
+  uom: {
+    title: string; addUom: string; editUom: string; deleteUom: string;
+    conversions: string; addConversion: string; editConversion: string; deleteConversion: string;
+    symbol: string; factor: string; meaning: string; fromUom: string; toUom: string;
+    selectUom: string; active: string; inactive: string;
+    saved: string; deleted: string; conversionSaved: string; conversionDeleted: string;
+    confirmDelete: string; confirmDeleteConversion: string;
+  };
+  reportsMain: {
+    title: string; subtitle: string;
+    groupPos: string; groupInventory: string;
+    tabDaily: string; tabBranch: string; tabCashier: string; tabTopProducts: string;
+    tabStock: string; tabStockLow: string; tabMovements: string; tabTransfers: string; tabReturns: string;
+    filterFrom: string; filterTo: string; filterCompany: string; filterBranch: string;
+    filterWarehouse: string; filterCashier: string; filterProduct: string; filterThreshold: string;
+    filterReset: string; export: string; loading: string; noData: string;
+  };
+  vendorStatus: {
+    aktif: string;
+    nonaktif: string;
+    ditangguhkan: string;
+    diarsipkan: string;
+    dipublikasikan: string;
+    ditarikDariMarketplace: string;
+    statusDiperbarui: string;
+    gagalUbahStatus: string;
+    vendorTerverifikasi: string;
+    gagalVerifikasi: string;
+    statusMarketplaceDiperbarui: string;
+    dokumenTersimpan: string;
+    jenisDokumenWajib: string;
+    gagalUploadDokumen: string;
+    dokumenDihapus: string;
+    gagalModerasiReview: string;
+    memuatStatus: string;
+    statusLegalitas: string;
+    terverifikasi: string;
+    belumTerverifikasi: string;
+    marketplace: string;
+    vendorTidakBisaTransaksi: string;
+    ubahStatus: string;
+    dokumen: string;
+    riwayat: string;
+    review: string;
+    statusBaru: string;
+    pilihStatus: string;
+    statusMarketplace: string;
+    alasanOpsional: string;
+    terapkanStatus: string;
+    verifikasiVendor: string;
+    jenisDokumen: string;
+    fileOpsional: string;
+    simpanDokumen: string;
+    kadaluarsa: string;
+    setujuiPublikasikan: string;
+    tolak: string;
+  };
+  kasirUsers: {
+    kembali: string;
+    dashboard: string;
+    tenantProperty: string;
+    posTenant: string;
+    kasirPengguna: string;
+    semuaCabang: string;
+    tambah: string;
+    terakhirDiperbarui: string;
+    username: string;
+    namaLengkap: string;
+    role: string;
+    cabang: string;
+    kontak: string;
+    status: string;
+    aktif: string;
+    nonaktif: string;
+    nonaktifkanUser: string;
+    editPengguna: string;
+    tambahPengguna: string;
+    pilihCabang: string;
+    tidakAda: string;
+    email: string;
+    telepon: string;
+    batal: string;
+    menyimpan: string;
+    simpan: string;
+    tersimpan: string;
+    dinonaktifkan: string;
+    errorMsg: string;
+  };
 }
 
 const id: Translations = {
@@ -774,6 +862,128 @@ const id: Translations = {
     totalAssets: "Total Aset",
     totalLiabilities: "Total Liabilitas",
     equity: "Ekuitas",
+  },
+  uom: {
+    title: "Satuan Ukur",
+    addUom: "Tambah Satuan",
+    editUom: "Edit Satuan",
+    deleteUom: "Hapus Satuan",
+    conversions: "Konversi",
+    addConversion: "Tambah Konversi",
+    editConversion: "Edit Konversi",
+    deleteConversion: "Hapus Konversi",
+    symbol: "Simbol",
+    factor: "Faktor",
+    meaning: "Arti",
+    fromUom: "Dari Satuan",
+    toUom: "Ke Satuan",
+    selectUom: "Pilih Satuan",
+    active: "Aktif",
+    inactive: "Tidak Aktif",
+    saved: "Tersimpan",
+    deleted: "Terhapus",
+    conversionSaved: "Konversi Tersimpan",
+    conversionDeleted: "Konversi Terhapus",
+    confirmDelete: "Hapus satuan ini?",
+    confirmDeleteConversion: "Hapus konversi ini?",
+  },
+  reportsMain: {
+    title: "Laporan",
+    subtitle: "Ringkasan laporan operasional",
+    groupPos: "POS",
+    groupInventory: "Inventaris",
+    tabDaily: "Harian",
+    tabBranch: "Cabang",
+    tabCashier: "Kasir",
+    tabTopProducts: "Produk Terlaris",
+    tabStock: "Stok",
+    tabStockLow: "Stok Menipis",
+    tabMovements: "Pergerakan",
+    tabTransfers: "Transfer",
+    tabReturns: "Retur",
+    filterFrom: "Dari",
+    filterTo: "Sampai",
+    filterCompany: "Perusahaan",
+    filterBranch: "Cabang",
+    filterWarehouse: "Gudang",
+    filterCashier: "Kasir",
+    filterProduct: "Produk",
+    filterThreshold: "Batas Minimum",
+    filterReset: "Reset Filter",
+    export: "Ekspor",
+    loading: "Memuat...",
+    noData: "Tidak ada data",
+  },
+  vendorStatus: {
+    aktif: "Aktif",
+    nonaktif: "Nonaktif",
+    ditangguhkan: "Ditangguhkan",
+    diarsipkan: "Diarsipkan",
+    dipublikasikan: "Dipublikasikan",
+    ditarikDariMarketplace: "Ditarik dari Marketplace",
+    statusDiperbarui: "Status vendor diperbarui",
+    gagalUbahStatus: "Gagal mengubah status",
+    vendorTerverifikasi: "Vendor terverifikasi",
+    gagalVerifikasi: "Gagal verifikasi vendor",
+    statusMarketplaceDiperbarui: "Status marketplace diperbarui",
+    dokumenTersimpan: "Dokumen tersimpan",
+    jenisDokumenWajib: "Jenis dokumen wajib diisi",
+    gagalUploadDokumen: "Gagal upload dokumen",
+    dokumenDihapus: "Dokumen dihapus",
+    gagalModerasiReview: "Gagal moderasi review",
+    memuatStatus: "Memuat status vendor…",
+    statusLegalitas: "Status & Legalitas Vendor",
+    terverifikasi: "Terverifikasi",
+    belumTerverifikasi: "Belum Terverifikasi",
+    marketplace: "Marketplace",
+    vendorTidakBisaTransaksi: "Vendor tidak bisa bertransaksi",
+    ubahStatus: "Ubah Status",
+    dokumen: "Dokumen",
+    riwayat: "Riwayat",
+    review: "Review",
+    statusBaru: "Status Baru",
+    pilihStatus: "Pilih status",
+    statusMarketplace: "Status Marketplace",
+    alasanOpsional: "Alasan (opsional, tercatat di riwayat)",
+    terapkanStatus: "Terapkan Status",
+    verifikasiVendor: "Verifikasi Vendor",
+    jenisDokumen: "Jenis Dokumen",
+    fileOpsional: "File (opsional)",
+    simpanDokumen: "Simpan Dokumen",
+    kadaluarsa: "kadaluarsa",
+    setujuiPublikasikan: "Setujui & Publikasikan",
+    tolak: "Tolak",
+  },
+  kasirUsers: {
+    kembali: "Kembali",
+    dashboard: "Dashboard",
+    tenantProperty: "Tenant & Property",
+    posTenant: "POS Tenant",
+    kasirPengguna: "Kasir — Pengguna",
+    semuaCabang: "Semua cabang",
+    tambah: "Tambah",
+    terakhirDiperbarui: "Terakhir diperbarui",
+    username: "Username",
+    namaLengkap: "Nama Lengkap",
+    role: "Role",
+    cabang: "Cabang",
+    kontak: "Kontak",
+    status: "Status",
+    aktif: "Aktif",
+    nonaktif: "Nonaktif",
+    nonaktifkanUser: "Nonaktifkan user ini?",
+    editPengguna: "Edit Pengguna Kasir",
+    tambahPengguna: "Tambah Pengguna Kasir",
+    pilihCabang: "Pilih cabang",
+    tidakAda: "— Tidak ada —",
+    email: "Email",
+    telepon: "Telepon / WA",
+    batal: "Batal",
+    menyimpan: "Menyimpan...",
+    simpan: "Simpan",
+    tersimpan: "Tersimpan",
+    dinonaktifkan: "Dinonaktifkan",
+    errorMsg: "Error",
   },
 };
 
@@ -1153,6 +1363,128 @@ const en: Translations = {
     totalLiabilities: "Total Liabilities",
     equity: "Equity",
   },
+  uom: {
+    title: "Units of Measure",
+    addUom: "Add Unit",
+    editUom: "Edit Unit",
+    deleteUom: "Delete Unit",
+    conversions: "Conversions",
+    addConversion: "Add Conversion",
+    editConversion: "Edit Conversion",
+    deleteConversion: "Delete Conversion",
+    symbol: "Symbol",
+    factor: "Factor",
+    meaning: "Meaning",
+    fromUom: "From Unit",
+    toUom: "To Unit",
+    selectUom: "Select Unit",
+    active: "Active",
+    inactive: "Inactive",
+    saved: "Saved",
+    deleted: "Deleted",
+    conversionSaved: "Conversion Saved",
+    conversionDeleted: "Conversion Deleted",
+    confirmDelete: "Delete this unit?",
+    confirmDeleteConversion: "Delete this conversion?",
+  },
+  reportsMain: {
+    title: "Reports",
+    subtitle: "Operational report summary",
+    groupPos: "POS",
+    groupInventory: "Inventory",
+    tabDaily: "Daily",
+    tabBranch: "Branch",
+    tabCashier: "Cashier",
+    tabTopProducts: "Top Products",
+    tabStock: "Stock",
+    tabStockLow: "Low Stock",
+    tabMovements: "Movements",
+    tabTransfers: "Transfers",
+    tabReturns: "Returns",
+    filterFrom: "From",
+    filterTo: "To",
+    filterCompany: "Company",
+    filterBranch: "Branch",
+    filterWarehouse: "Warehouse",
+    filterCashier: "Cashier",
+    filterProduct: "Product",
+    filterThreshold: "Minimum Threshold",
+    filterReset: "Reset Filters",
+    export: "Export",
+    loading: "Loading...",
+    noData: "No data",
+  },
+  vendorStatus: {
+    aktif: "Active",
+    nonaktif: "Inactive",
+    ditangguhkan: "Suspended",
+    diarsipkan: "Archived",
+    dipublikasikan: "Published",
+    ditarikDariMarketplace: "Withdrawn from Marketplace",
+    statusDiperbarui: "Vendor status updated",
+    gagalUbahStatus: "Failed to change status",
+    vendorTerverifikasi: "Vendor verified",
+    gagalVerifikasi: "Failed to verify vendor",
+    statusMarketplaceDiperbarui: "Marketplace status updated",
+    dokumenTersimpan: "Document saved",
+    jenisDokumenWajib: "Document type is required",
+    gagalUploadDokumen: "Failed to upload document",
+    dokumenDihapus: "Document deleted",
+    gagalModerasiReview: "Failed to moderate review",
+    memuatStatus: "Loading vendor status…",
+    statusLegalitas: "Vendor Status & Legality",
+    terverifikasi: "Verified",
+    belumTerverifikasi: "Not Verified",
+    marketplace: "Marketplace",
+    vendorTidakBisaTransaksi: "Vendor cannot transact",
+    ubahStatus: "Change Status",
+    dokumen: "Documents",
+    riwayat: "History",
+    review: "Review",
+    statusBaru: "New Status",
+    pilihStatus: "Select status",
+    statusMarketplace: "Marketplace Status",
+    alasanOpsional: "Reason (optional, recorded in history)",
+    terapkanStatus: "Apply Status",
+    verifikasiVendor: "Verify Vendor",
+    jenisDokumen: "Document Type",
+    fileOpsional: "File (optional)",
+    simpanDokumen: "Save Document",
+    kadaluarsa: "expires",
+    setujuiPublikasikan: "Approve & Publish",
+    tolak: "Reject",
+  },
+  kasirUsers: {
+    kembali: "Back",
+    dashboard: "Dashboard",
+    tenantProperty: "Tenant & Property",
+    posTenant: "POS Tenant",
+    kasirPengguna: "Cashier — Users",
+    semuaCabang: "All branches",
+    tambah: "Add",
+    terakhirDiperbarui: "Last updated",
+    username: "Username",
+    namaLengkap: "Full Name",
+    role: "Role",
+    cabang: "Branch",
+    kontak: "Contact",
+    status: "Status",
+    aktif: "Active",
+    nonaktif: "Inactive",
+    nonaktifkanUser: "Deactivate this user?",
+    editPengguna: "Edit Cashier User",
+    tambahPengguna: "Add Cashier User",
+    pilihCabang: "Select branch",
+    tidakAda: "— None —",
+    email: "Email",
+    telepon: "Phone / WA",
+    batal: "Cancel",
+    menyimpan: "Saving...",
+    simpan: "Save",
+    tersimpan: "Saved",
+    dinonaktifkan: "Deactivated",
+    errorMsg: "Error",
+  },
 };
 
 const zhCN: DeepPartial<Translations> = {
@@ -1262,6 +1594,24 @@ const zhCN: DeepPartial<Translations> = {
     noRole: "无角色",
     division: "部门",
     signOut: "退出",
+    refresh: "刷新",
+    off: "关",
+    seconds: "秒",
+    minute: "分钟",
+    interval: "刷新间隔",
+    accessDenied: "访问被拒绝",
+    adminOnly: "只有管理员可以访问此页面。",
+    optional: "可选",
+    contactEmail: "联系邮箱",
+    confirmDeleteTitle: "确认删除",
+    confirmDeleteDesc: "此操作无法撤销。",
+    viewAll: "查看全部",
+    new: "新建",
+    inProgress: "进行中",
+    completed: "已完成",
+    cancelled: "已取消",
+    noResults2: "没有匹配结果。",
+    number: "编号",
   },
   welcome: {
     title: "欢迎使用 BizPortal",
@@ -1280,13 +1630,13 @@ const zhCN: DeepPartial<Translations> = {
     posDetail: "快速处理零售交易，支持多种支付方式，追踪门店日营业额。",
     signOut: "退出",
   },
-  dashboard: { title: "仪表板", totalRevenue: "总收入", totalOrders: "总订单", activeCustomers: "活跃客户", pendingShipments: "待发货", recentOrders: "最近订单", salesOverview: "销售概览", quickActions: "快速操作", newQuotation: "新报价单", newOrder: "新订单", viewReports: "查看报表" },
+  dashboard: { title: "仪表板", subtitle: "实时运营摘要和业务KPI", totalRevenue: "总收入", totalOrders: "总订单", activeCustomers: "活跃客户", pendingShipments: "待发货", recentOrders: "最近订单", salesOverview: "销售概览", quickActions: "快速操作", newQuotation: "新报价单", newOrder: "新订单", viewReports: "查看报表", activeFreight: "在途货运", awaitingQuote: "待报价", inTransit: "运输中", driverStatus: "司机状态", available: "可用", busy: "繁忙", portalOrdersTitle: "门户订单", systemHealth: "系统健康", refreshInterval: "刷新间隔", allOrders: "全部", createSalesOrder: "创建销售订单", statusUpdated: "状态已更新", updatedAt: "更新于", refreshIn: "刷新于", loadedIn: "加载于", allPortalOrders: "所有门户订单", noOrdersForStatus: "此状态没有订单", noActiveDrivers: "没有活跃司机" },
   settings: { title: "设置", profile: "个人资料", language: "语言", languageDesc: "选择显示语言", notifications: "通知", security: "安全", calculator: "费率计算器", calculatorDesc: "配置物流费用估算费率", cargoTypes: "货物类型", cargoTypesDesc: "计算器的货物类型列表", aiIntake: "AI订单录入", aiIntakeDesc: "AI处理传入电子邮件/WA设置", waNotif: "WhatsApp通知", waNotifDesc: "管理员WhatsApp号码" },
-  pos: { title: "销售终端", products: "商品", cart: "购物车", total: "总计", payment: "付款", cashier: "收银员", receipt: "收据", emptyCart: "购物车为空", checkout: "结账", searchProduct: "搜索商品..." },
-  trading: { title: "贸易", inventory: "库存", stock: "库存量", sku: "SKU", costPrice: "成本价", salePrice: "销售价", hsCode: "HS编码", supplier: "供应商" },
-  logistics: { title: "物流", trackingNumber: "追踪号", origin: "发货地", destination: "目的地", estimatedDelivery: "预计到达", deliveryStatus: "配送状态", driver: "司机", vehicle: "车辆", weight: "重量", dimensions: "尺寸" },
-  sales: { title: "销售", quotation: "报价单", order: "订单", invoice: "发票", customer: "客户", item: "商品", qty: "数量", unitPrice: "单价", subtotal: "小计", discount: "折扣", tax: "税", grandTotal: "合计", dueDate: "到期日", paymentTerms: "付款条件", notes: "备注", newQuotation: "新报价单", newOrder: "新订单", newInvoice: "新发票" },
-  purchase: { title: "采购", rfq: "询价单", order: "采购订单", bill: "账单", vendor: "供应商", item: "商品", qty: "数量", unitPrice: "单价", subtotal: "小计", newRFQ: "新询价单", newOrder: "新采购单", newBill: "新账单" },
+  pos: { title: "销售终端", subtitle: "管理实体店交易和日销售汇总", products: "商品", cart: "购物车", total: "总计", payment: "付款", cashier: "收银员", receipt: "收据", emptyCart: "购物车为空", checkout: "结账", searchProduct: "搜索商品...", cashierTab: "收银台", historyStats: "历史与统计", selectProduct: "选择商品", searchProductSku: "搜索商品/SKU...", noProducts: "暂无商品，请在电商页面添加。", paymentMethod: "支付方式", cash: "现金", qris: "QRIS", debit: "借记卡", credit: "信用卡", transfer: "银行转账", items: "件", todaySales: "今日销售额", txCount: "交易次数", avgOrder: "平均订单", historyTitle: "交易记录", time: "时间", product: "商品", price: "价格", document: "单据", noTransactions: "暂无交易记录", qty: "数量", monthSales: "本月销售额", monthTxCount: "本月交易次数", isProcessing: "处理中...", pay: "支付" },
+  trading: { title: "贸易", subtitle: "管理批发库存、供应商及进口商品", inventory: "库存", stock: "库存量", sku: "SKU", costPrice: "成本价", salePrice: "销售价", hsCode: "HS编码", supplier: "供应商", stockInventory: "库存清单", addStock: "添加库存", addStockTitle: "添加库存", addStockDesc: "向仓库记录新的批发库存。", editStockTitle: "编辑库存", addSupplierTitle: "添加供应商", editSupplierTitle: "编辑供应商", productName: "商品名称", quantity: "数量", unit: "单位", noStock: "暂无库存。", noSuppliers: "暂无供应商。", supplierName: "供应商名称", country: "国家", addSupplier: "添加供应商" },
+  logistics: { title: "物流", subtitle: "追踪货运并管理车队运营", trackingNumber: "追踪号", origin: "发货地", destination: "目的地", estimatedDelivery: "预计到达", deliveryStatus: "配送状态", driver: "司机", vehicle: "车辆", weight: "重量", dimensions: "尺寸", newShipment: "新货运", statusDraft: "草稿", statusRfqSent: "已发询价", statusConfirmed: "已确认", statusInTransit: "运输中", statusCompleted: "已完成", statusCancelled: "已取消", noShipments: "暂无货运。", allStatus: "所有状态", last7Days: "最近7天", last30Days: "最近30天", custom: "自定义", newest: "最新", oldest: "最旧", filters: "筛选", clearFilters: "清除筛选", viewAll: "查看全部", freightTitle: "国际货运代理", freightSubtitle: "活跃的国际货运。", shipmentsTitle: "本地货运", shipmentsSubtitle: "本地车队货运列表。", addShipment: "添加货运", carrier: "承运商", sortBy: "排序", dateRange: "日期范围" },
+  sales: { title: "销售", subtitle: "销售摘要及最近单据", quotation: "报价单", order: "订单", invoice: "发票", customer: "客户", item: "商品", qty: "数量", unitPrice: "单价", subtotal: "小计", discount: "折扣", tax: "税", grandTotal: "合计", dueDate: "到期日", paymentTerms: "付款条件", notes: "备注", newQuotation: "新报价单", newOrder: "新订单", newInvoice: "新发票", toInvoice: "转为发票", revenue: "收入", recentDocuments: "最近单据", noDocuments: "暂无单据。", searchPlaceholder: "搜索单据...", docNumber: "单据编号", customerName: "客户名称" },
+  purchase: { title: "采购", subtitle: "采购摘要及最近单据", rfq: "询价单", order: "采购订单", bill: "账单", vendor: "供应商", item: "商品", qty: "数量", unitPrice: "单价", subtotal: "小计", newRFQ: "新询价单", newOrder: "新采购单", newBill: "新账单", toReceive: "待收货", toBill: "待开票", totalSpend: "总支出", recentDocuments: "最近单据", noDocuments: "暂无单据。" },
   accounting: { title: "会计", account: "账户", debit: "借方", credit: "贷方", balance: "余额", journal: "日记账", entry: "分录", payment: "付款", tax: "税", period: "期间", openingBalance: "期初余额", closingBalance: "期末余额", netIncome: "净利润", totalAssets: "总资产", totalLiabilities: "总负债", equity: "权益" },
 };
 

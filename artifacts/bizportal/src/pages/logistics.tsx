@@ -1,4 +1,6 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -6,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Navigation2, RefreshCw, Ship, ArrowRight, Clock, ArrowUpDown, X, Filter, CheckCircle2 } from "lucide-react";
+import { Plus, Navigation2, RefreshCw, Ship, ArrowRight, Clock, ArrowUpDown, X, Filter, CheckCircle2, Car } from "lucide-react";
+import { useCompany } from "@/contexts/CompanyContext";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -57,6 +60,8 @@ export default function LogisticsPage() {
   const { toast } = useToast();
   const [location, navigate] = useLocation();
   const searchString = useSearch();
+  const { activeCompany } = useCompany();
+  const showFleetIntelligence = ["CST", "DVS"].includes(activeCompany?.companyCode ?? "");
 
   const [freightRefreshInterval, setFreightRefreshInterval] = useState<FreightRefreshValue>(getInitialRefreshInterval);
 
@@ -66,7 +71,8 @@ export default function LogisticsPage() {
     try { localStorage.setItem(FREIGHT_REFRESH_LS_KEY, next); } catch {}
   };
 
-  const { data: shipments, isLoading } = useListShipments();
+  const { data: _shipmentsPaginated, isLoading } = useListShipments({ limit: 500 });
+  const shipments = _shipmentsPaginated?.data;
   const createShipment = useCreateShipment();
   const updateStatus = useUpdateShipmentStatus();
 
@@ -187,7 +193,7 @@ export default function LogisticsPage() {
     if (newUrl !== currentFull) {
       navigate(newUrl, { replace: true });
     }
-  }, [freightStatusFilter, freightSortOrder, freightDateFilter, customDateFrom, customDateTo]);
+  }, [freightStatusFilter, freightSortOrder, freightDateFilter, customDateFrom, customDateTo, location, navigate, rawSearch]);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
@@ -312,10 +318,31 @@ export default function LogisticsPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{t.logistics.title}</h1>
-          <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">{t.logistics.subtitle}</p>
-        </div>
+        <PageHeader
+          title={t.logistics.title}
+          description={t.logistics.subtitle}
+          favoriteEnabled
+        />
+
+        {/* Gojek Fleet Intelligence Shortcut */}
+        {showFleetIntelligence && (
+          <Link href="/logistics/fleet-intelligence">
+            <Card className="cursor-pointer border-green-500/40 bg-green-500/5 hover:bg-green-500/10 transition-colors">
+              <CardContent className="flex items-center justify-between py-4 px-5">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-green-500/15">
+                    <Car className="h-5 w-5 text-green-500" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-sm text-green-400">Gojek Fleet Intelligence</p>
+                    <p className="text-xs text-muted-foreground">Monitor driver, transaksi, dan outstanding armada Gojek</p>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-green-500 shrink-0" />
+              </CardContent>
+            </Card>
+          </Link>
+        )}
 
         {/* Freight Forwarding Summary Card */}
         <Card>
@@ -357,7 +384,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("rfq_sent")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950" : ""}`}
                   title={freightStatusFilter === "rfq_sent" ? "Klik untuk hapus filter" : "Filter: Menunggu Persetujuan Quote"}
                 >
                   {(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") && (
@@ -376,7 +403,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("confirmed")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") ? "ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") ? "ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-950" : ""}`}
                   title={freightStatusFilter === "confirmed" ? "Klik untuk hapus filter" : "Filter: Dikonfirmasi"}
                 >
                   {(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") && (
@@ -395,7 +422,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("in_transit")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") ? "ring-2 ring-indigo-400 bg-indigo-50 dark:bg-indigo-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") ? "ring-2 ring-indigo-400 bg-indigo-50 dark:bg-indigo-950" : ""}`}
                   title={freightStatusFilter === "in_transit" ? "Klik untuk hapus filter" : "Filter: Dalam Perjalanan"}
                 >
                   {(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") && (
@@ -516,21 +543,9 @@ export default function LogisticsPage() {
               </Select>
               {freightDateFilter === "custom" && (
                 <>
-                  <Input
-                    type="date"
-                    className={`h-7 text-xs w-auto px-2 ${isCustomRangeInvalid ? "border-destructive" : ""}`}
-                    value={customDateFrom}
-                    onChange={(e) => setCustomDateFrom(e.target.value)}
-                    aria-label="Dari tanggal"
-                  />
+                  <DatePicker value={customDateFrom} onChange={(v) => setCustomDateFrom(v)} className={`h-7 text-xs w-auto px-2 ${isCustomRangeInvalid ? "border-destructive" : ""}`} aria-label="Dari tanggal" />
                   <span className="text-xs text-muted-foreground">–</span>
-                  <Input
-                    type="date"
-                    className={`h-7 text-xs w-auto px-2 ${isCustomRangeInvalid ? "border-destructive" : ""}`}
-                    value={customDateTo}
-                    onChange={(e) => setCustomDateTo(e.target.value)}
-                    aria-label="Sampai tanggal"
-                  />
+                  <DatePicker value={customDateTo} onChange={(v) => setCustomDateTo(v)} className={`h-7 text-xs w-auto px-2 ${isCustomRangeInvalid ? "border-destructive" : ""}`} aria-label="Sampai tanggal" />
                   {isCustomRangeInvalid && (
                     <span className="text-xs text-destructive">{"Rentang tanggal tidak valid"}</span>
                   )}
@@ -571,7 +586,7 @@ export default function LogisticsPage() {
               </div>
             ) : recentFreight.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
-                <img src="/images/logo.png" alt="CST Logistics" className="h-8 w-auto object-contain opacity-50" />
+                <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto object-contain opacity-50" />
                 <p className="text-sm">
                   {freightStatusFilter !== "all" && freightDateFilter !== "all"
                     ? `${t.logistics.noShipments} (${FREIGHT_STATUS_LABELS[freightStatusFilter] ?? freightStatusFilter})`

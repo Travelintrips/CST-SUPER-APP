@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { AppShell } from "@/components/layout/AppShell";
 import {
   useListEmailCorrespondences,
@@ -115,15 +116,17 @@ function TransactionList({
   const soParams = useMemo(() => ({ kind: "order" as const }), []);
   const poParams = useMemo(() => ({ kind: "order" as const }), []);
 
-  const { data: salesDocs = [], isLoading: soLoading } = useListSalesDocuments(
-    soParams,
+  const { data: _salesDocsPaginated, isLoading: soLoading } = useListSalesDocuments(
+    { ...soParams, limit: 500 },
     { query: { enabled: docType === "sales_order", queryKey: getListSalesDocumentsQueryKey(soParams) } }
   );
+  const salesDocs = _salesDocsPaginated?.data ?? [];
   const invoiceParams = useMemo(() => ({}), []);
-  const { data: invoiceDocs = [], isLoading: invLoading } = useListSalesDocuments(
-    invoiceParams,
+  const { data: _invoiceDocsPaginated, isLoading: invLoading } = useListSalesDocuments(
+    { ...invoiceParams, limit: 500 },
     { query: { enabled: docType === "invoice", queryKey: getListSalesDocumentsQueryKey(invoiceParams) } }
   );
+  const invoiceDocs = _invoiceDocsPaginated?.data ?? [];
   const { data: purchaseDocs = [], isLoading: poLoading } = useListPurchaseDocuments(
     poParams,
     { query: { enabled: docType === "purchase_order", queryKey: getListPurchaseDocumentsQueryKey(poParams) } }
@@ -606,21 +609,11 @@ export default function EmailInboxPage() {
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-muted-foreground flex items-center gap-1"><CalendarDays className="h-3 w-3" /> Tanggal Dari</Label>
-                <Input
-                  type="date"
-                  className="h-8 text-sm"
-                  value={filterDateFrom}
-                  onChange={(e) => setFilterDateFrom(e.target.value)}
-                />
+                <DatePicker value={filterDateFrom} onChange={(v) => setFilterDateFrom(v)} className="h-8 text-sm" />
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-muted-foreground flex items-center gap-1"><CalendarDays className="h-3 w-3" /> Tanggal Sampai</Label>
-                <Input
-                  type="date"
-                  className="h-8 text-sm"
-                  value={filterDateTo}
-                  onChange={(e) => setFilterDateTo(e.target.value)}
-                />
+                <DatePicker value={filterDateTo} onChange={(v) => setFilterDateTo(v)} className="h-8 text-sm" />
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs text-muted-foreground">Status Validasi</Label>

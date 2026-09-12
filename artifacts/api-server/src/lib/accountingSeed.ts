@@ -7,7 +7,7 @@ import {
   expenseCategoriesTable,
   companiesTable,
 } from "@workspace/db";
-import { eq, isNull, or, sql } from "drizzle-orm";
+import { eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 type AccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
@@ -19,11 +19,13 @@ interface SeedAccount {
   parentCode?: string;
 }
 
+/**
+ * Abbreviasi perusahaan — diisi secara dinamis dari DB oleh populateDynamicCompanies().
+ * Company 1 (holding CST) dicantumkan sebagai fallback sebelum DB query berjalan.
+ * Jangan tambahkan entry hardcode untuk perusahaan lain di sini; gunakan company_code di DB.
+ */
 const COMPANY_ABBR: Record<number, string> = {
   1: "CST",
-  2: "WS",
-  3: "DV",
-  4: "ER",
 };
 
 /** Map lama → baru untuk rename akun yang sudah dibuat dengan singkatan lama */
@@ -33,7 +35,45 @@ const OLD_TO_NEW_ABBR: Record<string, string> = {
   ERA: "ER",
 };
 
-const ALL_COMPANY_IDS = [1, 2, 3, 4];
+const ALL_COMPANY_IDS: number[] = [1, 2, 3, 4];
+
+// Canonical Sport Center QRIS receipts must not share the physical bank COA.
+// 1-1023 is the CST Bank Mandiri Ciputat net-settlement account; 1-1024 is
+// the gross payment clearing account used by the canonical payment adapter.
+const SPORT_CENTER_QRIS_CLEARING_BASE_CODE = "1-1024";
+const SPORT_CENTER_QRIS_CLEARING_CODE = "1-1024-CST";
+const CST_BANK_PARENT_CODE = "1-1020-CST";
+const CST_BANK_CHILD_CODE = "1-1023-CST";
+
+/**
+ * Populate ALL_COMPANY_IDS dan COMPANY_ABBR secara dinamis dari tabel companies.
+ * Perusahaan baru (ID > 4 atau yang belum terdaftar) akan ditambahkan ke daftar
+ * seed menggunakan company_code sebagai abbreviasi.
+ * Ini harus dipanggil sebelum seed loop berjalan.
+ */
+async function populateDynamicCompanies(): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: companiesTable.id, companyCode: companiesTable.companyCode })
+      .from(companiesTable)
+      .where(eq(companiesTable.isActive, true));
+    for (const row of rows) {
+      // Selalu gunakan company_code dari DB sebagai sumber kebenaran abbreviasi.
+      // Ini memastikan tidak ada desync antara DB dan kode seed.
+      COMPANY_ABBR[row.id] = row.companyCode.slice(0, 8).toUpperCase();
+      // Tambahkan ID ke list jika belum ada
+      if (!ALL_COMPANY_IDS.includes(row.id)) {
+        ALL_COMPANY_IDS.push(row.id);
+      }
+    }
+    logger.info(
+      { companyIds: ALL_COMPANY_IDS, companyAbbr: COMPANY_ABBR },
+      "populateDynamicCompanies: daftar perusahaan berhasil dimuat dari DB",
+    );
+  } catch (err) {
+    logger.warn({ err }, "populateDynamicCompanies: gagal membaca companies dari DB, menggunakan daftar fallback");
+  }
+}
 
 /**
  * Parent/group accounts — global (no companyId), inserted once.
@@ -58,17 +98,42 @@ const COA_PARENTS: SeedAccount[] = [
 ];
 
 /**
+ * Tax hierarchy is governed by coaTaxMigration + maker-checker approval.
+ * accountingSeed must never create tax headers/subaccounts or repair their
+ * parent links. The three legacy fallback accounts remain in the general
+ * leaf template for first-time setup, but become insert-only after creation
+ * so approved governance changes cannot be overwritten by a later seed.
+ */
+const GOVERNED_TAX_COA_BASE_CODES = new Set([
+  "1-1050", "1-1070", "1-1071", "1-1072", "1-1073", "1-1074", "1-1075", "1-1076",
+  "2-1030", "2-1031", "2-1032",
+  "2-1060", "2-1061", "2-1062", "2-1063", "2-1064", "2-1065", "2-1066",
+  "2-1067", "2-1068", "2-1069", "2-1070", "2-1071", "2-1072",
+  "5-3020", "5-3040", "5-3041", "5-3042", "5-3043", "5-3044", "5-3045", "5-3046",
+  "5-3047", "5-3048",
+]);
+
+export function isGovernedTaxCoaCode(baseCode: string): boolean {
+  return GOVERNED_TAX_COA_BASE_CODES.has(baseCode);
+}
+
+/**
  * Leaf account templates — seeded per-company with abbreviation suffix.
  * code here is the BASE code; actual code will be "code-ABBR".
  */
 const COA_LEAF_TEMPLATES: SeedAccount[] = [
   // ── Aset Lancar ───────────────────────────────────────────
-  { code: "1-1010", name: "Kas",                              type: "asset",   parentCode: "1-1000" },
+  { code: "1-1010", name: "Kas Kecil",                        type: "asset",   parentCode: "1-1000" },
   { code: "1-1020", name: "Bank Mandiri",                     type: "asset",   parentCode: "1-1000" },
   { code: "1-1021", name: "Bank BCA",                         type: "asset",   parentCode: "1-1000" },
   { code: "1-1022", name: "Bank BNI",                         type: "asset",   parentCode: "1-1000" },
+  { code: "1-1023", name: "Bank Mandiri Ciputat",              type: "asset",   parentCode: "1-1000" },
+  { code: "1-1024", name: "Payment Clearing Sport Center / QRIS", type: "asset", parentCode: "1-1000" },
   { code: "1-1030", name: "Piutang Usaha",                    type: "asset",   parentCode: "1-1000" },
   { code: "1-1031", name: "Piutang Lainnya",                  type: "asset",   parentCode: "1-1000" },
+  { code: "1-1032", name: "Piutang Karyawan (Kasbon)",        type: "asset",   parentCode: "1-1000" },
+  { code: "1-1033", name: "Piutang Dana Talangan",            type: "asset",   parentCode: "1-1000" },
+  { code: "1-1099", name: "Piutang Intercompany Dana Talangan", type: "asset", parentCode: "1-1000" },
   { code: "1-1040", name: "Persediaan Barang",                type: "asset",   parentCode: "1-1000" },
   { code: "1-1050", name: "PPN Masukan",                      type: "asset",   parentCode: "1-1000" },
   { code: "1-1060", name: "Uang Muka Biaya",                  type: "asset",   parentCode: "1-1000" },
@@ -79,10 +144,17 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "2-1010", name: "Hutang Usaha",                     type: "liability", parentCode: "2-1000" },
   { code: "2-1020", name: "PPN Keluaran",                     type: "liability", parentCode: "2-1000" },
   { code: "2-1030", name: "Hutang Pajak Lainnya",             type: "liability", parentCode: "2-1000" },
+  { code: "2-1031", name: "Hutang PPh 21",                   type: "liability", parentCode: "2-1000" },
+  { code: "2-1032", name: "Hutang PPh 23",                   type: "liability", parentCode: "2-1000" },
   { code: "2-1040", name: "Uang Muka Pelanggan",              type: "liability", parentCode: "2-1000" },
   { code: "2-1045", name: "GR/IR Clearing (Barang Diterima/Belum Ditagih)", type: "liability", parentCode: "2-1000" },
+  { code: "2-1050", name: "Hutang Bank Jangka Pendek",        type: "liability", parentCode: "2-1000" },
+  { code: "2-1055", name: "Hutang Leasing Jangka Pendek",     type: "liability", parentCode: "2-1000" },
   // ── Kewajiban Jangka Panjang ──────────────────────────────
   { code: "2-2010", name: "Hutang Jangka Panjang",            type: "liability", parentCode: "2-2000" },
+  { code: "2-2020", name: "Hutang Bank Jangka Panjang",       type: "liability", parentCode: "2-2000" },
+  { code: "2-2030", name: "Hutang Leasing Jangka Panjang",    type: "liability", parentCode: "2-2000" },
+  { code: "2-2098", name: "Hutang Intercompany Dana Talangan", type: "liability", parentCode: "2-2000" },
   // ── Modal ─────────────────────────────────────────────────
   { code: "3-1010", name: "Modal Disetor",                    type: "equity",  parentCode: "3-1000" },
   // ── Laba / Rugi ───────────────────────────────────────────
@@ -95,6 +167,11 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "4-1013", name: "Pendapatan Land Freight",          type: "revenue", parentCode: "4-1000" },
   { code: "4-1014", name: "Pendapatan Custom Clearance",      type: "revenue", parentCode: "4-1000" },
   { code: "4-1015", name: "Pendapatan Penjualan Barang",      type: "revenue", parentCode: "4-1000" },
+  { code: "4-1016", name: "Pendapatan Membership Sport Center", type: "revenue", parentCode: "4-1000" },
+  { code: "4-1017", name: "Pendapatan Booking Sport Center",    type: "revenue", parentCode: "4-1000" },
+  { code: "4-1018", name: "Pendapatan Handling Service",        type: "revenue", parentCode: "4-1000" },
+  { code: "4-1019", name: "Pendapatan Document Service",        type: "revenue", parentCode: "4-1000" },
+  { code: "4-1021", name: "Pendapatan Sewa Tenant",             type: "revenue", parentCode: "4-1000" },
   // ── Pendapatan Lain-lain ──────────────────────────────────
   { code: "4-1020", name: "Pendapatan Lain-lain",             type: "revenue", parentCode: "4-2000" },
   { code: "4-2010", name: "Pendapatan Bunga",                 type: "revenue", parentCode: "4-2000" },
@@ -104,6 +181,14 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "5-1011", name: "Biaya Pengiriman Langsung",        type: "expense", parentCode: "5-1000" },
   { code: "5-1012", name: "Biaya Kepabeanan",                 type: "expense", parentCode: "5-1000" },
   { code: "5-1013", name: "Biaya Penanganan & Handling",      type: "expense", parentCode: "5-1000" },
+  // ── HPP Logistics Marketplace ─────────────────────────────
+  { code: "5-1020", name: "HPP Jasa Logistik",                type: "expense", parentCode: "5-1000" },
+  { code: "5-1021", name: "HPP Sea Freight",                  type: "expense", parentCode: "5-1000" },
+  { code: "5-1022", name: "HPP Air Freight",                  type: "expense", parentCode: "5-1000" },
+  { code: "5-1023", name: "HPP Trucking / Land Freight",      type: "expense", parentCode: "5-1000" },
+  { code: "5-1024", name: "HPP PPJK / Kepabeanan",            type: "expense", parentCode: "5-1000" },
+  { code: "5-1025", name: "HPP Handling Service",             type: "expense", parentCode: "5-1000" },
+  { code: "5-1026", name: "HPP Document Service",             type: "expense", parentCode: "5-1000" },
   // ── Beban Operasional ─────────────────────────────────────
   { code: "5-2010", name: "Beban Gaji & Tunjangan",           type: "expense", parentCode: "5-2000" },
   { code: "5-2020", name: "Beban Sewa",                       type: "expense", parentCode: "5-2000" },
@@ -119,6 +204,7 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "5-3010", name: "Beban Bunga & Administrasi Bank",  type: "expense", parentCode: "5-3000" },
   { code: "5-3020", name: "Beban Pajak & Perijinan",          type: "expense", parentCode: "5-3000" },
   { code: "5-3030", name: "Kerugian Selisih Kurs",            type: "expense", parentCode: "5-3000" },
+  { code: "5-3050", name: "Biaya MDR & Payment Gateway",      type: "expense", parentCode: "5-3000" },
 ];
 
 /** All leaf accounts (for backward compat export) */
@@ -129,7 +215,7 @@ async function applyRuntimeMigrations(): Promise<void> {
   // companies table column additions
   const companyColMigrations = [
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS code TEXT NOT NULL DEFAULT 'CST'`,
-    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'PT CST Logistics'`,
+    `ALTER TABLE companies ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'PT B2B Marketplace and Logistic'`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_holding BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS parent_company_id INTEGER`,
     `ALTER TABLE companies ADD COLUMN IF NOT EXISTS address TEXT`,
@@ -146,28 +232,117 @@ async function applyRuntimeMigrations(): Promise<void> {
     `ALTER TABLE accounting_taxes ADD COLUMN IF NOT EXISTS company_id INTEGER`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS company_id INTEGER`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS grir_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_journal_id INTEGER REFERENCES accounting_journals(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS gsheet_spreadsheet_id TEXT`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tenant_rent_income_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS allowance_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tax_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS bpjs_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS fleet_cash_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS fleet_driver_receivable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+    `CREATE TABLE IF NOT EXISTS transaction_taxes (
+      id SERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      transaction_type TEXT NOT NULL,
+      transaction_id INTEGER NOT NULL,
+      transaction_ref TEXT,
+      tax_id INTEGER NOT NULL REFERENCES accounting_taxes(id),
+      tax_name TEXT NOT NULL,
+      tax_rate NUMERIC(6,3) NOT NULL,
+      cut_type TEXT NOT NULL DEFAULT 'self_borne',
+      base_amount NUMERIC(14,2) NOT NULL,
+      tax_amount NUMERIC(14,2) NOT NULL,
+      account_id INTEGER REFERENCES chart_of_accounts(id),
+      period TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      paid_at TIMESTAMP,
+      reported_at TIMESTAMP,
+      notes TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS tx_taxes_tx_uniq ON transaction_taxes(transaction_type, transaction_id, tax_id)`,
+    `CREATE INDEX IF NOT EXISTS tx_taxes_company_period_idx ON transaction_taxes(company_id, period)`,
+    `CREATE INDEX IF NOT EXISTS tx_taxes_status_idx ON transaction_taxes(status)`,
   ];
   for (const q of [...companyColMigrations, ...accountingColMigrations]) {
     try { await db.execute(sql.raw(q)); } catch { /* column/index already exists or duplicate */ }
   }
+  // Sinkronisasi company_code di DB agar konsisten dengan COA codes yang sudah ada.
+  // company_code digunakan langsung sebagai abbreviasi suffix di COA dan journal codes.
+  const companyCodeFixes: [string, string][] = [
+    ["WGS", "WS"],
+    ["DVS", "DV"],
+    ["ERA", "ER"],
+  ];
+  for (const [oldCode, newCode] of companyCodeFixes) {
+    try {
+      await db.execute(sql.raw(
+        `UPDATE companies SET company_code = '${newCode}' WHERE company_code = '${oldCode}'`
+      ));
+    } catch { /* non-fatal */ }
+  }
+
+  // Bersihkan gsheet_spreadsheet_id yang tersimpan sebagai URL penuh → extract ID saja
+  try {
+    await db.execute(sql.raw(`
+      UPDATE accounting_settings
+      SET gsheet_spreadsheet_id = (regexp_match(gsheet_spreadsheet_id, '/spreadsheets/d/([a-zA-Z0-9_-]+)'))[1]
+      WHERE gsheet_spreadsheet_id LIKE '%/spreadsheets/d/%'
+    `));
+  } catch { /* ignore */ }
   // Add new enum values to accounting_entry_source (safe: ignored if already exists)
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'cogs_delivery'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'logistic_vendor_cost'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'tenant_rent_payment'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'tenant_rent_reversal'`)); } catch { /* already exists */ }
+  // closing_entry + reversal dipakai oleh trigger ae_period_lock_insert_guard_fn — WAJIB ada di enum
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'closing_entry'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'reversal'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation_void'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'historical_duplicate_reversal'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'fund_transfer'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking_reversal'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_qris_mdr'`)); } catch { /* already exists */ }
   // Deduplicate chart_of_accounts keeping lowest id per (company_id, code) before creating unique index
-  await db.execute(sql.raw(`
-    DELETE FROM chart_of_accounts
-    WHERE id NOT IN (
-      SELECT MIN(id) FROM chart_of_accounts
-      GROUP BY COALESCE(company_id::text, '__null__'), code
-    )
-  `));
+  try {
+    await db.execute(sql.raw(`
+      DELETE FROM chart_of_accounts
+      WHERE id NOT IN (
+        SELECT MIN(id) FROM chart_of_accounts
+        GROUP BY COALESCE(company_id::text, '__null__'), code
+      )
+    `));
+  } catch { /* non-fatal: table may be empty or index already prevents dups */ }
   // Deduplicate accounting_journals
-  await db.execute(sql.raw(`
-    DELETE FROM accounting_journals
-    WHERE id NOT IN (
-      SELECT MIN(id) FROM accounting_journals
-      GROUP BY COALESCE(company_id::text, '__null__'), code
-    )
-  `));
+  try {
+    await db.execute(sql.raw(`
+      DELETE FROM accounting_journals
+      WHERE id NOT IN (
+        SELECT MIN(id) FROM accounting_journals
+        GROUP BY COALESCE(company_id::text, '__null__'), code
+      )
+    `));
+  } catch { /* non-fatal */ }
+  // Deduplicate expense_categories by code (keep min id per code)
+  try {
+    await db.execute(sql.raw(`
+      DELETE FROM expense_categories
+      WHERE id NOT IN (
+        SELECT MIN(id) FROM expense_categories GROUP BY code
+      )
+    `));
+  } catch { /* non-fatal */ }
+  // Ensure expense_categories.code unique index exists
+  try {
+    await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS expense_categories_code_uniq ON expense_categories (code)`));
+  } catch { /* already exists */ }
   // Ensure compound unique indexes exist (ignore error if already exists)
   const indexes = [
     `CREATE UNIQUE INDEX IF NOT EXISTS coa_company_code_uniq ON chart_of_accounts (company_id, code)`,
@@ -194,7 +369,7 @@ export async function ensureDefaultCompany(): Promise<number> {
   const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.companyCode, "CST")).limit(1);
   if (existing) return existing.id;
   const [created] = await db.insert(companiesTable).values({
-    companyName: "PT CST Logistics",
+    companyName: "PT B2B Marketplace and Logistic",
     companyCode: "CST",
     isHolding: true,
   }).onConflictDoNothing().returning();
@@ -204,43 +379,336 @@ export async function ensureDefaultCompany(): Promise<number> {
   return row!.id;
 }
 
+/**
+ * Make the CST Mandiri account a real header and keep the postable Ciputat
+ * child as the destination for all new bank activity.
+ *
+ * This is deliberately idempotent and runs before the seed fast-path, because
+ * existing installations can already have a complete COA and therefore skip
+ * the full seed loop. Historical journal lines are not rewritten.
+ */
+export async function repairMandiriCiputatHierarchy(): Promise<void> {
+  try {
+    const parentRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = ${CST_BANK_PARENT_CODE}
+      LIMIT 1
+    `);
+    const childRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = ${CST_BANK_CHILD_CODE}
+      LIMIT 1
+    `);
+    const parentId = Number((parentRows.rows[0] as { id?: number } | undefined)?.id);
+    const childId = Number((childRows.rows[0] as { id?: number } | undefined)?.id);
+    if (!parentId || !childId) return;
+
+    await db.execute(sql`
+      UPDATE chart_of_accounts
+      SET name = 'Bank Mandiri CST',
+          is_header = TRUE,
+          is_postable = FALSE,
+          updated_at = NOW()
+      WHERE id = ${parentId}
+    `);
+    await db.execute(sql`
+      UPDATE chart_of_accounts
+      SET name = 'Bank Mandiri Ciputat',
+          parent_id = ${parentId},
+          is_header = FALSE,
+          is_postable = TRUE,
+          updated_at = NOW()
+      WHERE id = ${childId}
+    `);
+
+    // BNK-CST and CST accounting settings must never point to the header.
+    await db.execute(sql`
+      UPDATE accounting_journals
+      SET default_debit_account_id = ${childId},
+          default_credit_account_id = ${childId}
+      WHERE company_id = 1 AND code = 'BNK-CST'
+    `);
+    await db.execute(sql`
+      UPDATE accounting_settings
+      SET default_bank_account_id = ${childId}
+      WHERE company_id = 1
+    `);
+    await db.execute(sql`
+      UPDATE company_bank_accounts
+      SET name = CASE
+            WHEN name ILIKE '%Bank Mandiri%Sport Center%' THEN 'Bank Mandiri Ciputat'
+            ELSE name
+          END,
+          coa_id = ${childId},
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND (
+          coa_id IN (${parentId}, ${childId})
+          OR name ILIKE '%Bank Mandiri%Sport Center%'
+          OR name ILIKE '%Bank Mandiri CST%'
+        )
+    `);
+
+    // The bank mutation master is the source of truth for imported bank rows.
+    // Reuse an existing Ciputat row when present; otherwise promote the legacy
+    // CST row instead of creating a duplicate configuration.
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET is_active = FALSE,
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND coa_code = '1-1020-CST'
+        AND EXISTS (
+          SELECT 1
+          FROM master_bank_accounts
+          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+        )
+    `);
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET account_name = 'Mandiri Ciputat',
+          coa_code = '1-1023-CST',
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND is_active = TRUE
+        AND coa_code = '1-1020-CST'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM master_bank_accounts
+          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+        )
+    `);
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET account_name = 'Mandiri Ciputat',
+          coa_code = '1-1023-CST',
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND is_active = TRUE
+        AND coa_code = '1-1023-CST'
+    `);
+  } catch (err) {
+    // Startup migrations can run before optional bank-master tables exist.
+    // The full seed/migration runner will retry this function later.
+    logger.warn({ err }, "Accounting seed: Mandiri Ciputat hierarchy repair deferred");
+  }
+}
+
+/**
+ * Keep the CST salary hierarchy aligned with the governed COA decision:
+ *
+ *   5-2000 → 5-2010 (header) → 5-2010-CST (postable leaf)
+ *
+ * This repair is idempotent and never rewrites accounting entry lines.
+ */
+export async function repairCstSalaryHierarchy(): Promise<void> {
+  try {
+    const parentRows = await db.execute(sql`
+      SELECT id, parent_id, is_header, is_postable, is_active, status::text AS status
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = '5-2010'
+      LIMIT 1
+    `);
+    const childRows = await db.execute(sql`
+      SELECT id, parent_id, is_header, is_postable, is_active, status::text AS status
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = '5-2010-CST'
+      LIMIT 1
+    `);
+    const groupRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id IS NULL AND code = '5-2000'
+      LIMIT 1
+    `);
+    const parent = parentRows.rows[0] as {
+      id?: number; parent_id?: number | null; is_header?: boolean;
+      is_postable?: boolean; is_active?: boolean; status?: string;
+    } | undefined;
+    const child = childRows.rows[0] as {
+      id?: number; parent_id?: number | null; is_header?: boolean;
+      is_postable?: boolean; is_active?: boolean; status?: string;
+    } | undefined;
+    const groupId = Number((groupRows.rows[0] as { id?: number } | undefined)?.id);
+    const parentId = Number(parent?.id);
+    const childId = Number(child?.id);
+    if (!parentId || !childId || !groupId) return;
+
+    if (
+      parent?.parent_id !== groupId
+      || parent.is_header !== true
+      || parent.is_postable !== false
+      || parent.is_active !== true
+      || parent.status !== "ACTIVE"
+    ) {
+      await db.execute(sql`
+        UPDATE chart_of_accounts
+        SET parent_id = ${groupId},
+            is_header = TRUE,
+            is_postable = FALSE,
+            is_active = TRUE,
+            status = 'ACTIVE',
+            updated_at = NOW()
+        WHERE id = ${parentId}
+      `);
+    }
+
+    if (
+      child?.parent_id !== parentId
+      || child.is_header !== false
+      || child.is_postable !== true
+      || child.is_active !== true
+      || child.status !== "ACTIVE"
+    ) {
+      await db.execute(sql`
+        UPDATE chart_of_accounts
+        SET parent_id = ${parentId},
+            is_header = FALSE,
+            is_postable = TRUE,
+            is_active = TRUE,
+            status = 'ACTIVE',
+            updated_at = NOW()
+        WHERE id = ${childId}
+      `);
+    }
+
+    // Existing configuration must never direct a new expense posting to the
+    // non-postable header.
+    await db.execute(sql`
+      UPDATE accounting_settings
+      SET salary_expense_account_id = CASE
+            WHEN salary_expense_account_id = ${parentId} THEN ${childId}
+            ELSE salary_expense_account_id
+          END,
+          allowance_expense_account_id = CASE
+            WHEN allowance_expense_account_id = ${parentId} THEN ${childId}
+            ELSE allowance_expense_account_id
+          END
+      WHERE salary_expense_account_id = ${parentId}
+         OR allowance_expense_account_id = ${parentId}
+    `);
+    await db.execute(sql`
+      UPDATE expense_categories
+      SET expense_account_id = ${childId}
+      WHERE code = 'EXP-GAJI'
+        AND (company_id = 1 OR company_id IS NULL)
+        AND expense_account_id IS DISTINCT FROM ${childId}
+    `);
+  } catch (err) {
+    logger.warn({ err }, "Accounting seed: CST salary hierarchy repair deferred");
+  }
+}
+
 export async function seedAccountingDefaults(companyId?: number): Promise<void> {
   const cid = companyId ?? (await ensureDefaultCompany());
 
-  // ── Fast-path: skip heavy seed if COA already fully populated ────────────
+  // ── Populate ALL_COMPANY_IDS & COMPANY_ABBR dari DB secara dinamis ────────
+  // Harus dijalankan sebelum fast-path check agar perusahaan baru (ID > 4)
+  // turut disertakan dalam seed COA, jurnal, dan settings.
+  await populateDynamicCompanies();
+
+  // Keep the CST bank hierarchy and all bank-facing defaults aligned even
+  // when the general seed takes its fast path.  The parent is a header only;
+  // all new CST bank postings must use the Ciputat child account.
+  await repairMandiriCiputatHierarchy();
+  await repairCstSalaryHierarchy();
+
+  // ── Fast-path: skip heavy seed if COA, journals, AND settings already fully populated ──
+  // Check journals FIRST: if empty → always run full seed regardless of COA state.
   // Count leaf accounts that have a company_id (per-company accounts).
-  // Expected: COA_LEAF_TEMPLATES.length (38) × ALL_COMPANY_IDS.length (4) = 152
+  // Expected: COA_LEAF_TEMPLATES.length × ALL_COMPANY_IDS.length leaf accounts,
+  //           6 journal types × companies, settings rows with cash_journal_id populated.
   try {
-    const [{ leafCount }] = await db
-      .select({ leafCount: sql<number>`count(*)::int` })
-      .from(chartOfAccountsTable)
+    const expectedJournals = 7 * ALL_COMPANY_IDS.length; // 7 journal types × N companies
+
+    // ── GUARD: if journals are completely missing, skip fast-path immediately ──────
+    const [{ jCount }] = await db
+      .select({ jCount: sql<number>`count(*)::int` })
+      .from(accountingJournalsTable)
       .where(sql`company_id IS NOT NULL`);
-    const expectedLeaves = COA_LEAF_TEMPLATES.length * ALL_COMPANY_IDS.length;
-    if (Number(leafCount) >= expectedLeaves) {
-      logger.info("Accounting seed: COA already fully seeded — skipping (fast path).");
-      // Still patch grirAccountId in settings if it's NULL but 2-1045 account exists
-      try {
-        await db.execute(sql`
-          UPDATE accounting_settings AS s
-          SET grir_account_id = coa.id
-          FROM chart_of_accounts coa
-          WHERE coa.code = CONCAT('2-1045-', (
-            SELECT abbr FROM companies c WHERE c.id = s.company_id LIMIT 1
-          ))
-          AND s.grir_account_id IS NULL
-          AND s.company_id IS NOT NULL
+    if (Number(jCount) === 0) {
+      logger.info(
+        { expectedJournals },
+        "Accounting seed: journals table empty — skipping fast-path, running full seed."
+      );
+      // Fall through to full seed below (do NOT return)
+    } else {
+      // Journals exist — check COA completeness before deciding to skip
+      const [{ leafCount }] = await db
+        .select({ leafCount: sql<number>`count(*)::int` })
+        .from(chartOfAccountsTable)
+        .where(sql`company_id IS NOT NULL`);
+      const [{ intercompanyCoaCount }] = await db
+        .select({ intercompanyCoaCount: sql<number>`count(*)::int` })
+        .from(chartOfAccountsTable)
+        .where(sql`
+          company_id IS NOT NULL
+          AND (code LIKE '1-1099-%' OR code LIKE '2-2098-%')
         `);
-        // Also handle global settings row (no company_id)
-        await db.execute(sql`
-          UPDATE accounting_settings AS s
-          SET grir_account_id = (
-            SELECT id FROM chart_of_accounts WHERE code LIKE '2-1045%' ORDER BY id LIMIT 1
-          )
-          WHERE s.grir_account_id IS NULL
-        `);
-      } catch (e) { /* non-fatal */ }
-      return;
-    }
+      // Governed tax accounts are created only through COA maker-checker
+      // requests, so their absence must not force the general seed to rerun.
+      const seedManagedLeafCount = COA_LEAF_TEMPLATES.filter(
+        (leaf) => !isGovernedTaxCoaCode(leaf.code),
+      ).length;
+      const expectedLeaves = seedManagedLeafCount * ALL_COMPANY_IDS.length;
+      const expectedIntercompanyCoa = ALL_COMPANY_IDS.length * 2;
+      if (
+        Number(leafCount) >= expectedLeaves &&
+        Number(intercompanyCoaCount) >= expectedIntercompanyCoa
+      ) {
+        // Also verify journals count and settings completeness
+        const [{ nullSettingsCnt }] = await db
+          .select({ nullSettingsCnt: sql<number>`count(*)::int` })
+          .from(accountingSettingsTable)
+          .where(sql`
+            company_id IS NOT NULL
+            AND (
+              cash_journal_id IS NULL
+              OR bank_journal_id IS NULL
+              OR (company_id = 1 AND (qris_account_id IS NULL OR qris_journal_id IS NULL))
+            )
+          `);
+        const [{ totalSettingsCnt }] = await db
+          .select({ totalSettingsCnt: sql<number>`count(*)::int` })
+          .from(accountingSettingsTable)
+          .where(sql`company_id IS NOT NULL`);
+        const settingsMissing = Number(totalSettingsCnt) < ALL_COMPANY_IDS.length;
+        if (Number(jCount) < expectedJournals || Number(nullSettingsCnt) > 0 || settingsMissing) {
+          logger.info(
+            { jCount: Number(jCount), expectedJournals, nullSettingsCnt: Number(nullSettingsCnt) },
+            "Accounting seed: COA seeded but journals/settings incomplete — running full seed to repair."
+          );
+          // Fall through to full seed below
+        } else {
+          logger.info("Accounting seed: COA already fully seeded — skipping (fast path).");
+          // Still patch grirAccountId in settings if it's NULL but 2-1045 account exists
+          try {
+            await db.execute(sql`
+              UPDATE accounting_settings AS s
+              SET grir_account_id = coa.id
+              FROM chart_of_accounts coa
+              WHERE coa.code = CONCAT('2-1045-', (
+                SELECT abbr FROM companies c WHERE c.id = s.company_id LIMIT 1
+              ))
+              AND s.grir_account_id IS NULL
+              AND s.company_id IS NOT NULL
+            `);
+            // Also handle global settings row (no company_id)
+            await db.execute(sql`
+              UPDATE accounting_settings AS s
+              SET grir_account_id = (
+                SELECT id FROM chart_of_accounts WHERE code LIKE '2-1045%' ORDER BY id LIMIT 1
+              )
+              WHERE s.grir_account_id IS NULL
+            `);
+          } catch (e) { /* non-fatal */ }
+          await repairSportCenterCanonicalSettings();
+          return;
+        } // end else (journals+settings already seeded)
+      } // end if (leafCount >= expectedLeaves)
+    } // end else (journals exist)
   } catch {
     // column may not exist yet — fall through to full seed
   }
@@ -253,11 +721,16 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       ADD COLUMN IF NOT EXISTS company_id integer
   `);
 
-  // ── Dedup chart_of_accounts: keep min(id) per code, reroute FK refs ──────
+  // ── Dedup chart_of_accounts without rewriting posted ledger history ──────
+  // Posted entry lines are immutable.  If a duplicate account is referenced by
+  // posted history, preserve that account row (and its historical account_id),
+  // move only mutable references, and give the preserved row a unique legacy
+  // code so the canonical account can still satisfy the unique-code indexes.
   await db.execute(sql`
     DO $$
     DECLARE
       loser RECORD;
+      has_posted_history BOOLEAN;
     BEGIN
       FOR loser IN
         SELECT coa.id AS loser_id, winners.keep_id
@@ -266,7 +739,22 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
           SELECT code, MIN(id) AS keep_id FROM chart_of_accounts GROUP BY code HAVING COUNT(*) > 1
         ) winners ON coa.code = winners.code AND coa.id <> winners.keep_id
       LOOP
-        UPDATE accounting_entry_lines SET account_id = loser.keep_id WHERE account_id = loser.loser_id;
+        SELECT EXISTS (
+          SELECT 1
+          FROM accounting_entry_lines ael
+          JOIN accounting_entries ae ON ae.id = ael.entry_id
+          WHERE ael.account_id = loser.loser_id
+            AND ae.status::text = 'posted'
+        ) INTO has_posted_history;
+
+        -- Draft/unposted lines remain mutable; posted lines must retain their
+        -- original account identity for auditability and ledger immutability.
+        UPDATE accounting_entry_lines ael
+        SET account_id = loser.keep_id
+        FROM accounting_entries ae
+        WHERE ael.account_id = loser.loser_id
+          AND ae.id = ael.entry_id
+          AND ae.status::text <> 'posted';
         UPDATE accounting_journals SET default_debit_account_id = loser.keep_id WHERE default_debit_account_id = loser.loser_id;
         UPDATE accounting_journals SET default_credit_account_id = loser.keep_id WHERE default_credit_account_id = loser.loser_id;
         UPDATE accounting_settings SET ar_account_id = loser.keep_id WHERE ar_account_id = loser.loser_id;
@@ -280,7 +768,13 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         UPDATE accounting_settings SET inventory_account_id = loser.keep_id WHERE inventory_account_id = loser.loser_id;
         UPDATE accounting_settings SET cogs_account_id = loser.keep_id WHERE cogs_account_id = loser.loser_id;
         UPDATE accounting_taxes SET account_id = loser.keep_id WHERE account_id = loser.loser_id;
-        DELETE FROM chart_of_accounts WHERE id = loser.loser_id;
+        IF has_posted_history THEN
+          UPDATE chart_of_accounts
+          SET code = code || '-LEGACY-' || loser.loser_id
+          WHERE id = loser.loser_id;
+        ELSE
+          DELETE FROM chart_of_accounts WHERE id = loser.loser_id;
+        END IF;
       END LOOP;
     END $$
   `);
@@ -328,11 +822,15 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
 
   // ── Pass 2b: Rename akun yang masih pakai singkatan lama ─────────────────
   for (const [oldAbbr, newAbbr] of Object.entries(OLD_TO_NEW_ABBR)) {
+    const governedTaxCodePredicates = [...GOVERNED_TAX_COA_BASE_CODES].map(
+      (baseCode) => sql`${chartOfAccountsTable.code} = ${`${baseCode}-${oldAbbr}`}`,
+    );
     await db.execute(sql`
       UPDATE chart_of_accounts
          SET code = REPLACE(code, ${"-" + oldAbbr}, ${"-" + newAbbr}),
              name = REPLACE(name, ${" " + oldAbbr}, ${" " + newAbbr})
        WHERE code LIKE ${"%-" + oldAbbr}
+         AND NOT (${sql.join(governedTaxCodePredicates, sql` OR `)})
     `);
   }
 
@@ -343,9 +841,20 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   for (const companyId of ALL_COMPANY_IDS) {
     const abbr = COMPANY_ABBR[companyId]!;
     for (const leaf of COA_LEAF_TEMPLATES) {
-      const parentId = leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null;
+      if (isGovernedTaxCoaCode(leaf.code)) {
+        // Tax headers/subaccounts and legacy tax fallback accounts are
+        // governed. Do not create, rename, or repair them from startup seed.
+        continue;
+      }
+      const parentId =
+        companyId === 1 && leaf.code === "1-1023"
+          ? (byCode.get(CST_BANK_PARENT_CODE)?.id ?? null)
+          : (leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null);
       const companyCode = `${leaf.code}-${abbr}`;
-      const companyName = `${leaf.name} ${abbr}`;
+      const companyName =
+        companyId === 1 && leaf.code === "1-1023"
+          ? "Bank Mandiri Ciputat"
+          : `${leaf.name} ${abbr}`;
       await db
         .insert(chartOfAccountsTable)
         .values({
@@ -361,6 +870,15 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         });
     }
   }
+
+  // Pass 3 creates the child on a fresh database; run the repair again so the
+  // hierarchy and related defaults are also applied on the full-seed path.
+  await repairMandiriCiputatHierarchy();
+  await repairCstSalaryHierarchy();
+
+  // Tax headers and subaccounts are intentionally absent from this seed.
+  // Run coaTaxMigration and approve its change requests instead.
+  logger.info("Accounting seed: tax COA creation deferred to maker-checker governance.");
 
   logger.info("Accounting seed: COA hierarchy done.");
 
@@ -409,7 +927,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     { suffix: "SAL", label: "Penjualan",              type: "sales",    debitBase: "1-1030", creditBase: "4-1010" },
     { suffix: "PUR", label: "Pembelian",              type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
     { suffix: "BNK", label: "Bank Mandiri",           type: "bank",     debitBase: "1-1020", creditBase: "1-1020" },
-    { suffix: "CSH", label: "Kas",                    type: "cash",     debitBase: "1-1010", creditBase: "1-1010" },
+    { suffix: "QRIS", label: "QRIS Sport Center",     type: "bank",     debitBase: "1-1024", creditBase: "1-1024" },
+    { suffix: "CSH", label: "Kas Kecil",              type: "cash",     debitBase: "1-1010", creditBase: "1-1010" },
     { suffix: "GEN", label: "Memorial / Penyesuaian", type: "general",  debitBase: null,     creditBase: null     },
     { suffix: "EXP", label: "Beban & Reimburse",      type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
   ];
@@ -419,8 +938,12 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     for (const tpl of JOURNAL_TEMPLATES) {
       const code = `${tpl.suffix}-${abbr}`;
       const name = tpl.label + (tpl.suffix === "BNK" ? ` ${abbr}` : "");
-      const debitId  = tpl.debitBase  ? (byCode.get(`${tpl.debitBase}-${abbr}`)?.id  ?? null) : null;
-      const creditId = tpl.creditBase ? (byCode.get(`${tpl.creditBase}-${abbr}`)?.id ?? null) : null;
+      const debitBase =
+        companyId === 1 && tpl.suffix === "BNK" ? "1-1023" : tpl.debitBase;
+      const creditBase =
+        companyId === 1 && tpl.suffix === "BNK" ? "1-1023" : tpl.creditBase;
+      const debitId  = debitBase  ? (byCode.get(`${debitBase}-${abbr}`)?.id  ?? null) : null;
+      const creditId = creditBase ? (byCode.get(`${creditBase}-${abbr}`)?.id ?? null) : null;
       await db
         .insert(accountingJournalsTable)
         .values({
@@ -433,12 +956,20 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         })
         .onConflictDoUpdate({
           target: [accountingJournalsTable.companyId, accountingJournalsTable.code],
-          set: { name: sql`excluded.name` },
+          set: {
+            name: sql`excluded.name`,
+            // COALESCE: preserve any manually-configured account; only fill in null
+            // slots from the seed value (existing non-null is always kept).
+            defaultDebitAccountId:  sql`COALESCE(accounting_journals.default_debit_account_id,  excluded.default_debit_account_id)`,
+            defaultCreditAccountId: sql`COALESCE(accounting_journals.default_credit_account_id, excluded.default_credit_account_id)`,
+          },
         });
     }
   }
 
-  const allJournals = await db.select().from(accountingJournalsTable).where(eq(accountingJournalsTable.companyId, cid));
+  // Load journals for ALL companies (not just cid) so that getJournal("BNK", 2) etc.
+  // can resolve WS/DV/ER journals when seeding settings for companies 2–4.
+  const allJournals = await db.select().from(accountingJournalsTable).where(isNotNull(accountingJournalsTable.companyId));
   const journalByCode = new Map(allJournals.map((j) => [j.code, j]));
 
   const getJournal = (suffix: string, companyId: number) => {
@@ -458,12 +989,89 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     ALTER TABLE accounting_taxes ADD COLUMN IF NOT EXISTS company_id integer
   `);
 
-  // Dedup taxes: keep min(id) per (kind, company_id)
+  // ── Taxes: add withholding value to tax_kind enum if not exists ───────────
+  try {
+    await db.execute(sql.raw(`ALTER TYPE tax_kind ADD VALUE IF NOT EXISTS 'withholding'`));
+  } catch { /* already exists */ }
+
+  // ── Taxes: create cut_type enum and add cut_type column ──────────────────
+  try {
+    await db.execute(sql.raw(`
+      DO $$ BEGIN
+        CREATE TYPE cut_type AS ENUM ('self_borne', 'withholding');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `));
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql.raw(`
+      ALTER TABLE accounting_taxes
+        ADD COLUMN IF NOT EXISTS cut_type cut_type NOT NULL DEFAULT 'self_borne'
+    `));
+  } catch { /* already exists */ }
+
+  // Dedup taxes: keep min(id) per (kind, company_id), preserving the
+  // transaction_taxes foreign key.  A legacy duplicate can already be used by
+  // transaction history, so deleting it directly violates the FK.  If both
+  // rows are attached to the same transaction, retain the canonical assignment
+  // once; otherwise move the reference before deleting the duplicate tax row.
   await db.execute(sql`
-    DELETE FROM accounting_taxes
-    WHERE id NOT IN (
-      SELECT MIN(id) FROM accounting_taxes GROUP BY kind, COALESCE(company_id, 0)
+    WITH duplicate_taxes AS (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    ),
+    conflicting_transactions AS (
+      SELECT DISTINCT
+        tt.transaction_type,
+        tt.transaction_id,
+        d.loser_id,
+        d.keep_id
+      FROM transaction_taxes tt
+      JOIN duplicate_taxes d ON d.loser_id = tt.tax_id
+      WHERE d.loser_id <> d.keep_id
+        AND EXISTS (
+          SELECT 1
+          FROM transaction_taxes existing
+          WHERE existing.transaction_type = tt.transaction_type
+            AND existing.transaction_id = tt.transaction_id
+            AND existing.tax_id = d.keep_id
+        )
     )
+    DELETE FROM transaction_taxes tt
+    USING conflicting_transactions c
+    WHERE tt.transaction_type = c.transaction_type
+      AND tt.transaction_id = c.transaction_id
+      AND tt.tax_id = c.loser_id;
+
+    WITH duplicate_taxes AS (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    )
+    UPDATE transaction_taxes tt
+    SET tax_id = d.keep_id
+    FROM duplicate_taxes d
+    WHERE tt.tax_id = d.loser_id
+      AND d.loser_id <> d.keep_id;
+
+    DELETE FROM accounting_taxes tax
+    USING (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    ) d
+    WHERE tax.id = d.loser_id
+      AND d.loser_id <> d.keep_id;
   `);
 
   // Assign existing taxes with null company_id to company 1
@@ -471,50 +1079,68 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     UPDATE accounting_taxes SET company_id = 1 WHERE company_id IS NULL
   `);
 
-  // Seed PPN sale + purchase per company
+  // Define PPh tax templates
+  interface TaxTemplate {
+    name: string;
+    rate: string;
+    kind: "sale" | "purchase" | "withholding";
+    cutType: "self_borne" | "withholding";
+    accountBase: string; // base COA code
+    uniqueKey: string;   // used to detect if already exists
+  }
+  const TAX_TEMPLATES: TaxTemplate[] = [
+    { name: "PPN Keluaran 11%",         rate: "11.000", kind: "sale",        cutType: "self_borne",  accountBase: "2-1020", uniqueKey: "sale" },
+    { name: "PPN Masukan 11%",          rate: "11.000", kind: "purchase",     cutType: "self_borne",  accountBase: "1-1050", uniqueKey: "purchase" },
+    { name: "PPh 21",                   rate: "5.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1031", uniqueKey: "pph21" },
+    { name: "PPh 23",                   rate: "2.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1032", uniqueKey: "pph23" },
+    { name: "PPh Final",                rate: "0.500",  kind: "withholding",  cutType: "self_borne",  accountBase: "2-1030", uniqueKey: "pphfinal" },
+    { name: "PPh Freight Paket 1,1%",   rate: "1.100",  kind: "withholding",  cutType: "withholding", accountBase: "2-1030", uniqueKey: "pphfreight" },
+  ];
+
+  // Seed all tax templates per company
   for (const companyId of ALL_COMPANY_IDS) {
-    const ppnOut = needFor("2-1020", companyId);
-    const ppnIn  = needFor("1-1050", companyId);
     const existingForCompany = await db
       .select()
       .from(accountingTaxesTable)
       .where(eq(accountingTaxesTable.companyId, companyId));
-    const hasSale     = existingForCompany.some((t) => t.kind === "sale");
-    const hasPurchase = existingForCompany.some((t) => t.kind === "purchase");
-    if (!hasSale) {
-      await db.insert(accountingTaxesTable).values({
-        name: "PPN Keluaran 11%", rate: "11.000", kind: "sale",
-        accountId: ppnOut.id, companyId,
-      });
-    } else {
-      // Update account to correct company account
-      const [existing] = existingForCompany.filter((t) => t.kind === "sale");
-      if (existing && existing.accountId !== ppnOut.id) {
-        await db.execute(sql`
-          UPDATE accounting_taxes SET account_id = ${ppnOut.id}
-          WHERE id = ${existing.id}
-        `);
+
+    for (const tpl of TAX_TEMPLATES) {
+      const accountRow = byCode.get(`${tpl.accountBase}-${COMPANY_ABBR[companyId]}`);
+      if (!accountRow) {
+        logger.warn(
+          { accountCode: `${tpl.accountBase}-${COMPANY_ABBR[companyId]}`, companyId },
+          "Accounting seed: tax template deferred until governed COA account is approved.",
+        );
+        continue;
       }
-    }
-    if (!hasPurchase) {
-      await db.insert(accountingTaxesTable).values({
-        name: "PPN Masukan 11%", rate: "11.000", kind: "purchase",
-        accountId: ppnIn.id, companyId,
-      });
-    } else {
-      const [existing] = existingForCompany.filter((t) => t.kind === "purchase");
-      if (existing && existing.accountId !== ppnIn.id) {
-        await db.execute(sql`
-          UPDATE accounting_taxes SET account_id = ${ppnIn.id}
+
+      // Detect existing by kind for PPN, by name-prefix for PPh
+      let existing: typeof existingForCompany[0] | undefined;
+      if (tpl.uniqueKey === "sale")       existing = existingForCompany.find((t) => t.kind === "sale");
+      else if (tpl.uniqueKey === "purchase") existing = existingForCompany.find((t) => t.kind === "purchase");
+      else existing = existingForCompany.find((t) => t.name === tpl.name);
+
+      if (!existing) {
+        await db.execute(sql.raw(`
+          INSERT INTO accounting_taxes (name, rate, kind, cut_type, account_id, company_id, is_active)
+          VALUES ('${tpl.name}', '${tpl.rate}', '${tpl.kind}', '${tpl.cutType}', ${accountRow.id}, ${companyId}, true)
+          ON CONFLICT DO NOTHING
+        `));
+      } else {
+        // Patch account_id and cut_type on existing rows
+        await db.execute(sql.raw(`
+          UPDATE accounting_taxes
+          SET account_id = ${accountRow.id},
+              cut_type = '${tpl.cutType}'
           WHERE id = ${existing.id}
-        `);
+        `));
       }
     }
   }
 
   const allTaxes    = await db.select().from(accountingTaxesTable).where(eq(accountingTaxesTable.companyId, 1));
-  const saleTax     = allTaxes.find((t) => t.kind === "sale")!;
-  const purchaseTax = allTaxes.find((t) => t.kind === "purchase")!;
+  const saleTax     = allTaxes.find((t) => t.kind === "sale");
+  const purchaseTax = allTaxes.find((t) => t.kind === "purchase");
 
   // ── Settings: upsert for all 4 companies using their own accounts ─────────
   const existingSettingsList = await db.select().from(accountingSettingsTable);
@@ -522,41 +1148,54 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
 
   for (const companyId of ALL_COMPANY_IDS) {
     const cash        = needFor("1-1010", companyId);
-    const bankMandiri = needFor("1-1020", companyId);
+    const bankMandiri = needFor(companyId === 1 ? "1-1023" : "1-1020", companyId);
     const ar          = needFor("1-1030", companyId);
     const inventory   = needFor("1-1040", companyId);
-    const ppnIn       = needFor("1-1050", companyId);
+    const ppnIn       = byCode.get(`1-1050-${COMPANY_ABBR[companyId]}`);
     const ap          = needFor("2-1010", companyId);
     const ppnOut      = needFor("2-1020", companyId);
-    const salesIncome       = needFor("4-1010", companyId);
-    const cogs              = needFor("5-1010", companyId);
-    const freightExpense    = needFor("5-1011", companyId);
+    const salesIncome           = needFor("4-1010", companyId);
+    const sportCenterRevenue    = needFor("4-1017", companyId);
+    const tenantRentIncome      = byCode.get(`4-1021-${COMPANY_ABBR[companyId]}`) ?? byCode.get("4-1021") ?? null;
+    const cogs                  = needFor("5-1010", companyId);
+    const freightExpense        = needFor("5-1011", companyId);
 
     const cSalesJ = getJournal("SAL", companyId);
     const cPurJ   = getJournal("PUR", companyId);
     const cBankJ  = getJournal("BNK", companyId);
     const cCashJ  = getJournal("CSH", companyId);
+    const abbr = COMPANY_ABBR[companyId]!;
 
     const grir = byCode.get(`2-1045-${abbr}`);
+    const qrisClearing = companyId === 1
+      ? needFor(SPORT_CENTER_QRIS_CLEARING_BASE_CODE, companyId)
+      : null;
+    const qrisJ = companyId === 1 ? getJournal("QRIS", companyId) : null;
 
     const settingsBase = {
       arAccountId:             ar.id,
       apAccountId:             ap.id,
-      salesIncomeAccountId:    salesIncome.id,
+      // Company 1's canonical Sport Center handoff deliberately uses the
+      // dedicated booking revenue account, not the generic freight revenue
+      // fallback. Other companies retain the general accounting default.
+      salesIncomeAccountId:    companyId === 1 ? sportCenterRevenue.id : salesIncome.id,
       purchaseExpenseAccountId: freightExpense.id,
       defaultBankAccountId:    bankMandiri.id,
       defaultCashAccountId:    cash.id,
       ppnOutputAccountId:      ppnOut.id,
-      ppnInputAccountId:       ppnIn.id,
+      ppnInputAccountId:       ppnIn?.id ?? null,
       salesJournalId:          cSalesJ?.id ?? salesJ.id,
       purchaseJournalId:       cPurJ?.id   ?? purJ.id,
       bankJournalId:           cBankJ?.id  ?? bankJ.id,
       cashJournalId:           cCashJ?.id  ?? cashJ.id,
-      defaultSalesTaxId:       saleTax.id,
-      defaultPurchaseTaxId:    purchaseTax.id,
+      defaultSalesTaxId:       saleTax?.id ?? null,
+      defaultPurchaseTaxId:    purchaseTax?.id ?? null,
       inventoryAccountId:      inventory.id,
-      cogsAccountId:           cogs.id,
-      grirAccountId:           grir?.id ?? null,
+      cogsAccountId:              cogs.id,
+      grirAccountId:              grir?.id ?? null,
+      qrisAccountId:              qrisClearing?.id ?? null,
+      qrisJournalId:              qrisJ?.id ?? null,
+      tenantRentIncomeAccountId:  tenantRentIncome?.id ?? null,
     };
 
     const existing = existingByCompany.get(companyId);
@@ -571,6 +1210,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     }
   }
 
+  await repairSportCenterCanonicalSettings();
+
   // ── Expense categories: seed using CST accounts ───────────────────────────
   const c1ExpByCode = new Map(
     allAccounts
@@ -583,7 +1224,36 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   const c1ap = needFor("2-1010", 1);
   await seedExpenseCategories(c1ExpByCode, expJ.id, c1ap.id);
 
-  logger.info("Accounting seed: complete (4 perusahaan, per-company COA).");
+  // ── Post-seed health check: warn loudly if any settings row still has null journals ──
+  // A null cashJournalId/bankJournalId after seed means sport center accounting will fail
+  // at payment time. Surface it now as a prominent WARNING rather than a silent skip later.
+  try {
+    const nullJournalRows = await db.execute(sql`
+      SELECT s.company_id, c.company_name, s.cash_journal_id, s.bank_journal_id
+      FROM accounting_settings s
+      LEFT JOIN companies c ON c.id = s.company_id
+      WHERE s.company_id IS NOT NULL
+        AND (s.cash_journal_id IS NULL OR s.bank_journal_id IS NULL)
+    `);
+    if (nullJournalRows.rows.length > 0) {
+      const affected = (nullJournalRows.rows as Array<Record<string, unknown>>).map(
+        (r) => `company_id=${r["company_id"]} (${r["company_name"] ?? "?"}) cashJournalId=${r["cash_journal_id"] ?? "NULL"} bankJournalId=${r["bank_journal_id"] ?? "NULL"}`
+      );
+      logger.warn(
+        { affectedCompanies: affected },
+        "⚠️  ACCOUNTING HEALTH CHECK: accounting_settings rows with NULL journal IDs detected after seed. " +
+        "Sport center payments will throw JOURNAL_MISSING errors until these are configured. " +
+        "Go to Accounting → Settings and set Cash Journal / Bank Journal for each affected company. " +
+        `Affected: ${affected.join("; ")}`
+      );
+    } else {
+      logger.info("Accounting health check: all settings rows have journal IDs populated — OK.");
+    }
+  } catch (hcErr) {
+    logger.warn({ hcErr }, "Accounting health check: could not verify journal settings (non-fatal).");
+  }
+
+  logger.info({ totalCompanies: ALL_COMPANY_IDS.length, companyIds: ALL_COMPANY_IDS }, "Accounting seed: complete (per-company COA).");
 }
 
 async function seedExpenseCategories(
@@ -611,6 +1281,7 @@ async function seedExpenseCategories(
     { code: "EXP-BUNGA",   name: "Beban Bunga & Adm. Bank",     expenseAccountId: get("5-3010"), payableAccountId: apAccountId },
     { code: "EXP-PAJAK",   name: "Pajak & Perijinan",           expenseAccountId: get("5-3020"), payableAccountId: apAccountId },
     { code: "EXP-OPS",     name: "Beban Operasional Lainnya",   expenseAccountId: get("5-2040"), payableAccountId: apAccountId },
+    { code: "EXP-MDR",     name: "Biaya MDR & Payment Gateway", expenseAccountId: get("5-3050"), payableAccountId: apAccountId },
   ];
   const validCats = cats.filter((c) => c.expenseAccountId !== null);
   if (validCats.length > 0) {
@@ -619,21 +1290,519 @@ async function seedExpenseCategories(
   }
 }
 
+// ── Backfill legacy expense categories missing an account mapping ────────────
+// Some early "EXP-*" rows were inserted before their target account existed,
+// leaving expense_account_id NULL. Any expense that later "auto-detects" this
+// category (e.g. via OCR) then falls back to the generic "Beban Operasional
+// Lain" account instead of the category's real account (e.g. "Pajak &
+// Perijinan" → "Beban Pajak & Perijinan"). This backfill is idempotent: it
+// only fills rows that are still NULL, matching by the category code's
+// intended base account code against that company's chart of accounts.
+const LEGACY_CATEGORY_ACCOUNT_CODE: Record<string, string> = {
+  "EXP-GAJI": "5-2010",
+  "EXP-SEWA": "5-2020",
+  "EXP-UTIL": "5-2030",
+  "EXP-ATK": "5-2090",
+  "EXP-DINAS": "5-2050",
+  "EXP-REPRS": "5-2060",
+  "EXP-ASURANSI": "5-2070",
+  "EXP-KOMUN": "5-2080",
+  "EXP-KIRIM": "5-1011",
+  "EXP-PABEAN": "5-1012",
+  "EXP-HANDLING": "5-1013",
+  "EXP-BUNGA": "5-3010",
+  "EXP-PAJAK": "5-3020",
+  "EXP-OPS": "5-2040",
+  "EXP-MDR": "5-3050",
+  "BIAYA-OCEAN-FREIGHT": "5-1021",
+  "BIAYA-AIR-FREIGHT": "5-1022",
+  "BIAYA-TRUCKING": "5-1023",
+  "BIAYA-CUSTOMS": "5-1024",
+  "BIAYA-HANDLING": "5-1025",
+  "BIAYA-STORAGE": "5-1020",
+  "BIAYA-ASURANSI": "5-2070",
+  "BIAYA-LAINNYA": "5-1020",
+};
+
+export async function backfillExpenseCategoryAccounts(): Promise<void> {
+  try {
+    const rows = await db
+      .select({
+        id: expenseCategoriesTable.id,
+        code: expenseCategoriesTable.code,
+        companyId: expenseCategoriesTable.companyId,
+      })
+      .from(expenseCategoriesTable)
+      .where(sql`${expenseCategoriesTable.expenseAccountId} IS NULL`);
+
+    const candidates = rows.filter((r) => LEGACY_CATEGORY_ACCOUNT_CODE[String(r.code ?? "").toUpperCase()]);
+    if (candidates.length === 0) return;
+
+    let fixed = 0;
+    for (const cat of candidates) {
+      const baseCode = LEGACY_CATEGORY_ACCOUNT_CODE[String(cat.code).toUpperCase()];
+      const [account] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(
+          sql`${chartOfAccountsTable.companyId} = ${cat.companyId} AND ${chartOfAccountsTable.code} LIKE ${baseCode + "-%"}`,
+        )
+        .limit(1);
+      if (!account) continue;
+
+      await db
+        .update(expenseCategoriesTable)
+        .set({ expenseAccountId: account.id })
+        .where(eq(expenseCategoriesTable.id, cat.id));
+      fixed++;
+    }
+    if (fixed > 0) {
+      logger.info(`Accounting seed: backfilled ${fixed} expense categor${fixed === 1 ? "y" : "ies"} missing an account mapping.`);
+    }
+  } catch (err) {
+    logger.warn({ err }, "backfillExpenseCategoryAccounts: failed (non-fatal)");
+  }
+}
+
+// ── Backfill EXP-MDR expense category for existing companies ─────────────────
+// Runs unconditionally on every boot; is idempotent via ON CONFLICT DO NOTHING.
+export async function backfillMdrExpenseCategory(): Promise<void> {
+  try {
+    await populateDynamicCompanies();
+    for (const companyId of ALL_COMPANY_IDS) {
+      const abbr = COMPANY_ABBR[companyId]!;
+      // Find the MDR account for this company
+      const mdrCode = `5-3050-${abbr}`;
+      const [mdrAccount] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${mdrCode} AND ${chartOfAccountsTable.companyId} = ${companyId}`)
+        .limit(1);
+      if (!mdrAccount) {
+        logger.warn({ mdrCode, companyId }, "backfillMdrExpenseCategory: account not found, skip");
+        continue;
+      }
+      // Find AP account for this company
+      const apCode = `2-1010-${abbr}`;
+      const [apAccount] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${apCode} AND ${chartOfAccountsTable.companyId} = ${companyId}`)
+        .limit(1);
+
+      await db.execute(sql.raw(`
+        INSERT INTO expense_categories (code, name, expense_account_id, payable_account_id, company_id)
+        VALUES ('EXP-MDR', 'Biaya MDR & Payment Gateway', ${mdrAccount.id}, ${apAccount?.id ?? "NULL"}, ${companyId})
+        ON CONFLICT DO NOTHING
+      `));
+    }
+    logger.info("backfillMdrExpenseCategory: done");
+  } catch (err) {
+    logger.warn({ err }, "backfillMdrExpenseCategory: failed (non-fatal)");
+  }
+}
+
+// ── Additional tax rates — runs unconditionally on every boot ────────────────
+const ADDITIONAL_TAX_TEMPLATES: {
+  name: string;
+  rate: string;
+  kind: "sale" | "purchase" | "withholding";
+  cutType: "self_borne" | "withholding";
+  accountBase: string;
+}[] = [
+  { name: "PPN Keluaran 12%",           rate: "12.000", kind: "sale",       cutType: "self_borne",  accountBase: "2-1020" },
+  { name: "PPN Masukan 12%",            rate: "12.000", kind: "purchase",   cutType: "self_borne",  accountBase: "1-1050" },
+  { name: "PPh 4(2) Sewa 10%",          rate: "10.000", kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
+  { name: "PPh 15 Pelayaran DN 1,2%",   rate: "1.200",  kind: "withholding",cutType: "withholding", accountBase: "2-1102" },
+  { name: "PPh 15 Pelayaran LN 2,64%",  rate: "2.640",  kind: "withholding",cutType: "withholding", accountBase: "2-1102" },
+  { name: "PPh 26 20%",                 rate: "20.000", kind: "withholding",cutType: "withholding", accountBase: "2-1030" },
+];
+
+/**
+ * Repair only the PPh 15 tax-master account mapping. This is intentionally a
+ * separate additive stage because the original additional-tax seed may already
+ * be marked complete in an existing environment.
+ */
+export async function repairPph15TaxAccounts(): Promise<void> {
+  await populateDynamicCompanies();
+  for (const cid of ALL_COMPANY_IDS) {
+    const abbr = COMPANY_ABBR[cid]!;
+    const accountCode = `2-1102-${abbr}`;
+    const [accountRow] = await db
+      .select({ id: chartOfAccountsTable.id })
+      .from(chartOfAccountsTable)
+      .where(sql`
+        ${chartOfAccountsTable.code} = ${accountCode}
+        AND ${chartOfAccountsTable.companyId} = ${cid}
+        AND ${chartOfAccountsTable.type} = 'liability'
+        AND ${chartOfAccountsTable.isActive} = true
+        AND ${chartOfAccountsTable.isPostable} = true
+      `)
+      .limit(1);
+
+    if (!accountRow) {
+      logger.warn({ cid, accountCode }, "repairPph15TaxAccounts: dedicated account not found, skip");
+      continue;
+    }
+
+    const result = await db.execute(sql`
+      UPDATE accounting_taxes
+      SET account_id = ${accountRow.id}
+      WHERE company_id = ${cid}
+        AND kind = 'withholding'
+        AND LOWER(name) LIKE 'pph 15%'
+        AND account_id IS DISTINCT FROM ${accountRow.id}
+    `);
+    logger.info(
+      { cid, accountCode, repairedRows: Number(result.rowCount ?? 0) },
+      "repairPph15TaxAccounts: completed",
+    );
+  }
+}
+
+export async function seedAdditionalTaxes(): Promise<void> {
+  try {
+    await populateDynamicCompanies();
+    await repairPph15TaxAccounts();
+    for (const cid of ALL_COMPANY_IDS) {
+      const abbr = COMPANY_ABBR[cid]!;
+
+      const existingRows = await db
+        .select({
+          id: accountingTaxesTable.id,
+          name: accountingTaxesTable.name,
+          accountId: accountingTaxesTable.accountId,
+        })
+        .from(accountingTaxesTable)
+        .where(eq(accountingTaxesTable.companyId, cid));
+
+      for (const tpl of ADDITIONAL_TAX_TEMPLATES) {
+        const accountCode = `${tpl.accountBase}-${abbr}`;
+        const [accountRow] = await db
+          .select({ id: chartOfAccountsTable.id })
+          .from(chartOfAccountsTable)
+          .where(sql`${chartOfAccountsTable.code} = ${accountCode} AND ${chartOfAccountsTable.companyId} = ${cid}`)
+          .limit(1);
+
+        if (!accountRow) {
+          logger.warn({ accountCode, cid }, "seedAdditionalTaxes: account not found, skip");
+          continue;
+        }
+
+        const existing = existingRows.find(
+          (row) => row.name.trim().toLowerCase() === tpl.name.trim().toLowerCase(),
+        );
+        if (existing) {
+          // PPh 15 has a dedicated liability account. Repair the tax master
+          // mapping so disbursement fallback cannot return the generic 2-1030.
+          if (
+            tpl.name.toLowerCase().includes("pph 15") &&
+            Number(existing.accountId ?? 0) !== Number(accountRow.id)
+          ) {
+            await db
+              .update(accountingTaxesTable)
+              .set({ accountId: accountRow.id })
+              .where(eq(accountingTaxesTable.id, existing.id));
+            logger.info(
+              { name: tpl.name, cid, accountCode },
+              "seedAdditionalTaxes: repaired PPh 15 liability account",
+            );
+          }
+          continue;
+        }
+
+        await db.execute(sql.raw(`
+          INSERT INTO accounting_taxes (name, rate, kind, cut_type, account_id, company_id, is_active)
+          VALUES ('${tpl.name.replace(/'/g, "''")}', '${tpl.rate}', '${tpl.kind}', '${tpl.cutType}', ${accountRow.id}, ${cid}, true)
+          ON CONFLICT DO NOTHING
+        `));
+
+        logger.info({ name: tpl.name, cid, abbr }, "seedAdditionalTaxes: inserted new tax");
+      }
+    }
+
+    logger.info("seedAdditionalTaxes: done");
+  } catch (err) {
+    logger.warn({ err }, "seedAdditionalTaxes: failed (non-fatal)");
+  }
+}
+
+/** List of ALTER TABLE statements to add missing columns to accounting_settings.
+ *  Called automatically if a SELECT fails with "column does not exist" (PG 42703). */
+const ACCOUNTING_SETTINGS_COL_PATCHES = [
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS allowance_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tax_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS bpjs_payable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS fleet_cash_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS fleet_driver_receivable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tenant_rent_income_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS grir_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_journal_id INTEGER REFERENCES accounting_journals(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS gsheet_spreadsheet_id TEXT`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
+];
+
+let _accountingSettingsPatchApplied = false;
+
+async function applyAccountingSettingsColumnPatches(): Promise<void> {
+  if (_accountingSettingsPatchApplied) return;
+  for (const q of ACCOUNTING_SETTINGS_COL_PATCHES) {
+    try { await db.execute(sql.raw(q)); } catch { /* column already exists or FK missing — ignore */ }
+  }
+  _accountingSettingsPatchApplied = true;
+  logger.info("accounting_settings column patches applied");
+}
+
+/** Enum values required by triggers and application logic but sometimes missing in prod.
+ *  Safe to call multiple times — ALTER TYPE ... ADD VALUE IF NOT EXISTS is idempotent. */
+const ENUM_PATCHES = [
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'closing_entry'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'reversal'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation_void'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'historical_duplicate_reversal'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'fund_transfer'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'cogs_delivery'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'logistic_vendor_cost'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'tenant_rent_payment'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'tenant_rent_reversal'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking_reversal'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_qris_mdr'`,
+];
+
+let _enumPatchApplied = false;
+
+/** Apply missing enum values to accounting_entry_source. Called automatically on 22P02 error. */
+export async function applyAccountingEnumPatches(): Promise<void> {
+  if (_enumPatchApplied) return;
+  for (const q of ENUM_PATCHES) {
+    try { await db.execute(sql.raw(q)); } catch { /* ignore */ }
+  }
+  _enumPatchApplied = true;
+  logger.info("accounting_entry_source enum patches applied");
+}
+
 export async function getAccountingSettings(companyId = 1): Promise<typeof accountingSettingsTable.$inferSelect | null> {
-  const [row] = await db
-    .select()
-    .from(accountingSettingsTable)
-    .where(eq(accountingSettingsTable.companyId, companyId))
-    .limit(1);
-  return row ?? null;
+  try {
+    const [row] = await db
+      .select()
+      .from(accountingSettingsTable)
+      .where(eq(accountingSettingsTable.companyId, companyId))
+      .limit(1);
+    return row ?? null;
+  } catch (err: unknown) {
+    // PostgreSQL 42703 = "column does not exist" — schema drift between Drizzle model and DB.
+    // Self-heal: apply missing column patches then retry once.
+    const pgCode = (err as { cause?: { code?: string } })?.cause?.code;
+    if (pgCode === "42703") {
+      logger.warn({ companyId, pgCode }, "getAccountingSettings: column missing — applying schema patches and retrying");
+      await applyAccountingSettingsColumnPatches();
+      const [row] = await db
+        .select()
+        .from(accountingSettingsTable)
+        .where(eq(accountingSettingsTable.companyId, companyId))
+        .limit(1);
+      return row ?? null;
+    }
+    throw err;
+  }
+}
+
+/** Lookup COA dan journal yang tersedia lalu return partial settings untuk auto-populate. */
+async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof accountingSettingsTable.$inferInsert>> {
+  const cFilter = companyId;
+  // Gunakan kode akun dengan suffix perusahaan agar menemukan akun yang tepat
+  // (misal: 1-1010-ER bukan 1-1010 global). FIX: sebelumnya pakai base code saja
+  // sehingga fallback ke akun global/CST yang salah untuk perusahaan lain.
+  const abbr = COMPANY_ABBR[companyId as keyof typeof COMPANY_ABBR] ?? null;
+  const coaCode = (base: string) => abbr ? `${base}-${abbr}` : base;
+
+  const lookupCoa = async (baseCode: string): Promise<number | null> => {
+    const code = coaCode(baseCode);
+    // Coba kode dengan suffix perusahaan dahulu
+    let [row] = await db
+      .select({ id: chartOfAccountsTable.id })
+      .from(chartOfAccountsTable)
+      .where(sql`${chartOfAccountsTable.code} = ${code} AND ${chartOfAccountsTable.companyId} = ${cFilter}`)
+      .limit(1);
+    // Fallback ke kode base tanpa suffix (untuk perusahaan tanpa abbreviation)
+    if (!row && code !== baseCode) {
+      [row] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${baseCode} AND ${chartOfAccountsTable.companyId} = ${cFilter}`)
+        .limit(1);
+    }
+    // Fallback global: cari suffixed code tanpa filter company
+    if (!row) {
+      [row] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${code}`)
+        .limit(1);
+    }
+    // Fallback global: cari base code tanpa suffix (legacy/global accounts)
+    if (!row && code !== baseCode) {
+      [row] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${baseCode}`)
+        .limit(1);
+    }
+    return row?.id ?? null;
+  };
+
+  const lookupJournal = async (type: string): Promise<number | null> => {
+    let [row] = await db
+      .select({ id: accountingJournalsTable.id })
+      .from(accountingJournalsTable)
+      .where(sql`${accountingJournalsTable.type} = ${type} AND ${accountingJournalsTable.companyId} = ${cFilter}`)
+      .limit(1);
+    if (!row) {
+      [row] = await db
+        .select({ id: accountingJournalsTable.id })
+        .from(accountingJournalsTable)
+        .where(sql`${accountingJournalsTable.type} = ${type}`)
+        .limit(1);
+    }
+    return row?.id ?? null;
+  };
+
+  const lookupJournalByCode = async (code: string): Promise<number | null> => {
+    const [row] = await db
+      .select({ id: accountingJournalsTable.id })
+      .from(accountingJournalsTable)
+      .where(sql`${accountingJournalsTable.code} = ${code} AND ${accountingJournalsTable.companyId} = ${cFilter} AND ${accountingJournalsTable.isActive} = TRUE`)
+      .limit(1);
+    return row?.id ?? null;
+  };
+
+  const [cashAccountId, bankAccountId, salesIncomeId, arAccountId, apAccountId, cashJournalId, bankJournalId, salesJournalId, purchaseJournalId, qrisAccountId, ppnOutputAccountId, qrisJournalId, sportCenterRevenueId] = await Promise.all([
+    lookupCoa("1-1010"),
+     lookupCoa(companyId === 1 ? "1-1023" : "1-1020"),
+    lookupCoa("4-1010"),
+    lookupCoa("1-1030"),
+    lookupCoa("2-1010"),
+    lookupJournal("cash"),
+    lookupJournal("bank"),
+    lookupJournal("sales"),
+    lookupJournal("purchase"),
+    companyId === 1 ? lookupCoa(SPORT_CENTER_QRIS_CLEARING_BASE_CODE) : Promise.resolve(null),
+    companyId === 1 ? lookupCoa("2-1020") : Promise.resolve(null),
+    companyId === 1 ? lookupJournalByCode("QRIS-CST") : Promise.resolve(null),
+    companyId === 1 ? lookupCoa("4-1017") : Promise.resolve(null),
+  ]);
+
+  return {
+    defaultCashAccountId: cashAccountId,
+    defaultBankAccountId: bankAccountId,
+    salesIncomeAccountId: salesIncomeId,
+    arAccountId,
+    apAccountId,
+    cashJournalId,
+    bankJournalId,
+    salesJournalId,
+    purchaseJournalId,
+    ...(companyId === 1
+      ? {
+          qrisAccountId,
+          qrisJournalId,
+          ppnOutputAccountId,
+          salesIncomeAccountId: sportCenterRevenueId ?? salesIncomeId,
+        }
+      : {}),
+  };
+}
+
+/**
+ * Repair the approved canonical Sport Center accounting destinations.
+ *
+ * Company 1's Sport Center payment handoff has one governed destination
+ * contract: QRIS clearing, QRIS journal, Sport Center revenue, and PPN
+ * output. This is intentionally idempotent and only changes the settings
+ * row; transaction and journal history remains untouched.
+ */
+async function repairSportCenterCanonicalSettings(): Promise<void> {
+  try {
+    await db.execute(sql`
+      UPDATE accounting_settings AS s
+      SET
+        qris_account_id = target_qris.id,
+        sales_income_account_id = target_revenue.id,
+        ppn_output_account_id = target_tax.id,
+        qris_journal_id = target_journal.id,
+        updated_at = NOW()
+      FROM chart_of_accounts AS target_qris
+      JOIN accounting_journals AS target_journal
+        ON target_journal.company_id = 1
+       AND target_journal.code = 'QRIS-CST'
+       AND target_journal.is_active = TRUE
+      JOIN chart_of_accounts AS target_revenue
+        ON target_revenue.company_id = 1
+       AND target_revenue.code = '4-1017-CST'
+       AND target_revenue.type = 'revenue'
+       AND target_revenue.is_active = TRUE
+       AND target_revenue.is_postable = TRUE
+      JOIN chart_of_accounts AS target_tax
+        ON target_tax.company_id = 1
+       AND target_tax.code = '2-1020-CST'
+       AND target_tax.type = 'liability'
+       AND target_tax.is_active = TRUE
+       AND target_tax.is_postable = TRUE
+      WHERE s.company_id = 1
+        AND target_qris.company_id = 1
+        AND target_qris.code = ${SPORT_CENTER_QRIS_CLEARING_CODE}
+        AND target_qris.type = 'asset'
+        AND target_qris.is_active = TRUE
+        AND target_qris.is_postable = TRUE
+    `);
+  } catch (err) {
+    logger.warn({ err }, "Accounting seed: canonical Sport Center mapping repair gagal (non-fatal)");
+  }
 }
 
 export async function ensureAccountingSettings(companyId = 1): Promise<typeof accountingSettingsTable.$inferSelect> {
   const existing = await getAccountingSettings(companyId);
-  if (existing) return existing;
+  if (existing) {
+    try {
+      const resolved = await resolveSettingsFromCoa(companyId);
+      // Never overwrite an explicit owner/manual mapping. Fill only missing
+      // destinations, including the canonical company-1 QRIS contract.
+      const patch = Object.fromEntries(
+        Object.entries(resolved).filter(([key, value]) =>
+          value != null && (existing as Record<string, unknown>)[key] == null,
+        ),
+      ) as Partial<typeof accountingSettingsTable.$inferInsert>;
+      if (Object.keys(patch).length > 0) {
+        const [updated] = await db
+          .update(accountingSettingsTable)
+          .set(patch)
+          .where(eq(accountingSettingsTable.id, existing.id))
+          .returning();
+        logger.info({ companyId, patch }, "ensureAccountingSettings: auto-populated settings dari COA");
+        return updated ?? existing;
+      }
+    } catch (err) {
+      logger.warn({ companyId, err }, "ensureAccountingSettings: gagal auto-populate dari COA");
+    }
+    return existing;
+  }
+
+  // Create baru dengan auto-populate dari COA
+  let autoFields: Partial<typeof accountingSettingsTable.$inferInsert> = {};
+  try {
+    autoFields = await resolveSettingsFromCoa(companyId);
+  } catch {
+    // ignore, fallback ke kosong
+  }
   const [created] = await db
     .insert(accountingSettingsTable)
-    .values({ companyId })
+    .values({ companyId, ...autoFields })
     .returning();
+  logger.info({ companyId, autoFields }, "ensureAccountingSettings: created new settings");
   return created!;
 }

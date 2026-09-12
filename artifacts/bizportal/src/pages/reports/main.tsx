@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { DatePicker } from "@/components/ui/date-picker";
 import {
   BarChart2, TrendingUp, Store, Users, Package, AlertTriangle,
   ArrowLeftRight, RotateCcw, Flame, FileDown, RefreshCw, Filter,
@@ -130,11 +131,11 @@ function FilterPanel({
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1 min-w-[130px]">
             <Label className="text-xs">Dari</Label>
-            <Input type="date" value={filters.from} onChange={(e) => set("from", e.target.value)} className="h-8 text-sm" />
+            <DatePicker value={filters.from} onChange={(v) => set("from", v)} className="h-8 text-sm" />
           </div>
           <div className="flex flex-col gap-1 min-w-[130px]">
             <Label className="text-xs">Sampai</Label>
-            <Input type="date" value={filters.to} onChange={(e) => set("to", e.target.value)} className="h-8 text-sm" />
+            <DatePicker value={filters.to} onChange={(v) => set("to", v)} className="h-8 text-sm" />
           </div>
 
           {companies && companies.length > 1 && (
@@ -574,7 +575,7 @@ function TabStockLow({ filters }: { filters: Filters }) {
 // ─── Tab: Mutasi Stok ─────────────────────────────────────────────────────────
 
 const MOVEMENT_LABELS: Record<string, string> = {
-  po_receipt: "Terima PO", so_delivery: "Kirim SO", pos_sale: "Jual POS",
+  po_receipt: "Terima PO", so_delivery: "Kirim SO",
   transfer_in: "Transfer Masuk", transfer_out: "Transfer Keluar",
   return_in: "Retur Masuk", return_out: "Retur Keluar",
   damage: "Rusak/Hilang", manual_in: "Masuk Manual", manual_out: "Keluar Manual",

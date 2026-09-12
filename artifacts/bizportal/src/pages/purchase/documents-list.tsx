@@ -1,6 +1,16 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +33,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch-on-hover";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCompany } from "@/contexts/CompanyContext";
 
@@ -41,18 +51,20 @@ const statusVariant = (s: string): "default" | "secondary" | "outline" | "destru
   }
 };
 
-type PaymentFilter = "all" | "unpaid" | "partial" | "paid";
+type PaymentFilter = "all" | "unpaid" | "partial" | "paid" | "overdue";
 
 const PAYMENT_LABELS: Record<PaymentFilter, string> = {
   all: "Semua",
   unpaid: "Belum Bayar",
   partial: "Sebagian",
   paid: "Lunas",
+  overdue: "Jatuh Tempo",
 };
 
 function PaymentBadge({ status }: { status: string }) {
   if (status === "paid") return <Badge className="bg-emerald-900/50 text-emerald-300 border-emerald-700">Lunas</Badge>;
   if (status === "partial") return <Badge className="bg-amber-900/50 text-amber-300 border-amber-700">Sebagian</Badge>;
+  if (status === "overdue") return <Badge className="bg-red-900/50 text-red-300 border-red-700">Jatuh Tempo</Badge>;
   return <Badge variant="outline" className="text-slate-400 border-slate-600">Belum Bayar</Badge>;
 }
 
@@ -76,6 +88,9 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>("all");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [cancelTargetId, setCancelTargetId] = useState<number | null>(null);
 
   const queryClient = useQueryClient();
   const prefetchHover = usePrefetchOnHover();
@@ -85,11 +100,7 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
   const deleteMut = useDeletePurchaseDocument();
   const actionMut = usePurchaseDocumentAction();
 
-  const { data: docs } = useListPurchaseDocuments({
-    kind,
-    ...(!isRfq && paymentFilter !== "all" ? { paymentStatus: paymentFilter } : {}),
-    company: activeCompanyId,
-  });
+  const { data: docs } = (useListPurchaseDocuments as any)({ kind, ...(!isRfq && paymentFilter !== "all" ? { paymentStatus: paymentFilter } : {}) });
 
   const allDocs = docs ?? [];
 
@@ -105,18 +116,20 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
     });
   };
 
-  const allSelected = allDocs.length > 0 && allDocs.every((d) => selectedIds.has(d.id));
+  const allSelected = allDocs.length > 0 && allDocs.every((d: any) => selectedIds.has(d.id));
 
   const toggleAll = () => {
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(allDocs.map((d) => d.id)));
+      setSelectedIds(new Set(allDocs.map((d: any) => d.id)));
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm("Hapus dokumen ini? Tindakan ini tidak bisa dibatalkan.")) return;
+  const handleDelete = (id: number) => { setDeleteTargetId(id); };
+
+  const doDelete = async (id: number) => {
+    setDeleteTargetId(null);
     try {
       await deleteMut.mutateAsync({ id });
       queryClient.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey({ kind }) });
@@ -126,9 +139,13 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
     }
   };
 
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Hapus ${selectedIds.size} dokumen terpilih? Tindakan ini tidak bisa dibatalkan.`)) return;
+    setBulkDeleteOpen(true);
+  };
+
+  const doBulkDelete = async () => {
+    setBulkDeleteOpen(false);
     setBulkDeleting(true);
     let success = 0;
     let failed = 0;
@@ -150,8 +167,10 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
     }
   };
 
-  const handleCancel = async (id: number) => {
-    if (!confirm(t.common.confirmDeleteDesc)) return;
+  const handleCancel = (id: number) => { setCancelTargetId(id); };
+
+  const doCancel = async (id: number) => {
+    setCancelTargetId(null);
     try {
       await actionMut.mutateAsync({ id, data: { action: "cancel" } });
       queryClient.invalidateQueries({ queryKey: getListPurchaseDocumentsQueryKey({ kind }) });
@@ -167,6 +186,7 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
     <AppShell>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
+          <Link href="/purchase"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
           <div>
             <h1 className="text-2xl font-bold">{title}</h1>
             <p className="text-sm text-muted-foreground">{desc}</p>
@@ -247,7 +267,7 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(docs ?? []).map((d) => (
+                {(docs ?? []).map((d: any) => (
                   <TableRow
                     key={d.id}
                     data-testid={`row-doc-${d.id}`}
@@ -314,6 +334,69 @@ export default function PurchaseDocumentsListPage({ kind }: Props) {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── AlertDialog: hapus dokumen tunggal ── */}
+      <AlertDialog open={deleteTargetId !== null} onOpenChange={(o) => { if (!o) setDeleteTargetId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Dokumen</AlertDialogTitle>
+            <AlertDialogDescription>
+              Dokumen ini akan dihapus secara permanen. Tindakan ini tidak bisa dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (deleteTargetId !== null) void doDelete(deleteTargetId); }}
+            >
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── AlertDialog: hapus massal ── */}
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus {selectedIds.size} Dokumen</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{selectedIds.size} dokumen terpilih</strong> akan dihapus secara permanen. Tindakan ini tidak bisa dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => void doBulkDelete()}
+            >
+              Hapus Semua
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── AlertDialog: batalkan dokumen ── */}
+      <AlertDialog open={cancelTargetId !== null} onOpenChange={(o) => { if (!o) setCancelTargetId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Batalkan Dokumen</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t.common.confirmDeleteDesc}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (cancelTargetId !== null) void doCancel(cancelTargetId); }}
+            >
+              Konfirmasi
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

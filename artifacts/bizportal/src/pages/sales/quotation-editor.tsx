@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useLocation, useRoute, Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
+import { GooglePlacesAutocomplete } from "@/components/ui/google-places-autocomplete";
 import { ScanDocumentDialog, type ScannedDocumentData } from "@/components/ScanDocumentDialog";
 import { SendEmailDialog } from "@/components/SendEmailDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,8 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { QueryState } from "@/components/ui/query-state";
+import { LoadingSkeleton } from "@/components/ui/loading-skeleton";
 import {
   Select,
   SelectContent,
@@ -70,13 +72,10 @@ import {
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Send, Check, CheckCircle, X, Receipt, Truck, Trash2, FileEdit, Save, Printer, CreditCard, Wallet, FileText, ScanLine, Mail, Search, Package, Wrench, ExternalLink, MessageSquare, Bot, SendHorizonal, Pencil, Loader2 } from "lucide-react";
 import { CorrespondenceTab } from "@/components/CorrespondenceTab";
+import { TemplateSnapshotCard } from "@/components/TemplateSnapshotCard";
 import { useCreateSalesPaymentLink } from "@workspace/api-client-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-
-const LOGISTICS_SUBCATEGORIES = [
-  "Udara", "Laut", "Darat", "Pabean", "Handling",
-  "Trucking", "Container", "Freight Forwarding", "Lainnya",
-];
+import { LOGISTICS_SUBCATEGORIES } from "@workspace/logistics-constants";
 
 interface ItemPickerProps {
   products: Product[];
@@ -92,6 +91,11 @@ function ItemPicker({ products, onSelect, onAddNew, disabled, currentName }: Ite
   const [filterType, setFilterType] = useState<"all" | "barang" | "jasa">("all");
   const [filterSubcat, setFilterSubcat] = useState("all");
   const searchRef = useRef<HTMLInputElement>(null);
+  const { data: subcatList = [...LOGISTICS_SUBCATEGORIES] } = useQuery<string[]>({
+    queryKey: ["logistics-subcategories"],
+    queryFn: () => fetch("/api/settings/logistics-subcategories", { credentials: "include" }).then((r) => r.ok ? r.json() : [...LOGISTICS_SUBCATEGORIES]),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -148,7 +152,7 @@ function ItemPicker({ products, onSelect, onAddNew, disabled, currentName }: Ite
               className="flex-1 text-xs bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-300 outline-none"
             >
               <option value="all">Semua Sub-Kat</option>
-              {LOGISTICS_SUBCATEGORIES.map((s) => (
+              {subcatList.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
@@ -263,8 +267,8 @@ function StockBadge({ productId, salesUomId, qty }: { productId: number; salesUo
   const symbol = data.salesUomSymbol;
 
   const colorClass =
-    avail <= 0 ? "text-red-500 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800"
-    : avail < qty ? "text-amber-600 bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800"
+    avail <= 0 ? "text-red-500 bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800"
+    : avail < qty ? "text-amber-600 bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800"
     : "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800";
 
   const label = avail <= 0 ? "Stok habis" : `Stok: ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(avail)} ${symbol}`;
@@ -455,7 +459,8 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
     }
   };
   const { data: customers } = useListCustomers();
-  const { data: products } = useListProducts();
+  const { data: _productsPaginated } = useListProducts({ limit: 500 });
+  const products = _productsPaginated?.data;
   const { data: taxes } = useListTaxes();
   const { data: acctSettings } = useGetAccountingSettings();
   const { data: uomList = [] } = useQuery<UomRow[]>({
@@ -560,7 +565,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
   useEffect(() => {
     setNpwpDraft(selectedCustomer?.taxId ?? "");
     setEditingNpwp(false);
-  }, [selectedCustomer?.id]);
+  }, [selectedCustomer?.id, selectedCustomer?.taxId]);
 
   const handleSaveNpwp = async () => {
     if (!selectedCustomer) return;
@@ -770,7 +775,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
   if (!isNew && docLoading) {
-    return <AppShell><div className="text-muted-foreground">Memuat...</div></AppShell>;
+    return <AppShell><LoadingSkeleton variant="detail" count={6} className="p-6" /></AppShell>;
   }
 
   return (
@@ -1043,14 +1048,18 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
             <div className="grid gap-1.5" />
             <div className="grid gap-1.5">
               <Label>ETD (Est. Time of Departure)</Label>
-              <Input type="date" value={etd} onChange={(e) => setEtd(e.target.value)} disabled={!isEditable} data-testid="input-etd" />
+              <DatePicker value={etd} onChange={(v) => setEtd(v)} disabled={!isEditable} data-testid="input-etd" />
             </div>
             <div className="grid gap-1.5">
               <Label>ETA (Est. Time of Arrival)</Label>
-              <Input type="date" value={eta} onChange={(e) => setEta(e.target.value)} disabled={!isEditable} data-testid="input-eta" />
+              <DatePicker value={eta} onChange={(v) => setEta(v)} disabled={!isEditable} data-testid="input-eta" />
             </div>
           </CardContent>
         </Card>
+
+        {(doc as any)?.templateSnapshot && (
+          <TemplateSnapshotCard templateSnapshot={(doc as any).templateSnapshot} />
+        )}
 
         <Card>
           <CardHeader className="flex-row items-center justify-between">
@@ -1217,11 +1226,12 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
               )}
             </CardHeader>
             <CardContent>
-              {paymentsLoading ? (
-                <p className="text-sm text-muted-foreground">Memuat...</p>
-              ) : linkedPayments.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Belum ada pembayaran tercatat.</p>
-              ) : (
+              <QueryState
+                loading={paymentsLoading}
+                empty={!paymentsLoading && linkedPayments.length === 0}
+                emptyMessage="Belum ada pembayaran tercatat."
+                skeletonRows={3}
+              >
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1252,7 +1262,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
                     ))}
                   </TableBody>
                 </Table>
-              )}
+              </QueryState>
               {doc?.kind === "order" && (
                 <div className="mt-4 pt-3 border-t border-slate-700/50 space-y-1.5 text-sm" data-testid="payment-summary">
                   <div className="flex items-center justify-between text-slate-400">
@@ -1293,14 +1303,12 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
               </div>
             </CardHeader>
             <CardContent>
-              {expensesLoading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-7 w-full" />
-                  <Skeleton className="h-7 w-full" />
-                </div>
-              ) : linkedExpenses.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Belum ada biaya terkait pesanan ini.</p>
-              ) : (
+              <QueryState
+                loading={expensesLoading}
+                empty={!expensesLoading && linkedExpenses.length === 0}
+                emptyMessage="Belum ada biaya terkait pesanan ini."
+                skeletonRows={2}
+              >
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1335,7 +1343,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
                     ))}
                   </TableBody>
                 </Table>
-              )}
+              </QueryState>
               {linkedExpenses.length > 0 && (
                 <div className="flex justify-end mt-3 pt-3 border-t border-slate-700/50 text-sm font-semibold">
                   <span className="text-muted-foreground mr-4">Total Biaya</span>
@@ -1361,9 +1369,10 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
               </div>
             </CardHeader>
             <CardContent>
-              {linkedShipments.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">Belum ada shipment terkait pesanan ini.</p>
-              ) : (
+              <QueryState
+                empty={linkedShipments.length === 0}
+                emptyMessage="Belum ada shipment terkait pesanan ini."
+              >
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1396,7 +1405,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
                     ))}
                   </TableBody>
                 </Table>
-              )}
+              </QueryState>
             </CardContent>
           </Card>
         )}
@@ -1434,7 +1443,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
             </div>
             <div className="grid gap-1.5">
               <Label>Tanggal</Label>
-              <Input type="date" value={payForm.date} onChange={(e) => setPayForm((f) => ({ ...f, date: e.target.value }))} data-testid="input-pay-date" />
+              <DatePicker value={payForm.date} onChange={(v) => setPayForm((f) => ({ ...f, date: v }))} data-testid="input-pay-date" />
             </div>
             <div className="grid gap-1.5">
               <Label>Jumlah</Label>
@@ -1502,7 +1511,11 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="ac-address">Alamat</Label>
-              <Textarea id="ac-address" value={addCustomerForm.address} onChange={(e) => setAddCustomerForm((f) => ({ ...f, address: e.target.value }))} />
+              <GooglePlacesAutocomplete
+                value={addCustomerForm.address}
+                onChange={(v) => setAddCustomerForm((f) => ({ ...f, address: v }))}
+                placeholder="Ketik alamat customer..."
+              />
             </div>
             <div className="grid gap-1.5">
               <Label>Pajak Penjualan Default</Label>

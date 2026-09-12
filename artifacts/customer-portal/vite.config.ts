@@ -7,48 +7,46 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 const port = Number(process.env.PORT ?? "3000");
 
 const basePath = process.env.BASE_PATH ?? "/";
-const isPosMode = process.env.VITE_POS_MODE === "true";
-
-// Plugin: paksa semua request ke /kasir/login saat mode POS aktif,
-// kecuali path kasir itu sendiri, API, dan asset internal Vite
-function posRedirectPlugin() {
-  return {
-    name: "pos-redirect",
-    configureServer(server: import("vite").ViteDevServer) {
-      server.middlewares.use((req, res, next) => {
-        if (!isPosMode) { next(); return; }
-        const url = req.url ?? "/";
-        const isAllowed =
-          url.startsWith("/kasir") ||
-          url.startsWith("/menu-board") ||
-          url.startsWith("/api/") ||
-          url.startsWith("/@") ||
-          url.startsWith("/node_modules") ||
-          url.startsWith("/__vite") ||
-          url.includes(".") // file statis (js, css, png, dll.)
-        if (!isAllowed) {
-          res.writeHead(302, { Location: "/kasir/login" });
-          res.end();
-          return;
-        }
-        next();
-      });
-    },
-  };
-}
+const HERO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp";
+const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
+const HERO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_HERO_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const PUBLIC_ASSET_CDN_ORIGIN = (
+  process.env.VITE_SUPABASE_URL ??
+  process.env.SUPABASE_URL ??
+  ""
+).replace(/\/+$/, "");
 
 export default defineConfig({
   base: basePath,
   define: {
-    "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? ""),
-    "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY ?? ""),
+    "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(
+      process.env.VITE_SUPABASE_URL ??
+      process.env.SUPABASE_URL ??
+      ""
+    ),
+    "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(
+      process.env.VITE_SUPABASE_ANON_KEY ??
+      process.env.SUPABASE_ANON_KEY ??
+      ""
+    ),
     "import.meta.env.VITE_SUPABASE_URL_DEV": JSON.stringify(process.env.VITE_SUPABASE_URL_DEV ?? process.env.SUPABASE_URL_DEV ?? ""),
     "import.meta.env.VITE_SUPABASE_ANON_KEY_DEV": JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY_DEV ?? process.env.SUPABASE_ANON_KEY_DEV ?? ""),
     "import.meta.env.VITE_REPLIT_DEV_DOMAIN": JSON.stringify(process.env.REPLIT_DEV_DOMAIN ?? ""),
-    "import.meta.env.VITE_POS_MODE": JSON.stringify(process.env.VITE_POS_MODE ?? ""),
+    "import.meta.env.VITE_GOOGLE_MAPS_API_KEY": JSON.stringify(process.env.GOOGLE_MAPS_API_KEY ?? ""),
+    // External map/routing service URLs — override via env var in production
+    "import.meta.env.VITE_OSRM_URL": JSON.stringify(
+      process.env.VITE_OSRM_URL ?? "https://router.project-osrm.org"
+    ),
+    "import.meta.env.VITE_MAP_TILE_URL": JSON.stringify(
+      process.env.VITE_MAP_TILE_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    ),
+    // OSM iframe embed base URL — used by order-track LiveMapSection
+    "import.meta.env.VITE_OSM_EMBED_BASE_URL": JSON.stringify(
+      process.env.VITE_OSM_EMBED_BASE_URL ?? "https://www.openstreetmap.org/export/embed.html"
+    ),
   },
   plugins: [
-    posRedirectPlugin(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
@@ -70,6 +68,9 @@ export default defineConfig({
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
       "@assets": path.resolve(import.meta.dirname, "..", "..", "attached_assets"),
+      "@workspace/product-templates": path.resolve(import.meta.dirname, "../../lib/product-templates/src/index.ts"),
+      "@workspace/service-templates": path.resolve(import.meta.dirname, "../../lib/service-templates/src/index.ts"),
+      "@workspace/logistics-constants": path.resolve(import.meta.dirname, "../../lib/logistics-constants/src/index.ts"),
     },
     dedupe: ["react", "react-dom"],
   },
@@ -83,48 +84,121 @@ export default defineConfig({
         if (warning.code === "SOURCEMAP_ERROR") return;
         warn(warning);
       },
+      output: {
+        // Do NOT use manualChunks for node_modules. Custom chunk splitting of CJS
+        // packages (react, radix, supabase, etc.) causes Rollup's cross-chunk CJS
+        // interop to fail at runtime: packages like use-sync-external-store call
+        // require('react') across chunk boundaries, and Rollup's ESM wrapper does not
+        // properly expose named exports (useLayoutEffect, Children, etc.), resulting in
+        // "Cannot read properties of undefined" errors on first load.
+        //
+        // Rollup's automatic chunking (driven by dynamic import() boundaries) handles
+        // CJS interop correctly by keeping shared dependencies in the same evaluation
+        // scope. Route-level code splitting is preserved via React.lazy() + dynamic
+        // imports that already exist in the app.
+      },
     },
   },
   server: {
     port,
-    strictPort: false,
+    strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
+    headers: {
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Permissions-Policy": "microphone=(), geolocation=()",
+      "Content-Security-Policy": [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: https: blob:",
+        "connect-src 'self' https: wss: ws: http://localhost:*",
+        "media-src 'self' https: blob:",
+        "worker-src 'self' blob:",
+        "frame-ancestors 'self' https://replit.com https://*.replit.dev https://*.sisko.replit.dev",
+        "object-src 'none'",
+        "base-uri 'self'",
+      ].join("; "),
+    },
     watch: {
       ignored: [
         "**/node_modules/**",
         path.resolve(import.meta.dirname, "../api-server/**"),
         path.resolve(import.meta.dirname, "../bizportal/**"),
-        path.resolve(import.meta.dirname, "../cst-driver/**"),
         path.resolve(import.meta.dirname, "../logistic-order/**"),
         path.resolve(import.meta.dirname, "../mockup-sandbox/**"),
       ],
     },
-    hmr: {
-      clientPort: 443,
-      protocol: "wss",
-    },
+    hmr: false,
     proxy: {
+      // Keep relative storage URLs working in preview while reading the
+      // canonical public-assets bucket. This also covers DB-backed images
+      // resolved to /api/storage/public-objects/... URLs.
+      ...(process.env.NODE_ENV !== "production" && PUBLIC_ASSET_CDN_ORIGIN
+        ? {
+            "/api/storage/public-objects": {
+              target: PUBLIC_ASSET_CDN_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+              rewrite: (path) =>
+                path.replace(
+                  /^\/api\/storage\/public-objects/,
+                  "/storage/v1/object/public/public-assets",
+                ),
+            },
+          }
+        : {}),
+      // Development storage can lag the promoted production static-asset
+      // bucket. Keep the canonical application URL while allowing the
+      // above-the-fold hero to render in preview until that bucket is synced.
+      ...(process.env.NODE_ENV !== "production"
+        ? {
+            [HERO_ASSET_PATH]: {
+              target: HERO_ASSET_DEV_FALLBACK_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+            },
+            [BRAND_LOGO_ASSET_PATH]: {
+              target: BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+            },
+          }
+        : {}),
       "/api": {
-        target: "http://localhost:8080",
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
       },
+      // Legacy public image URLs must never reach Vite's SPA fallback. The
+      // API applies the same canonicalization and 404 semantics in dev.
+      "/images": {
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
+        changeOrigin: true,
+        rewrite: (path) => `/api/storage/public-objects${path}`,
+      },
+      "/portal/images": {
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
+        changeOrigin: true,
+        rewrite: (path) => `/api/storage/public-objects${path}`,
+      },
+      // /sitemap.xml intentionally NOT proxied — served as a static file from public/
       "/q": {
-        target: "http://localhost:8080",
-        changeOrigin: true,
-      },
-      "/pos-images": {
-        target: "http://localhost:8080",
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
       },
       // BizPortal dev server — proxied so /bizportal/* works via main entry port
       "/bizportal": {
-        target: "http://localhost:18442",
+        target: `http://localhost:${process.env.BIZPORTAL_PORT ?? 4200}`,
         changeOrigin: true,
         ws: true,
       },
-      "/logistic-order": {
-        target: "http://localhost:19368",
+      // Logistic Order is owned by this Customer Portal. Its compatibility
+      // aliases are handled by the SPA routes above; do not proxy them to the
+      // deprecated standalone redirect shim.
+      "/wa-gateway": {
+        target: `http://localhost:${process.env.WA_GATEWAY_PORT ?? 8000}`,
         changeOrigin: true,
         ws: true,
       },

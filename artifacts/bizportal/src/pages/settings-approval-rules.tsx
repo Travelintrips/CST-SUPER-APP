@@ -19,7 +19,8 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { GitMerge, Plus, Pencil, Trash2, Building2, GitBranch, LayoutList, FolderOpen, CheckCircle2, XCircle } from "lucide-react";
+import { ArrowLeft, GitMerge, Plus, Pencil, Trash2, Building2, GitBranch, LayoutList, FolderOpen, CheckCircle2, XCircle } from "lucide-react";
+import { Link } from "wouter";
 
 const MODULE_LABELS: Record<string, string> = {
   purchase_request: "Purchase Request",
@@ -228,6 +229,8 @@ export default function SettingsApprovalRulesPage() {
           <div className="flex items-center gap-3">
             <GitMerge className="h-7 w-7 text-primary" />
             <div>
+              <Link href="/settings"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
               <h1 className="text-2xl font-bold">Aturan Approval</h1>
               <p className="text-sm text-muted-foreground">Konfigurasi alur persetujuan berdasarkan scope organisasi dan nominal</p>
             </div>

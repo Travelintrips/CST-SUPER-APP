@@ -10,6 +10,7 @@
 
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
@@ -116,7 +117,8 @@ function getExtension(contentType: string): string {
 }
 
 async function main() {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const { url: databaseUrl } = resolveSupabaseDatabaseUrl();
+  const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
   const connectors = new ReplitConnectors();
 
   console.log("=== BizPortal Object Storage → Google Drive Backup ===\n");

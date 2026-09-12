@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CommandPalette, useCommandPalette, usePageTracker } from "@/components/CommandPalette";
 import { Link, useLocation } from "wouter";
@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   Package,
   Truck,
-  Calculator,
   Settings,
   LogOut,
   Building2,
@@ -19,50 +18,43 @@ import {
   FileText,
   Receipt,
   ClipboardList,
-  UserCircle,
   BookOpen,
   Wallet,
-  FileSpreadsheet,
   Landmark,
-  Mail,
-  Ship,
-  Boxes,
   DollarSign,
   Tags,
   BarChart2,
-  PackageOpen,
   List,
   GitMerge,
   Bot,
-  ScanLine,
   MessageCircle,
-  Layers,
-  Network,
-  ImageIcon,
-  Warehouse,
   LayoutGrid,
-  PackageSearch,
   ArrowLeftRight,
   ClipboardCheck,
-  Activity,
-  FlaskConical,
-  ChefHat,
   GitBranch,
-  RotateCcw,
-  AlertTriangle,
-  PackageCheck,
-  QrCode,
   ShieldCheck,
   Shield,
-  Calendar,
-  CalendarDays,
-  Dumbbell,
+  ShieldAlert,
+  Database,
   Search,
-  Bell,
   Eye,
   EyeOff,
   SlidersHorizontal,
-  Send,
+  Link2,
+  Lock,
+  Brain,
+  Trophy,
+  Store,
+  CreditCard,
+  Upload,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Globe,
+  MessageSquarePlus,
+  Wand2,
+  Star,
+  CheckSquare,
+  TestTube2,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -70,7 +62,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -82,17 +73,19 @@ import {
   SidebarFooter,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { LanguageSelector } from "@/components/layout/LanguageSelector";
 import { NotificationBell } from "@/components/layout/NotificationBell";
+import { DevUserSwitcher } from "@/components/layout/DevUserSwitcher";
 import { useOrderNotificationsContext } from "@/contexts/OrderNotificationsContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { CompanySwitcher } from "@/components/CompanySwitcher";
 import { useCompany } from "@/contexts/CompanyContext";
 import { cn } from "@/lib/utils";
 import { useNavPreferences } from "@/hooks/useNavPreferences";
+import { useAlertWebSocket } from "@/hooks/useAlertWebSocket";
 import {
   DndContext,
   closestCenter,
@@ -109,9 +102,20 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { SortableNavWrapper } from "./SortableNavWrapper";
+import { PinnedShortcuts } from "./PinnedShortcuts";
+import { QuickCreate } from "./QuickCreate";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
+import { preloadNavRoute } from "@/routes";
+
+const IS_DEV = import.meta.env.DEV;
 
 interface AppShellProps {
   children: ReactNode;
+  noPadding?: boolean;
+  /** Optional metadata for pages that need a title/breadcrumbs — rendered by the page itself, not AppShell */
+  title?: string;
+  breadcrumbs?: { label: string; href?: string }[];
 }
 
 interface FlatItem {
@@ -121,6 +125,8 @@ interface FlatItem {
   icon: LucideIcon;
   roles: string[];
   companyCodes?: string[];
+  allowedCompanyIds?: number[];
+  activePaths?: string[];
 }
 
 interface GroupItem {
@@ -129,36 +135,63 @@ interface GroupItem {
   basePath: string;
   icon: LucideIcon;
   roles: string[];
-  children: { titleKey: string; href: string; icon: LucideIcon; roles?: string[]; companyCodes?: string[] }[];
+  permissionKeys?: string[];
+  children: { titleKey: string; href: string; icon: LucideIcon; roles?: string[]; companyCodes?: string[]; devOnly?: boolean }[];
   companyCodes?: string[];
+  allowedCompanyIds?: number[];
 }
 
 type NavItem = FlatItem | GroupItem;
 
-// Role hierarchy — semua role diatas "kasir" juga dapat melihat semua yang kasir bisa lihat
-// kasir    : Dashboard, POS Kasir
-// gudang   : Inventory
-// manager  : Dashboard, POS Kasir, Inventory, Cabang, Laporan
-// admin    : semua menu dalam company
-// owner    : semua menu
-// (plus legacy built-in roles: ecommerce, trading, logistics, pos)
-
-const ALL_ROLES = ["kasir", "gudang", "manager", "admin", "owner", "ecommerce", "trading", "logistics", "pos"];
+const ALL_ROLES = ["manager", "admin", "owner", "ecommerce", "trading", "logistics", "super_admin"];
 
 const getKey = (item: NavItem): string =>
   item.type === "group" ? item.basePath : item.href;
 
-export function AppShell({ children }: AppShellProps) {
-  const [location] = useLocation();
+function applySortOrder<T extends { href: string }>(items: T[], order: string[] | undefined): T[] {
+  if (!order || order.length === 0) return items;
+  return [...items].sort((a, b) => {
+    const ia = order.indexOf(a.href);
+    const ib = order.indexOf(b.href);
+    if (ia === -1 && ib === -1) return 0;
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
+}
+
+export function AppShell({ children, noPadding }: AppShellProps) {
+  const [location, navigate] = useLocation();
   const { t } = useLanguage();
   const { activeCompany, isConsolidated } = useCompany();
+  const secondaryReady = useAfterFirstPaint(500);
   const { data: dbUser } = useGetCurrentUser({
     query: {
       queryKey: getGetCurrentUserQueryKey(),
       staleTime: Infinity,
     },
   });
-  const { unreadCount, dbUnreadTotal } = useOrderNotificationsContext();
+  const { dbUnreadTotal } = useOrderNotificationsContext();
+  const { data: portalWorkload } = useQuery({
+    queryKey: ["/api/portal/admin/service-operations", "pending-count"],
+    queryFn: async () => {
+      const response = await fetch("/api/portal/admin/service-operations?limit=1&offset=0", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Portal workload unavailable");
+      return response.json() as Promise<{ summary?: Array<{ pending?: number }> }>;
+    },
+    enabled: ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const portalPendingCount = (portalWorkload?.summary ?? []).reduce(
+    (sum, item) => sum + Number(item.pending ?? 0),
+    0,
+  );
+
+  useAlertWebSocket({ enabled: secondaryReady });
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -173,276 +206,254 @@ export function AppShell({ children }: AppShellProps) {
       href: "/dashboard",
       icon: LayoutDashboard,
       roles: ALL_ROLES,
+      activePaths: ["/dashboard", "/approvals", "/ceo-dashboard", "/operational-dashboard", "/enterprise-dashboard", "/exceptions"],
     },
 
-    // ── 2. POS KASIR ──────────────────────────────────────────────────
+    // ── 2. EXECUTIVE ──────────────────────────────────────────────────
     {
       type: "flat",
-      titleKey: "POS Kasir",
-      href: "/pos-kasir",
-      icon: Calculator,
-      roles: ["kasir", "manager", "admin", "owner", "pos"],
+      titleKey: "Executive",
+      href: "/executive",
+      icon: Trophy,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/executive", "/holding"],
     },
 
-    // ── NOTIFIKASI ────────────────────────────────────────────────────
+    // ── 3. MASTER DATA ────────────────────────────────────────────────
     {
       type: "flat",
-      titleKey: "Notifikasi",
-      href: "/notifications",
-      icon: Bell,
-      roles: ["admin", "owner"],
+      titleKey: "Master Data",
+      href: "/master-data",
+      icon: Database,
+      roles: ["manager", "admin", "owner", "super_admin"],
+      activePaths: ["/master-data", "/products", "/katalog-terpadu"],
     },
 
-    // ── 3. PRODUK & RECIPE/BOM ────────────────────────────────────────
-    {
-      type: "group",
-      titleKey: "Produk & Recipe/BOM",
-      basePath: "/products",
-      icon: ChefHat,
-      roles: ["manager", "admin", "owner"],
-      children: [
-        { titleKey: "Produk / Bahan Baku", href: "/products/items", icon: PackageSearch },
-        { titleKey: "Recipe / BOM", href: "/products/recipes", icon: FlaskConical },
-      ],
-    },
-
-    // ── 4. INVENTORY ──────────────────────────────────────────────────
-    {
-      type: "group",
-      titleKey: "Inventory",
-      basePath: "/pos-inventory",
-      icon: Boxes,
-      roles: ["gudang", "manager", "admin", "owner"],
-      children: [
-        { titleKey: "Gudang", href: "/pos-inventory/warehouses", icon: Warehouse },
-        { titleKey: "Rak", href: "/pos-inventory/racks", icon: LayoutGrid },
-        { titleKey: "Stok", href: "/pos-inventory/stocks", icon: Boxes },
-        { titleKey: "Transfer Stok", href: "/pos-inventory/transfers", icon: ArrowLeftRight },
-        { titleKey: "Retur Barang", href: "/pos-inventory/returns", icon: RotateCcw },
-        { titleKey: "Barang Rusak / Hilang", href: "/pos-inventory/losses", icon: AlertTriangle },
-        { titleKey: "Stock Opname", href: "/pos-inventory/opname", icon: ClipboardCheck },
-        { titleKey: "Riwayat Pergerakan", href: "/pos-inventory/mutations", icon: Activity },
-      ],
-    },
-
-    // ── 5. CABANG ─────────────────────────────────────────────────────
+    // ── 4. CRM & SALES ────────────────────────────────────────────────
     {
       type: "flat",
-      titleKey: "Cabang",
-      href: "/pos-inventory/branches",
-      icon: GitBranch,
-      roles: ["manager", "admin", "owner"],
-    },
-
-    // ── 6. USER & ROLE ────────────────────────────────────────────────
-    {
-      type: "group",
-      titleKey: "User & Role",
-      basePath: "/users",
-      icon: Users,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "Pengguna", href: "/users", icon: UserCircle },
-        { titleKey: "Manajemen Role", href: "/settings/roles", icon: ShieldCheck },
-        { titleKey: "Aturan Approval", href: "/settings/approval-rules", icon: ClipboardCheck },
-        { titleKey: "Struktur Organisasi", href: "/org", icon: Network },
-      ],
-    },
-
-    // ── 7. LAPORAN ────────────────────────────────────────────────────
-    {
-      type: "group",
-      titleKey: "Laporan",
-      basePath: "/reports",
-      icon: BarChart2,
-      roles: ["manager", "admin", "owner", "kasir", "gudang"],
-      children: [
-        { titleKey: "Lap. Operasional (POS & Stok)", href: "/pos-kasir", icon: BarChart2, roles: ["manager", "admin", "owner", "kasir", "gudang"] },
-        { titleKey: "Audit Log Keamanan", href: "/reports/audit-log", icon: Shield, roles: ["admin", "owner"] },
-        { titleKey: "Laporan Penjualan B2B", href: "/reports/sales", icon: TrendingUp, roles: ["manager", "admin", "owner"] },
-        { titleKey: "Laporan Pembelian", href: "/reports/purchase", icon: ShoppingBag, roles: ["admin", "owner"] },
-        { titleKey: "Valuasi Persediaan", href: "/reports/inventory-valuation", icon: PackageSearch, roles: ["admin", "owner"] },
-        { titleKey: "AR Aging", href: "/reports/ar-aging", icon: Receipt, roles: ["admin", "owner"] },
-        { titleKey: "AP Aging", href: "/reports/ap-aging", icon: FileText, roles: ["admin", "owner"] },
-      ],
-    },
-
-    // ── 8. SETTINGS ───────────────────────────────────────────────────
-    {
-      type: "flat",
-      titleKey: "settings",
-      href: "/settings",
-      icon: Settings,
-      roles: ["admin", "owner", "ecommerce", "trading", "logistics", "pos"],
-    },
-
-    // ── MODUL ERP LANJUTAN (admin / owner) ────────────────────────────
-    {
-      type: "group",
-      titleKey: "sales",
-      basePath: "/sales",
+      titleKey: "CRM & Sales",
+      href: "/sales",
       icon: TrendingUp,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "salesDashboard", href: "/sales", icon: LayoutDashboard },
-        { titleKey: "masterItem", href: "/sales/items", icon: Boxes },
-        { titleKey: "quotations", href: "/sales/quotations", icon: FileText },
-        { titleKey: "salesOrders", href: "/sales/orders", icon: ShoppingBag },
-        { titleKey: "aiDrafts", href: "/sales/ai-drafts", icon: Bot },
-        { titleKey: "customers", href: "/sales/customers", icon: UserCircle },
-        { titleKey: "invoices", href: "/sales/invoices", icon: Receipt },
-        { titleKey: "Portal Product Orders", href: "/portal-product-orders", icon: ShoppingBag, companyCodes: ["CST"] },
-      ],
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/sales", "/portal-product-orders", "/ecommerce"],
     },
+
+    // ── 4b. QUICK QUOTE LEADS ─────────────────────────────────────────
     {
-      type: "group",
-      titleKey: "purchase",
-      basePath: "/purchase",
+      type: "flat",
+      titleKey: "Quick Quote Leads",
+      href: "/portal/quick-quotes",
+      icon: MessageSquarePlus,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/portal/quick-quotes"],
+    },
+
+    // ── 4c. UNIFIED VENDOR INVITES ───────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Customer Portal Ops",
+      href: "/admin/portal?tab=workload",
       icon: ClipboardList,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "purchaseDashboard", href: "/purchase", icon: LayoutDashboard },
-        { titleKey: "Purchase Request (PR)", href: "/purchase/pr", icon: ClipboardList },
-        { titleKey: "rfq", href: "/purchase/rfq", icon: FileText },
-        { titleKey: "purchaseOrders", href: "/purchase/orders", icon: ShoppingBag },
-        { titleKey: "Terima Barang (GRN)", href: "/purchase/gr", icon: PackageCheck },
-        { titleKey: "QC Inspection", href: "/purchase/qc", icon: ClipboardCheck },
-        { titleKey: "Purchase Return", href: "/purchase/returns", icon: RotateCcw },
-        { titleKey: "Vendor Invoice (AP)", href: "/purchase/vendor-invoices", icon: Receipt },
-        { titleKey: "Payment Request", href: "/purchase/payment-requests", icon: Wallet },
-        { titleKey: "Landed Cost", href: "/purchase/landed-costs", icon: Calculator },
-        { titleKey: "vendors", href: "/purchase/vendors", icon: UserCircle },
-        { titleKey: "Thai Tea Procurement", href: "/purchase/thai-tea", icon: ShoppingBag, companyCodes: ["CST"] },
-      ],
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/admin/portal"],
     },
     {
-      type: "group",
-      titleKey: "accounting",
-      basePath: "/accounting",
-      icon: BookOpen,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "chartOfAccounts", href: "/accounting/accounts", icon: Landmark },
-        { titleKey: "journals", href: "/accounting/journals", icon: BookOpen },
-        { titleKey: "journalEntry", href: "/accounting/entries", icon: FileText },
-        { titleKey: "payments", href: "/accounting/payments", icon: Wallet },
-        { titleKey: "taxes", href: "/accounting/taxes", icon: Receipt },
-        { titleKey: "trialBalance", href: "/accounting/reports/trial-balance", icon: FileSpreadsheet },
-        { titleKey: "generalLedger", href: "/accounting/reports/general-ledger", icon: BookOpen },
-        { titleKey: "profitLoss", href: "/accounting/reports/profit-loss", icon: TrendingUp },
-        { titleKey: "balanceSheet", href: "/accounting/reports/balance-sheet", icon: Wallet },
-        { titleKey: "reconciliation", href: "/accounting/reconciliation", icon: GitMerge },
-        { titleKey: "accountingSettings", href: "/accounting/settings", icon: Settings },
-        { titleKey: "Holding Dashboard", href: "/holding/dashboard", icon: LayoutDashboard, companyCodes: ["__holding__"] },
-        { titleKey: "Holding P&L", href: "/holding/pl-report", icon: TrendingUp, companyCodes: ["__holding__"] },
-      ],
+      type: "flat",
+      titleKey: "Undang Vendor",
+      href: "/admin/portal?tab=vendors",
+      icon: Link2,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/admin/portal"],
     },
+
+    // ── 5. PROCUREMENT ────────────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Procurement",
+      href: "/purchase",
+      icon: ClipboardList,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/purchase", "/marketplace"],
+    },
+
+    // ── 5b. MARKETPLACE ───────────────────────────────────────────────
     {
       type: "group",
-      titleKey: "logistics",
+      titleKey: "Customer Portal Marketplace",
+      basePath: "/marketplace",
+      icon: ShoppingBag,
+      roles: ALL_ROLES,
+      permissionKeys: ["customer_portal.marketplace", "customer_portal.marketplace:view", "customer_portal.marketplace:manage"],
+      children: [
+        { titleKey: "RFQ", href: "/marketplace/rfqs", icon: List },
+        { titleKey: "Purchase Orders", href: "/marketplace/purchase-orders", icon: Package },
+        { titleKey: "Produk Unggulan", href: "/marketplace/produk-unggulan", icon: Star },
+        { titleKey: "Kelengkapan Vendor", href: "/purchase/vendor-completion", icon: CheckSquare },
+        { titleKey: "Master Price", href: "/marketplace/master-price", icon: Tags },
+        ...(import.meta.env.PROD ? [] : [
+          { titleKey: "QA Fixture Manager", href: "/marketplace/qa-fixture-manager", icon: TestTube2 as LucideIcon },
+        ]),
+      ],
+    },
+
+    // ── 6. LOGISTICS ──────────────────────────────────────────────────
+    {
+      type: "group",
+      titleKey: "Logistics",
       basePath: "/logistics",
       icon: Truck,
-      roles: ["admin", "owner", "logistics"],
+      roles: ["admin", "owner", "super_admin", "logistics", "operations", "trading"],
       children: [
-        { titleKey: "shipments", href: "/logistics", icon: Truck },
-        { titleKey: "freightForwarding", href: "/logistics/freight", icon: Ship, companyCodes: ["CST"] },
-        { titleKey: "Balasan Quotation WA", href: "/logistics/quotation-reply", icon: MessageCircle, companyCodes: ["CST"] },
-        { titleKey: "Performa Driver", href: "/logistics/driver-performance", icon: BarChart2, companyCodes: ["CST"] },
-        { titleKey: "RFQ Vendor", href: "/logistics/rfq", icon: Send, companyCodes: ["CST"] },
-        { titleKey: "Request Quote", href: "/logistics/quote-requests", icon: FileText, companyCodes: ["CST"] },
-        { titleKey: "portalOrders", href: "/logistics/portal-orders", icon: ClipboardList, companyCodes: ["CST"] },
-        { titleKey: "Pelanggan Portal", href: "/portal/customers", icon: Users },
-        { titleKey: "Persetujuan Onboarding", href: "/portal/onboarding-approvals", icon: Users },
-      ],
-    },
-    // ── HOLDING ────────────────────────────────────────────────────────
-    {
-      type: "group",
-      titleKey: "Holding",
-      basePath: "/holding",
-      icon: Building2,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "Overview Perusahaan", href: "/holding", icon: LayoutDashboard },
-        { titleKey: "Dashboard Holding", href: "/holding/dashboard", icon: BarChart2 },
-        { titleKey: "Laporan L/R Holding", href: "/holding/pl-report", icon: TrendingUp },
-        { titleKey: "Laporan Arus Kas", href: "/holding/cashflow-report", icon: Wallet },
+        { titleKey: "Hub", href: "/logistics", icon: LayoutGrid },
+        { titleKey: "PPJK Kepabeanan", href: "/logistics/ppjk", icon: Globe },
+        { titleKey: "Verifikasi Dokumen", href: "/logistics/doc-verify", icon: ShieldCheck },
+        { titleKey: "Import Assistant", href: "/logistics/import-assistant", icon: Bot },
       ],
     },
 
-    { type: "flat", titleKey: "trading", href: "/trading", icon: Package, roles: ["admin", "owner", "trading"] },
-    { type: "flat", titleKey: "Katalog Terpadu", href: "/katalog-terpadu", icon: Layers, roles: ["admin", "owner"] },
+    // ── 7. TENANT & PROPERTY ──────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Tenant & Property",
+      href: "/tenant",
+      icon: Store,
+      roles: ["admin", "owner", "super_admin", "manager"],
+      allowedCompanyIds: [1, 4],
+      activePaths: ["/tenant", "/sport-center"],
+    },
+
+    // ── 8. FINANCE ────────────────────────────────────────────────────
     {
       type: "group",
-      titleKey: "expense",
+      titleKey: "Finance",
+      basePath: "/finance",
+      icon: BookOpen,
+      roles: ["admin", "owner", "super_admin"],
+      children: [
+        { titleKey: "Finance Hub",         href: "/finance",                            icon: BookOpen },
+        { titleKey: "Allocation Center",   href: "/finance/allocation",                 icon: ArrowLeftRight },
+        { titleKey: "Bank Allocation",     href: "/finance/bank-allocation",            icon: Wand2 },
+        { titleKey: "Advance Management",  href: "/finance/advances",                   icon: Wallet },
+        { titleKey: "Kas & Bank",          href: "/accounting/kas-bank",                icon: Building2 },
+        { titleKey: "Bank Disbursement",   href: "/accounting/bank-disbursements",      icon: ArrowUpRight },
+        { titleKey: "Bank Receipt",        href: "/accounting/bank-receipts",           icon: ArrowDownLeft },
+        { titleKey: "Tax Dashboard",       href: "/tax/dashboard",                      icon: Receipt },
+        { titleKey: "Audit Pajak",         href: "/tax/audit",                          icon: ShieldCheck },
+        { titleKey: "Setup Pajak",         href: "/accounting/taxes",                   icon: Receipt },
+        { titleKey: "Ekspor DJP",          href: "/tax/export-djp",                     icon: FileText },
+        { titleKey: "Bank Recon Config",     href: "/finance/recon-config",               icon: SlidersHorizontal },
+        { titleKey: "Settlement Pattern",   href: "/finance/settlement-pattern",         icon: GitBranch },
+         { titleKey: "Pengaturan Akunting", href: "/accounting/settings",                icon: Settings },
+      ],
+    },
+
+    // ── 9d. BIAYA OPERASIONAL ─────────────────────────────────────────
+    {
+      type: "group",
+      titleKey: "Biaya Operasional",
       basePath: "/expense",
-      icon: DollarSign,
-      roles: ["admin", "owner"],
+      icon: Receipt,
+      roles: ["admin", "owner", "super_admin"],
       children: [
-        { titleKey: "expenseList", href: "/expense", icon: Receipt },
-        { titleKey: "expenseCategories", href: "/expense/categories", icon: Tags },
-        { titleKey: "expenseReports", href: "/expense/reports", icon: BarChart2 },
+        { titleKey: "Daftar Biaya",        href: "/expense",                            icon: Receipt },
+        { titleKey: "Dana Karyawan",       href: "/expense/dana-karyawan",              icon: Users },
+        { titleKey: "Kasbon Karyawan",     href: "/expense/kasbon",                     icon: DollarSign },
+        { titleKey: "Dana Talangan",       href: "/expense/talangan",                   icon: Wallet },
+        { titleKey: "Aset Tetap",          href: "/expense/fixed-assets",               icon: Landmark },
+        { titleKey: "Anggaran",            href: "/expense/budget",                     icon: BarChart2 },
+        { titleKey: "Laporan Biaya",       href: "/expense/reports",                    icon: FileText },
+        { titleKey: "Audit Disbursement",  href: "/expense/audit-disbursement",         icon: GitMerge },
+        { titleKey: "Audit COA Talangan",  href: "/expense/audit-dana-talangan",        icon: ShieldAlert },
       ],
     },
-
-    // ── KOMUNIKASI (gabungan Korespondensi + Email Inbox) ──────────────
+    // ── 9b. CASH & BANK ──────────────────────────────────────────────
     {
       type: "group",
-      titleKey: "Komunikasi",
-      basePath: "/correspondences",
-      icon: Mail,
-      roles: ["admin", "owner"],
+      titleKey: "Cash & Bank",
+      basePath: "/cash-bank",
+      icon: Building2,
+      roles: ["admin", "owner", "super_admin"],
       children: [
-        { titleKey: "correspondences", href: "/correspondences", icon: Mail },
-        { titleKey: "emailInbox", href: "/email-inbox", icon: MessageCircle },
+        { titleKey: "Dashboard",       href: "/cash-bank/dashboard",      icon: LayoutDashboard },
+        { titleKey: "Rekening",        href: "/cash-bank/accounts",       icon: CreditCard },
+        { titleKey: "Mutasi",          href: "/cash-bank/mutations",       icon: ArrowLeftRight },
+        { titleKey: "Import Statement",href: "/cash-bank/imports",        icon: Upload },
+        { titleKey: "Transfer",        href: "/cash-bank/transfers",       icon: ArrowUpRight },
+        { titleKey: "Rekonsiliasi",    href: "/accounting/bank-reconciliation",  icon: ClipboardCheck },
+        { titleKey: "Forecast",        href: "/cash-bank/forecast",        icon: TrendingUp },
+        { titleKey: "Petty Cash",      href: "/cash-bank/petty-cash",      icon: Wallet },
+        { titleKey: "Pengaturan",      href: "/cash-bank/settings",        icon: Settings },
       ],
     },
-
-    // ── AI & MEDIA (gabungan AI tools + Image Manager) ─────────────────
+    // ── 9c. ACCOUNTING HUB ────────────────────────────────────────────
     {
-      type: "group",
-      titleKey: "AI & Media",
-      basePath: "/settings/ai",
+      type: "flat",
+      titleKey: "Accounting Hub",
+      href: "/accounting/hub",
+      icon: BookOpen,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/accounting/hub"],
+    },
+
+    // ── 9c. WA REPORT SETTINGS ────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Laporan WA Harian",
+      href: "/accounting/wa-report-settings",
+      icon: MessageCircle,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/accounting/wa-report-settings"],
+    },
+
+    // ── 10. AI CENTER ─────────────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "AI Center",
+      href: "/ai-center",
       icon: Bot,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "aiChatbot", href: "/settings/ai-chatbot", icon: Bot },
-        { titleKey: "aiKnowledgeBase", href: "/settings/ai-chatbot/knowledge", icon: BookOpen },
-        { titleKey: "aiScanSettings", href: "/settings/ai-scan", icon: ScanLine },
-        { titleKey: "Konfigurasi Menu", href: "/settings/nav-company-config", icon: LayoutGrid },
-        { titleKey: "Image Manager", href: "/media", icon: ImageIcon },
-      ],
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/ai-center", "/ai-approvals", "/operational-context", "/intelligence-alerts"],
     },
 
+    // ── 10b. AI REVIEW ────────────────────────────────────────────────
     {
-      type: "group",
-      titleKey: "Sport Center",
-      basePath: "/sport-center",
-      icon: Dumbbell,
-      roles: ["admin", "owner"],
-      children: [
-        { titleKey: "Dashboard", href: "/sport-center", icon: LayoutDashboard },
-        { titleKey: "Booking", href: "/sport-center/bookings", icon: Calendar },
-        { titleKey: "Jadwal Booking", href: "/sport-center/schedule", icon: CalendarDays },
-        { titleKey: "Produk & Layanan", href: "/sport-center/services", icon: Package },
-        { titleKey: "Purchase Request", href: "/sport-center/purchase-requests", icon: ClipboardList },
-        { titleKey: "Laporan", href: "/sport-center/reports", icon: BarChart2 },
-      ],
+      type: "flat",
+      titleKey: "AI Review",
+      href: "/ai/review",
+      icon: Brain,
+      roles: ["admin", "owner", "super_admin", "finance", "accounting", "treasury", "tax"],
+      activePaths: ["/ai/review"],
     },
+
+    // ── 11. REPORTS ───────────────────────────────────────────────────
     {
-      type: "group",
-      titleKey: "Thai Tea CST",
-      basePath: "/thai-tea",
-      icon: ShoppingBag,
-      roles: ["admin", "owner"],
-      companyCodes: ["CST"],
-      children: [
-        { titleKey: "Dashboard", href: "/thai-tea/dashboard", icon: LayoutDashboard },
-        { titleKey: "Stok Bahan Baku", href: "/thai-tea/stock", icon: Boxes },
-        { titleKey: "Monitoring Cabang", href: "/thai-tea/branches", icon: GitBranch },
-        { titleKey: "Produksi / Racikan", href: "/thai-tea/production", icon: FlaskConical },
-        { titleKey: "Laporan", href: "/thai-tea/reports", icon: BarChart2 },
-      ],
+      type: "flat",
+      titleKey: "Reports",
+      href: "/reports",
+      icon: BarChart2,
+      roles: ["manager", "admin", "owner", "super_admin"],
+      activePaths: ["/reports", "/audit", "/vendors", "/analytics"],
+    },
+
+    // ── 12. PROFIL PERUSAHAAN ─────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Profil Perusahaan",
+      href: "/settings/company-profile",
+      icon: Building2,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/settings/company-profile"],
+    },
+
+    // ── 13. ADMINISTRATION ────────────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Administration",
+      href: "/settings",
+      icon: Shield,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/settings", "/users", "/org", "/correspondences", "/email-inbox", "/media", "/system-health", "/system/observability", "/notifications", "/notification-history", "/portal"],
     },
   ];
 
@@ -452,25 +463,116 @@ export function AppShell({ children }: AppShellProps) {
 
   const { data: aiDrafts = [] } = useListAiDraftQuotations({
     query: {
-      enabled: dbUser?.role === "admin" || dbUser?.role === "owner",
+      enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
       refetchInterval: 60_000,
       queryKey: getListAiDraftQuotationsQueryKey(),
     },
   });
   const aiDraftCount = aiDrafts.length;
 
-  const customRolePermissions = (dbUser as any)?.customRolePermissions as string[] | null | undefined;
+  const { data: tenantDashboardNav } = useQuery<{ invoices?: { overdue?: number } }>({
+    queryKey: ["tenant-dashboard-nav-badge"],
+    queryFn: async () => {
+      const r = await fetch("/api/tenant/dashboard", { credentials: "include" });
+      if (!r.ok) return {};
+      return r.json();
+    },
+    refetchInterval: 60_000,
+    enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
+  });
+  const tenantOverdueCount = tenantDashboardNav?.invoices?.overdue ?? 0;
 
-  const { hiddenItems, itemOrder, toggle: toggleHidden, reorder, reset: resetHidden } = useNavPreferences();
+  const customRolePermissions = (dbUser as any)?.customRolePermissions as string[] | null | undefined;
+  const hasNavPermission = (keys?: string[]): boolean => {
+    if (!keys || keys.length === 0) return true;
+    if ((dbUser?.role as string | undefined) === "super_admin") return true;
+    if (!customRolePermissions) return false;
+    return keys.some((key) => customRolePermissions.includes(key));
+  };
+
+  const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences();
   const [customizeMode, setCustomizeMode] = useState(false);
+
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem("bizportal_sidebar_open") !== "false"; }
+    catch { return true; }
+  });
+  const handleSidebarOpenChange = (open: boolean) => {
+    setSidebarOpen(open);
+    try { localStorage.setItem("bizportal_sidebar_open", String(open)); } catch { /* ignore */ }
+  };
+
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 420;
+  const SIDEBAR_DEFAULT = 256;
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("bizportal_sidebar_width");
+    const n = saved ? parseInt(saved, 10) : NaN;
+    return isNaN(n) ? SIDEBAR_DEFAULT : Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, n));
+  });
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
+
+  const onDragMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = sidebarWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = ev.clientX - dragStartX.current;
+      const next = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, dragStartWidth.current + delta));
+      setSidebarWidth(next);
+    };
+    const onMouseUp = (ev: MouseEvent) => {
+      isDragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      const delta = ev.clientX - dragStartX.current;
+      const next = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, dragStartWidth.current + delta));
+      localStorage.setItem("bizportal_sidebar_width", String(next));
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [sidebarWidth]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  // Helper: apakah custom-role user punya akses ke path ini?
+  const canAccessPath = (p: string): boolean => {
+    if (!customRolePermissions) return true; // bukan custom-role, lolos
+    if (
+      (p.startsWith("/marketplace") || p === "/purchase/vendor-completion") &&
+      hasNavPermission([
+        "customer_portal.marketplace",
+        "customer_portal.marketplace:view",
+        "customer_portal.marketplace:manage",
+      ])
+    ) {
+      return true;
+    }
+    const seg = p.replace(/^\//, "").split("/")[0] ?? "";
+    const full = p.replace(/^\//, "");
+    return (
+      customRolePermissions.includes(`${seg}:view`) ||
+      customRolePermissions.includes(`${full}:view`) ||
+      customRolePermissions.includes(seg) ||
+      customRolePermissions.includes(full)
+    );
+  };
+
   const filteredNav = navItems.filter((item) => {
     if (!dbUser?.role) return false;
+    if (!hasNavPermission(item.type === "group" ? item.permissionKeys : undefined)) return false;
 
     // Filter berdasarkan company code
     if (item.companyCodes && item.companyCodes.length > 0) {
@@ -478,22 +580,27 @@ export function AppShell({ children }: AppShellProps) {
       if (!item.companyCodes.includes(activeCompany.companyCode)) return false;
     }
 
+    // Filter berdasarkan allowed company IDs (Tenant & Property restriction)
+    if (item.allowedCompanyIds && item.allowedCompanyIds.length > 0) {
+      if (isConsolidated || !activeCompany) return false;
+      if (!item.allowedCompanyIds.includes(activeCompany.id)) return false;
+    }
+
     // owner dan admin (built-in) melihat semua
-    if (dbUser.role === "owner") return true;
-    if (dbUser.role === "admin") return true;
+    if ((dbUser.role as string) === "owner") return true;
+    if ((dbUser.role as string) === "admin") return true;
 
-    // Custom role permissions (format: "module" atau "module:view")
+    // Custom role permissions: tampilkan grup jika minimal satu child lolos
+    // semua filter (custom-permission + role + company + devOnly).
     if (customRolePermissions != null) {
-      const path = item.type === "group" ? item.basePath : item.href;
-      const seg = path.replace(/^\//, "").split("/")[0] ?? "";
-      const full = path.replace(/^\//, "");
-
-      // Cek format baru "segment:view" atau format lama "segment"
-      return (
-        customRolePermissions.includes(`${seg}:view`) ||
-        customRolePermissions.includes(`${full}:view`) ||
-        customRolePermissions.includes(seg) ||
-        customRolePermissions.includes(full)
+      if (item.type === "flat") return canAccessPath(item.href);
+      // Grup: tampil jika ada child yang lolos semua filter
+      return item.children.some(
+        (c) =>
+          canAccessPath(c.href) &&
+          (!c.roles || c.roles.includes(dbUser.role)) &&
+          filterChild(c) &&
+          (IS_DEV || !c.devOnly),
       );
     }
 
@@ -518,42 +625,25 @@ export function AppShell({ children }: AppShellProps) {
         return ia - ib;
       });
 
-  // Pisahkan nav utama (8 menu pokok) dan ERP lanjutan
-  const MAIN_PATHS = [
-    "/dashboard", "/pos-kasir", "/notifications", "/products", "/pos-inventory",
-    "/users", "/reports", "/settings",
-  ];
-  const mainNav = orderedNav.filter((item) => {
-    const p = getKey(item);
-    return MAIN_PATHS.includes(p) || p === "/pos-inventory/branches";
-  });
-  const erpNav = orderedNav.filter((item) => {
-    const p = getKey(item);
-    return !MAIN_PATHS.includes(p) && p !== "/pos-inventory/branches";
-  });
-
-  const handleMainNavDragEnd = ({ active, over }: DragEndEvent) => {
+  const handleNavDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const keys = mainNav.map(getKey);
+    const keys = orderedNav.map(getKey);
     const oldIdx = keys.indexOf(String(active.id));
     const newIdx = keys.indexOf(String(over.id));
     if (oldIdx === -1 || newIdx === -1) return;
-    reorder([...arrayMove(keys, oldIdx, newIdx), ...erpNav.map(getKey)]);
+    reorder(arrayMove(keys, oldIdx, newIdx));
   };
 
-  const handleErpNavDragEnd = ({ active, over }: DragEndEvent) => {
+  const handleChildDragEnd = (basePath: string, orderedHrefs: string[]) => ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const keys = erpNav.map(getKey);
-    const oldIdx = keys.indexOf(String(active.id));
-    const newIdx = keys.indexOf(String(over.id));
+    const oldIdx = orderedHrefs.indexOf(String(active.id));
+    const newIdx = orderedHrefs.indexOf(String(over.id));
     if (oldIdx === -1 || newIdx === -1) return;
-    reorder([...mainNav.map(getKey), ...arrayMove(keys, oldIdx, newIdx)]);
+    reorderChildren(basePath, arrayMove(orderedHrefs, oldIdx, newIdx));
   };
 
-  const DASHBOARD_CHILD_PATHS = ["/portal-product-orders"];
   const isGroupActive = (g: GroupItem) => {
     if (location === g.basePath || location.startsWith(`${g.basePath}/`)) return true;
-    if (g.basePath === "/dashboard" && DASHBOARD_CHILD_PATHS.some((p) => location === p || location.startsWith(`${p}/`))) return true;
     // Cek apakah salah satu child aktif (untuk grup dengan basePath virtual)
     if (g.children.some((c) => location === c.href || location.startsWith(`${c.href}/`))) return true;
     return false;
@@ -561,6 +651,39 @@ export function AppShell({ children }: AppShellProps) {
 
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   usePageTracker();
+
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement)?.isContentEditable) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts((s) => !s);
+        return;
+      }
+      if (e.key === "Escape") {
+        setShowShortcuts(false);
+        return;
+      }
+      if (showShortcuts && /^[1-9]$/.test(e.key)) {
+        const idx = parseInt(e.key, 10) - 1;
+        const item = orderedNav[idx];
+        if (item) {
+          e.preventDefault();
+          const href = item.type === "group" ? (item.children[0]?.href ?? item.basePath) : item.href;
+          navigate(href);
+          setShowShortcuts(false);
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showShortcuts, orderedNav, navigate]);
 
   const { data: navConfig } = useQuery<Record<string, string[]>>({
     queryKey: ["settings", "nav-company-config"],
@@ -572,7 +695,7 @@ export function AppShell({ children }: AppShellProps) {
       } catch { return {}; }
     },
     staleTime: 5 * 60 * 1000,
-    enabled: dbUser?.role === "admin" || dbUser?.role === "owner",
+    enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
   });
 
   const companyKey = isConsolidated ? "__all__" : String(activeCompany?.id ?? 0);
@@ -637,21 +760,40 @@ export function AppShell({ children }: AppShellProps) {
 
     if (item.type === "flat") {
       const isNotif = item.href === "/notifications";
+      const isPortalOps = item.href === "/admin/portal?tab=workload";
+      const isActive =
+        location === item.href ||
+        location.startsWith(`${item.href}/`) ||
+        (item.activePaths ?? []).some(
+          (p) => location === p || location.startsWith(`${p}/`)
+        );
       return (
         <SidebarMenuItem key={item.href} className={cn(customizeMode && isHidden && "opacity-40")}>
           <div className="flex items-center">
             <SidebarMenuButton
               asChild
-              isActive={location === item.href || location.startsWith(`${item.href}/`)}
+              isActive={isActive}
               tooltip={getNavTitle(item.titleKey)}
               className="flex-1"
             >
-              <Link href={item.href} className="flex items-center gap-3" data-testid={`nav-${item.titleKey.toLowerCase().replace(/\s+/g, "-")}`}>
+              <Link
+                href={item.href}
+                onMouseEnter={() => preloadNavRoute(item.href)}
+                onFocus={() => preloadNavRoute(item.href)}
+                onPointerDown={() => preloadNavRoute(item.href)}
+                className="flex items-center gap-3"
+                data-testid={`nav-${item.titleKey.toLowerCase().replace(/\s+/g, "-")}`}
+              >
                 <item.icon size={18} />
                 <span className="flex-1">{getNavTitle(item.titleKey)}</span>
                 {isNotif && dbUnreadTotal > 0 && (
                   <span className="ml-auto inline-flex items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
                     {dbUnreadTotal > 99 ? "99+" : dbUnreadTotal}
+                  </span>
+                )}
+                {isPortalOps && portalPendingCount > 0 && (
+                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                    {portalPendingCount > 99 ? "99+" : portalPendingCount}
                   </span>
                 )}
               </Link>
@@ -673,15 +815,58 @@ export function AppShell({ children }: AppShellProps) {
     const open = openGroups[`${companyKey}:${item.basePath}`] ?? false;
     const active = isGroupActive(item);
 
-    const ERP_MODULE_PATHS = ["/accounting", "/sales", "/purchase", "/logistics", "/expense"];
-    const isErpModule = ERP_MODULE_PATHS.includes(item.basePath);
-
     const roleFilteredChildren = item.children.filter((c) =>
-      (!c.roles || (dbUser?.role && c.roles.includes(dbUser.role))) && filterChild(c)
+      canAccessPath(c.href) &&
+      (!c.roles || (dbUser?.role && c.roles.includes(dbUser.role))) &&
+      filterChild(c) &&
+      (IS_DEV || !c.devOnly)
     );
     const visibleChildren = customizeMode
       ? roleFilteredChildren
       : roleFilteredChildren.filter((c) => !hiddenItems.includes(c.href));
+    const sortedChildren = applySortOrder(visibleChildren, childOrder[item.basePath]);
+
+    const renderChildItem = (c: typeof sortedChildren[0]) => {
+      const childHidden = hiddenItems.includes(c.href);
+      return (
+        <SidebarMenuSubItem key={c.href} className={cn(customizeMode && childHidden && "opacity-40")}>
+          <div className="flex items-center">
+            <SidebarMenuSubButton asChild isActive={isChildActive(c.href)} className="flex-1">
+                <Link
+                  href={c.href}
+                  onMouseEnter={() => preloadNavRoute(c.href)}
+                  onFocus={() => preloadNavRoute(c.href)}
+                  onPointerDown={() => preloadNavRoute(c.href)}
+                  className="flex items-center gap-2"
+                  data-testid={`nav-sub-${c.titleKey.toLowerCase().replace(/\s+/g, "-")}`}
+                >
+                <c.icon size={14} />
+                <span className="flex-1">{getNavTitle(c.titleKey)}</span>
+                {c.href === "/sales/ai-drafts" && aiDraftCount > 0 && (
+                  <span className="ml-auto inline-flex items-center justify-center rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
+                    {aiDraftCount}
+                  </span>
+                )}
+                {c.href === "/tenant/invoices" && tenantOverdueCount > 0 && (
+                  <span className="ml-auto inline-flex items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
+                    {tenantOverdueCount > 99 ? "99+" : tenantOverdueCount}
+                  </span>
+                )}
+              </Link>
+            </SidebarMenuSubButton>
+            {customizeMode && (
+              <button
+                onClick={() => toggleHidden(c.href)}
+                className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground"
+                title={childHidden ? "Tampilkan" : "Sembunyikan"}
+              >
+                {childHidden ? <Eye size={11} /> : <EyeOff size={11} />}
+              </button>
+            )}
+          </div>
+        </SidebarMenuSubItem>
+      );
+    };
 
     return (
       <SidebarMenuItem key={item.basePath} className={cn(customizeMode && isHidden && "opacity-40")}>
@@ -695,9 +880,9 @@ export function AppShell({ children }: AppShellProps) {
           >
             <item.icon size={18} />
             <span className="flex-1">{getNavTitle(item.titleKey)}</span>
-            {isErpModule && open && (
-              <span className="shrink-0 max-w-[64px] truncate rounded-sm bg-primary/15 px-1 py-px text-[9px] font-semibold uppercase leading-none text-primary">
-                {isConsolidated ? "Holding" : (activeCompany?.companyCode ?? "")}
+            {item.basePath === "/tenant" && tenantOverdueCount > 0 && (
+              <span className="inline-flex items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
+                {tenantOverdueCount > 99 ? "99+" : tenantOverdueCount}
               </span>
             )}
             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -714,76 +899,150 @@ export function AppShell({ children }: AppShellProps) {
         </div>
         {open && (
           <SidebarMenuSub>
-            {isErpModule && (
-              <div className="mx-2 mb-1 flex items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1">
-                <Building2 size={11} className="shrink-0 text-muted-foreground" />
-                <span className="truncate text-[10px] font-medium text-muted-foreground">
-                  {isConsolidated ? "Holding Consolidated" : (activeCompany?.companyName ?? "—")}
-                </span>
-              </div>
+            {customizeMode ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleChildDragEnd(item.basePath, sortedChildren.map((c) => c.href))}
+              >
+                <SortableContext items={sortedChildren.map((c) => c.href)} strategy={verticalListSortingStrategy}>
+                  {sortedChildren.map((c) => (
+                    <SortableNavWrapper key={c.href} id={c.href}>
+                      {renderChildItem(c)}
+                    </SortableNavWrapper>
+                  ))}
+                </SortableContext>
+              </DndContext>
+            ) : (
+              sortedChildren.map(renderChildItem)
             )}
-            {visibleChildren.map((c) => {
-              const childHidden = hiddenItems.includes(c.href);
-              return (
-                <SidebarMenuSubItem key={c.href} className={cn(customizeMode && childHidden && "opacity-40")}>
-                  <div className="flex items-center">
-                    <SidebarMenuSubButton asChild isActive={isChildActive(c.href)} className="flex-1">
-                      <Link href={c.href} className="flex items-center gap-2" data-testid={`nav-sub-${c.titleKey.toLowerCase().replace(/\s+/g, "-")}`}>
-                        <c.icon size={14} />
-                        <span className="flex-1">{getNavTitle(c.titleKey)}</span>
-                        {c.href === "/sales/ai-drafts" && aiDraftCount > 0 && (
-                          <span className="ml-auto inline-flex items-center justify-center rounded-full bg-purple-600 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
-                            {aiDraftCount}
-                          </span>
-                        )}
-                      </Link>
-                    </SidebarMenuSubButton>
-                    {customizeMode && (
-                      <button
-                        onClick={() => toggleHidden(c.href)}
-                        className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground"
-                        title={childHidden ? "Tampilkan" : "Sembunyikan"}
-                      >
-                        {childHidden ? <Eye size={11} /> : <EyeOff size={11} />}
-                      </button>
-                    )}
-                  </div>
-                </SidebarMenuSubItem>
-              );
-            })}
           </SidebarMenuSub>
         )}
       </SidebarMenuItem>
     );
   };
 
+  const shortcutsOverlay = showShortcuts ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={() => setShowShortcuts(false)}
+    >
+      <div
+        className="relative w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-xl border border-border bg-background shadow-2xl mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background px-5 py-3">
+          <div>
+            <h2 className="text-sm font-semibold">Keyboard Shortcuts</h2>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Tekan <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">1</kbd>–<kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">9</kbd> untuk navigasi cepat · <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">?</kbd> tutup · <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">Esc</kbd> tutup
+            </p>
+          </div>
+          <button
+            onClick={() => setShowShortcuts(false)}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+          {orderedNav.map((item, idx) => {
+            const shortcutKey = idx < 9 ? String(idx + 1) : null;
+            const title = getNavTitle(item.titleKey);
+            const Icon = item.icon;
+            const children = item.type === "group"
+              ? item.children
+                  .filter((c) => filterChild(c) && (IS_DEV || !("devOnly" in c && c.devOnly)))
+                  .slice(0, 6)
+              : [];
+            return (
+              <div key={item.type === "group" ? item.basePath : item.href} className="rounded-lg border border-border bg-card p-3 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  {shortcutKey && (
+                    <kbd className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] font-bold text-muted-foreground">{shortcutKey}</kbd>
+                  )}
+                  <Icon size={14} className="shrink-0 text-primary" />
+                  <span className="text-xs font-semibold truncate">{title}</span>
+                </div>
+                {children.length > 0 && (
+                  <div className="pl-1 space-y-0.5">
+                    {children.map((c) => (
+                      <button
+                        key={c.href}
+                        onClick={() => { navigate(c.href); setShowShortcuts(false); }}
+                        className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                      >
+                        <c.icon size={11} className="shrink-0" />
+                        <span className="truncate">{getNavTitle(c.titleKey)}</span>
+                      </button>
+                    ))}
+                    {item.type === "group" && item.children.filter((c) => filterChild(c) && (IS_DEV || !("devOnly" in c && c.devOnly))).length > 6 && (
+                      <span className="block pl-1 text-[10px] text-muted-foreground/60">
+                        +{item.children.filter((c) => filterChild(c) && (IS_DEV || !("devOnly" in c && c.devOnly))).length - 6} lainnya…
+                      </span>
+                    )}
+                  </div>
+                )}
+                {item.type === "flat" && (
+                  <button
+                    onClick={() => { navigate(item.href); setShowShortcuts(false); }}
+                    className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                  >
+                    <span className="truncate">→ {item.href}</span>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="border-t border-border px-5 py-3 text-[11px] text-muted-foreground flex gap-4">
+          <span><kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">Ctrl+K</kbd> Command palette</span>
+          <span><kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px]">?</kbd> Toggle overlay ini</span>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <SidebarProvider>
+    <SidebarProvider open={sidebarOpen} onOpenChange={handleSidebarOpenChange} style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}>
+      {shortcutsOverlay}
       <div className="flex min-h-[100dvh] w-full bg-background text-foreground">
         <Sidebar className="border-r border-border">
-          <SidebarHeader className="border-b border-border px-4 py-3">
+          <div
+            onMouseDown={onDragMouseDown}
+            className="absolute top-0 right-0 z-50 h-full w-1.5 cursor-col-resize group hidden md:flex items-center justify-center"
+            title="Geser untuk resize sidebar"
+          >
+            <div className="h-12 w-0.5 rounded-full bg-border group-hover:bg-primary transition-colors" />
+          </div>
+          <SidebarHeader className="border-b border-border px-3 py-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0">
                 <Building2 size={18} />
               </div>
               <span className="text-lg font-bold tracking-tight flex-1">BizPortal</span>
+            </div>
+            {(["admin", "owner", "super_admin", "manager"] as string[]).includes(dbUser?.role as string) && (
               <button
                 onClick={() => setCustomizeMode((m) => !m)}
                 className={cn(
-                  "p-1.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors",
-                  customizeMode && "bg-accent text-foreground"
+                  "mt-1.5 w-full flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  customizeMode
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "text-foreground hover:bg-accent hover:border-accent-foreground/20"
                 )}
                 title="Sesuaikan tampilan menu"
               >
-                <SlidersHorizontal size={14} />
+                <SlidersHorizontal size={13} />
+                <span>{customizeMode ? "✓ Mode Kustomisasi Aktif" : "Kustomisasi Sidebar"}</span>
               </button>
-            </div>
+            )}
             {customizeMode && (
-              <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-accent/60 px-2 py-1.5 text-[11px] text-muted-foreground">
-                <span>Klik <EyeOff size={10} className="inline -mt-px" /> untuk sembunyikan item</span>
+              <div className="mt-1 flex items-center justify-between gap-2 rounded-md bg-amber-950/40 border border-amber-700/30 px-2 py-1.5 text-[11px] text-amber-300">
+                <span>Seret <span className="font-mono">⠿</span> untuk reorder · <EyeOff size={10} className="inline -mt-px" /> sembunyikan</span>
                 <button
                   onClick={resetHidden}
-                  className="shrink-0 font-medium text-destructive hover:text-destructive/80"
+                  className="shrink-0 font-semibold text-red-400 hover:text-red-300"
                 >
                   Reset
                 </button>
@@ -792,27 +1051,11 @@ export function AppShell({ children }: AppShellProps) {
           </SidebarHeader>
 
           <SidebarContent>
-            {/* Menu Utama */}
             <SidebarGroup>
-              <SidebarGroupLabel className="text-muted-foreground px-4 py-2 text-xs font-medium uppercase tracking-wider">
-                Menu Utama
-              </SidebarGroupLabel>
               <SidebarGroupContent>
-                {renderNavList(mainNav, handleMainNavDragEnd)}
+                {renderNavList(orderedNav, handleNavDragEnd)}
               </SidebarGroupContent>
             </SidebarGroup>
-
-            {/* Modul ERP (hanya tampil jika ada menu ERP) */}
-            {erpNav.length > 0 && (
-              <SidebarGroup>
-                <SidebarGroupLabel className="text-muted-foreground px-4 py-2 text-xs font-medium uppercase tracking-wider">
-                  Modul ERP
-                </SidebarGroupLabel>
-                <SidebarGroupContent>
-                  {renderNavList(erpNav, handleErpNavDragEnd)}
-                </SidebarGroupContent>
-              </SidebarGroup>
-            )}
           </SidebarContent>
 
           <SidebarFooter />
@@ -836,10 +1079,25 @@ export function AppShell({ children }: AppShellProps) {
                 <span className="hidden sm:inline">Cari...</span>
                 <kbd className="hidden sm:inline rounded bg-background px-1 py-0.5 text-[10px] font-mono border border-border">⌘K</kbd>
               </button>
+              {IS_DEV && dbUser && (
+                <span className="hidden sm:flex items-center gap-1 rounded border border-amber-600/40 bg-amber-950/30 px-2 py-0.5 text-[10px] font-mono text-amber-400 max-w-[140px] truncate" title={`Login sebagai: ${dbUser.email}`}>
+                  {dbUser.name || dbUser.email}
+                </span>
+              )}
+              {IS_DEV && <ErrorBoundary fallback={null}><DevUserSwitcher /></ErrorBoundary>}
+              <button
+                onClick={() => setShowShortcuts(true)}
+                className="hidden sm:flex items-center justify-center rounded-md border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground hover:bg-accent transition-colors"
+                title="Keyboard shortcuts (?)"
+              >
+                <span className="font-mono font-bold">?</span>
+              </button>
+              <QuickCreate compact />
               <NotificationBell />
             </div>
           </div>
-          <div className="hidden lg:flex sticky top-0 z-10 h-12 items-center justify-between border-b border-border bg-background px-6">
+          <div className="hidden lg:sticky lg:top-0 lg:z-10 lg:flex lg:flex-col">
+          <div className="flex h-12 items-center justify-between border-b border-border bg-background px-6">
             <CompanySwitcher />
             <div className="flex items-center gap-3">
               <button
@@ -850,6 +1108,21 @@ export function AppShell({ children }: AppShellProps) {
                 <Search size={13} />
                 <span>Cari halaman...</span>
                 <kbd className="ml-1 rounded bg-background px-1 py-0.5 text-[10px] font-mono border border-border">Ctrl+K</kbd>
+              </button>
+              <QuickCreate />
+              {IS_DEV && dbUser && (
+                <span className="flex items-center gap-1.5 rounded border border-amber-600/40 bg-amber-950/30 px-2 py-1 text-[11px] font-mono text-amber-400 max-w-[200px]" title={dbUser.email ?? ""}>
+                  <span className="text-amber-600/70 shrink-0">as:</span>
+                  <span className="truncate">{dbUser.name || dbUser.email}</span>
+                </span>
+              )}
+              {IS_DEV && <ErrorBoundary fallback={null}><DevUserSwitcher /></ErrorBoundary>}
+              <button
+                onClick={() => setShowShortcuts(true)}
+                className="flex items-center justify-center rounded-md border border-border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent transition-colors"
+                title="Keyboard shortcuts (?)"
+              >
+                <span className="font-mono font-bold text-[11px]">?</span>
               </button>
               <LanguageSelector />
               <NotificationBell />
@@ -893,8 +1166,35 @@ export function AppShell({ children }: AppShellProps) {
               </DropdownMenu>
             </div>
           </div>
-          <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
-            {children}
+          <PinnedShortcuts />
+          </div>
+          <div className={noPadding ? "flex-1 overflow-hidden flex flex-col" : "flex-1 overflow-auto p-4 sm:p-6 lg:p-8"}>
+            {(location.startsWith("/tenant") || location.startsWith("/sport-center")) && !isConsolidated && activeCompany && ![1, 4].includes(activeCompany.id) ? (
+              <div className="flex flex-col items-center justify-center min-h-[60vh] gap-5 p-8">
+                <div className="rounded-full bg-red-100 dark:bg-red-950 p-5 border border-red-200 dark:border-red-800">
+                  <Lock className="h-10 w-10 text-red-500" />
+                </div>
+                <div className="text-center space-y-2">
+                  <h2 className="text-xl font-bold text-foreground">Akses Ditolak</h2>
+                  <p className="text-muted-foreground max-w-sm text-sm leading-relaxed">
+                    Modul <strong>Tenant & Property</strong> hanya tersedia untuk:
+                  </p>
+                  <div className="flex flex-col items-center gap-2 mt-3">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-sm font-semibold px-5 py-2">
+                      PT Cahaya Sejati Teknologi
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 text-sm font-semibold px-5 py-2">
+                      PT Elmira Ratu Abadi
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-4">
+                    Pilih salah satu perusahaan di atas melalui menu pemilih perusahaan di header.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              children
+            )}
           </div>
         </main>
       </div>

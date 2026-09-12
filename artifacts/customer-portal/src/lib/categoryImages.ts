@@ -2,7 +2,7 @@ const BASE = "https://images.unsplash.com/photo-";
 const W = "?w=800&q=80&auto=format&fit=crop";
 
 // Local HD images bundled with the app (always available, no external dependency)
-const LOCAL = (path: string) => `${import.meta.env.BASE_URL}images/${path}`;
+const LOCAL = (path: string) => `/api/storage/public-objects/portal-assets/static/customer-portal/images/${path.replace(/\.(png|jpe?g)$/i, ".webp")}`;
 
 // ── Product-specific images (exact product name match, case-insensitive) ─────
 const PRODUCT_SPECIFIC: Array<{ names: string[]; url: string }> = [
@@ -121,7 +121,9 @@ const SERVICE_IMAGES: Array<{ keywords: string[]; url: string }> = [
   },
 ];
 
-const DEFAULT_SERVICE = `${BASE}1586528116311-ad8dd3c8310d${W}`;
+// Reuse a verified service object instead of a legacy default path that may not
+// exist in every environment. This is a display fallback, not CMS data.
+const DEFAULT_SERVICE = SVCIMG("ocean-freight.png");
 
 // ── Product images (order: most-specific first) ──────────────────────────────
 // All IDs below are verified HTTP 200 as of 2026-05.
@@ -174,8 +176,13 @@ const PRODUCT_IMAGES: Array<{ keywords: string[]; url: string }> = [
     url: `${BASE}1518709268805-4e9042af9f23${W}`,
   },
   {
+    // Rice / beras
+    keywords: ["beras", "rice", "ir64", "ir 64", "padi", "gabah"],
+    url: LOCAL("products/beras-rice.png"),
+  },
+  {
     // Food / pantry
-    keywords: ["makanan", "food", "minuman", "beverage", "snack", "sembako", "beras", "minyak"],
+    keywords: ["makanan", "food", "minuman", "beverage", "snack", "sembako", "minyak"],
     url: `${BASE}1490818387583-1baba5e638af${W}`,
   },
   {

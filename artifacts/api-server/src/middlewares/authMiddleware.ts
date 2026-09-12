@@ -1,25 +1,38 @@
 import { type Request, type Response, type NextFunction } from "express";
 import type { AuthUser } from "../lib/auth";
 import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { verifySupabaseToken } from "../lib/supabaseAdmin";
-import { getSessionId, getSession } from "../lib/auth";
+import { getSessionId, getBearerToken, getSession, getSessionFromCacheOnly } from "../lib/auth";
+import { getCircuitBreakerStatus } from "@workspace/db";
 
-// ── In-memory cache: userId → { companyId, role } — TTL 5 min ────────────────
-const _userCtxCache = new Map<string, { companyId: number | null; role: string | null; cachedAt: number }>();
+// ── In-memory cache: userId → { companyId, role, allowedCompanyIds } — TTL 5 min ──
+const _userCtxCache = new Map<string, { companyId: number | null; role: string | null; allowedCompanyIds: number[]; cachedAt: number }>();
 const _USER_CTX_TTL = 5 * 60 * 1000;
 
-async function _loadUserCtx(userId: string): Promise<{ companyId: number | null; role: string | null }> {
+async function _loadUserCtx(userId: string): Promise<{ companyId: number | null; role: string | null; allowedCompanyIds: number[] }> {
   const now = Date.now();
   const cached = _userCtxCache.get(userId);
   if (cached && now - cached.cachedAt < _USER_CTX_TTL) {
-    return { companyId: cached.companyId, role: cached.role };
+    return { companyId: cached.companyId, role: cached.role, allowedCompanyIds: cached.allowedCompanyIds };
   }
   const [u] = await db
     .select({ companyId: usersTable.companyId, role: usersTable.role })
     .from(usersTable)
     .where(eq(usersTable.id, userId));
-  const result = { companyId: u?.companyId ?? null, role: u?.role ?? null };
+
+  // Load allowed companies (only relevant for admin users; empty = all companies)
+  let allowedCompanyIds: number[] = [];
+  try {
+    const acResult = await db.execute(sql`
+      SELECT company_id FROM user_allowed_companies WHERE user_id = ${userId}
+    `);
+    allowedCompanyIds = (acResult.rows as any[]).map((r) => Number(r.company_id));
+  } catch {
+    // Non-fatal: table may not exist yet during boot migrations
+  }
+
+  const result = { companyId: u?.companyId ?? null, role: u?.role ?? null, allowedCompanyIds };
   _userCtxCache.set(userId, { ...result, cachedAt: now });
   return result;
 }
@@ -65,12 +78,57 @@ export async function authMiddleware(
   req.isInternalSession = false;
 
   // ── 1. Session cookie (Google OAuth / Replit OIDC) ──────────────────────────
+  // getSessionId reads ONLY the cookie — Bearer tokens are handled in path 2 below.
   const sid = getSessionId(req);
-  if (sid && !req.headers.authorization?.startsWith("Bearer ")) {
+  if (!sid) {
+    req.log?.debug?.(
+      { method: req.method, url: req.url },
+      "[authMiddleware] no sid cookie — treating as unauthenticated"
+    );
+  }
+  if (sid) {
     try {
-      const session = await getSession(sid);
+      let session = await getSession(sid);
+
+      // ECIRCUITBREAKER fallback: if DB is in cooldown and getSession returned null,
+      // try reading from in-memory/read-through cache so previously-verified sessions
+      // survive the 5-minute CB window without requiring a DB round-trip.
+      if (!session?.user) {
+        const cb = getCircuitBreakerStatus();
+        if (cb.open) {
+          const fromCache = getSessionFromCacheOnly(sid);
+          if (fromCache?.user) {
+            req.log?.info?.(
+              { sid: sid.slice(0, 8) + "...", cbRemaining: cb.remainingCooldownSeconds },
+              "[authMiddleware] CB actif — menggunakan session dari cache"
+            );
+            session = fromCache;
+          }
+        }
+      }
+
+      if (!session?.user) {
+        req.log?.warn?.(
+          { sid: sid.slice(0, 8) + "...", method: req.method, url: req.url },
+          "[authMiddleware] sid present but getSession returned null — session not found or expired"
+        );
+      }
+
       if (session?.user) {
-        const ctx = await _loadUserCtx(session.user.id);
+        // Load DB context (role, companyId). On transient DB failure, fall back
+        // to values stored in the session so the user stays authenticated.
+        let ctx: { companyId: number | null; role: string | null; allowedCompanyIds: number[] };
+        try {
+          ctx = await _loadUserCtx(session.user.id);
+        } catch (ctxErr) {
+          const msg = ctxErr instanceof Error ? ctxErr.message : String(ctxErr);
+          req.log?.warn?.({ sid: sid.slice(0, 8) + "...", err: msg }, "[authMiddleware] _loadUserCtx DB error, falling back to session data");
+          ctx = {
+            role: (session.user as { role?: string | null }).role ?? null,
+            companyId: (session.user as { companyId?: number | null }).companyId ?? null,
+            allowedCompanyIds: [],
+          };
+        }
         req.user = {
           id: session.user.id,
           email: session.user.email ?? null,
@@ -79,15 +137,14 @@ export async function authMiddleware(
           profileImageUrl: session.user.profileImageUrl ?? null,
           role: ctx.role,
           companyId: ctx.companyId,
+          allowedCompanyIds: ctx.allowedCompanyIds,
         };
         req.isInternalSession = true;
         next();
         return;
       }
     } catch (err) {
-      // DB transient error (e.g. Supabase idle-connection drop) — log and
-      // continue unauthenticated rather than returning 500 to the client.
-      // The client will retry and succeed once the pool reconnects.
+      // DB transient error reading the session itself — log and continue unauthenticated.
       const msg = err instanceof Error ? err.message : String(err);
       req.log?.warn?.({ sid: sid.slice(0, 8) + "...", err: msg }, "[authMiddleware] getSession failed, treating as unauthenticated");
     }
@@ -97,9 +154,9 @@ export async function authMiddleware(
   // NOTE: bearer-token users are NOT considered internal staff.  They can only
   // access routes that explicitly use requirePortalAuth / requirePortalAdmin.
   // requireClerkUser() rejects requests where isInternalSession is false.
-  const auth = req.headers.authorization;
-  if (auth?.startsWith("Bearer ")) {
-    const token = auth.slice(7);
+  const bearerToken = getBearerToken(req);
+  if (bearerToken) {
+    const token = bearerToken;
     const supabaseUser = await verifySupabaseToken(token);
     if (supabaseUser?.email) {
       let [dbUser] = await db

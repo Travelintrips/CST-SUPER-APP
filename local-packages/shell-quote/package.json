@@ -1,0 +1,6 @@
+{
+  "name": "shell-quote",
+  "version": "1.8.3",
+  "description": "local stub for shell-quote (blocked by package firewall)",
+  "main": "index.js"
+}

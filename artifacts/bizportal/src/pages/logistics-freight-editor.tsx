@@ -1,11 +1,13 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useParams } from "wouter";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GooglePlacesAutocomplete } from "@/components/ui/google-places-autocomplete";
+import { RouteMapPreview } from "@/components/ui/route-map-preview";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -15,9 +17,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Save, Loader2, ScanLine, ChevronsUpDown, Check, Plus, Pencil, X } from "lucide-react";
+import { ArrowLeft, Save, Loader2, ScanLine, ChevronsUpDown, Check, Plus, Pencil, X, Calculator } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useVendors } from "@/hooks/useVendors";
 import { FreightScanDialog, type FreightFormFields } from "@/components/freight/FreightScanDialog";
 import {
   Popover,
@@ -45,14 +48,12 @@ import {
   useUpdateFreightShipment,
   useListSalesDocuments,
   useListPurchaseDocuments,
-  useListSuppliers,
   useCreateSupplier,
   useUpdateSupplier,
   getListFreightShipmentsQueryKey,
   getGetFreightShipmentQueryKey,
   getListSalesDocumentsQueryKey,
   getListPurchaseDocumentsQueryKey,
-  getListSuppliersQueryKey,
   type Supplier,
 } from "@workspace/api-client-react";
 
@@ -161,9 +162,10 @@ export default function LogisticsFreightEditorPage() {
   const createSupplier = useCreateSupplier();
   const updateSupplier = useUpdateSupplier();
 
-  const { data: salesOrders = [] } = useListSalesDocuments({ kind: "order" }, { query: { queryKey: getListSalesDocumentsQueryKey({ kind: "order" }) } });
+  const { data: _salesOrdersPaginated } = useListSalesDocuments({ kind: "order", limit: 500 }, { query: { queryKey: getListSalesDocumentsQueryKey({ kind: "order" }) } });
+  const salesOrders = useMemo(() => _salesOrdersPaginated?.data ?? [], [_salesOrdersPaginated]);
   const { data: purchaseOrders = [] } = useListPurchaseDocuments({ kind: "order" }, { query: { queryKey: getListPurchaseDocumentsQueryKey({ kind: "order" }) } });
-  const { data: suppliers = [], isFetched: suppliersFetched } = useListSuppliers({ query: { queryKey: getListSuppliersQueryKey() } });
+  const { data: suppliers = [], isFetched: suppliersFetched } = useVendors();
   const [soPickerOpen, setSoPickerOpen] = useState(false);
   const [poPickerOpen, setPoPickerOpen] = useState(false);
   const [vendorPickerOpen, setVendorPickerOpen] = useState(false);
@@ -222,7 +224,14 @@ export default function LogisticsFreightEditorPage() {
     transportMode: "",
     cargoType: "",
     containerNo: "",
+    freightCost: "",
   });
+
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+  const [ratePerKm, setRatePerKm] = useState("");
+  const handleDistanceFetched = useCallback((km: number | null) => {
+    setRouteDistanceKm(km);
+  }, []);
 
   useEffect(() => {
     if (!isEdit) {
@@ -270,6 +279,7 @@ export default function LogisticsFreightEditorPage() {
         transportMode: (existing as any).transportMode ?? "",
         cargoType: (existing as any).cargoType ?? "",
         containerNo: (existing as any).containerNo ?? "",
+        freightCost: (existing as any).freightCost ? String((existing as any).freightCost) : "",
       });
     }
   }, [existing]);
@@ -313,7 +323,7 @@ export default function LogisticsFreightEditorPage() {
   }, [id]);
 
   // Catalog-aware PO autofill helper (shared by manual selection, URL pre-link, and edit load)
-  const applyPoAutoFill = (poDoc: { supplierName?: string | null; supplierAddress?: string | null }) => {
+  const applyPoAutoFill = useCallback((poDoc: { supplierName?: string | null; supplierAddress?: string | null }) => {
     const normalise = (s: string) => s.trim().toLowerCase();
     // Find a catalog vendor that matches the PO's supplier name
     const catalogVendor = poDoc.supplierName
@@ -352,7 +362,7 @@ export default function LogisticsFreightEditorPage() {
         shipperAddress: f.shipperAddress || (poDoc.supplierAddress ?? "") || (catalogVendor?.address ?? ""),
       };
     });
-  };
+  }, [form.shipperAddress, form.shipperName, suppliers]);
 
   // Create mode: auto-fill shipper info when a PO is pre-linked via URL param
   useEffect(() => {
@@ -364,7 +374,7 @@ export default function LogisticsFreightEditorPage() {
     if (!poDoc) return;
     poUrlPreLinkDone.current = true;
     applyPoAutoFill(poDoc);
-  }, [isEdit, purchaseDocId, purchaseOrders, suppliersFetched, suppliers]);
+  }, [applyPoAutoFill, isEdit, purchaseDocId, purchaseOrders, suppliersFetched]);
 
   useEffect(() => {
     if (!isEdit || !existing || autoFillSetupDone.current) return;
@@ -393,7 +403,7 @@ export default function LogisticsFreightEditorPage() {
     }
     // Mark setup complete only when all linked sources are resolved
     if (soProcessed && poProcessed) autoFillSetupDone.current = true;
-  }, [isEdit, existing, salesOrders, purchaseOrders, suppliersFetched, suppliers]);
+  }, [applyPoAutoFill, isEdit, existing, salesOrders, purchaseOrders, suppliersFetched]);
 
   // On edit load: if no PO is linked but shipperName matches a catalog vendor, pre-select that vendor
   // and mark it as manually-chosen so unlinking a PO later won't clear it.
@@ -541,10 +551,7 @@ export default function LogisticsFreightEditorPage() {
       { id: selectedVendorId, data: { name: editVendorForm.name, country: editVendorForm.country, contactEmail: "", address: editVendorForm.address || undefined } },
       {
         onSuccess: (updated) => {
-          queryClient.setQueryData<Supplier[]>(getListSuppliersQueryKey(), (old) =>
-            old ? old.map((s) => (s.id === updated.id ? updated : s)) : [updated]
-          );
-          queryClient.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ["vendors-filtered"] });
           setEditVendorDialogOpen(false);
           setShipperVendorNameValue(updated.name);
           setShipperVendorAddressValue(updated.address ?? "");
@@ -569,10 +576,7 @@ export default function LogisticsFreightEditorPage() {
       { data: { name: newVendorForm.name, country: newVendorForm.country, contactEmail: "", address: newVendorForm.address || undefined } },
       {
         onSuccess: (newSupplier) => {
-          queryClient.setQueryData<Supplier[]>(getListSuppliersQueryKey(), (old) =>
-            old ? [...old, newSupplier] : [newSupplier]
-          );
-          queryClient.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
+          queryClient.invalidateQueries({ queryKey: ["vendors-filtered"] });
           setAddVendorDialogOpen(false);
           setVendorSearchQuery("");
           handleSelectVendorByData(newSupplier);
@@ -647,6 +651,7 @@ export default function LogisticsFreightEditorPage() {
       transportMode: (form.transportMode || undefined) as any,
       cargoType: (form.cargoType || undefined) as any,
       containerNo: form.containerNo || undefined,
+      freightCost: form.freightCost ? Number(form.freightCost) : undefined,
       salesDocId: salesDocId ?? undefined,
       purchaseDocId: isEdit ? purchaseDocId : (purchaseDocId ?? undefined),
     } as any;
@@ -1056,7 +1061,12 @@ export default function LogisticsFreightEditorPage() {
                         <AutofillRestoreMarker source="catalog" fieldKey="shipperAddress" originalValue={shipperCatalogAddressValue} currentValue={form.shipperAddress} onRestore={() => { setForm((f) => ({ ...f, shipperAddress: shipperCatalogAddressValue })); clearDismissedBadges("shipperAddress:catalog"); }} />
                       )}
                     </div>
-                    <Input id="shipperAddress" value={form.shipperAddress} onChange={set("shipperAddress")} placeholder="Jl. ..." className={`${scannedFields.has("shipperAddress") ? "ring-1 ring-green-400" : ""} ${(shipperAddressAutoFilled && dismissedBadges.has("shipperAddress:po")) ? "border-l-2 border-l-blue-300" : (shipperVendorAddressFilled && dismissedBadges.has("shipperAddress:vendor")) ? "border-l-2 border-l-purple-300" : (shipperCatalogAddressFilled && dismissedBadges.has("shipperAddress:catalog")) ? "border-l-2 border-l-amber-300" : ""}`.trim()} />
+                    <GooglePlacesAutocomplete
+                      value={form.shipperAddress}
+                      onChange={(v) => setForm((f) => ({ ...f, shipperAddress: v }))}
+                      placeholder="Jl. ..."
+                      className={`${scannedFields.has("shipperAddress") ? "ring-1 ring-green-400" : ""} ${(shipperAddressAutoFilled && dismissedBadges.has("shipperAddress:po")) ? "border-l-2 border-l-blue-300" : (shipperVendorAddressFilled && dismissedBadges.has("shipperAddress:vendor")) ? "border-l-2 border-l-purple-300" : (shipperCatalogAddressFilled && dismissedBadges.has("shipperAddress:catalog")) ? "border-l-2 border-l-amber-300" : ""}`.trim()}
+                    />
                     {((shipperAddressAutoFilled && !dismissedBadges.has("shipperAddress:po")) || (shipperVendorAddressFilled && !dismissedBadges.has("shipperAddress:vendor")) || (shipperCatalogAddressFilled && !dismissedBadges.has("shipperAddress:catalog")) || scannedFields.has("shipperAddress")) && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
                         {shipperAddressAutoFilled && !dismissedBadges.has("shipperAddress:po") && <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[10px] font-medium">Dari PO<button type="button" onClick={() => dismissBadge("shipperAddress:po")} className="hover:text-blue-900 leading-none" aria-label="Tutup">×</button></span>}
@@ -1110,7 +1120,12 @@ export default function LogisticsFreightEditorPage() {
                         <AutofillRestoreMarker source="so" fieldKey="consigneeAddress" originalValue={consigneeAddressAutoFilledValue} currentValue={form.consigneeAddress} onRestore={() => { setForm((f) => ({ ...f, consigneeAddress: consigneeAddressAutoFilledValue })); clearDismissedBadges("consigneeAddress:so"); setScannedFields((prev) => { const next = new Set(prev); next.delete("consigneeAddress"); return next; }); }} />
                       )}
                     </div>
-                    <Input id="consigneeAddress" value={form.consigneeAddress} onChange={set("consigneeAddress")} placeholder="Jl. ..." className={`${scannedFields.has("consigneeAddress") ? "ring-1 ring-green-400" : ""} ${(consigneeAddressAutoFilled && dismissedBadges.has("consigneeAddress:so")) ? "border-l-2 border-l-blue-300" : ""}`.trim()} />
+                    <GooglePlacesAutocomplete
+                      value={form.consigneeAddress}
+                      onChange={(v) => setForm((f) => ({ ...f, consigneeAddress: v }))}
+                      placeholder="Jl. ..."
+                      className={`${scannedFields.has("consigneeAddress") ? "ring-1 ring-green-400" : ""} ${(consigneeAddressAutoFilled && dismissedBadges.has("consigneeAddress:so")) ? "border-l-2 border-l-blue-300" : ""}`.trim()}
+                    />
                     {((consigneeAddressAutoFilled && !dismissedBadges.has("consigneeAddress:so")) || scannedFields.has("consigneeAddress")) && (
                       <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
                         {consigneeAddressAutoFilled && !dismissedBadges.has("consigneeAddress:so") && <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[10px] font-medium">Dari SO<button type="button" onClick={() => dismissBadge("consigneeAddress:so")} className="hover:text-blue-900 leading-none" aria-label="Tutup">×</button></span>}
@@ -1132,6 +1147,90 @@ export default function LogisticsFreightEditorPage() {
                       Diisi dari scan dokumen.
                     </p>
                   )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Mini map — ditampilkan ketika kedua alamat sudah diisi */}
+            {(form.shipperAddress || form.consigneeAddress) && (
+              <RouteMapPreview
+                origin={form.shipperAddress}
+                destination={form.consigneeAddress}
+                onDistanceFetched={handleDistanceFetched}
+              />
+            )}
+
+            {/* Biaya Freight */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Calculator className="h-4 w-4" />
+                  Biaya Freight
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+                  <div className="space-y-1.5">
+                    <Label>Jarak (km)</Label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={routeDistanceKm ?? ""}
+                      onChange={(e) => setRouteDistanceKm(e.target.value ? Number(e.target.value) : null)}
+                      placeholder="Auto dari peta"
+                    />
+                    <p className="text-[11px] text-muted-foreground">Otomatis dari alamat shipper→consignee</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Tarif per km (Rp)</Label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={ratePerKm}
+                      onChange={(e) => setRatePerKm(e.target.value)}
+                      placeholder="cth. 5000"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Estimasi Biaya</Label>
+                    <div className="flex h-9 items-center rounded-md border bg-muted/50 px-3 text-sm font-medium">
+                      {routeDistanceKm != null && ratePerKm
+                        ? `Rp ${Math.round(routeDistanceKm * Number(ratePerKm)).toLocaleString("id-ID")}`
+                        : <span className="text-muted-foreground font-normal">—</span>}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>&nbsp;</Label>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      disabled={routeDistanceKm == null || !ratePerKm}
+                      onClick={() => {
+                        if (routeDistanceKm != null && ratePerKm) {
+                          setForm((f) => ({ ...f, freightCost: String(Math.round(routeDistanceKm * Number(ratePerKm))) }));
+                        }
+                      }}
+                    >
+                      Pakai sebagai biaya
+                    </Button>
+                  </div>
+                </div>
+                <Separator />
+                <div className="space-y-1.5">
+                  <Label htmlFor="freightCost">Biaya Freight Aktual (Rp)</Label>
+                  <input
+                    id="freightCost"
+                    type="number"
+                    min={0}
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={form.freightCost}
+                    onChange={(e) => setForm((f) => ({ ...f, freightCost: e.target.value }))}
+                    placeholder="0"
+                  />
                 </div>
               </CardContent>
             </Card>

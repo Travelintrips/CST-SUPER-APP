@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Images & binary assets — wajib di Supabase Storage, bukan git
+public/menu/
+public/Screenshot_*.jpg
+public/logocst.png
+public/thai-tea-cst-logo.jpeg

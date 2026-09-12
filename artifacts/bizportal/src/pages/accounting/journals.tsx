@@ -27,9 +27,10 @@ import {
   type AccountingJournal,
 } from "@workspace/api-client-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { Pencil, Plus, BookOpen, Printer, Download, ChevronsUpDown, Check } from "lucide-react";
+import { Pencil, Plus, BookOpen, Printer, Download, ChevronsUpDown, Check, ArrowLeft } from "lucide-react";
 import { exportXlsx, printWindow } from "@/lib/export";
 import { cn } from "@/lib/utils";
+import { BackButton } from "@/components/ui/back-button";
 
 const TYPE_LABELS: Record<string, string> = {
   sales: "Penjualan", purchase: "Pembelian", bank: "Bank", cash: "Kas", general: "Umum",
@@ -195,7 +196,11 @@ export default function JournalsPage() {
 
   return (
     <AppShell>
+      <BackButton href="/accounting" />
       <div className="space-y-6 p-6">
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => window.history.back()}>
+          <ArrowLeft className="h-4 w-4 mr-1" />Kembali
+        </Button>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><BookOpen className="h-6 w-6" />Jurnal</h1>
@@ -266,7 +271,7 @@ export default function JournalsPage() {
                   <TableCell className="text-xs">{accLabel(j.defaultDebitAccountId)}</TableCell>
                   <TableCell className="text-xs">{accLabel(j.defaultCreditAccountId)}</TableCell>
                   <TableCell>{j.isActive ? <Badge>Aktif</Badge> : <Badge variant="secondary">Non-aktif</Badge>}</TableCell>
-                  <TableCell className="text-right"><Button size="icon" variant="ghost" onClick={() => startEdit(j)} data-testid={`button-edit-${j.id}`}><Pencil className="h-4 w-4" /></Button></TableCell>
+                  <TableCell className="text-right"><Button size="icon" variant="ghost" aria-label="Edit" onClick={() => startEdit(j)} data-testid={`button-edit-${j.id}`}><Pencil className="h-4 w-4" /></Button></TableCell>
                 </TableRow>
               ))}
             </TableBody>

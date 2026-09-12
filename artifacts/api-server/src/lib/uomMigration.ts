@@ -32,18 +32,26 @@ export async function runUomMigration(): Promise<void> {
 
     // Pastikan FK selalu menunjuk ke tabel uom (bukan uom_master yang lama)
     await db.execute(sql`
-      ALTER TABLE uom_conversions
-        DROP CONSTRAINT IF EXISTS uom_conversions_from_uom_id_fkey,
-        DROP CONSTRAINT IF EXISTS uom_conversions_to_uom_id_fkey,
-        DROP CONSTRAINT IF EXISTS uom_conversions_pair_uidx,
-        DROP CONSTRAINT IF EXISTS uom_conversions_unique
-    `);
-    await db.execute(sql`
-      ALTER TABLE uom_conversions
-        ADD CONSTRAINT uom_conversions_from_uom_id_fkey
-          FOREIGN KEY (from_uom_id) REFERENCES uom(id) ON DELETE CASCADE,
-        ADD CONSTRAINT uom_conversions_to_uom_id_fkey
-          FOREIGN KEY (to_uom_id) REFERENCES uom(id) ON DELETE CASCADE
+      DO $$
+      BEGIN
+        ALTER TABLE uom_conversions
+          DROP CONSTRAINT IF EXISTS uom_conversions_pair_uidx,
+          DROP CONSTRAINT IF EXISTS uom_conversions_unique;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'uom_conversions_from_uom_id_fkey'
+        ) THEN
+          ALTER TABLE uom_conversions
+            ADD CONSTRAINT uom_conversions_from_uom_id_fkey
+              FOREIGN KEY (from_uom_id) REFERENCES uom(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'uom_conversions_to_uom_id_fkey'
+        ) THEN
+          ALTER TABLE uom_conversions
+            ADD CONSTRAINT uom_conversions_to_uom_id_fkey
+              FOREIGN KEY (to_uom_id) REFERENCES uom(id) ON DELETE CASCADE;
+        END IF;
+      END $$
     `);
     await db.execute(sql`
       CREATE UNIQUE INDEX IF NOT EXISTS uom_conversions_pair_uidx

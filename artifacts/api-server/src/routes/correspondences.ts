@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
-import OpenAI from "openai";
+import { getOpenAI } from "../lib/openaiClient.js";
+import { validateMagicBytes } from "../lib/uploadValidation.js";
 import { db, correspondencesTable, correspondenceAttachmentsTable, customersTable, suppliersTable } from "@workspace/db";
 import { eq, desc, ilike, or, and, count, inArray } from "drizzle-orm";
 import { ObjectStorageService } from "../lib/objectStorage.js";
@@ -15,19 +16,6 @@ router.use(async (req, res, next) => {
   next();
 });
 
-let openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!openai) {
-    if (!process.env.AI_INTEGRATIONS_OPENAI_API_KEY && !process.env.OPENAI_API_KEY) {
-      throw new Error("OpenAI API key not configured. Please add OPENAI_API_KEY to environment variables.");
-    }
-    openai = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-    });
-  }
-  return openai;
-}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -81,6 +69,13 @@ router.post("/scan", async (req, res, next) => {
 
   if (!allowedMimes.includes(mimeType)) {
     res.status(400).json({ message: "Hanya file JPG, PNG, WEBP, dan PDF yang didukung" });
+    return;
+  }
+
+  // C2-REMEDIATION: magic-byte check — verifikasi konten file sebelum diteruskan ke AI/scanning
+  const magicCheck = validateMagicBytes(file.buffer, mimeType);
+  if (!magicCheck.ok) {
+    res.status(400).json({ message: magicCheck.errorMessage });
     return;
   }
 
@@ -271,8 +266,17 @@ router.put("/:id", async (req, res) => {
 // DELETE /api/correspondences/:id
 router.delete("/:id", async (req, res) => {
   const id = Number(req.params.id);
+  // Ambil objectPath semua attachment sebelum dihapus dari DB
+  const attachments = await db
+    .select({ objectPath: correspondenceAttachmentsTable.objectPath })
+    .from(correspondenceAttachmentsTable)
+    .where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondenceAttachmentsTable).where(eq(correspondenceAttachmentsTable.correspondenceId, id));
   await db.delete(correspondencesTable).where(eq(correspondencesTable.id, id));
+  // Cascade storage cleanup — hapus file fisik (non-fatal)
+  for (const a of attachments) {
+    if (a.objectPath) objectStorageService.tryDeletePrivateEntity(a.objectPath).catch(() => {});
+  }
   return res.json({ message: "Berhasil dihapus" });
 });
 

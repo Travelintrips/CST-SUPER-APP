@@ -4,55 +4,34 @@ import { logger } from "./logger.js";
 
 export async function runEnterpriseMigration(): Promise<void> {
   try {
-    // 1. Add response_deadline to logistic_order_rfqs
+    // 1. Add columns to logistic_order_rfqs — batched
     await db.execute(sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_order_rfqs' AND column_name='response_deadline') THEN
-          ALTER TABLE logistic_order_rfqs ADD COLUMN response_deadline TIMESTAMPTZ;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_order_rfqs' AND column_name='created_by_user_id') THEN
-          ALTER TABLE logistic_order_rfqs ADD COLUMN created_by_user_id TEXT;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_order_rfqs' AND column_name='created_by_user_name') THEN
-          ALTER TABLE logistic_order_rfqs ADD COLUMN created_by_user_name TEXT;
-        END IF;
-      END $$;
+      ALTER TABLE logistic_order_rfqs
+        ADD COLUMN IF NOT EXISTS response_deadline TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS created_by_user_id TEXT,
+        ADD COLUMN IF NOT EXISTS created_by_user_name TEXT;
     `);
 
-    // 2. Add rank_score and rank_badges to logistic_order_quotes
+    // 2. Add rank columns to logistic_order_quotes — batched
     await db.execute(sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_order_quotes' AND column_name='rank_score') THEN
-          ALTER TABLE logistic_order_quotes ADD COLUMN rank_score NUMERIC(6,2);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_order_quotes' AND column_name='rank_badges') THEN
-          ALTER TABLE logistic_order_quotes ADD COLUMN rank_badges TEXT[] DEFAULT '{}';
-        END IF;
-      END $$;
+      ALTER TABLE logistic_order_quotes
+        ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'IDR',
+        ADD COLUMN IF NOT EXISTS rank_score NUMERIC(6,2),
+        ADD COLUMN IF NOT EXISTS rank_badges TEXT[] DEFAULT '{}';
     `);
 
-    // 3. Add operational_status and payment_status to logistic_orders
+    // 3. Add operational/payment columns to logistic_orders — batched
     await db.execute(sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='operational_status') THEN
-          ALTER TABLE logistic_orders ADD COLUMN operational_status TEXT;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='logistic_orders' AND column_name='payment_status') THEN
-          ALTER TABLE logistic_orders ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'unpaid';
-        END IF;
-      END $$;
+      ALTER TABLE logistic_orders
+        ADD COLUMN IF NOT EXISTS operational_status TEXT,
+        ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'unpaid';
     `);
 
-    // 4. Add quotation_pdf_url and quotation_number to customer_quote_links
+    // 4. Add quotation columns to customer_quote_links — batched
     await db.execute(sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_quote_links' AND column_name='quotation_pdf_url') THEN
-          ALTER TABLE customer_quote_links ADD COLUMN quotation_pdf_url TEXT;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='customer_quote_links' AND column_name='quotation_number') THEN
-          ALTER TABLE customer_quote_links ADD COLUMN quotation_number TEXT;
-        END IF;
-      END $$;
+      ALTER TABLE customer_quote_links
+        ADD COLUMN IF NOT EXISTS quotation_pdf_url TEXT,
+        ADD COLUMN IF NOT EXISTS quotation_number TEXT;
     `);
 
     // 5. Create margin_rules table
@@ -88,6 +67,7 @@ export async function runEnterpriseMigration(): Promise<void> {
         new_value JSONB,
         description TEXT,
         ip_address TEXT,
+        deduplication_key TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
@@ -98,13 +78,30 @@ export async function runEnterpriseMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS activity_logs_rfq_idx ON activity_logs(rfq_id);
     `);
 
-    // 8. Add expired_at to rfq_vendor_links if not exists (idempotent)
+    // 8. Add missing columns to rfq_vendor_links (idempotent)
     await db.execute(sql`
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='rfq_vendor_links' AND column_name='expired_at') THEN
-          ALTER TABLE rfq_vendor_links ADD COLUMN expired_at TIMESTAMPTZ;
-        END IF;
-      END $$;
+      ALTER TABLE rfq_vendor_links
+        ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS lead_time_days INTEGER,
+        ADD COLUMN IF NOT EXISTS stock_availability TEXT DEFAULT 'unknown';
+    `);
+
+    // 10. Optimistic locking: version column on logistic_orders
+    await db.execute(sql`
+      ALTER TABLE logistic_orders
+        ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+    `);
+
+    // 9. Race-condition / idempotency unique constraints
+    //    - logistic_order_quotes: one vendor may submit at most one quote per RFQ
+    //    - vendor_responses: one READY/NOT_READY row per order number (upsert target)
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS liq_rfq_vendor_uidx
+        ON logistic_order_quotes (rfq_id, vendor_id);
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS vendor_responses_order_uidx
+        ON vendor_responses (order_number);
     `);
 
     logger.info("Enterprise migration completed successfully");

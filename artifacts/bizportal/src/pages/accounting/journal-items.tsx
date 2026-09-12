@@ -17,7 +17,7 @@ import {
   getListAccountingEntryLinesQueryKey,
 } from "@workspace/api-client-react";
 import { useCompany } from "@/contexts/CompanyContext";
-import { List, TrendingUp, TrendingDown, Printer, Download } from "lucide-react";
+import { ArrowLeft, List, TrendingUp, TrendingDown, Printer, Download } from "lucide-react";
 import { exportXlsx, printWindow } from "@/lib/export";
 
 const idr = (n: number) =>
@@ -29,7 +29,7 @@ const SOURCE_LABELS: Record<string, string> = {
   purchase_bill: "Tagihan Beli",
   sales_payment: "Bayar Masuk",
   purchase_payment: "Bayar Keluar",
-  pos_sale: "POS",
+
   ecommerce_order: "E-Commerce",
   stock_received: "Stok Masuk",
   manual_payment: "Bayar Manual",
@@ -89,6 +89,8 @@ export default function JournalItemsPage() {
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
           <div>
+            <Link href="/accounting/journals"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <List className="h-6 w-6" />
               Jurnal Items

@@ -140,7 +140,7 @@ export default function VendorConfirmPage() {
           <h2 className="text-xl font-bold text-slate-800 mb-2">Terima Kasih!</h2>
           <p className="text-sm text-slate-500 mb-4">
             Anda telah <strong>menerima</strong> order <strong>{data.orderNumber}</strong>.<br />
-            Tim CST Logistics akan segera menindaklanjuti.
+            Tim kami akan segera menindaklanjuti.
           </p>
           <div className="bg-green-50 rounded-xl p-4 text-green-800 font-semibold">
             {fmt(confirmedPrice || data.basePrice)}
@@ -313,8 +313,7 @@ export default function VendorConfirmPage() {
         </div>
 
         <p className="text-xs text-slate-400 text-center pb-6">
-          Batas konfirmasi: 24 jam dari pengiriman WA.<br />
-          CST Logistics — {data.vendorName}
+          Batas konfirmasi: 24 jam dari pengiriman WA.
         </p>
       </div>
     </div>

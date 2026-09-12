@@ -1,0 +1,13 @@
+---
+  name: Gateway vs artifact workflow port conflicts
+  description: start-replit.sh (Gateway) and Replit's auto-managed per-artifact workflows can both bind the same ports, causing EADDRINUSE crashes
+  ---
+
+  Replit auto-runs a separate workflow per artifact directory (e.g. "artifacts/bizportal: web") that cannot be removed (PROHIBITED_ACTION on removeWorkflow). If a unified "Gateway" workflow (start-replit.sh) also directly spawns its own copy of the same services on the same hardcoded ports (BIZPORTAL_PORT, CUSTOMER_PORT, API_PORT, LOGISTIC_ORDER_PORT), both processes race for the port and one crashes with EADDRINUSE — this is the actual cause behind vague reports like "bizportal not run" even though the login page may still partially render.
+
+  **Why:** BIZPORTAL_PORT/CUSTOMER_PORT/etc. env vars set inside start-replit.sh's subshells are NOT visible process-wide, so the individual artifact's own start-dev.sh "yield if port already legacy-bound" detection never triggers for the standalone workflow — both sides just try to bind directly.
+
+  **How to apply:** start-replit.sh now checks each port with a check_port()/start_if_free() helper before spawning its own copy of a service; if the port is already bound (by the artifact workflow or a leftover process), it yields (tail -f /dev/null) instead of crashing. When debugging "app not running" issues in this multi-workflow topology, check for duplicate port bindings across Gateway and per-artifact workflows before assuming a code bug.
+
+  **BizPortal-specific case:** `.replit`'s `[[ports]]` table maps localPort 6800 directly to externalPort 80 (in addition to the Gateway's 5000→80 mapping). This means Replit's edge proxy routes `/bizportal/*` straight to whatever is on port 6800, bypassing the Gateway entirely — the Gateway's own reverse-proxy rule for `/bizportal/*` is irrelevant for the public domain. Because of this, port 6800 MUST be owned by the "artifacts/bizportal: web" artifact workflow (its start-dev.sh proxy chain 6800→VITE port), not started inside start-replit.sh. If start-replit.sh binds 6800 itself, the artifact workflow yields, but that's fine because whichever process is *actually* listening on 6800 answers the edge-routed request. The failure mode to avoid: restarting the bizportal artifact workflow while something else (e.g. Gateway) is still transiently holding 6800 causes it to yield and no service ever gets requests. Always restart Gateway (or whatever else claims 6800) first, confirm the port is truly free via a raw TCP probe, then restart the artifact workflow.
+  

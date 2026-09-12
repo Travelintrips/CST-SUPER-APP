@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { ScanLine, Save, Loader2, CheckCircle2, Info, X, Plus, RotateCcw, FileSearch, FlaskConical, ChevronDown, ChevronUp, Scissors, CheckCircle, Upload, FileText } from "lucide-react";
+import { ArrowLeft, ScanLine, Save, Loader2, CheckCircle2, Info, X, Plus, RotateCcw, FileSearch, FlaskConical, ChevronDown, ChevronUp, Scissors, CheckCircle, Upload, FileText } from "lucide-react";
+import { Link } from "wouter";
 
 type DocGroup = "sales" | "freight" | "customs";
 
@@ -85,12 +86,7 @@ export default function AiScanSettingsPage() {
     return { matchedPhrase: null, lineIndex: -1, lines };
   }, [testText, bpPhrases]);
 
-  useEffect(() => {
-    void loadFields();
-    void loadBoilerplate();
-  }, []);
-
-  async function loadFields() {
+  const loadFields = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/scan-document/fields", { credentials: "include" });
@@ -104,9 +100,9 @@ export default function AiScanSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
-  async function loadBoilerplate() {
+  const loadBoilerplate = useCallback(async () => {
     setBpLoading(true);
     try {
       const res = await fetch("/api/scan-document/boilerplate-headers", { credentials: "include" });
@@ -121,7 +117,12 @@ export default function AiScanSettingsPage() {
     } finally {
       setBpLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadFields();
+    void loadBoilerplate();
+  }, [loadBoilerplate, loadFields]);
 
   async function handleSaveFields() {
     setSaving(true);
@@ -254,6 +255,8 @@ export default function AiScanSettingsPage() {
             <ScanLine className="h-5 w-5 text-violet-600" />
           </div>
           <div>
+            <Link href="/settings"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-xl font-semibold text-gray-900">Pengaturan Scan Dokumen</h1>
             <p className="text-sm text-gray-500">
               Pilih field mana yang diekstrak AI saat memindai dokumen

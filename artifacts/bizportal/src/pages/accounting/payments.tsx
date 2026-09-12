@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useMemo } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
@@ -20,7 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, ArrowDownLeft, ArrowUpRight, ExternalLink, FileText, ChevronDown, ChevronUp, Users, Ban, MessageSquare, ShoppingCart, Printer, Download } from "lucide-react";
+import { Plus, ArrowDownLeft, ArrowUpRight, ExternalLink, FileText, ChevronDown, ChevronUp, Users, Ban, MessageSquare, ShoppingCart, Printer, Download, Activity, ArrowLeft, ArrowRight, Info } from "lucide-react";
 import { exportXlsx, printWindow } from "@/lib/export";
 import { CorrespondenceTab } from "@/components/CorrespondenceTab";
 import {
@@ -55,6 +56,15 @@ function LinkedDocBadge({ sourceType, sourceDocId }: { sourceType?: string | nul
       <Link href={`/sales/orders/${sourceDocId}`}>
         <Badge className="bg-indigo-900/40 text-indigo-300 border-indigo-700 text-xs gap-1 cursor-pointer hover:bg-indigo-900/60">
           <ShoppingCart className="h-3 w-3" /> SO #{sourceDocId}
+        </Badge>
+      </Link>
+    );
+  }
+  if (sourceType === "sport_center") {
+    return (
+      <Link href="/sport-center/payments">
+        <Badge className="bg-emerald-900/40 text-emerald-300 border-emerald-700 text-xs gap-1 cursor-pointer hover:bg-emerald-900/60">
+          <Activity className="h-3 w-3" /> Sport Center
         </Badge>
       </Link>
     );
@@ -173,9 +183,20 @@ export default function PaymentsPage() {
     from?: string;
     to?: string;
     sourceType?: string;
-    sourceDocId?: number;
-  }>({});
-  const [sourceDocIdText, setSourceDocIdText] = useState("");
+    refDocNumber?: string;
+  }>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const refDocNumber = p.get("refDocNumber");
+      const sourceType = p.get("sourceType");
+      return {
+        ...(refDocNumber ? { refDocNumber } : {}),
+        ...(sourceType ? { sourceType } : {}),
+      };
+    } catch {
+      return {};
+    }
+  });
   const [refSearch, setRefSearch] = useState("");
 
   const { activeCompanyId, isConsolidated } = useCompany();
@@ -184,12 +205,12 @@ export default function PaymentsPage() {
     ...(filter.from ? { from: new Date(filter.from).toISOString() } : {}),
     ...(filter.to ? { to: new Date(filter.to + "T23:59:59").toISOString() } : {}),
     ...(filter.sourceType && filter.sourceType !== "all" ? { sourceType: filter.sourceType } : {}),
-    ...(filter.sourceDocId ? { sourceDocId: filter.sourceDocId } : {}),
+    ...(filter.refDocNumber ? { refDocNumber: filter.refDocNumber } : {}),
     company: (isConsolidated ? "all" : activeCompanyId) as unknown as number,
   }), [filter, activeCompanyId, isConsolidated]);
 
-  const { data: allPayments = [] as AccountingPayment[], isLoading } = useListAccountingPayments(params, {
-    query: { queryKey: getListAccountingPaymentsQueryKey(params) },
+  const { data: allPayments = [] as AccountingPayment[], isLoading } = useListAccountingPayments(params as any, {
+    query: { queryKey: getListAccountingPaymentsQueryKey(params as any) },
   });
 
   const payments = useMemo(() => {
@@ -200,12 +221,6 @@ export default function PaymentsPage() {
       (p.partnerName ?? "").toLowerCase().includes(search)
     );
   }, [allPayments, refSearch]);
-
-  const applySourceDocId = (val: string) => {
-    setSourceDocIdText(val);
-    const num = parseInt(val, 10);
-    setFilter((f) => ({ ...f, sourceDocId: !Number.isNaN(num) && num > 0 ? num : undefined }));
-  };
 
   const { data: journals = [] } = useListJournals();
   const bankCashJournals = journals.filter((j) => j.type === "bank" || j.type === "cash");
@@ -319,11 +334,10 @@ export default function PaymentsPage() {
 
   const resetFilters = () => {
     setFilter({});
-    setSourceDocIdText("");
     setRefSearch("");
   };
 
-  const hasFilters = filter.paymentType || filter.from || filter.to || filter.sourceType || filter.sourceDocId || refSearch;
+  const hasFilters = filter.paymentType || filter.from || filter.to || filter.sourceType || filter.refDocNumber || refSearch;
 
   const handleVoided = async () => {
     await Promise.all([
@@ -335,11 +349,38 @@ export default function PaymentsPage() {
   return (
     <AppShell>
       <div className="space-y-6">
+        {/* ── Banner Redirect ── */}
+        <div className="rounded-xl border border-amber-600/40 bg-amber-950/30 p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 mt-0.5">
+              <Info className="h-5 w-5 text-amber-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-300 mb-0.5">Menu Historis & Penerimaan (AR)</p>
+              <p className="text-sm text-amber-200/80 leading-relaxed">
+                Halaman ini menyimpan histori pembayaran lama dan digunakan untuk mencatat <strong>penerimaan dari pelanggan (AR)</strong>.
+                Untuk transaksi <strong>pembayaran keluar baru</strong> (ke supplier, biaya operasional, pajak, dll.),
+                gunakan <strong>Bank Disbursement</strong>.
+              </p>
+            </div>
+            <Link href="/accounting/bank-disbursements">
+              <button
+                type="button"
+                className="flex-shrink-0 flex items-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-4 py-2 transition-colors whitespace-nowrap"
+              >
+                Buka Bank Disbursement
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </Link>
+          </div>
+        </div>
+
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-50">Pembayaran</h1>
+            <Link href="/accounting"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+            <h1 className="text-2xl font-bold text-slate-50">Payments <span className="text-slate-400 font-normal text-lg">(Historis &amp; Penerimaan)</span></h1>
             <p className="text-slate-400 text-sm mt-1">
-              Catat penerimaan dari pelanggan dan pembayaran ke pemasok secara manual.
+              Histori pembayaran &amp; penerimaan AR. Pembayaran keluar baru → Bank Disbursement.
             </p>
           </div>
           <div className="flex gap-2">
@@ -382,40 +423,22 @@ export default function PaymentsPage() {
             </Button>
             <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
               <DialogTrigger asChild>
-                <Button className="gap-2"><Plus className="h-4 w-4" /> Catat Pembayaran</Button>
+                <Button className="gap-2"><Plus className="h-4 w-4" /> Catat Penerimaan</Button>
               </DialogTrigger>
             <DialogContent className="max-w-lg">
               <DialogHeader>
-                <DialogTitle>Catat Pembayaran Manual</DialogTitle>
+                <DialogTitle>Catat Penerimaan Manual (AR)</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-2">
+                <div className="rounded border border-orange-700/40 bg-orange-900/20 px-3 py-2 text-xs text-orange-300">
+                  ⚠️ Pembayaran keluar (ke supplier) sekarang diproses melalui <strong>Finance → Bank Disbursement</strong>. Halaman ini hanya untuk mencatat penerimaan dari pelanggan (AR).
+                </div>
                 <div className="space-y-1">
                   <Label>Tipe Pembayaran</Label>
-                  <Select
-                    value={form.paymentType}
-                    onValueChange={(v) => setForm((f) => ({ ...f, paymentType: v as "inbound" | "outbound" }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="inbound">
-                        <span className="flex items-center gap-2">
-                          <ArrowDownLeft className="h-4 w-4 text-emerald-400" /> Bayar Masuk (Penerimaan)
-                        </span>
-                      </SelectItem>
-                      <SelectItem value="outbound">
-                        <span className="flex items-center gap-2">
-                          <ArrowUpRight className="h-4 w-4 text-red-400" /> Bayar Keluar (Pembayaran)
-                        </span>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-slate-400 pt-0.5">
-                    {form.paymentType === "inbound"
-                      ? "Posting: DR Bank/Kas \u2192 CR Piutang (AR)"
-                      : "Posting: DR Hutang (AP) \u2192 CR Bank/Kas"}
-                  </p>
+                  <div className="flex items-center gap-2 rounded border border-emerald-700/40 bg-emerald-900/10 px-3 py-2 text-sm text-emerald-300">
+                    <ArrowDownLeft className="h-4 w-4 shrink-0" />
+                    Bayar Masuk (Penerimaan) — Posting: DR Bank/Kas → CR Piutang (AR)
+                  </div>
                 </div>
 
                 {form.sourceDocId && (
@@ -432,11 +455,7 @@ export default function PaymentsPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label>Tanggal</Label>
-                    <Input
-                      type="date"
-                      value={form.date}
-                      onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                    />
+                    <DatePicker value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
                   </div>
                   <div className="space-y-1">
                     <Label>Jumlah (IDR)</Label>
@@ -454,7 +473,7 @@ export default function PaymentsPage() {
                 <div className="space-y-1">
                   <Label>Jurnal (Bank / Kas)</Label>
                   <Select
-                    value={form.journalId}
+                    value={form.journalId || undefined}
                     onValueChange={(v) => setForm((f) => ({ ...f, journalId: v }))}
                   >
                     <SelectTrigger>
@@ -721,15 +740,14 @@ export default function PaymentsPage() {
                                               {idr(entry.balance)}
                                             </TableCell>
                                             <TableCell className="text-right">
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                className="h-7 text-xs gap-1 border-red-700/50 text-red-300 hover:bg-red-900/30"
-                                                onClick={() => prefillFromPartner(entry, "outbound")}
+                                              <a
+                                                href="/accounting/bank-disbursements"
+                                                className="inline-flex items-center gap-1 h-7 px-2 text-xs rounded border border-orange-700/50 text-orange-400 hover:bg-orange-900/20 transition-colors"
                                                 data-testid={`btn-pay-ap-${entry.sourceDocId}`}
+                                                title="Buat Bank Disbursement untuk membayar hutang ini"
                                               >
-                                                <ArrowUpRight className="h-3 w-3" /> Bayar
-                                              </Button>
+                                                <ArrowUpRight className="h-3 w-3" /> Buat Disbursement
+                                              </a>
                                             </TableCell>
                                           </TableRow>
                                         ))}
@@ -772,7 +790,7 @@ export default function PaymentsPage() {
                 </Select>
               </div>
               <div className="flex items-center gap-2">
-                <Label className="text-slate-400 text-xs whitespace-nowrap">Dokumen</Label>
+                <Label className="text-slate-400 text-xs whitespace-nowrap">Tipe Dokumen</Label>
                 <Select
                   value={filter.sourceType ?? "all"}
                   onValueChange={(v) =>
@@ -783,50 +801,42 @@ export default function PaymentsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Semua</SelectItem>
-                    <SelectItem value="sales_order">Invoice Penjualan</SelectItem>
-                    <SelectItem value="purchase_order">Tagihan Pembelian</SelectItem>
+                    <SelectItem value="all">Semua Dokumen</SelectItem>
+                    <SelectItem value="sales_order">SO (Sales Order)</SelectItem>
+                    <SelectItem value="purchase_order">PO (Purchase Order)</SelectItem>
+                    <SelectItem value="sport_center">Sport Center</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="flex items-center gap-2">
-                <Label className="text-slate-400 text-xs whitespace-nowrap">ID Dokumen</Label>
+                <Label className="text-slate-400 text-xs whitespace-nowrap">No. Dokumen</Label>
                 <Input
-                  type="number"
-                  min="1"
-                  className="h-8 text-xs w-24"
-                  placeholder="ID #"
-                  value={sourceDocIdText}
-                  onChange={(e) => applySourceDocId(e.target.value)}
-                  data-testid="filter-source-doc-id"
+                  className="h-8 text-xs w-44"
+                  placeholder="cth: SO/2024/000001"
+                  value={filter.refDocNumber ?? ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilter((f) => ({ ...f, refDocNumber: val.trim() || undefined }));
+                  }}
+                  data-testid="filter-ref-doc-number"
                 />
               </div>
               <div className="flex items-center gap-2">
-                <Label className="text-slate-400 text-xs whitespace-nowrap">Cari Ref/Mitra</Label>
+                <Label className="text-slate-400 text-xs whitespace-nowrap">Cari Mitra</Label>
                 <Input
-                  className="h-8 text-xs w-40"
-                  placeholder="No. ref atau nama mitra..."
+                  className="h-8 text-xs w-36"
+                  placeholder="Nama mitra..."
                   value={refSearch}
                   onChange={(e) => setRefSearch(e.target.value)}
                 />
               </div>
               <div className="flex items-center gap-2">
                 <Label className="text-slate-400 text-xs whitespace-nowrap">Dari</Label>
-                <Input
-                  type="date"
-                  className="h-8 text-xs w-36"
-                  value={filter.from ?? ""}
-                  onChange={(e) => setFilter((f) => ({ ...f, from: e.target.value || undefined }))}
-                />
+                <DatePicker value={filter.from ?? ""} onChange={(v) => setFilter((f) => ({ ...f, from: v || undefined }))} className="h-8 text-xs w-36" />
               </div>
               <div className="flex items-center gap-2">
                 <Label className="text-slate-400 text-xs whitespace-nowrap">Sampai</Label>
-                <Input
-                  type="date"
-                  className="h-8 text-xs w-36"
-                  value={filter.to ?? ""}
-                  onChange={(e) => setFilter((f) => ({ ...f, to: e.target.value || undefined }))}
-                />
+                <DatePicker value={filter.to ?? ""} onChange={(v) => setFilter((f) => ({ ...f, to: v || undefined }))} className="h-8 text-xs w-36" />
               </div>
               {hasFilters && (
                 <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={resetFilters}>
@@ -865,7 +875,7 @@ export default function PaymentsPage() {
                     return (
                       <TableRow key={p.id} className={isVoided ? "opacity-50" : undefined}>
                         <TableCell className="text-indigo-400 text-xs font-mono whitespace-nowrap">
-                          {p.paymentNumber ?? <span className="text-slate-600">—</span>}
+                          {(p as any).paymentNumber ?? <span className="text-slate-600">—</span>}
                         </TableCell>
                         <TableCell className="text-slate-300 text-xs whitespace-nowrap">
                           {formatDate(p.date)}

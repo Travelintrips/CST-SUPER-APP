@@ -1,5 +1,10 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { useOrderNotifications, type OrderNotification } from "@/hooks/useOrderNotifications";
+import {
+  useOrderNotifications,
+  type OrderNotification,
+  type GeofenceAlertItem,
+  type GeofenceResolvedNotice,
+} from "@/hooks/useOrderNotifications";
 
 interface OrderNotificationsContextValue {
   notifications: OrderNotification[];
@@ -13,6 +18,9 @@ interface OrderNotificationsContextValue {
   lastFreightEventAt: number | null;
   notifPermission: NotificationPermission;
   requestNotifPermission: () => Promise<NotificationPermission>;
+  geofenceAlerts: GeofenceAlertItem[];
+  resolvedGeofenceNotices: GeofenceResolvedNotice[];
+  dismissGeofenceResolved: (id: string) => void;
 }
 
 const OrderNotificationsContext = createContext<OrderNotificationsContextValue | null>(null);

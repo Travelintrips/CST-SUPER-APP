@@ -1,6 +1,8 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState } from "react";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
+import { QueryState } from "@/components/ui/query-state";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +40,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { Bot, ExternalLink, SendHorizonal, Trash2, RefreshCw, MessageSquare, Mail, CheckCircle2, MinusCircle, ClipboardList, X, Search } from "lucide-react";
+import { ArrowLeft, Bot, ExternalLink, SendHorizonal, Trash2, RefreshCw, MessageSquare, Mail, CheckCircle2, MinusCircle, ClipboardList, X, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -290,6 +292,8 @@ export default function AiDraftsPage() {
               <Bot size={20} className="text-white" />
             </div>
             <div>
+              <Link href="/sales"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
               <h1 className="text-2xl font-bold text-foreground">AI Draft Quotations</h1>
               <p className="text-sm text-muted-foreground">
                 Draft penawaran yang dibuat otomatis dari email & WhatsApp masuk
@@ -326,17 +330,12 @@ export default function AiDraftsPage() {
           <TabsContent value="drafts" className="mt-4">
             <Card className="border-border bg-card">
               <CardContent className="pt-4">
-                {isLoading ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">Memuat...</div>
-                ) : drafts.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <Bot size={40} className="mx-auto mb-3 opacity-30" />
-                    <p className="font-medium">Belum ada AI draft</p>
-                    <p className="text-xs mt-1">
-                      Draft akan muncul otomatis saat ada email/WA berisi inquiry order
-                    </p>
-                  </div>
-                ) : (
+                <QueryState
+                  loading={isLoading}
+                  empty={!isLoading && drafts.length === 0}
+                  emptyMessage="Draft akan muncul otomatis saat ada email/WA berisi inquiry order"
+                  emptyIcon={<Bot size={40} className="opacity-30" />}
+                >
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -411,7 +410,7 @@ export default function AiDraftsPage() {
                       ))}
                     </TableBody>
                   </Table>
-                )}
+                </QueryState>
               </CardContent>
             </Card>
           </TabsContent>
@@ -482,19 +481,9 @@ export default function AiDraftsPage() {
                   {/* Date range */}
                   <div className="flex flex-wrap items-center gap-1.5 ml-auto">
                     <span className="text-xs text-muted-foreground">Dari</span>
-                    <Input
-                      type="date"
-                      value={logDateFrom}
-                      onChange={(e) => setLogDateFrom(e.target.value)}
-                      className={`h-7 text-xs w-32 px-2 ${!rangeValid ? "border-red-500" : ""}`}
-                    />
+                    <DatePicker value={logDateFrom} onChange={(v) => setLogDateFrom(v)} className={`h-7 text-xs w-32 px-2 ${!rangeValid ? "border-red-500" : ""}`} />
                     <span className="text-xs text-muted-foreground">s/d</span>
-                    <Input
-                      type="date"
-                      value={logDateTo}
-                      onChange={(e) => setLogDateTo(e.target.value)}
-                      className={`h-7 text-xs w-32 px-2 ${!rangeValid ? "border-red-500" : ""}`}
-                    />
+                    <DatePicker value={logDateTo} onChange={(v) => setLogDateTo(v)} className={`h-7 text-xs w-32 px-2 ${!rangeValid ? "border-red-500" : ""}`} />
                     {!rangeValid && (
                       <span className="text-xs text-red-500">Tanggal tidak valid</span>
                     )}
@@ -502,26 +491,22 @@ export default function AiDraftsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {isLogLoading ? (
-                  <div className="text-center py-8 text-muted-foreground text-sm">Memuat log...</div>
-                ) : intakeLog.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <ClipboardList size={40} className="mx-auto mb-3 opacity-30" />
-                    <p className="font-medium">Belum ada riwayat</p>
-                    <p className="text-xs mt-1">
-                      Log akan muncul setelah AI memproses email atau pesan WhatsApp pertama
-                    </p>
-                  </div>
-                ) : filteredLog.length === 0 ? (
-                  <div className="text-center py-10 text-muted-foreground">
-                    <ClipboardList size={32} className="mx-auto mb-2 opacity-20" />
-                    <p className="text-sm font-medium">Tidak ada hasil</p>
-                    <p className="text-xs mt-1">Coba ubah atau reset filter</p>
-                    <Button variant="outline" size="sm" onClick={resetLogFilters} className="mt-3 text-xs">
-                      Reset filter
-                    </Button>
-                  </div>
-                ) : (
+                <QueryState
+                  loading={isLogLoading}
+                  empty={!isLogLoading && intakeLog.length === 0}
+                  emptyMessage="Log akan muncul setelah AI memproses email atau pesan WhatsApp pertama"
+                  emptyIcon={<ClipboardList size={40} className="opacity-30" />}
+                >
+                  {filteredLog.length === 0 ? (
+                    <div className="text-center py-10 text-muted-foreground">
+                      <ClipboardList size={32} className="mx-auto mb-2 opacity-20" />
+                      <p className="text-sm font-medium">Tidak ada hasil</p>
+                      <p className="text-xs mt-1">Coba ubah atau reset filter</p>
+                      <Button variant="outline" size="sm" onClick={resetLogFilters} className="mt-3 text-xs">
+                        Reset filter
+                      </Button>
+                    </div>
+                  ) : (
                   <>
                     {hasLogFilters && (
                       <p className="text-xs text-muted-foreground mb-2">
@@ -585,7 +570,8 @@ export default function AiDraftsPage() {
                       </TableBody>
                     </Table>
                   </>
-                )}
+                  )}
+                </QueryState>
               </CardContent>
             </Card>
           </TabsContent>

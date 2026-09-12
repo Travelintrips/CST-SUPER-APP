@@ -1,4 +1,7 @@
 import { pgTable, serial, integer, text, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { mktRfqsTable } from "./mktRfqs";
+import { mktVendorQuotesTable } from "./mktVendorQuotes";
+import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
 
 export const activityLogsTable = pgTable("activity_logs", {
   id: serial("id").primaryKey(),
@@ -13,6 +16,10 @@ export const activityLogsTable = pgTable("activity_logs", {
   newValue: jsonb("new_value"),
   description: text("description"),
   ipAddress: text("ip_address"),
+  // Marketplace audit trail — Added Phase 1C (2026-07-02), Group D migration
+  mktRfqId: integer("mkt_rfq_id").references(() => mktRfqsTable.id, { onDelete: "set null" }),
+  mktVendorQuoteId: integer("mkt_vendor_quote_id").references(() => mktVendorQuotesTable.id, { onDelete: "set null" }),
+  mktPurchaseOrderId: integer("mkt_purchase_order_id").references(() => mktPurchaseOrdersTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

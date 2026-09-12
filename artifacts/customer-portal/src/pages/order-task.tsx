@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "wouter";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type OrderInfo = {
   id: number;
@@ -31,25 +32,27 @@ type TaskData = {
 
 type GpsState = "idle" | "loading" | "success" | "error";
 
-const STATUS_LABELS: Record<string, string> = {
-  order_confirmed: "Order Dikonfirmasi",
-  assigned_to_vendor: "Ditugaskan ke Vendor",
-  waiting_pickup: "Menunggu Pickup",
-  picked_up: "Sudah Pickup",
-  in_progress: "Dalam Perjalanan",
-  delivered: "Terkirim",
-  pod_uploaded: "POD Diunggah",
-  invoice_created: "Invoice Dibuat",
-  payment_pending: "Menunggu Pembayaran",
-  paid: "Sudah Dibayar",
-  completed: "Selesai",
-  cancelled: "Dibatalkan",
-};
-
 const GPS_ROLES = ["vendor", "driver", "transporter"];
 
 export default function OrderTaskPage() {
   const { token } = useParams<{ token: string }>();
+  const { t } = useLanguage();
+
+  const STATUS_LABELS: Record<string, string> = {
+    order_confirmed:    t("orderTask.statusOrderConfirmed", "Order Dikonfirmasi"),
+    assigned_to_vendor: t("orderTask.statusAssignedToVendor", "Ditugaskan ke Vendor"),
+    waiting_pickup:     t("orderTask.statusWaitingPickup", "Menunggu Pickup"),
+    picked_up:          t("orderTask.statusPickedUp", "Sudah Pickup"),
+    in_progress:        t("orderTask.statusInProgress", "Dalam Perjalanan"),
+    delivered:          t("orderTask.statusDelivered", "Terkirim"),
+    pod_uploaded:       t("orderTask.statusPodUploaded", "POD Diunggah"),
+    invoice_created:    t("orderTask.statusInvoiceCreated", "Invoice Dibuat"),
+    payment_pending:    t("orderTask.statusPaymentPending", "Menunggu Pembayaran"),
+    paid:               t("orderTask.statusPaid", "Sudah Dibayar"),
+    completed:          t("orderTask.statusCompleted", "Selesai"),
+    cancelled:          t("orderTask.statusCancelled", "Dibatalkan"),
+  };
+
   const [data, setData] = useState<TaskData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,7 +71,7 @@ export default function OrderTaskPage() {
     fetch(`/api/order-task/${token}`)
       .then(async (r) => {
         const d = await r.json() as TaskData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(d.error ?? t("orderTask.errorGeneral", "Terjadi kesalahan"));
         setData(d);
         setNewStatus(d.order.status);
       })
@@ -87,7 +90,7 @@ export default function OrderTaskPage() {
         body: JSON.stringify({ status: newStatus || undefined, notes: notes.trim() || undefined }),
       });
       const d = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok) throw new Error(d.error ?? "Gagal");
+      if (!res.ok) throw new Error(d.error ?? t("orderTask.errorFailed", "Gagal"));
       setSubmitted(true);
       const r2 = await fetch(`/api/order-task/${token}`);
       const d2 = await r2.json() as TaskData;
@@ -102,7 +105,7 @@ export default function OrderTaskPage() {
 
   const handleShareLocation = useCallback(() => {
     if (!navigator.geolocation) {
-      setGpsError("Browser tidak mendukung GPS");
+      setGpsError(t("orderTask.errorGpsNotSupported", "Browser tidak mendukung GPS"));
       return;
     }
     setGpsState("loading");
@@ -117,7 +120,7 @@ export default function OrderTaskPage() {
             body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
           });
           const d = await res.json() as { ok?: boolean; error?: string };
-          if (!res.ok) throw new Error(d.error ?? "Gagal kirim lokasi");
+          if (!res.ok) throw new Error(d.error ?? t("orderTask.errorSendLocation", "Gagal kirim lokasi"));
           setGpsState("success");
           setLastLocation({
             lat: latitude,
@@ -132,15 +135,15 @@ export default function OrderTaskPage() {
       (err) => {
         setGpsState("error");
         const msgs: Record<number, string> = {
-          1: "Akses lokasi ditolak. Izinkan GPS di browser.",
-          2: "Lokasi tidak tersedia.",
-          3: "Timeout mendapatkan lokasi.",
+          1: t("orderTask.errorGpsPermission", "Akses lokasi ditolak. Izinkan GPS di browser."),
+          2: t("orderTask.errorGpsUnavailable", "Lokasi tidak tersedia."),
+          3: t("orderTask.errorGpsTimeout", "Timeout mendapatkan lokasi."),
         };
-        setGpsError(msgs[err.code] ?? "Gagal mendapatkan lokasi");
+        setGpsError(msgs[err.code] ?? t("orderTask.errorGpsFailed", "Gagal mendapatkan lokasi"));
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
-  }, [token]);
+  }, [token, t]);
 
   if (loading) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -191,9 +194,9 @@ export default function OrderTaskPage() {
         {/* GPS Location Panel */}
         {showGps && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="font-semibold text-slate-800 mb-3">📍 Kirim Lokasi GPS</h2>
+            <h2 className="font-semibold text-slate-800 mb-3">{t("orderTask.gpsTitle", "📍 Kirim Lokasi GPS")}</h2>
             <p className="text-xs text-slate-500 mb-3">
-              Bagikan posisi Anda saat ini agar admin dapat memantau perjalanan secara real-time.
+              {t("orderTask.gpsDesc", "Bagikan posisi Anda saat ini agar admin dapat memantau perjalanan secara real-time.")}
             </p>
             <button
               type="button"
@@ -204,15 +207,15 @@ export default function OrderTaskPage() {
               {gpsState === "loading" ? (
                 <>
                   <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Mendapatkan lokasi...
+                  {t("orderTask.gpsGetting", "Mendapatkan lokasi...")}
                 </>
               ) : (
-                <>📡 {gpsState === "success" ? "Kirim Ulang Lokasi" : "Kirim Lokasi Sekarang"}</>
+                <>📡 {gpsState === "success" ? t("orderTask.gpsSendAgain", "Kirim Ulang Lokasi") : t("orderTask.gpsSendNow", "Kirim Lokasi Sekarang")}</>
               )}
             </button>
             {gpsState === "success" && lastLocation && (
               <div className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                ✅ Lokasi terkirim pukul {lastLocation.time} — ({lastLocation.lat.toFixed(5)}, {lastLocation.lng.toFixed(5)})
+                ✅ {t("orderTask.gpsSendNow", "Lokasi terkirim")} {lastLocation.time} — ({lastLocation.lat.toFixed(5)}, {lastLocation.lng.toFixed(5)})
                 <br />
                 <a
                   href={`https://maps.google.com/?q=${lastLocation.lat},${lastLocation.lng}`}
@@ -220,7 +223,7 @@ export default function OrderTaskPage() {
                   rel="noopener noreferrer"
                   className="text-emerald-600 underline mt-0.5 inline-block"
                 >
-                  Lihat di Google Maps
+                  {t("orderTask.gpsMapsLink", "Lihat di Google Maps")}
                 </a>
               </div>
             )}
@@ -234,10 +237,10 @@ export default function OrderTaskPage() {
 
         {/* Update form */}
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-4">
-          <h2 className="font-semibold text-slate-800">📝 Kirim Update</h2>
+          <h2 className="font-semibold text-slate-800">{t("orderTask.updateFormTitle", "📝 Kirim Update")}</h2>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700">Update Status</label>
+            <label className="text-sm font-medium text-slate-700">{t("orderTask.statusLabel", "Update Status")}</label>
             <select
               value={newStatus}
               onChange={e => setNewStatus(e.target.value)}
@@ -250,19 +253,19 @@ export default function OrderTaskPage() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700">Catatan Operasional</label>
+            <label className="text-sm font-medium text-slate-700">{t("orderTask.notesLabel", "Catatan Operasional")}</label>
             <textarea
               value={notes}
               onChange={e => setNotes(e.target.value)}
               rows={3}
-              placeholder="Contoh: Barang sudah diambil pukul 09.00, estimasi tiba besok..."
+              placeholder={t("orderTask.notesPh", "Contoh: Barang sudah diambil pukul 09.00, estimasi tiba besok...")}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
             />
           </div>
 
           {submitted && (
             <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              ✅ Update berhasil dikirim!
+              {t("orderTask.successMsg", "✅ Update berhasil dikirim!")}
             </div>
           )}
 
@@ -271,14 +274,14 @@ export default function OrderTaskPage() {
             disabled={submitting || (!notes.trim() && newStatus === order.status)}
             className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm transition-colors"
           >
-            {submitting ? "Mengirim..." : "Kirim Update"}
+            {submitting ? t("orderTask.submitting", "Mengirim...") : t("orderTask.submit", "Kirim Update")}
           </button>
         </form>
 
         {/* Timeline */}
         {data.updates.length > 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="font-semibold text-slate-800 mb-4">📅 Riwayat Update</h2>
+            <h2 className="font-semibold text-slate-800 mb-4">{t("orderTask.historyTitle", "📅 Riwayat Update")}</h2>
             <div className="relative pl-4">
               <div className="absolute left-1 top-0 bottom-0 w-0.5 bg-slate-100" />
               <div className="space-y-4">
@@ -295,7 +298,7 @@ export default function OrderTaskPage() {
                       {u.attachmentUrl && (
                         <a href={u.attachmentUrl} target="_blank" rel="noopener noreferrer"
                           className="text-xs text-blue-600 underline mt-1 block">
-                          📎 Lihat Lampiran
+                          {t("orderTask.attachmentLabel", "📎 Lihat Lampiran")}
                         </a>
                       )}
                       <p className="text-xs text-slate-400 mt-1">

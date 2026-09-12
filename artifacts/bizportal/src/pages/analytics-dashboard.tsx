@@ -51,7 +51,7 @@ const BADGE_COLORS: Record<string, string> = {
 
 export default function AnalyticsDashboardPage() {
   const [period, setPeriod] = useState("30d");
-  const { selectedCompany } = useCompany();
+  const { activeCompany: selectedCompany } = useCompany();
   const companyId = selectedCompany?.id;
 
   const { data: analytics, isLoading: loadingAnalytics, refetch } = useQuery({

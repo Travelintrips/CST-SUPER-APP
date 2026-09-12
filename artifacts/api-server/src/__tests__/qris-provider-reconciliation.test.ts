@@ -1,0 +1,1292 @@
+import { describe, expect, it } from "vitest";
+import { addBusinessDays, jakartaDateFromTimestamp } from "../lib/reconciliation/businessCalendar.js";
+import {
+  DEFAULT_QRIS_PROVIDER_RULES,
+  accountProviderRuleCatalogFromRows,
+  expectedQrisSettlementDate,
+  normalizeQrisProvider,
+  providerRulesByBankAccountFromRows,
+  resolveQrisProviderFromEvidence,
+} from "../lib/reconciliation/providerSettlementRules.js";
+import { calculateObservedDeduction, classifyBankMutationSource } from "../lib/reconciliation/qrisSettlement.js";
+import { generateQrisMutationBatchCandidates } from "../lib/reconciliation/qrisCandidateEngine.js";
+import { resolveActiveBankAccountId } from "../lib/reconciliation/bankAccountIdentity.js";
+
+describe("provider-aware QRIS dry-run reconciliation", () => {
+  it("resolves Friday, Saturday, and Sunday to Monday in Asia/Jakarta", () => {
+    expect(addBusinessDays("2026-08-07", 1)).toBe("2026-08-10");
+    expect(addBusinessDays("2026-08-08", 1)).toBe("2026-08-10");
+    expect(addBusinessDays("2026-08-09", 1)).toBe("2026-08-10");
+  });
+
+  it("skips consecutive holidays and preserves Jakarta date", () => {
+    expect(addBusinessDays("2026-08-14", 1, ["2026-08-17", "2026-08-18"])).toBe("2026-08-19");
+    expect(jakartaDateFromTimestamp("2026-08-06T17:30:00.000Z")).toBe("2026-08-07");
+  });
+
+  it("settles QRIS on the next calendar day, including weekends and holidays", () => {
+    expect(expectedQrisSettlementDate("2026-08-07T03:00:00.000Z", "mandiri_direct", ["2026-08-08"])).toBe("2026-08-08");
+    expect(expectedQrisSettlementDate("2026-08-08T03:00:00.000Z", "mandiri_direct")).toBe("2026-08-09");
+    expect(expectedQrisSettlementDate("2026-08-09T03:00:00.000Z", "gpn_qris")).toBe("2026-08-10");
+  });
+
+  it("keeps H+1 fallback when no configured provider rule exists", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 901, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-15T09:00:00+07:00",
+        expectedSettlementDate: "2026-08-16",
+        settlementRuleVersion: "default-v1",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 902, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-16", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+      providerRules: DEFAULT_QRIS_PROVIDER_RULES,
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.estimatedSettlementDate).toBe("2026-08-16");
+    expect(result[0]?.settlementRuleVersion).toBe("default-v1");
+  });
+
+  it("detects a QRIS payment from payment method when bank evidence is generic", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 911, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-07T09:00:00+07:00",
+        expectedSettlementDate: null,
+        settlementRuleVersion: null,
+        providerName: null,
+      }],
+      mutations: [{
+        id: 912, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-08", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "TRANSFER MASUK",
+      }],
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.estimatedSettlementDate).toBe("2026-08-08");
+    expect(result[0]?.paymentItems[0]?.expectedSettlementDate).toBe("2026-08-08");
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.reason).toContain("Provider unknown");
+  });
+
+  it("uses only QRIS payment method and payment date H-1 for the simplified candidate rule", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "payment_method_h_minus_one",
+      payments: [
+        {
+          id: 913,
+          companyId: 1,
+          bankAccountId: 999,
+          amount: 1_000_000,
+          method: "QRIS",
+          status: "paid",
+          paidAt: "2026-08-05T18:00:00+07:00",
+          expectedSettlementDate: "2026-08-20",
+          settlementRuleVersion: "stale-rule",
+          providerName: "paylabs",
+        },
+        {
+          id: 914,
+          companyId: 1,
+          bankAccountId: 999,
+          amount: 50_000,
+          method: "QRIS",
+          status: "paid",
+          paidAt: "2026-08-04T18:00:00+07:00",
+          expectedSettlementDate: "2026-08-05",
+          providerName: "mandiri_direct",
+        },
+      ],
+      mutations: [{
+        id: 915,
+        companyId: 1,
+        bankAccountId: 2,
+        amount: 1,
+        transactionDate: "2026-08-06",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "unknown",
+        providerName: null,
+        description: "TRANSFER MASUK",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 915,
+      status: "REVIEW",
+      providerCode: "unknown",
+      estimatedSettlementDate: "2026-08-06",
+      paymentItems: [{
+        paymentId: 913,
+        expectedSettlementDate: "2026-08-06",
+      }],
+    });
+    expect(result[0]?.reason).toContain("payment_method QRIS");
+  });
+
+  it("uses the Jakarta calendar date for a UTC timestamp near midnight", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "payment_method_h_minus_one",
+      payments: [{
+        id: 916,
+        companyId: 1,
+        bankAccountId: null,
+        amount: 200_000,
+        method: "QRIS",
+        status: "paid",
+        paidAt: "2026-08-20T17:30:00.000Z",
+        expectedSettlementDate: null,
+        settlementRuleVersion: null,
+        providerName: null,
+      }],
+      mutations: [{
+        id: 917,
+        companyId: 1,
+        bankAccountId: null,
+        amount: 200_000,
+        transactionDate: "2026-08-22",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "QRTRAVELI",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.estimatedSettlementDate).toBe("2026-08-22");
+    expect(result[0]?.paymentItems[0]).toMatchObject({
+      paymentId: 916,
+      paidAt: "2026-08-20T17:30:00.000Z",
+      paymentDate: "2026-08-21",
+      expectedSettlementDate: "2026-08-22",
+    });
+  });
+
+  it("selects the production account rule by effective settlement window", () => {
+    const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "LEGACY-MANDIRI-2",
+        effective_from: "2026-01-01",
+        effective_until: "2026-08-10",
+        settlement_delay_business_days: 1,
+      },
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "PROD-MANDIRI-SC-20260810-v1",
+        effective_from: "2026-08-10",
+        effective_until: null,
+        settlement_delay_business_days: 1,
+      },
+    ]);
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 903, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-11T09:00:00+07:00",
+        expectedSettlementDate: "2026-08-12",
+        settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 904, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-12", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+      accountProviderRuleCatalog,
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.settlementRuleVersion).toBe("PROD-MANDIRI-SC-20260810-v1");
+    expect(result[0]?.paymentItems[0]?.settlementRuleVersion)
+      .toBe("PROD-MANDIRI-SC-20260810-v1");
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
+  it("uses half-open effective windows and fails closed on overlaps", () => {
+    const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "v1",
+        effective_from: "2026-08-01",
+        effective_until: "2026-08-20",
+      },
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "v2",
+        effective_from: "2026-08-10",
+        effective_until: null,
+      },
+    ]);
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 907, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-11T09:00:00+07:00",
+        expectedSettlementDate: "2026-08-12",
+        settlementRuleVersion: "v2",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 908, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-12", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+      accountProviderRuleCatalog,
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.settlementRuleVersion).toBe("AMBIGUOUS_EFFECTIVE_WINDOW");
+    expect(result[0]?.paymentItems).toEqual([]);
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.reason).toContain("AMBIGUOUS_EFFECTIVE_WINDOW");
+  });
+
+  it("selects the next rule exactly on the exclusive end boundary", () => {
+    const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "v1",
+        effective_from: "2026-08-01",
+        effective_until: "2026-08-10",
+      },
+      {
+        bank_account_id: 2,
+        provider_code: "mandiri_direct",
+        rule_version: "v2",
+        effective_from: "2026-08-10",
+        effective_until: null,
+      },
+    ]);
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 909, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-09T09:00:00+07:00",
+        expectedSettlementDate: "2026-08-10",
+        settlementRuleVersion: "v2",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 910, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-10", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+      accountProviderRuleCatalog,
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.settlementRuleVersion).toBe("v2");
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
+  it("does not rewrite a candidate with a payment from another rule version", () => {
+    const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([{
+      bank_account_id: 2,
+      provider_code: "mandiri_direct",
+      rule_version: "PROD-MANDIRI-SC-20260810-v2",
+      effective_from: "2026-08-20",
+      effective_until: null,
+      settlement_delay_business_days: 1,
+    }]);
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 905, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-20T09:00:00+07:00",
+        expectedSettlementDate: "2026-08-21",
+        settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 906, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-21", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+      accountProviderRuleCatalog,
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.settlementRuleVersion).toBe("PROD-MANDIRI-SC-20260810-v2");
+    expect(result[0]?.paymentItems).toEqual([]);
+    expect(result[0]?.status).toBe("UNMATCHED");
+  });
+
+  it("keeps Mandiri and Paylabs separated and never guesses from QRIS alone", () => {
+    expect(normalizeQrisProvider("Mandiri Direct")).toBe("mandiri_direct");
+    expect(normalizeQrisProvider("Paylabs")).toBe("paylabs");
+    expect(normalizeQrisProvider("QRIS")).toBe("unknown");
+  });
+
+  it("falls back from a literal unknown provider field to bank evidence", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "unknown",
+      description: "QRTRAVELI SETTLEMENT",
+    })).toBe("gpn_qris");
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "unknown",
+      providerOrderId: "PAYLABS-SETTLEMENT-123",
+      description: "QRIS",
+    })).toBe("paylabs");
+  });
+
+  it("resolves Mandiri even when the statement only adds SA/KR markers", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "Bank Mandiri",
+      description: "SA 123456 KR 1640006707220",
+    })).toBe("mandiri_direct");
+  });
+
+  it("resolves an external account number to the internal account ID", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts)).toBe(17);
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "17",
+    }, accounts)).toBe(17);
+  });
+
+  it("matches an external payment account number to an internal mutation account ID", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+    ];
+    const paymentAccountId = resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts);
+    const mutationAccountId = resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "17",
+    }, accounts);
+
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 101, companyId: 1, bankAccountId: paymentAccountId, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 102, companyId: 1, bankAccountId: mutationAccountId, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(paymentAccountId).toBe(17);
+    expect(mutationAccountId).toBe(17);
+    expect(result[0]).toMatchObject({
+      status: "MATCHED",
+      bankAccountId: 17,
+      paymentItems: [{ paymentId: 101 }],
+    });
+  });
+
+  it("retains an out-of-tolerance deduction rate as review-only audit evidence", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 110, companyId: 1, bankAccountId: 17, amount: 100,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 111, companyId: 1, bankAccountId: 17, amount: 2_000,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]).toMatchObject({
+      status: "REVIEW",
+      observedDeduction: -1_900,
+      effectiveDeductionRate: -19,
+      paymentItems: [{ paymentId: 110 }],
+    });
+  });
+
+  it("enforces the H-1 settlement cohort and excludes the next-day payment", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "H-MINUS-1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [
+        {
+          id: 111, companyId: 1, bankAccountId: 17, amount: 100_000,
+          method: "QRIS", status: "paid", paidAt: "2026-06-26",
+          expectedSettlementDate: "2026-06-27", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+          bookingDate: "2026-06-26",
+        },
+        {
+          id: 112, companyId: 1, bankAccountId: 17, amount: 200_000,
+          method: "QRIS", status: "paid", paidAt: "2026-06-27",
+          expectedSettlementDate: "2026-06-28", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+          bookingDate: "2026-06-27",
+        },
+      ],
+      mutations: [{
+        id: 113, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-06-27", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([111]);
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
+  it("uses settlement date rather than booking date for H-1 and rejects payment after settlement", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "H-MINUS-1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [
+        {
+          id: 114, companyId: 1, bankAccountId: 17, amount: 100_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-23",
+          paymentDate: "2026-08-23",
+          bookingDate: "2026-08-26",
+          expectedSettlementDate: "2026-08-24", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+        },
+        {
+          id: 115, companyId: 1, bankAccountId: 17, amount: 200_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-25",
+          paymentDate: "2026-08-25",
+          bookingDate: "2026-08-23",
+          expectedSettlementDate: "2026-08-24", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+        },
+      ],
+      mutations: [{
+        id: 116, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-08-24", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([114]);
+    expect(result[0]?.paymentItems[0]?.bookingDate).toBe("2026-08-26");
+  });
+
+  it("uses paidAt for the payment timeline even when legacy aliases disagree", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "PAID-AT-CANONICAL",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [{
+        id: 117,
+        companyId: 1,
+        bankAccountId: 17,
+        amount: 100_000,
+        method: "QRIS",
+        status: "paid",
+        paidAt: "2026-08-23",
+        paymentDate: "2026-08-20",
+        bookingDate: "2026-08-26",
+        expectedSettlementDate: "2026-08-24",
+        providerName: "paylabs",
+        settlementRuleVersion: "PAID-AT-CANONICAL",
+      }],
+      mutations: [{
+        id: 118,
+        companyId: 1,
+        bankAccountId: 17,
+        amount: 99_300,
+        transactionDate: "2026-08-24",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs",
+        description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.paymentItems[0]).toMatchObject({
+      paymentId: 117,
+      paymentDate: "2026-08-23",
+    });
+  });
+
+  it("does not match a payment from another company even when amount/provider/date fit", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 103, companyId: 2, bankAccountId: 17, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 104, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("UNMATCHED");
+    expect(result[0]?.paymentItems).toEqual([]);
+  });
+
+  it("does not match a payment from another provider even when amount/company/date fit", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 105, companyId: 1, bankAccountId: 17, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 106, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("REVIEW");
+    // Provider evidence is an enrichment/review signal, not a reason to hide
+    // an otherwise dimensionally matching QRIS payment.
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([105]);
+    expect(result[0]?.reason).toContain("Provider pada payment tidak cocok");
+  });
+
+  it("fails closed when a bank account reference is missing or ambiguous", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+      { id: 18, companyId: 1, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts)).toBeNull();
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: null,
+    }, accounts)).toBeNull();
+  });
+
+  it("does not use a global or another company's account for a scoped reference", () => {
+    const accounts = [
+      { id: 17, companyId: null, accountNumber: "1640006707220" },
+      { id: 18, companyId: 2, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      sourceAccount: "1640006707220",
+    }, accounts)).toBeNull();
+  });
+
+  it("does not treat missing bank-account mapping as a wildcard", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 1, companyId: 1, bankAccountId: null, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 2, companyId: 1, bankAccountId: null, amount: 100_000,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.status).toBe("UNMATCHED");
+    expect(result[0]?.reason).toContain("Dimensi company dan bank account wajib tersedia");
+  });
+
+  it("does not create a QRIS audit candidate for an ordinary inbound invoice", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 24, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "BANK_TRANSFER", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 25, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
+        direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "030/INVOICE-CST/VII MCM InhouseTrf CS-CS",
+      }],
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("keeps QRTRAVELI bank evidence eligible for the QRIS audit path", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 26, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "unknown",
+      }],
+      mutations: [{
+        id: 27, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
+        direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "7177632488799999999 QRTRAVELI",
+      }],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([26]);
+    expect(result[0]?.reason).toContain("Provider pada payment tidak cocok");
+  });
+
+  it("maps QRTRAVELI to the only configured account provider", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 260, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 270, companyId: 10, bankAccountId: 77, amount: 149_000,
+        transactionDate: "2026-08-07",
+        direction: "IN", source: "google_sheet",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS",
+        description: "7177632488799999999 QRTRAVELI",
+      }],
+      accountProviderRules: {
+        "77": {
+          mandiri_direct: {
+            providerCode: "mandiri_direct",
+            settlementDelayBusinessDays: 1,
+            matchWindowBusinessDays: 1,
+            maxEffectiveDeductionRate: 0.1,
+          },
+        },
+      },
+    });
+    expect(result[0]?.providerCode).toBe("gpn_qris");
+    expect(result[0]?.providerDetectionSource).toBe("mutation_description");
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
+  it("uses the compatible owner rule instead of the broad GPN default", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 261, companyId: 1, bankAccountId: 17, amount: 200_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13",
+        settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+        providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 271, companyId: 1, bankAccountId: 17, amount: 190_000,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS", description: "7177632488799999999 QRTRAVELI",
+      }],
+      accountProviderRules: {
+        "17": {
+          mandiri_direct: {
+            providerCode: "mandiri_direct",
+            settlementDelayBusinessDays: 1,
+            matchWindowBusinessDays: 1,
+            maxEffectiveDeductionRate: 0.01,
+            ruleVersion: "PROD-MANDIRI-SC-20260810-v1",
+          },
+        },
+      },
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result[0]?.providerCode).toBe("gpn_qris");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([261]);
+    expect(result[0]?.settlementRuleVersion).toBe("PROD-MANDIRI-SC-20260810-v1");
+    expect(result[0]?.effectiveDeductionRate).toBeCloseTo(0.05, 6);
+    expect(result[0]?.status).toBe("REVIEW");
+  });
+
+  it("matches QRTRAVELI payments when their canonical provider is standardized", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        {
+          id: 361, companyId: 1, bankAccountId: 17, amount: 300_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-15",
+          expectedSettlementDate: "2026-08-16", providerName: "mandiri_direct",
+        },
+        {
+          id: 364, companyId: 1, bankAccountId: 17, amount: 200_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-15",
+          expectedSettlementDate: "2026-08-16", providerName: "mandiri_direct",
+        },
+      ],
+      mutations: [{
+        id: 365, companyId: 1, bankAccountId: 17, amount: 496_500,
+        transactionDate: "2026-08-16", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "gpn_qris", description: "QRTRAVELI SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([361, 364]);
+    expect(result[0]?.grossAmount).toBe(500_000);
+    expect(result[0]?.netAmount).toBe(496_500);
+  });
+
+  it("inherits provider defaults when an account rule omits optional tolerances", () => {
+    const rules = providerRulesByBankAccountFromRows([
+      {
+        bank_account_id: 17,
+        provider_code: "paylabs",
+        rule_version: "ACCOUNT-RULE-v1",
+        settlement_delay_business_days: 1,
+        match_window_business_days: 1,
+        max_effective_deduction_rate: 0.01,
+      },
+    ]);
+
+    expect(rules["17"]?.paylabs).toMatchObject({
+      providerCode: "paylabs",
+      bankAccountId: 17,
+      ruleVersion: "ACCOUNT-RULE-v1",
+      absoluteVarianceTolerance: 10_000,
+      percentageVarianceTolerance: 2,
+    });
+  });
+
+  it("calculates gross 10m versus bank credit 9.93m as 70k deduction", () => {
+    expect(calculateObservedDeduction(10_000_000, 9_930_000)).toEqual({
+      gross: 10_000_000,
+      bankCredit: 9_930_000,
+      observedDeduction: 70_000,
+      effectiveDeductionRate: 0.007,
+    });
+  });
+
+  it("uses gross payment and never subtracts customer PPN from reconciliation", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 11, companyId: 10, amount: 10_000_000, taxAmount: 1_100_000,
+        bankAccountId: 77,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 12, companyId: 10, transactionDate: "2026-08-07", amount: 9_930_000,
+        bankAccountId: 77,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+    expect(result[0]?.grossAmount).toBe(10_000_000);
+    expect(result[0]?.observedDeduction).toBe(70_000);
+  });
+
+  it("does not use synthetic mutations and keeps unknown provider in review", () => {
+    expect(classifyBankMutationSource("sport_center")).toBe("synthetic");
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 1, companyId: 10, amount: 10_000_000, method: "QRIS",
+        bankAccountId: 77,
+        status: "paid", paidAt: "2026-08-06T02:00:00.000Z",
+        expectedSettlementDate: "2026-08-07", providerName: "unknown",
+      }],
+      mutations: [{
+        id: 5, companyId: 10, transactionDate: "2026-08-07", amount: 9_930_000,
+        bankAccountId: 77,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS", description: "QRIS SETTLEMENT",
+      }],
+    });
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.providerCode).toBe("unknown");
+  });
+
+  it("supports one bank mutation for many payments, excludes reconciled payments, and is rerun-safe", () => {
+    const base = {
+      payments: [
+        { id: 1, companyId: 10, amount: 5_000_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", paymentNumber: "PAY-001", bookingId: 101, bookingNumber: "BK-001", paymentDate: "2026-08-06" },
+        { id: 2, companyId: 10, amount: 4_930_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", paymentNumber: "PAY-002", bookingId: 102, bookingNumber: "BK-002", paymentDate: "2026-08-06" },
+        { id: 3, companyId: 10, amount: 70_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", alreadyReconciled: true },
+      ],
+      mutations: [{
+        id: 8, companyId: 10, transactionDate: "2026-08-07", amount: 9_860_000,
+        bankAccountId: 77,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    } as const;
+    const first = generateQrisMutationBatchCandidates(base);
+    expect(first[0]?.status).toBe("MATCHED");
+    expect(first[0]?.paymentItems.map((item) => item.paymentId)).toEqual([1, 2]);
+    expect(first[0]?.paymentItems).toMatchObject([
+      { paymentId: 1, paymentNumber: "PAY-001", bookingId: 101, bookingNumber: "BK-001", paymentDate: "2026-08-06" },
+      { paymentId: 2, paymentNumber: "PAY-002", bookingId: 102, bookingNumber: "BK-002", paymentDate: "2026-08-06" },
+    ]);
+    expect(generateQrisMutationBatchCandidates({ ...base, existingMutationIds: [8] })).toEqual([]);
+  });
+
+  it("keeps a posted canonical payment out of a supplemental late-arriving batch", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        {
+          id: 25, companyId: 1, amount: 100_000, bankAccountId: 17,
+          method: "QRIS", status: "paid", paidAt: "2026-08-12",
+          expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+          settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+          alreadyReconciled: true,
+        },
+        {
+          id: 26, companyId: 1, amount: 200_000, bankAccountId: 17,
+          method: "QRIS", status: "paid", paidAt: "2026-08-12",
+          expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+          settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+        },
+      ],
+      mutations: [{
+        id: 227, companyId: 1, bankAccountId: 17, transactionDate: "2026-08-13",
+        amount: 200_000, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([26]);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).not.toContain(25);
+  });
+
+  it("does not mix same company/provider/date payments across bank accounts", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        { id: 21, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+        { id: 22, companyId: 10, bankAccountId: 88, amount: 200_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+      ],
+      mutations: [{
+        id: 23, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 100_000,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs",
+      }],
+    });
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.bankAccountId).toBe(77);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([21]);
+  });
+
+  it("does not auto-match an arbitrary subset when multiple combinations fit", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        { id: 31, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+        { id: 32, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+        { id: 33, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+      ],
+      mutations: [{
+        id: 34, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 199_300,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs",
+      }],
+    });
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.paymentItems).toHaveLength(3);
+    // The natural batch is all three payments; the engine must not select two
+    // merely because their effective rate happens to be acceptable.
+    expect(result[0]?.grossAmount).toBe(300_000);
+    expect(result[0]?.reason).toContain("AMBIGUOUS_PAYMENT_PARTITION");
+  });
+
+  it("keeps a confirmed H-1 batch visible when its net amount differs", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [{
+        id: 35,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 250_000,
+        method: "QRIS",
+        status: "confirmed",
+        paidAt: "2026-08-20T09:00:00+07:00",
+        canonicalMdrAmount: 0,
+        expectedSettlementDate: null,
+      }],
+      mutations: [{
+        id: 36,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 218_460,
+        transactionDate: "2026-08-21",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 36,
+      status: "UNMATCHED",
+      paymentItems: [{ paymentId: 35, paymentStatus: "confirmed" }],
+    });
+    expect(result[0]?.reason).toContain("netto yang dihitung 250000.00");
+    expect(result[0]?.reason).toContain("218460.00");
+  });
+
+  it("holds same-booking duplicate QRIS payments out of automatic settlement", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [
+        {
+          id: 40,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 30_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T12:58:19.716Z",
+          canonicalMdrAmount: 210,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 554,
+          bookingNumber: "SC-0494",
+        },
+        {
+          id: 41,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 30_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T05:00:00.000Z",
+          canonicalMdrAmount: 210,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 554,
+          bookingNumber: "SC-0494",
+        },
+        {
+          id: 42,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 350_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T10:00:00.000Z",
+          canonicalMdrAmount: 2_450,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 551,
+          bookingNumber: "SC-0491",
+        },
+      ],
+      mutations: [{
+        id: 43,
+        companyId: 1,
+        bankAccountId: 2,
+        amount: 377_340,
+        transactionDate: "2026-08-28",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 43,
+      status: "REVIEW",
+      grossAmount: 380_000,
+      paymentItems: [
+        { paymentId: 40, bookingNumber: "SC-0494" },
+        { paymentId: 42, bookingNumber: "SC-0491" },
+      ],
+    });
+    expect(result[0]?.reason).toContain("DUPLICATE_BOOKING_PAYMENT");
+    expect(result[0]?.reason).toContain("Payment ID 41");
+  });
+
+  it("retains QRIS bank evidence when the exact H-1 source payment is missing", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [{
+        id: 37,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 250_000,
+        method: "QRIS",
+        status: "confirmed",
+        // This payment belongs to the 23rd settlement cohort, not the 24th.
+        paidAt: "2026-08-22T09:00:00+07:00",
+        canonicalMdrAmount: 0,
+        expectedSettlementDate: null,
+      }],
+      mutations: [{
+        id: 38,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 218_460,
+        transactionDate: "2026-08-24",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        description: "TRAVELI QRTRAVELI SETTLEMENT",
+      }],
+    });
+
+    expect(result).toMatchObject([{
+      mutationId: 38,
+      estimatedSettlementDate: "2026-08-24",
+      status: "UNMATCHED",
+      paymentItems: [],
+    }]);
+    expect(result[0]?.reason).toContain("paid_at 2026-08-23");
+  });
+
+  it("keeps negative observed deduction out of MATCHED", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 41, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS",
+        status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 42, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 101_000,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs",
+      }],
+    });
+    expect(result[0]?.status).not.toBe("MATCHED");
+    expect(result[0]?.reason).toContain("NEGATIVE_OBSERVED_DEDUCTION");
+  });
+
+  it("keeps same-provider/date multiple settlements in review without references", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 51, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS",
+        status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [
+        { id: 52, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 99_300, direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation", providerName: "paylabs" },
+        { id: 53, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 0, direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation", providerName: "paylabs" },
+      ],
+    });
+    expect(result.every((candidate) => candidate.status === "REVIEW")).toBe(true);
+    expect(result.every((candidate) => candidate.reason.includes("AMBIGUOUS_PAYMENT_PARTITION"))).toBe(true);
+  });
+
+  it("derives settlement metadata from the QRIS payment date in the strict runtime contract", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      payments: [{
+        id: 91, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: null, settlementRuleVersion: null,
+        providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 92, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07",
+        amount: 99_300, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      status: "REVIEW",
+      estimatedSettlementDate: "2026-08-07",
+      settlementRuleVersion: "default-v1",
+      paymentItems: [{
+        paymentId: 91,
+        expectedSettlementDate: "2026-08-07",
+      }],
+    });
+  });
+
+  it("recomputes strict H+1 from the payment time when legacy metadata is stale", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "OWNER-PAYLABS-V1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [
+        {
+          id: 101, companyId: 10, bankAccountId: 77, amount: 100_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-21T09:00:00+07:00",
+          // A historical mirror was wrongly stamped with the 24th. It belongs
+          // to the 22nd H+1 cohort, not the mutation below.
+          expectedSettlementDate: "2026-08-24", settlementRuleVersion: "OWNER-PAYLABS-V1",
+          providerName: "paylabs",
+        },
+        {
+          id: 102, companyId: 10, bankAccountId: 77, amount: 100_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-23T09:00:00+07:00",
+          expectedSettlementDate: "2026-08-24", settlementRuleVersion: "OWNER-PAYLABS-V1",
+          providerName: "paylabs",
+        },
+      ],
+      mutations: [{
+        id: 103, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-24",
+        amount: 99_300, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation", providerName: "paylabs",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      status: "MATCHED",
+      grossAmount: 100_000,
+      estimatedSettlementDate: "2026-08-24",
+    });
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([102]);
+  });
+
+  it("matches strict runtime metadata only with an explicit provider rule", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "OWNER-PAYLABS-V1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [{
+        id: 93, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07",
+        settlementRuleVersion: "OWNER-PAYLABS-V1",
+        providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 94, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07",
+        amount: 99_300, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.settlementRuleVersion).toBe("OWNER-PAYLABS-V1");
+  });
+
+  it("keeps a cross-date partial settlement reviewable without calling it an ambiguous subset", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 81, companyId: 10, bankAccountId: 77, amount: 1_430_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "mandiri_direct",
+      }, {
+        id: 80, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-05",
+        expectedSettlementDate: "2026-08-06", providerName: "mandiri_direct",
+      }],
+      mutations: [
+        {
+          id: 82, companyId: 10, bankAccountId: 77, amount: 933_420,
+          transactionDate: "2026-08-07", direction: "IN", source: "bank_import",
+          sourceClassification: "actual_bank_mutation",
+          providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+        },
+        {
+          id: 83, companyId: 10, bankAccountId: 77, amount: 496_580,
+          transactionDate: "2026-08-08", direction: "IN", source: "bank_import",
+          sourceClassification: "actual_bank_mutation",
+          providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+        },
+      ],
+    });
+    expect(result.map((candidate) => candidate.status)).toEqual(["REVIEW", "REVIEW"]);
+    expect(result.every((candidate) => candidate.reason.includes("SPLIT_SETTLEMENT_REVIEW"))).toBe(true);
+    expect(result.every((candidate) => candidate.paymentItems.map((item) => item.paymentId).join(",") === "81")).toBe(true);
+  });
+
+  it("allows a same-day partition only when the settlement reference is shared", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        { id: 71, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", providerReference: "batch-a" },
+        { id: 72, companyId: 10, bankAccountId: 77, amount: 200_000, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", providerReference: "batch-b" },
+      ],
+      mutations: [
+        { id: 73, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 99_300, direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation", providerName: "paylabs", settlementReference: "batch-a" },
+        { id: 74, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 198_600, direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation", providerName: "paylabs", settlementReference: "batch-b" },
+      ],
+    });
+    expect(result.map((candidate) => candidate.status)).toEqual(["MATCHED", "MATCHED"]);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([71]);
+    expect(result[1]?.paymentItems.map((item) => item.paymentId)).toEqual([72]);
+  });
+
+  it("uses provider evidence, not the receiving bank name, and keeps unknown in review", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 61, companyId: 10, bankAccountId: 77, amount: 100_000, method: "QRIS",
+        status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 62, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07", amount: 99_300,
+        direction: "IN", source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS", description: "MANDIRI DIRECT SETTLEMENT",
+      }],
+    });
+    expect(result[0]?.providerCode).toBe("mandiri_direct");
+    expect(result[0]?.providerDetectionSource).toBe("mutation_description");
+    expect(result[0]?.status).toBe("REVIEW");
+  });
+});

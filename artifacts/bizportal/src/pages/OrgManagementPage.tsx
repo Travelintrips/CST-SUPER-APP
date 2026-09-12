@@ -18,6 +18,8 @@ import {
   RefreshCw, Shield, AlertCircle,
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
+import { Link } from "wouter";
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -317,7 +319,7 @@ function GenericTab<T extends { id: number; companyId: number; name: string; cod
           <div className="grid gap-3 py-2">
             <div>
               <Label className="text-xs">Perusahaan *</Label>
-              <Select value={String(dialog.item.companyId ?? "")} onValueChange={v => setDialog(d => ({ ...d, item: { ...d.item, companyId: Number(v) } }))}>
+              <Select value={dialog.item.companyId ? String(dialog.item.companyId) : ""} onValueChange={v => setDialog(d => ({ ...d, item: { ...d.item, companyId: Number(v) } }))}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih perusahaan" /></SelectTrigger>
                 <SelectContent>
                   {companies.map(c => <SelectItem key={c.id} value={String(c.id)}>{c.companyCode} — {c.companyName}</SelectItem>)}
@@ -552,6 +554,8 @@ export default function OrgManagementPage() {
             <Network className="h-6 w-6 text-indigo-400" />
           </div>
           <div>
+            <Link href="/settings"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold tracking-tight">Manajemen Organisasi</h1>
             <p className="text-muted-foreground text-sm mt-0.5">
               Kelola struktur perusahaan: Perusahaan → Cabang → Divisi → Departemen → Seksi/Tim

@@ -32,5 +32,31 @@ export async function runAuditLogMigration(): Promise<void> {
     CREATE INDEX IF NOT EXISTS erp_audit_logs_ref_idx       ON erp_audit_logs (reference_id);
   `);
 
-  console.log("[auditLogMigration] erp_audit_logs table ready");
+  // ── Append-only trigger: block UPDATE dan DELETE ──────────────────────────
+  // CREATE OR REPLACE tidak tersedia untuk trigger, jadi gunakan DROP IF EXISTS lalu CREATE.
+  // Idempoten: aman dipanggil berulang kali.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION erp_audit_log_immutability()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION
+        'erp_audit_logs: UPDATE dan DELETE tidak diizinkan. '
+        'Audit trail bersifat append-only. '
+        '(action=%, module=%, id=%)',
+        OLD.action, OLD.module, OLD.id;
+    END;
+    $$
+  `);
+
+  await db.execute(sql`
+    DROP TRIGGER IF EXISTS erp_audit_log_guard ON erp_audit_logs
+  `);
+
+  await db.execute(sql`
+    CREATE TRIGGER erp_audit_log_guard
+      BEFORE UPDATE OR DELETE ON erp_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION erp_audit_log_immutability()
+  `);
+
+  console.log("[auditLogMigration] erp_audit_logs table ready (append-only trigger installed)");
 }

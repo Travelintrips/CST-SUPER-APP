@@ -1,26 +1,327 @@
+import { randomBytes, randomUUID } from "crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { db, productsTable, productCategoryMapTable, productCategoriesTable, portalCustomersTable, portalCustomerServicesTable, portalContentTable, accountingSettingsTable, salesDocumentsTable, salesDocumentLinesTable, customersTable, logisticOrdersTable, suppliersTable, logisticOrderRfqsTable, logisticOrderQuotesTable, quoteRequestsTable, userProfilesTable, identityDocumentsTable, ocrResultsTable, vendorProfilesTable, driverProfilesTable, employeeProfilesTable, onboardingApprovalsTable, waOtpCodesTable } from "@workspace/db";
-import { eq, inArray, and, sql, desc, gte, lte, ilike, or } from "drizzle-orm";
+import { LOGISTICS_SUBCATEGORIES as LOGISTICS_SUBCATEGORIES_FALLBACK } from "@workspace/logistics-constants";
+import { rateLimit, ipKeyGenerator, type ValueDeterminingMiddleware } from "express-rate-limit";
+const keyGen: ValueDeterminingMiddleware<string> = (req) => ipKeyGenerator(req.ip ?? "127.0.0.1");
+import { db, productsTable, productCategoryMapTable, productCategoriesTable, portalCustomersTable, portalCustomerServicesTable, portalContentTable, accountingSettingsTable, vendorMiniFormLinksTable, vendorMiniFormSubmissionsTable, vendorCatalogItemsTable, productTemplatesTable, serviceTemplatesTable, vendorPerformanceTable, vendorNotificationsTable, vendorCatalogSubmissionsTable, notificationLogsTable, portalCustomerProfilesTable, supplierReviewsTable, mktPurchaseOrdersTable, mktRfqsTable, mktVendorQuotesTable, portalProductOrdersTable, suppliersTable, vendorProfilesTable, userProfilesTable } from "@workspace/db";
+import { evaluateReviewEligibility } from "../lib/services/vendorReviewGuard.js";
+import { deleteFromSupabase, uploadToSupabase } from "../lib/supabaseStorage.js";
+import { invalidateTokenCache, SERVICE_SCHEMAS } from "./vendorMiniForm";
+import { eq, inArray, and, ne, isNull, sql, desc, gte, lt, lte, ilike, or, asc } from "drizzle-orm";
+import { productMediaTable } from "@workspace/db";
 import { ObjectStorageService } from "../lib/objectStorage.js";
-import { sendWhatsApp } from "../lib/fonnte";
+import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from "../lib/uploadValidation.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
-import { sendMail, isSmtpConfigured } from "../lib/mailer";
-import { requirePortalAuth, requirePortalAdmin, type PortalAuthReq } from "../lib/supabaseAuth";
+import { getAppConfig } from "../lib/appConfig.js";
+import {
+  canSupplierAppearInMarketplace,
+  setSupplierVerification,
+  updateMarketplaceStatus,
+  verifySupplier,
+} from "../lib/services/supplierStatusService.js";
+import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
+import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, revokePortalSession, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
+import { consumeSafeDevResetArtifact, isSafeDevResetCaptureEnabled } from "../lib/safeDevResetCapture.js";
+import { writeAuditLog } from "../lib/auditLog.js";
 import { requireClerkUser } from "../lib/requireAdmin";
-import { broadcastToAdmins } from "../lib/sseManager";
+import { isCatalogItemPublic, catalogPublicConditions } from "../lib/catalogVisibility.js";
+import { resolveTemplate, hasInCodeTemplate } from "@workspace/product-templates";
+import {
+  listPublicMarketplaceItems,
+  getCatalogItemPublic,
+  getMarketplaceItemDetail,
+  getRelatedItems,
+  getSimilarItems,
+  getSameProvinceItems,
+  getVendorPublicProfile,
+  listVendorCatalogPublic,
+  compareVendorCatalog,
+  listProductTemplates,
+  listServiceTemplates,
+  getLinkedSupplier,
+  listVendorOwnCatalog,
+  deleteVendorCatalogMedia,
+  listVendorCatalogSubmissions,
+  getMarketplaceStats,
+  uploadVendorCatalogMedia,
+  normalizeServiceCategory,
+  SERVICE_CATEGORY_LABELS,
+  getHeroCategoryTiles,
+} from "../lib/services/portalVendorCatalogService.js";
+import { normalizeMarketplaceStockStatus } from "../lib/catalogNormalization.js";
+import { broadcastToAdmins, broadcastToPortal } from "../lib/sseManager";
+import { NotificationService } from "../lib/services/notificationService.js";
+import {
+  getCustomerPortalUnreadCount,
+  listCustomerPortalNotifications,
+  markAllCustomerPortalNotificationsRead,
+  markCustomerPortalNotificationRead,
+} from "../lib/customerPortalNotificationService.js";
+import {
+  registerCustomerPortalConnection,
+  unregisterCustomerPortalConnection,
+} from "../lib/sseManager.js";
+import {
+  listApprovals,
+  processApproval,
+  getApprovalAuditTrail,
+  getApprovalStats,
+  getApprovalIdentityDocs,
+} from "../lib/services/portalApprovalService.js";
+import { listCustomers, getCustomerStats, updatePortalCustomer, type PortalAccountStatus } from "../lib/services/portalCustomerService.js";
+import {
+  assignPortalCustomerMembership,
+  deactivatePortalCustomerMembership,
+  listPortalCustomerMemberships,
+  PortalCompanyMembershipError,
+} from "../lib/services/portalCompanyMembershipService.js";
+import {
+  configureCustomerOrganization,
+  getPortalCustomerOrganizationState,
+  listCustomerPortalCompanies,
+  listPendingPortalCompanyRequests,
+  reviewPortalCompanyRequest,
+  PortalCustomerOrganizationError,
+} from "../lib/services/portalCustomerOrganizationService.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
+import { getErpStats } from "../lib/services/portalStatsService.js";
+import { getContent, updateContent } from "../lib/services/portalContentService.js";
+import {
+  listAdminProducts,
+  listProductCategories,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  createService,
+  updateService,
+  deleteService,
+} from "../lib/services/portalProductService.js";
+import {
+  listVendors,
+  createVendor,
+  updateVendor,
+  deleteVendor,
+  listVendorFormLinks,
+  createVendorFormLink,
+  patchVendorFormLink,
+  deleteVendorFormLink,
+  listVendorFormSubmissions,
+} from "../lib/services/portalVendorService.js";
+import {
+  getTruckingRates,
+  setTruckingRates,
+  getFreightRates,
+  setFreightRates,
+  getCalculatorRates,
+  getCalculatorRatesV2,
+} from "../lib/services/portalRateService.js";
+import { submitCatalogInquiry } from "../lib/services/portalInquiryService.js";
+import { resolveVendorSupplierId } from "../lib/services/portalVendorProfileService.js";
+import {
+  FeaturedProductError,
+  listFeaturedPackages,
+  createFeaturedPackage,
+  updateFeaturedPackage,
+  deactivateFeaturedPackage,
+  createFeaturedRequest,
+  activateInternalFeaturedProduct,
+  listFeaturedRequestsForVendor,
+  getFeaturedRequestDetailForVendor,
+  submitPaymentProofForVendor,
+  cancelFeaturedRequestByVendor,
+  listFeaturedRequests,
+  getFeaturedRequestDetail,
+  approveFeaturedRequest,
+  rejectFeaturedRequest,
+  verifyFeaturedPayment,
+  activateFeaturedProduct,
+  cancelFeaturedProduct,
+  reorderFeaturedProducts,
+  listFeaturedProductsForDisplay,
+} from "../lib/services/marketplaceFeaturedProductService.js";
+import { scanFeaturedIntegrity, repairFeaturedIntegrity } from "../lib/services/marketplaceFeaturedRepairService.js";
+import { getPortalDashboardStats } from "../lib/services/portalDashboardService.js";
+// isMarketplaceNewPipelineEnabled, createMktRfqEntry, linkMktRfqToLegacy
+// moved to portalMarketplaceService.ts
+import {
+  submitMarketplaceQuote,
+  createMarketplaceOrder,
+} from "../lib/services/portalMarketplaceService.js";
+import {
+  listLogisticAdminServices,
+  createLogisticAdminService,
+  updateLogisticAdminService,
+  deleteLogisticAdminService,
+} from "../lib/services/portalLogisticAdminService.js";
 import multer from "multer";
-import { randomUUID } from "crypto";
-import { compressImageBuffer } from "../lib/imageCompress.js";
-import bcrypt from "bcryptjs";
-import { signPortalJwt } from "../lib/portalJwt.js";
-import OpenAI from "openai";
+import { verifyPortalJwt } from "../lib/portalJwt.js";
+import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
+import {
+  getOnboardingStatus,
+  runKtpOcr,
+  uploadOnboardingDoc,
+  completeOnboarding,
+  OnboardingServiceError,
+} from "../lib/services/portalVendorOnboardingService.js";
+import { classifyKtpOcrError, ktpOcrClientResponse } from "../lib/services/ktpOcrErrors.js";
+import {
+  getVendorDashboard,
+  getVendorFullProfile,
+} from "../lib/services/portalVendorProfileService.js";
+import {
+  getVendorProfileVersionBounds,
+  isCurrentVendorProfileVersion,
+} from "../lib/services/vendorProfileVersion.js";
+import { validateBody } from "../lib/middleware/validateBody.js";
+import {
+  VendorSelfProfileSchema,
+  CompleteOnboardingSchema,
+  VendorInviteAcceptSchema,
+} from "../lib/schemas/vendor/index.js";
+import {
+  logVendorAudit,
+  actorFromReq as vendorActorFromReq,
+  ipFromReq as vendorIpFromReq,
+  uaFromReq as vendorUaFromReq,
+} from "../lib/services/vendorAuditLogService.js";
+import {
+  AuthServiceError,
+  emailPasswordLogin,
+  sendWaOtp,
+  verifyWaOtp,
+  waRegister,
+  waLogin,
+  waTrustedLogin,
+  getTrustedDevices,
+  revokeTrustedDevice,
+  revokeAllTrustedDevices,
+  signup,
+  devLogin,
+  syncProfile,
+  requestEmailOtp,
+  verifyEmailOtp,
+  getMe,
+  normalizePhoneID,
+  hasUsablePortalPassword,
+  forgotPasswordCustom,
+  resetPasswordWithToken,
+} from "../lib/services/portalAuthService.js";
+import { getPortalAuthCapabilities } from "../lib/portalAuthCapabilities.js";
+import {
+  evaluateVendorInvitationEmail,
+} from "../lib/vendorInvitationIdentityGuard.js";
+import {
+  getPortalAuthBootstrap,
+  PortalAuthBootstrapError,
+} from "../lib/services/portalAuthBootstrapService.js";
+import {
+  LogisticOrderServiceError,
+  submitVendorQuote,
+  listSalesOrders,
+  listLogisticOrders,
+  listProductOrders,
+  listPortalOrderFeed,
+  listPortalServiceOrders,
+  createSalesOrder,
+  cancelSalesOrder,
+  cancelLogisticOrder,
+  uploadOrderFile,
+  uploadPaymentProof,
+  submitRequestQuote,
+  listQuoteRequests,
+  updateQuoteRequest,
+} from "../lib/services/portalLogisticOrderService.js";
 
 const router = Router();
 
-async function getServiceIds(customerId: number): Promise<number[]> {
-  const rows = await db.select().from(portalCustomerServicesTable).where(eq(portalCustomerServicesTable.customerId, customerId));
-  return rows.map((r) => r.serviceId);
+// Public, secret-free provider capability contract used by portal auth UI.
+router.get("/auth/capabilities", (_req, res) => {
+  res.json(getPortalAuthCapabilities());
+});
+
+// ── Customer in-app notifications ───────────────────────────────────────────
+// The feed is customer-scoped by the authenticated portal identity. SSE is a
+// separate stream from the legacy global portal stream so private events never
+// get broadcast to another customer.
+router.get("/notifications", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const limit = Number(req.query.limit ?? 50);
+    const [items, unreadCount] = await Promise.all([
+      listCustomerPortalNotifications(customerId, limit),
+      getCustomerPortalUnreadCount(customerId),
+    ]);
+    return res.json({ items, unreadCount });
+  } catch (error) {
+    console.error("[portal/notifications] list failed", error);
+    return res.status(500).json({ message: "Gagal memuat notifikasi" });
+  }
+});
+
+router.post("/notifications/:id/read", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const notificationId = Number(req.params.id);
+  if (!Number.isInteger(notificationId) || notificationId <= 0) {
+    return res.status(400).json({ message: "ID notifikasi tidak valid" });
+  }
+  try {
+    const updated = await markCustomerPortalNotificationRead(customerId, notificationId);
+    return updated ? res.json({ ok: true }) : res.status(404).json({ message: "Notifikasi tidak ditemukan" });
+  } catch (error) {
+    console.error("[portal/notifications] mark read failed", error);
+    return res.status(500).json({ message: "Gagal memperbarui notifikasi" });
+  }
+});
+
+router.post("/notifications/read-all", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const count = await markAllCustomerPortalNotificationsRead(customerId);
+    return res.json({ ok: true, count });
+  } catch (error) {
+    console.error("[portal/notifications] mark all read failed", error);
+    return res.status(500).json({ message: "Gagal memperbarui notifikasi" });
+  }
+});
+
+router.get("/notifications/events", requireCustomerPortalAuth, (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(": connected\n\n");
+  (res as Response & { flush?: () => void }).flush?.();
+
+  const keepAlive = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { clearInterval(keepAlive); }
+  }, 25_000);
+  registerCustomerPortalConnection(customerId, res);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    unregisterCustomerPortalConnection(customerId, res);
+  });
+});
+
+// Marketplace endpoints remain usable for an explicit guest submission, but
+// an auth token is never ignored. If one is present it must resolve through
+// the same middleware that establishes req.portalCustomerId for all protected
+// portal operations.
+function optionalPortalAuth(req: Request, res: Response, next: NextFunction) {
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const bearerToken = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7)
+    : undefined;
+  if (!cookieToken && !bearerToken) return next();
+  return requirePortalAuth(req, res, next);
 }
+
 
 async function getProductCategories(productIds: number[]): Promise<Record<number, string[]>> {
   if (productIds.length === 0) return {};
@@ -37,25 +338,55 @@ async function getProductCategories(productIds: number[]): Promise<Record<number
   return map;
 }
 
+// ── In-memory cache for company settings (5 min TTL) ─────────────────────────
+let _companyCache: { data: object; expiresAt: number } | null = null;
+const COMPANY_TTL_MS = 5 * 60 * 1000;
+
 // GET /api/portal/company
 router.get("/company", async (_req, res) => {
-  const [settings] = await db.select().from(accountingSettingsTable).limit(1);
-  const adminWa = await getAdminWa();
-  return res.json({
-    name: settings?.companyName ?? "PT. Cahaya Sejati Teknologi",
+  const FALLBACK = {
+    name: "PT. Cahaya Sejati Teknologi",
     tagline: "Solusi Logistik Terintegrasi & Berbasis Teknologi",
-    logoUrl: settings?.companyLogoUrl ?? null,
-    address: settings?.companyAddress ?? null,
-    email: null,
-    phone: adminWa || null,
-  });
+    logoUrl: null as string | null,
+    address: null as string | null,
+    email: null as string | null,
+    phone: null as string | null,
+  };
+  if (_companyCache && Date.now() < _companyCache.expiresAt) {
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+    return res.json(_companyCache.data);
+  }
+  try {
+    const [settings] = await db.select().from(accountingSettingsTable).limit(1);
+    const adminWa = await getAdminWa();
+    const data = {
+      name: settings?.companyName ?? FALLBACK.name,
+      tagline: FALLBACK.tagline,
+      logoUrl: settings?.companyLogoUrl ?? null,
+      address: settings?.companyAddress ?? null,
+      email: null,
+      phone: adminWa || null,
+    };
+    _companyCache = { data, expiresAt: Date.now() + COMPANY_TTL_MS };
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+    return res.json(data);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[portal/company] DB query failed — returning fallback", msg);
+    res.setHeader("Cache-Control", "no-store");
+    return res.json(FALLBACK);
+  }
 });
 
 async function listByType(type: string) {
   const rows = await db
     .select()
     .from(productsTable)
-    .where(and(eq(productsTable.isActive, true), eq(productsTable.itemType, type)));
+    .where(and(
+      eq(productsTable.isActive, true),
+      eq(productsTable.itemType, type),
+      or(isNull(productsTable.subcategory), ne(productsTable.subcategory, "bahan_thai_tea")),
+    ));
   const ids = rows.map((p) => p.id);
   const catMap = await getProductCategories(ids);
   return rows.map((p) => {
@@ -75,18 +406,183 @@ async function listByType(type: string) {
       imageUrl: p.imageUrl ?? null,
       mediaItems,
       categories: catMap[p.id] ?? [],
+      currencyCode: p.currencyCode ?? "IDR",
     };
   });
 }
 
 // GET /api/portal/services  — item_type = 'jasa' (active only, public)
 router.get("/services", async (_req, res) => {
+  // Public catalog data changes through admin workflows, not per request.
+  // A short browser/CDN cache avoids making every public page wait for the
+  // same relatively expensive catalog joins.
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("jasa"));
 });
 
 // GET /api/portal/products  — item_type = 'barang'
 router.get("/products", async (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   return res.json(await listByType("barang"));
+});
+
+// normalizeServiceCategory, SERVICE_CATEGORY_LABELS — moved to portalVendorCatalogService.ts
+// Re-exported from service so external consumers (if any) keep working.
+export { normalizeServiceCategory, SERVICE_CATEGORY_LABELS } from "../lib/services/portalVendorCatalogService.js";
+
+// ── GET /api/portal/marketplace/stats ─────────────────────────────────────────
+// public summary stats — unified (used by hero trust bar + MarketplaceStatsBar)
+router.get("/marketplace/stats", async (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+  try {
+    return res.json(await getMarketplaceStats());
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[marketplace/stats] query failed — returning zeros", msg);
+    return res.json({
+      itemCount: 0, vendorCount: 0, categoryCount: 0,
+      totalItems: 0, totalVendors: 0, verifiedVendors: 0, totalRfqs: 0, avgRating: null,
+    });
+  }
+});
+
+// ── GET /api/portal/marketplace ───────────────────────────────────────────────
+// public vendor catalog (published only, NO priceBase)
+router.get("/marketplace", async (req, res) => {
+  const { kind, category, vendorId, q, search } = req.query as {
+    kind?: string; category?: string; vendorId?: string; q?: string; search?: string;
+  };
+  // Publication state is changed by authenticated vendor/admin workflows.
+  // Do not let a browser, CDN, or proxy serve a stale published/draft result.
+  // The database predicate remains the security boundary; this header keeps
+  // the public UI consistent immediately after a state transition.
+  res.setHeader("Cache-Control", "no-store");
+  return res.json(await listPublicMarketplaceItems({ kind, category, vendorId, q, search }));
+});
+
+// [merged into /marketplace/stats above — removed duplicate P5 handler]
+
+// GET /api/portal/marketplace/featured — public: featured products for marketplace display.
+// MUST be registered before /marketplace/:id below, or Express matches "featured" as :id.
+router.get("/marketplace/featured", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit) || 12;
+    res.json(await listFeaturedProductsForDisplay(limit));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// GET /api/portal/marketplace/hero-tiles — public: one tile per hero category, DB-sourced.
+// MUST be before /marketplace/:id so Express doesn't match "hero-tiles" as an :id.
+router.get("/marketplace/hero-tiles", async (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=300");
+  try {
+    res.json(await getHeroCategoryTiles());
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Vendor public profile rate limit (unauthenticated) ───────────────────────
+const vendorPublicProfileLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: keyGen,
+  message: { error: "Terlalu banyak permintaan. Coba lagi dalam 1 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ── Vendor invite token rate limit (public, token-based) ─────────────────────
+const vendorInviteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyGenerator: keyGen,
+  message: { error: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ── Marketplace rate limiting + bot protection ────────────────────────────────
+const marketplaceSubmitLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { error: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// normalizeMarketplaceStockStatus — moved to catalogNormalization.ts, imported above
+
+// mkMarketplaceOrderNumber — moved to portalMarketplaceService.ts
+// getCatalogItemPublic    — moved to portalVendorCatalogService.ts, imported above
+
+// GET /api/portal/marketplace/:id — single published catalog item detail (NO priceBase)
+router.get("/marketplace/:id", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+  const detail = await getMarketplaceItemDetail(id);
+  if (!detail) return res.status(404).json({ error: "Item tidak ditemukan atau belum dipublikasikan" });
+  return res.json(detail);
+});
+
+// POST /api/portal/marketplace/:id/quote — buat Quote Request dari catalog item
+router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, optionalPortalAuth, async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+
+  const body = req.body as Record<string, unknown>;
+  if (body._hp && String(body._hp).trim() !== "") {
+    return res.status(400).json({ error: "Permintaan tidak valid" });
+  }
+
+  try {
+    const result = await submitMarketplaceQuote({
+      catalogItemId:        id,
+      portalCustomerId:     (req as PortalAuthReq).portalCustomerId ?? null,
+      ip:                   (req as Request & { ip?: string }).ip ?? null,
+      body:                 req.body,
+       idempotencyKey:       req.get("Idempotency-Key") ?? null,
+      correlationId:        (req as Request & { id?: string }).id ?? req.get("X-Request-ID") ?? null,
+    });
+    // Backward-compatible response — legacy fields unchanged.
+    // New clients can read rfqId/rfqNumber when new pipeline is active.
+    return res.status(201).json(result);
+  } catch (e: any) {
+    const code = (e as any)?.statusCode;
+    if (code === 404) return res.status(404).json({ error: e.message });
+    if (code === 400 || code === 409 || code === 422) return res.status(code).json({ error: e.message });
+    throw e;
+  }
+});
+
+// POST /api/portal/marketplace/:id/order — buat Order Now dari catalog item
+// DEPRECATED: Marketplace frontend no longer uses direct order flow. Use /api/portal/marketplace/:id/quote for RFQ.
+router.post("/marketplace/:id/order", marketplaceSubmitLimiter, optionalPortalAuth, async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+
+  const body = req.body as Record<string, unknown>;
+  if (body._hp && String(body._hp).trim() !== "") {
+    return res.status(400).json({ error: "Permintaan tidak valid" });
+  }
+
+  try {
+    const result = await createMarketplaceOrder({
+      catalogItemId: id,
+      portalCustomerId: (req as PortalAuthReq).portalCustomerId ?? null,
+      body: req.body,
+    });
+    return res.status(201).json(result);
+  } catch (e: any) {
+    const code = (e as any)?.statusCode;
+    if (code === 404) return res.status(404).json({ error: e.message });
+    if (code === 400 || code === 409 || code === 422) return res.status(code).json({ error: e.message });
+    throw e;
+  }
 });
 
 // ── Routes khusus untuk /logistic-admin (auth: portal admin JWT) ─────────────
@@ -98,63 +594,41 @@ router.get("/products", async (_req, res) => {
 
 // GET /api/portal/logistic-admin/services — semua jasa (incl. inactive)
 router.get("/logistic-admin/services", requirePortalAdmin, async (_req, res) => {
-  const rows = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.itemType, "jasa"))
-    .orderBy(productsTable.id);
-  return res.json(rows.map((p) => ({
-    id: p.id,
-    name: p.name,
-    sku: p.sku,
-    price: Number(p.price),
-    subcategory: p.subcategory ?? null,
-    unit: p.unit,
-    description: p.description ?? null,
-    isActive: p.isActive,
-  })));
+  return res.json(await listLogisticAdminServices());
 });
 
 // POST /api/portal/logistic-admin/services — tambah jasa baru
 router.post("/logistic-admin/services", requirePortalAdmin, async (req, res) => {
-  const { name, sku, price, subcategory, unit, description } = req.body ?? {};
-  if (!name || !sku) return res.status(400).json({ message: "Nama dan SKU wajib diisi" });
-  const [inserted] = await db.insert(productsTable).values({
-    name: String(name),
-    sku: String(sku),
-    price: String(Number(price) || 0),
-    stock: 0,
-    itemType: "jasa",
-    unit: String(unit || "pcs"),
-    subcategory: subcategory ? String(subcategory) : null,
-    description: description ? String(description) : null,
-    isActive: true,
-    createdAt: new Date(),
-  }).returning();
-  return res.status(201).json(inserted);
+  try {
+    const inserted = await createLogisticAdminService(req.body ?? {});
+    return res.status(201).json(inserted);
+  } catch (e: any) {
+    if ((e as any)?.statusCode === 400) return res.status(400).json({ message: e.message });
+    throw e;
+  }
 });
 
 // PUT /api/portal/logistic-admin/services/:id
 router.put("/logistic-admin/services/:id", requirePortalAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  const { name, price, subcategory, unit, description, isActive } = req.body ?? {};
-  const updates: Record<string, unknown> = {};
-  if (name !== undefined) updates.name = String(name);
-  if (price !== undefined) updates.price = String(Number(price));
-  if (subcategory !== undefined) updates.subcategory = subcategory ? String(subcategory) : null;
-  if (unit !== undefined) updates.unit = String(unit);
-  if (description !== undefined) updates.description = description ? String(description) : null;
-  if (isActive !== undefined) updates.isActive = Boolean(isActive);
-  if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Tidak ada data yang diupdate" });
-  const [updated] = await db.update(productsTable).set(updates).where(eq(productsTable.id, id)).returning();
-  if (!updated) return res.status(404).json({ message: "Jasa tidak ditemukan" });
-  return res.json(updated);
+  const id = Number(String(req.params.id));
+  try {
+    const updated = await updateLogisticAdminService(id, req.body ?? {});
+    // Notify Customer Portal: harga/data jasa diperbarui via logistic-admin portal.
+    // Listener: jasa.tsx (invalidates ["listPortalServicesJasa"])
+    broadcastToPortal("price_sync", { ts: Date.now() });
+    return res.json(updated);
+  } catch (e: any) {
+    const code = (e as any)?.statusCode;
+    if (code === 400) return res.status(400).json({ message: e.message });
+    if (code === 404) return res.status(404).json({ message: e.message });
+    throw e;
+  }
 });
 
 // DELETE /api/portal/logistic-admin/services/:id
 router.delete("/logistic-admin/services/:id", requirePortalAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  await db.delete(productsTable).where(eq(productsTable.id, id));
+  const id = Number(String(req.params.id));
+  await deleteLogisticAdminService(id);
   return res.json({ ok: true });
 });
 
@@ -167,708 +641,714 @@ const PORTAL_ADMIN_EMAILS = [
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
-// POST /api/portal/auth/login — email/password login (non-Supabase)
-router.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body ?? {};
-  if (!email || !password) {
-    return res.status(400).json({ message: "Email dan password diperlukan." });
-  }
-  const [customer] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, String(email).toLowerCase().trim()));
-  if (!customer || !customer.passwordHash) {
-    return res.status(401).json({ message: "Email atau password salah." });
-  }
-  const valid = await bcrypt.compare(String(password), customer.passwordHash);
-  if (!valid) {
-    return res.status(401).json({ message: "Email atau password salah." });
-  }
-  const token = await signPortalJwt({
-    sub: String(customer.id),
-    email: customer.email,
-    customerId: customer.id,
-    role: customer.role,
-  });
-  return res.json({
-    token,
-    user: {
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      phone: customer.phone,
-      company: customer.company,
-      role: customer.role,
-    },
-  });
+// ── Auth rate limiters ────────────────────────────────────────────────────────
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan login. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ─── WA OTP REGISTRATION ──────────────────────────────────────────────
-function normalizePhoneID(raw: string): string {
-  let p = String(raw).replace(/[^\d+]/g, "");
-  if (p.startsWith("+")) p = p.slice(1);
-  if (p.startsWith("0")) p = "62" + p.slice(1);
-  if (!p.startsWith("62")) p = "62" + p;
-  return p;
-}
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak pendaftaran dari IP ini. Coba lagi dalam 1 jam." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-function genOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
+// POST /auth/otp/request — max 5 requests per IP per 15 min
+const otpRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan OTP. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /auth/otp/verify — max 10 attempts per IP per 15 min (prevents 6-digit brute force)
+const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan verifikasi. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /auth/wa-otp/send — IP-level limiter (DB already limits per phone)
+const waOtpSendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan OTP. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /auth/wa-trusted-login — prevent device-token enumeration
+const waTrustedLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Password recovery endpoints are deliberately limited independently from
+// login/OTP buckets: reset links are expensive to deliver and can otherwise be
+// abused to flood an account or mailbox. The service still returns a generic
+// forgot-password response to avoid email enumeration.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak percobaan reset password. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /api/portal/auth/login — email/password login (non-Supabase)
+router.post("/auth/login", loginLimiter, async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (!email || !password) return res.status(400).json({ message: "Email dan password diperlukan." });
+  try {
+    const result = await emailPasswordLogin(String(email), String(password));
+    // C1-REMEDIATION: set HttpOnly session cookie (7-day expiry)
+    setPortalSessionCookie(res, result.token);
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// POST /api/portal/auth/logout — clears the session cookie
+router.post("/auth/logout", async (req, res) => {
+  const bearerHeader = req.headers.authorization;
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const token = (bearerHeader?.startsWith("Bearer ") ? bearerHeader.slice(7) : null) ?? cookieToken;
+  if (token) {
+    try {
+      await revokePortalSession(token);
+    } catch (err) {
+      req.log?.error({ err }, "portal logout session revocation failed");
+      return res.status(503).json({ message: "Sesi belum dapat dicabut. Coba lagi." });
+    }
+  }
+  clearPortalSessionCookie(res);
+  res.json({ message: "Logged out." });
+});
 
 // POST /api/portal/auth/wa-otp/send — kirim OTP via WhatsApp
-router.post("/auth/wa-otp/send", async (req, res) => {
-  if (!process.env.FONNTE_TOKEN) {
-    return res.status(503).json({ message: "Layanan OTP WhatsApp belum dikonfigurasi. Hubungi admin." });
-  }
+router.post("/auth/wa-otp/send", waOtpSendLimiter, async (req, res) => {
   const { phone } = req.body ?? {};
   if (!phone) return res.status(400).json({ message: "Nomor HP diperlukan." });
-  const normalized = normalizePhoneID(String(phone));
-  if (normalized.length < 10) return res.status(400).json({ message: "Nomor HP tidak valid." });
-
-  // Rate limit: max 3 OTP per phone in last 10 minutes
-  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
-  const recent = await db
-    .select({ id: waOtpCodesTable.id })
-    .from(waOtpCodesTable)
-    .where(and(eq(waOtpCodesTable.phone, normalized), gte(waOtpCodesTable.createdAt, tenMinAgo)));
-  if (recent.length >= 3) {
-    return res.status(429).json({ message: "Terlalu banyak permintaan OTP. Coba lagi nanti." });
-  }
-
-  const code = genOtp();
-  const codeHash = await bcrypt.hash(code, 10);
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
-
-  await db.insert(waOtpCodesTable).values({
-    phone: normalized,
-    codeHash,
-    purpose: "register",
-    expiresAt,
-  });
-
   try {
-    await sendWhatsApp(
-      normalized,
-      `*Kode Verifikasi BizPortal*\n\nKode OTP Anda: *${code}*\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapapun.`
-    );
+    const result = await sendWaOtp(String(phone));
+    const payload: Record<string, unknown> = { message: result.message, phone: result.phone };
+    if (result._dev_code) payload._dev_code = result._dev_code;
+    return res.json(payload);
   } catch (err) {
-    req.log?.error({ err }, "wa-otp send failed");
-    return res.status(500).json({ message: "Gagal mengirim OTP via WhatsApp." });
+    if (err instanceof AuthServiceError) {
+      if (err.statusCode === 500) req.log?.error({ err: err.cause }, "wa-otp send failed");
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+    throw err;
   }
-
-  return res.json({ message: "OTP dikirim ke WhatsApp.", phone: normalized });
 });
 
 // POST /api/portal/auth/wa-otp/verify — verifikasi OTP, return verifyToken
 router.post("/auth/wa-otp/verify", async (req, res) => {
   const { phone, code } = req.body ?? {};
   if (!phone || !code) return res.status(400).json({ message: "Nomor HP dan kode diperlukan." });
-  const normalized = normalizePhoneID(String(phone));
-
-  const [otp] = await db
-    .select()
-    .from(waOtpCodesTable)
-    .where(and(eq(waOtpCodesTable.phone, normalized), eq(waOtpCodesTable.verified, false)))
-    .orderBy(desc(waOtpCodesTable.createdAt))
-    .limit(1);
-
-  if (!otp) return res.status(400).json({ message: "OTP tidak ditemukan. Minta OTP baru." });
-  if (otp.expiresAt < new Date()) return res.status(400).json({ message: "OTP kadaluarsa. Minta OTP baru." });
-  if (otp.attempts >= 5) return res.status(429).json({ message: "Terlalu banyak percobaan. Minta OTP baru." });
-
-  const valid = await bcrypt.compare(String(code), otp.codeHash);
-  if (!valid) {
-    await db.update(waOtpCodesTable).set({ attempts: otp.attempts + 1 }).where(eq(waOtpCodesTable.id, otp.id));
-    return res.status(400).json({ message: "Kode OTP salah." });
+  try {
+    return res.json(await verifyWaOtp(String(phone), String(code)));
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-
-  const verifyToken = randomUUID();
-  await db
-    .update(waOtpCodesTable)
-    .set({ verified: true, verifyToken, expiresAt: new Date(Date.now() + 15 * 60 * 1000) })
-    .where(eq(waOtpCodesTable.id, otp.id));
-
-  return res.json({ verifyToken, phone: normalized });
 });
 
 // POST /api/portal/auth/wa-register — lengkapi profil & buat akun
 router.post("/auth/wa-register", async (req, res) => {
-  const { verifyToken, name, role: requestedRole, company, serviceIds, email } = req.body ?? {};
+  const {
+    verifyToken, name, role, customerType, company, companyId,
+    requestedCompanyName, requestedRegistrationNumber, serviceIds, email, rememberDays,
+  } = req.body ?? {};
   if (!verifyToken || !name) return res.status(400).json({ message: "Token verifikasi dan nama diperlukan." });
-
-  const [otp] = await db
-    .select()
-    .from(waOtpCodesTable)
-    .where(and(eq(waOtpCodesTable.verifyToken, String(verifyToken)), eq(waOtpCodesTable.verified, true)))
-    .limit(1);
-
-  if (!otp) return res.status(400).json({ message: "Token verifikasi tidak valid." });
-  if (otp.expiresAt < new Date()) return res.status(400).json({ message: "Token kadaluarsa. Verifikasi ulang OTP." });
-
-  const phone = otp.phone;
-  const ALLOWED_ROLES = ["customer", "vendor"];
-  const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
-
-  // Cek apakah phone sudah terdaftar
-  const [existingByPhone] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.phone, phone))
-    .limit(1);
-  if (existingByPhone) {
-    return res.status(409).json({ message: "Nomor HP sudah terdaftar. Silakan login." });
+  try {
+    const result = await waRegister({
+      verifyToken: String(verifyToken), name: String(name), role, customerType, company,
+      companyId: companyId === undefined || companyId === null ? undefined : Number(companyId),
+      requestedCompanyName, requestedRegistrationNumber, serviceIds, email, rememberDays,
+    });
+    // C1-REMEDIATION: set HttpOnly session cookie on registration
+    if ("token" in result && typeof result.token === "string") {
+      setPortalSessionCookie(res, result.token);
+    }
+    return res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-
-  const finalEmail = email ? String(email).toLowerCase().trim() : `${phone}@wa.local`;
-
-  // Cek email duplicate jika user provide
-  if (email) {
-    const [existingEmail] = await db
-      .select({ id: portalCustomersTable.id })
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.email, finalEmail))
-      .limit(1);
-    if (existingEmail) return res.status(409).json({ message: "Email sudah terdaftar." });
-  }
-
-  const [created] = await db
-    .insert(portalCustomersTable)
-    .values({
-      name: String(name),
-      email: finalEmail,
-      passwordHash: "",
-      phone,
-      company: company ? String(company) : null,
-      role,
-    })
-    .returning();
-
-  if (Array.isArray(serviceIds) && serviceIds.length > 0) {
-    await db
-      .insert(portalCustomerServicesTable)
-      .values((serviceIds as number[]).map((sid) => ({ customerId: created.id, serviceId: Number(sid) })))
-      .onConflictDoNothing();
-  }
-
-  // Invalidate token
-  await db.update(waOtpCodesTable).set({ verifyToken: null }).where(eq(waOtpCodesTable.id, otp.id));
-
-  const token = await signPortalJwt({
-    sub: String(created.id),
-    email: created.email,
-    customerId: created.id,
-    role: created.role,
-  });
-
-  return res.status(201).json({
-    token,
-    user: {
-      id: created.id,
-      name: created.name,
-      email: created.email,
-      phone: created.phone,
-      company: created.company,
-      role: created.role,
-    },
-  });
 });
 
 // POST /api/portal/auth/wa-login — login pakai phone + OTP
 router.post("/auth/wa-login", async (req, res) => {
-  const { verifyToken } = req.body ?? {};
+  const { verifyToken, rememberDays } = req.body ?? {};
   if (!verifyToken) return res.status(400).json({ message: "Token verifikasi diperlukan." });
-
-  const [otp] = await db
-    .select()
-    .from(waOtpCodesTable)
-    .where(and(eq(waOtpCodesTable.verifyToken, String(verifyToken)), eq(waOtpCodesTable.verified, true)))
-    .limit(1);
-
-  if (!otp) return res.status(400).json({ message: "Token verifikasi tidak valid." });
-  if (otp.expiresAt < new Date()) return res.status(400).json({ message: "Token kadaluarsa." });
-
-  const matches = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.phone, otp.phone))
-    .limit(2);
-
-  if (matches.length === 0) return res.status(404).json({ message: "Nomor HP belum terdaftar.", notRegistered: true, phone: otp.phone });
-  if (matches.length > 1) {
-    req.log?.error({ phone: otp.phone }, "wa-login: multiple accounts share phone — refusing login");
-    return res.status(409).json({ message: "Akun ambigu untuk nomor ini. Hubungi admin." });
+  try {
+    const { user, token, deviceToken } = await waLogin(
+      String(verifyToken),
+      typeof rememberDays === "number" ? rememberDays : undefined,
+      (phone) => req.log?.error({ phone }, "wa-login: multiple accounts share phone — refusing login")
+    );
+    // C1-REMEDIATION: set HttpOnly session cookie
+    setPortalSessionCookie(res, token);
+    return res.json({ token, deviceToken, user });
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message, ...err.payload });
+    throw err;
   }
-  const user = matches[0];
+});
 
-  await db.update(waOtpCodesTable).set({ verifyToken: null }).where(eq(waOtpCodesTable.id, otp.id));
+// POST /api/portal/auth/wa-trusted-login — login tanpa OTP pakai device token tersimpan
+router.post("/auth/wa-trusted-login", waTrustedLoginLimiter, async (req, res) => {
+  const { phone, deviceToken } = req.body ?? {};
+  if (!phone || !deviceToken) return res.status(400).json({ message: "phone dan deviceToken diperlukan." });
+  try {
+    const result = await waTrustedLogin(String(phone), String(deviceToken));
+    // C1-REMEDIATION: set HttpOnly session cookie
+    if ("token" in result && typeof result.token === "string") {
+      setPortalSessionCookie(res, result.token);
+    }
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message, ...err.payload });
+    throw err;
+  }
+});
 
-  const token = await signPortalJwt({
-    sub: String(user.id),
-    email: user.email,
-    customerId: user.id,
-    role: user.role,
-  });
+// GET /api/portal/auth/trusted-devices — daftar perangkat terpercaya milik user saat ini
+router.get("/auth/trusted-devices", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  return res.json(await getTrustedDevices(customerId));
+});
 
-  return res.json({
-    token,
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      company: user.company,
-      role: user.role,
-    },
-  });
+// DELETE /api/portal/auth/trusted-devices/:id — cabut perangkat terpercaya
+router.delete("/auth/trusted-devices/:id", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const deviceId = parseInt(String(req.params.id), 10);
+  if (isNaN(deviceId)) return res.status(400).json({ message: "ID tidak valid." });
+  try {
+    await revokeTrustedDevice(customerId, deviceId);
+    return res.json({ message: "Perangkat berhasil dicabut." });
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// DELETE /api/portal/auth/trusted-devices — cabut semua perangkat
+router.delete("/auth/trusted-devices", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    await revokeAllTrustedDevices(customerId);
+    return res.json({ message: "Semua perangkat berhasil dicabut." });
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
 });
 
 // POST /api/portal/auth/signup — standalone register (non-Supabase)
-router.post("/auth/signup", async (req, res) => {
-  const { name, email, password, phone, company, role: requestedRole, serviceIds } = req.body ?? {};
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: "Nama, email, dan password diperlukan." });
+router.post("/auth/signup", signupLimiter, async (req, res) => {
+  const {
+    name, email, password, phone, company, customerType, companyId,
+    requestedCompanyName, requestedRegistrationNumber, role, serviceIds,
+  } = req.body ?? {};
+  if (!name || !email || !password || !phone) {
+    return res.status(400).json({ message: "Nama, email, password, dan nomor HP diperlukan." });
   }
-  const emailLower = String(email).toLowerCase().trim();
-  const [existing] = await db
-    .select({ id: portalCustomersTable.id })
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, emailLower));
-  if (existing) {
-    return res.status(409).json({ message: "Email sudah terdaftar." });
+  try {
+    const result = await signup({
+      name: String(name), email: String(email), password: String(password), phone: String(phone), company,
+      customerType,
+      companyId: companyId === undefined || companyId === null ? undefined : Number(companyId),
+      requestedCompanyName, requestedRegistrationNumber, role, serviceIds,
+    });
+    // C1-REMEDIATION: set HttpOnly session cookie on registration
+    if ("token" in result && typeof result.token === "string") {
+      setPortalSessionCookie(res, result.token);
+    }
+    return res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-  const normalizedPhone = phone ? normalizePhoneID(String(phone)) : null;
-  if (normalizedPhone) {
-    const [phoneExisting] = await db
-      .select({ id: portalCustomersTable.id })
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.phone, normalizedPhone));
-    if (phoneExisting) return res.status(409).json({ message: "Nomor HP sudah terdaftar." });
-  }
-  const ALLOWED_ROLES = ["customer", "vendor"];
-  const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
-  const passwordHash = await bcrypt.hash(String(password), 12);
-  const [created] = await db
-    .insert(portalCustomersTable)
-    .values({ name: String(name), email: emailLower, passwordHash, phone: normalizedPhone, company: company ? String(company) : null, role })
-    .returning();
-  if (Array.isArray(serviceIds) && serviceIds.length > 0) {
-    await db.insert(portalCustomerServicesTable).values(
-      (serviceIds as number[]).map((sid) => ({ customerId: created.id, serviceId: Number(sid) }))
-    ).onConflictDoNothing();
-  }
-  const token = await signPortalJwt({
-    sub: String(created.id),
-    email: created.email,
-    customerId: created.id,
-    role: created.role,
-  });
-  return res.status(201).json({
-    token,
-    user: {
-      id: created.id,
-      name: created.name,
-      email: created.email,
-      phone: created.phone,
-      company: created.company,
-      role: created.role,
-    },
-  });
 });
 
 // POST /api/portal/auth/dev-login — hanya tersedia di non-production (dev & staging)
 // Membuat/menemukan dev user dan mengembalikan signed dev token untuk testing tanpa Supabase.
 router.post("/auth/dev-login", async (req, res) => {
-  if (process.env.NODE_ENV === "production") {
+  if (process.env.REPLIT_DEPLOYMENT === "1") {
     res.status(404).json({ message: "Not found" });
     return;
   }
-  const { signDevToken } = await import("../lib/supabaseAuth.js");
   const { role } = req.body ?? {};
-  const allowedRoles = ["customer", "admin", "vendor"] as const;
-  type DevRole = typeof allowedRoles[number];
-  const safeRole: DevRole = allowedRoles.includes(role) ? role : "customer";
-
-  const devEmail = `dev-${safeRole}@dev.local`;
-  const devName = `Dev ${safeRole.charAt(0).toUpperCase() + safeRole.slice(1)}`;
-
-  let [customer] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, devEmail));
-
-  if (!customer) {
-    [customer] = await db
-      .insert(portalCustomersTable)
-      .values({ name: devName, email: devEmail, passwordHash: "", role: safeRole })
-      .returning();
-  } else if (customer.role !== safeRole) {
-    [customer] = await db
-      .update(portalCustomersTable)
-      .set({ role: safeRole })
-      .where(eq(portalCustomersTable.id, customer.id))
-      .returning();
-  }
-
-  const token = signDevToken({
-    id: customer.id,
-    email: customer.email,
-    role: customer.role,
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7, // 7 hari
-  });
-
-  return res.json({
-    token,
-    profile: {
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      role: customer.role,
-    },
-  });
+  const result = await devLogin(String(role ?? ""));
+  // Set HttpOnly session cookie agar /admin dan route lain yang memerlukan
+  // requirePortalAuth / requirePortalAdmin bisa membaca token dari cookie,
+  // sama seperti flow login normal (email OTP, password, WA, dll).
+  setPortalSessionCookie(res, result.token);
+  return res.json(result);
 });
 
 // POST /api/portal/auth/register — sync profil ke DB setelah supabase.auth.signUp
 router.post("/auth/register", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const { name, phone, company, role: requestedRole, serviceIds } = req.body ?? {};
-
-  const patch: Record<string, unknown> = {};
-  if (name) patch.name = String(name);
-  if (phone !== undefined) patch.phone = phone ? String(phone) : null;
-  if (company !== undefined) patch.company = company ? String(company) : null;
-  const ALLOWED_ROLES = ["customer", "vendor"];
-  if (requestedRole && ALLOWED_ROLES.includes(String(requestedRole))) patch.role = String(requestedRole);
-
-  if (Object.keys(patch).length > 0) {
-    await db.update(portalCustomersTable).set(patch).where(eq(portalCustomersTable.id, customerId));
-  }
-
-  if (Array.isArray(serviceIds)) {
-    await db.delete(portalCustomerServicesTable).where(eq(portalCustomerServicesTable.customerId, customerId));
-    if (serviceIds.length > 0) {
-      await db.insert(portalCustomerServicesTable).values(
-        (serviceIds as number[]).map((sid) => ({ customerId, serviceId: Number(sid) }))
-      ).onConflictDoNothing();
-    }
-  }
-
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
-  const finalServiceIds = await getServiceIds(customerId);
-  return res.json({
-    id: customer!.id,
-    name: customer!.name,
-    email: customer!.email,
-    phone: customer!.phone,
-    company: customer!.company,
-    role: customer!.role,
-    serviceIds: finalServiceIds,
-  });
+  const { name, phone, company, customerType, role, serviceIds } = req.body ?? {};
+  return res.json(await syncProfile(customerId, { name, phone, company, customerType, role, serviceIds }));
 });
 
 // POST /api/portal/auth/otp/request — kirim kode OTP ke email (passwordless login)
-router.post("/auth/otp/request", async (req, res) => {
+// Security: rate-limited per IP; uses CSPRNG; stores bcrypt hash (not plaintext)
+router.post("/auth/otp/request", otpRequestLimiter, async (req, res) => {
   const { email } = req.body ?? {};
   if (!email) return res.status(400).json({ message: "Email diperlukan." });
-  const emailLower = String(email).toLowerCase().trim();
-
-  let [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.email, emailLower));
-  if (!customer) {
-    const [created] = await db.insert(portalCustomersTable).values({
-      name: emailLower.split("@")[0],
-      email: emailLower,
-      passwordHash: "",
-      role: "customer",
-    }).returning();
-    customer = created;
+  try {
+    return res.json(await requestEmailOtp(String(email)));
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiry = new Date(Date.now() + 10 * 60 * 1000);
-  await db.update(portalCustomersTable)
-    .set({ resetPasswordToken: `otp:${code}`, resetPasswordExpiry: expiry })
-    .where(eq(portalCustomersTable.id, customer.id));
-
-  const smtpOk = isSmtpConfigured();
-  if (smtpOk) {
-    try {
-      await sendMail({
-        to: emailLower,
-        subject: "Kode Login CST Portal",
-        html: `<p>Kode login Anda: <strong style="font-size:24px;letter-spacing:4px">${code}</strong></p><p>Berlaku 10 menit.</p>`,
-        text: `Kode login Anda: ${code}\nBerlaku 10 menit.`,
-      });
-    } catch (err) {
-      req.log?.warn({ err }, "OTP email failed");
-    }
-  }
-
-  const isDev = process.env.NODE_ENV !== "production";
-  return res.json({
-    sent: smtpOk,
-    ...(isDev ? { _dev_code: code } : {}),
-    message: smtpOk ? "Kode OTP telah dikirim ke email Anda." : `Kode OTP: ${code} (SMTP tidak dikonfigurasi)`,
-  });
 });
 
 // POST /api/portal/auth/otp/verify — verifikasi kode OTP dan login
-router.post("/auth/otp/verify", async (req, res) => {
+// Security: rate-limited per IP; attempt counter prevents brute force; bcrypt compare (v2 format)
+router.post("/auth/otp/verify", otpVerifyLimiter, async (req, res) => {
   const { email, code } = req.body ?? {};
   if (!email || !code) return res.status(400).json({ message: "Email dan kode diperlukan." });
-  const emailLower = String(email).toLowerCase().trim();
-
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.email, emailLower));
-  if (!customer) return res.status(401).json({ message: "Email tidak terdaftar." });
-
-  const stored = customer.resetPasswordToken;
-  const expiry = customer.resetPasswordExpiry;
-  if (!stored?.startsWith("otp:") || stored.slice(4) !== String(code).trim()) {
-    return res.status(401).json({ message: "Kode OTP salah." });
+  try {
+    const result = await verifyEmailOtp(String(email), String(code));
+    // C1-REMEDIATION: set HttpOnly session cookie
+    if ("token" in result && typeof result.token === "string") {
+      setPortalSessionCookie(res, result.token);
+    }
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-  if (!expiry || expiry < new Date()) {
-    return res.status(401).json({ message: "Kode OTP sudah kadaluarsa." });
-  }
-
-  await db.update(portalCustomersTable)
-    .set({ resetPasswordToken: null, resetPasswordExpiry: null })
-    .where(eq(portalCustomersTable.id, customer.id));
-
-  const token = await signPortalJwt({ sub: String(customer.id), email: customer.email, customerId: customer.id, role: customer.role });
-  return res.json({
-    token,
-    user: { id: customer.id, name: customer.name, email: customer.email, phone: customer.phone, company: customer.company, role: customer.role },
-  });
 });
 
-// POST /api/portal/auth/forgot-password — deprecated, gunakan Supabase resetPasswordForEmail
-router.post("/auth/forgot-password", (_req, res) => {
-  res.status(410).json({ message: "Gunakan Supabase Auth resetPasswordForEmail dari frontend." });
+// POST /api/portal/auth/forgot-password — custom flow via portal_customers (not Supabase Auth)
+router.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
+  try {
+    const { email, origin: bodyOrigin } = req.body ?? {};
+    if (!email || typeof email !== "string") return res.status(400).json({ message: "Email wajib diisi." });
+    // Prefer origin sent by the frontend (public domain); fall back to request host
+    const origin = (typeof bodyOrigin === "string" && bodyOrigin.startsWith("http"))
+      ? bodyOrigin
+      : `${req.protocol}://${req.get("host")}`;
+    const result = await forgotPasswordCustom(email, origin);
+    return res.json(result);
+  } catch (e: any) {
+    if (e instanceof AuthServiceError) return res.status(e.statusCode).json({ message: e.message });
+    console.error("[portal] forgot-password error", e);
+    return res.status(500).json({ message: "Terjadi kesalahan. Coba lagi." });
+  }
 });
 
-// POST /api/portal/auth/reset-password — deprecated, gunakan Supabase updateUser
-router.post("/auth/reset-password", (_req, res) => {
-  res.status(410).json({ message: "Gunakan Supabase Auth updateUser dari frontend." });
+// POST /api/portal/auth/reset-password-with-token — verify token and set new password
+router.post("/auth/reset-password-with-token", resetPasswordLimiter, async (req, res) => {
+  try {
+    const { email, token, password } = req.body ?? {};
+    if (!email || !token || !password) return res.status(400).json({ message: "email, token, dan password wajib diisi." });
+    const result = await resetPasswordWithToken(email, token, password);
+    return res.json(result);
+  } catch (e: any) {
+    if (e instanceof AuthServiceError) return res.status(e.statusCode).json({ message: e.message });
+    console.error("[portal] reset-password-with-token error", e);
+    return res.status(500).json({ message: "Terjadi kesalahan. Coba lagi." });
+  }
+});
+
+// Development harness-only reset artifact capture.
+// This endpoint is unavailable unless the process is explicitly in development
+// safe mode with the one-shot harness flag enabled. The token is never logged
+// and is removed from the in-memory capture map after one read.
+router.get("/auth/dev-reset-capture", (req, res) => {
+  const remote = req.socket.remoteAddress ?? "";
+  const ip = req.ip ?? "";
+  const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1"
+    || ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  if (!isSafeDevResetCaptureEnabled() || !loopback) {
+    res.status(404).json({ message: "Not found" });
+    return;
+  }
+  const email = typeof req.query.email === "string" ? req.query.email : "";
+  if (!email) {
+    res.status(400).json({ message: "Email diperlukan." });
+    return;
+  }
+  const token = consumeSafeDevResetArtifact(email);
+  if (!token) {
+    res.status(404).json({ message: "Reset artifact tidak tersedia." });
+    return;
+  }
+  res.json({ ok: true, token });
 });
 
 // GET /api/portal/auth/me
 router.get("/auth/me", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
-  if (!customer) return res.status(401).json({ message: "Customer not found" });
-  const serviceIds = await getServiceIds(customer.id);
-  return res.json({
-    id: customer.id,
-    name: customer.name,
-    email: customer.email,
-    phone: customer.phone,
-    company: customer.company,
-    role: customer.role,
-    serviceIds,
-    createdAt: customer.createdAt.toISOString(),
-  });
+  try {
+    return res.json(await getMe(customerId));
+  } catch (err) {
+    if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/auth/bootstrap
+// One canonical post-auth response for role, onboarding, company ownership,
+// approval state, and the safe destination. Protected APIs still authorize
+// independently; this endpoint only removes duplicate client-side lookups.
+router.get("/auth/bootstrap", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const authReq = req as PortalAuthReq;
+    const bootstrap = await getPortalAuthBootstrap(
+      customerId,
+      req.query.returnTo,
+      authReq.portalCustomer,
+    );
+    const t = bootstrap.timings;
+    const authTiming = authReq.portalAuthTiming;
+    res.setHeader(
+      "Server-Timing",
+      [
+        ...(authTiming ? [
+          `cookie-parse;dur=${Math.round(authTiming.COOKIE_PARSE_MS)}`,
+          `session-lookup;dur=${Math.round(authTiming.SESSION_LOOKUP_MS)}`,
+          `revocation-customer;dur=${Math.round(authTiming.REVOCATION_LOOKUP_MS)}`,
+          `auth-context;dur=${Math.round(authTiming.AUTH_CONTEXT_LOOKUP_MS)}`,
+          `auth-middleware;dur=${Math.round(authTiming.AUTH_MIDDLEWARE_TOTAL_MS)}`,
+        ] : []),
+        `user-profile;dur=${t.USER_PROFILE_MS}`,
+        `role-resolution;dur=${t.ROLE_RESOLUTION_MS}`,
+        `onboarding-status;dur=${t.ONBOARDING_STATUS_MS}`,
+        `company-context;dur=${t.COMPANY_CONTEXT_MS}`,
+        `vendor-approval;dur=${t.VENDOR_APPROVAL_MS}`,
+        `redirect-decision;dur=${t.REDIRECT_DECISION_MS}`,
+        `total-resolution;dur=${t.TOTAL_RESOLUTION_MS}`,
+      ].join(", "),
+    );
+    if (authTiming) {
+      res.setHeader("X-Portal-Auth-Pool", `${authTiming.POOL_BEFORE}->${authTiming.POOL_AFTER}`);
+    }
+    return res.json(bootstrap);
+  } catch (err) {
+    if (err instanceof PortalAuthBootstrapError) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+    throw err;
+  }
+});
+
+// GET /api/portal/organization — canonical customer/company context
+router.get("/organization", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  try {
+    const context = await getPortalCustomerContext((req as PortalAuthReq).portalCustomerId);
+    res.json(context);
+  } catch (err) {
+    if (err instanceof PortalCustomerContextError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// GET /api/portal/organization/companies — canonical company directory for
+// the authenticated customer onboarding/organization selector.
+router.get("/organization/companies", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  res.json(await listCustomerPortalCompanies(String(req.query.search ?? "")));
+});
+
+// PUT /api/portal/organization — configure organization for the session owner.
+// customerId/companyId from the browser are never used as ownership identity.
+router.put("/organization", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const customerType = body.customerType;
+  if (customerType !== "individual" && customerType !== "company") {
+    res.status(400).json({ error: "Tipe customer tidak valid." });
+    return;
+  }
+  try {
+    const organization = await configureCustomerOrganization({
+      customerId: (req as PortalAuthReq).portalCustomerId,
+      customerType,
+      companyId: body.companyId,
+      requestedCompanyName: body.requestedCompanyName,
+      requestedRegistrationNumber: body.requestedRegistrationNumber,
+    });
+    const context = await getPortalCustomerContext((req as PortalAuthReq).portalCustomerId);
+    res.json({ organization, context });
+  } catch (err) {
+    if (err instanceof PortalCustomerOrganizationError || err instanceof PortalCustomerContextError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// POST /api/portal/me/avatar — upload logo perusahaan / foto profil
+const _avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+router.post("/me/avatar", requirePortalAuth, _avatarUpload.single("avatar"), async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    if (!req.file) return res.status(400).json({ error: "Tidak ada file yang diunggah" });
+    const { buffer, mimetype } = req.file;
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (!allowed.includes(mimetype)) return res.status(400).json({ error: "Format file tidak didukung (jpg/png/webp)" });
+    // C2-REMEDIATION: magic-byte signature check
+    const magicCheck = validateMagicBytes(buffer, mimetype);
+    if (!magicCheck.ok) return res.status(400).json({ error: magicCheck.errorMessage });
+
+    // Delete old avatar if exists
+    const [cur] = await db.select({ avatarUrl: sql<string | null>`avatar_url` })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId))
+      .limit(1);
+    if (cur?.avatarUrl) await deleteFromSupabase(cur.avatarUrl);
+
+    const { publicUrl } = await uploadToSupabase(buffer, mimetype, "avatars");
+    await db.execute(sql`UPDATE portal_customers SET avatar_url = ${publicUrl} WHERE id = ${customerId}`);
+    return res.json({ ok: true, avatarUrl: publicUrl });
+  } catch (err) {
+    console.error("[portal] POST /me/avatar error", err);
+    return res.status(500).json({ error: "Gagal mengunggah foto" });
+  }
+});
+
+// PUT /api/portal/me — update profile (name, company, phone, address)
+router.put("/me", requirePortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const { name, company, phone, address } = req.body ?? {};
+
+  // Helper: coerce a field value to a DB-safe string or null (never "null" string)
+  function toStr(v: unknown): string | null {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    return s === "" ? null : s;
+  }
+
+  try {
+    // Build update object only for fields actually provided
+    const customerUpdate: Record<string, string | null> = {};
+    if (name    !== undefined) customerUpdate.name    = toStr(name);
+    if (company !== undefined) customerUpdate.company = toStr(company);
+    if (phone   !== undefined) customerUpdate.phone   = toStr(phone);
+
+    if (Object.keys(customerUpdate).length > 0) {
+      await db.update(portalCustomersTable)
+        .set(customerUpdate)
+        .where(eq(portalCustomersTable.id, customerId));
+    }
+
+    // Upsert address into portal_customer_profiles (only when provided)
+    if (address !== undefined) {
+      const addrValue = toStr(address);
+      const [existing] = await db.select({ id: portalCustomerProfilesTable.id })
+        .from(portalCustomerProfilesTable)
+        .where(eq(portalCustomerProfilesTable.customerId, customerId))
+        .limit(1);
+      if (existing) {
+        await db.update(portalCustomerProfilesTable)
+          .set({ companyAddress: addrValue, updatedAt: new Date() })
+          .where(eq(portalCustomerProfilesTable.customerId, customerId));
+      } else if (addrValue) {
+        await db.insert(portalCustomerProfilesTable)
+          .values({ customerId, companyAddress: addrValue });
+      }
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[portal] PUT /me error", err);
+    return res.status(500).json({ error: "Gagal menyimpan profil" });
+  }
 });
 
 
 // ── VENDOR PORTAL ─────────────────────────────────────────────────────────
 // GET /api/portal/vendor/profile — returns linked supplier + RFQs + quotes for a vendor user
-router.get("/vendor/profile", requirePortalAuth, async (req, res) => {
+// requireActiveVendor ensures pending/rejected vendors cannot access vendor dashboard data
+router.get("/vendor/profile", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
-  if (!customer) return res.status(401).json({ message: "Tidak ditemukan" });
-
-  // Try to find linked supplier by email or phone match
-  const allSuppliers = await db.select().from(suppliersTable);
-  const normalizePhone = (p: string | null) => p ? p.replace(/[^\d]/g, "").replace(/^0/, "62") : null;
-  const customerPhone = normalizePhone(customer.phone);
-  const linkedSupplier = allSuppliers.find(
-    (s) =>
-      (s.contactEmail && s.contactEmail.toLowerCase() === customer.email.toLowerCase()) ||
-      (customerPhone && normalizePhone(s.phone) === customerPhone)
-  ) ?? null;
-
-  let rfqs: {
-    id: number; rfqNumber: string; orderId: number; status: string;
-    orderNumber: string; origin: string; destination: string; shipmentType: string;
-    commodity: string | null; createdAt: string;
-  }[] = [];
-  let quotes: {
-    id: number; rfqId: number; orderId: number; orderNumber: string;
-    rfqNumber: string; vendorPrice: number; sellingPrice: number | null;
-    estimatedPickup: string | null; estimatedDelivery: string | null;
-    vendorNotes: string | null; quoteStatus: string; replySource: string | null;
-    createdAt: string;
-  }[] = [];
-
-  if (linkedSupplier) {
-    // All open/recent RFQs where this supplier is included
-    const allRfqs = await db.select().from(logisticOrderRfqsTable)
-      .orderBy(desc(logisticOrderRfqsTable.createdAt));
-    const relevantRfqs = allRfqs.filter((r) =>
-      (r.vendorIds as number[]).includes(linkedSupplier.id)
-    ).slice(0, 20);
-
-    if (relevantRfqs.length > 0) {
-      const orderIds = [...new Set(relevantRfqs.map((r) => r.orderId))];
-      const orders = await db.select().from(logisticOrdersTable).where(inArray(logisticOrdersTable.id, orderIds));
-      const orderMap = Object.fromEntries(orders.map((o) => [o.id, o]));
-
-      rfqs = relevantRfqs.map((r) => {
-        const o = orderMap[r.orderId];
-        return {
-          id: r.id,
-          rfqNumber: r.rfqNumber,
-          orderId: r.orderId,
-          status: r.status,
-          orderNumber: o?.orderNumber ?? String(r.orderId),
-          origin: o?.origin ?? "",
-          destination: o?.destination ?? "",
-          shipmentType: o?.shipmentType ?? "",
-          commodity: o?.commodity ?? null,
-          createdAt: r.createdAt.toISOString(),
-        };
-      });
-
-      // Quotes submitted by this supplier
-      const allQuotes = await db.select().from(logisticOrderQuotesTable)
-        .where(eq(logisticOrderQuotesTable.vendorId, linkedSupplier.id))
-        .orderBy(desc(logisticOrderQuotesTable.createdAt));
-
-      const rfqMap = Object.fromEntries(relevantRfqs.map((r) => [r.id, r]));
-      quotes = allQuotes.map((q) => {
-        const rfq = rfqMap[q.rfqId];
-        const order = orderMap[q.orderId];
-        return {
-          id: q.id,
-          rfqId: q.rfqId,
-          orderId: q.orderId,
-          orderNumber: order?.orderNumber ?? String(q.orderId),
-          rfqNumber: rfq?.rfqNumber ?? String(q.rfqId),
-          vendorPrice: Number(q.vendorPrice),
-          sellingPrice: q.sellingPrice != null ? Number(q.sellingPrice) : null,
-          estimatedPickup: q.estimatedPickup,
-          estimatedDelivery: q.estimatedDelivery,
-          vendorNotes: q.vendorNotes,
-          quoteStatus: q.quoteStatus,
-          replySource: q.replySource,
-          createdAt: q.createdAt.toISOString(),
-        };
-      });
-    }
-  }
-
-  return res.json({
-    portalCustomer: {
-      id: customer.id,
-      name: customer.name,
-      email: customer.email,
-      phone: customer.phone,
-      company: customer.company,
-      role: customer.role,
-    },
-    supplier: linkedSupplier ? {
-      id: linkedSupplier.id,
-      name: linkedSupplier.name,
-      phone: linkedSupplier.phone,
-      contactEmail: linkedSupplier.contactEmail,
-      serviceType: linkedSupplier.serviceType,
-      isActive: linkedSupplier.isActive,
-    } : null,
-    rfqs,
-    quotes,
-  });
+  const result = await getVendorDashboard(customerId);
+  if (!result) return res.status(401).json({ message: "Tidak ditemukan" });
+  return res.json(result);
 });
 
 // POST /api/portal/vendor/quotes — submit or update a quote for an open RFQ
-router.post("/vendor/quotes", requirePortalAuth, async (req, res) => {
+// Keep this aligned with the vendor dashboard routes: a logged-in portal
+// customer is not automatically an active vendor.
+router.post("/vendor/quotes", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
-  if (!customer) return res.status(401).json({ message: "Tidak ditemukan" });
-
   const { rfqId, vendorPrice, estimatedPickup, estimatedDelivery, estimatedDays, vendorNotes } = req.body as {
     rfqId: number; vendorPrice: number; estimatedPickup?: string; estimatedDelivery?: string;
     estimatedDays?: number; vendorNotes?: string;
   };
-  if (!rfqId || !vendorPrice || Number(vendorPrice) <= 0) {
-    return res.status(400).json({ message: "rfqId dan vendorPrice wajib diisi" });
+  try {
+    return res.json(await submitVendorQuote(customerId, { rfqId, vendorPrice, estimatedPickup, estimatedDelivery, estimatedDays, vendorNotes }));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// POST /api/portal/vendor/marketplace-quotes/:quoteId/decline
+// Declining is authenticated and supplier-scoped. The token-based quote form
+// remains responsible for saving/submitting an actual quotation.
+router.post("/vendor/marketplace-quotes/:quoteId/decline", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const quoteId = Number(req.params.quoteId);
+  if (!Number.isInteger(quoteId) || quoteId <= 0) {
+    return res.status(400).json({ message: "quoteId tidak valid" });
   }
 
-  // Resolve linked supplier
-  const allSuppliers = await db.select().from(suppliersTable);
-  const normalizePhone = (p: string | null) => p ? p.replace(/[^\d]/g, "").replace(/^0/, "62") : null;
-  const customerPhone = normalizePhone(customer.phone);
-  const linkedSupplier = allSuppliers.find(
-    (s) =>
-      (s.contactEmail && s.contactEmail.toLowerCase() === customer.email.toLowerCase()) ||
-      (customerPhone && normalizePhone(s.phone) === customerPhone)
-  ) ?? null;
-  if (!linkedSupplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+  const supplierId = await resolveVendorSupplierId(customerId);
+  if (!supplierId) return res.status(403).json({ message: "Akun vendor belum terhubung ke supplier" });
 
-  // Validate RFQ exists and includes this supplier
-  const [rfq] = await db.select().from(logisticOrderRfqsTable).where(eq(logisticOrderRfqsTable.id, rfqId));
-  if (!rfq) return res.status(404).json({ message: "RFQ tidak ditemukan" });
-  if (!(rfq.vendorIds as number[]).includes(linkedSupplier.id)) {
-    return res.status(403).json({ message: "RFQ ini bukan untuk vendor Anda" });
-  }
-  if (rfq.status !== "open") {
-    return res.status(400).json({ message: "RFQ sudah tidak open" });
+  const [quote] = await db
+    .select({
+      id: mktVendorQuotesTable.id,
+      rfqId: mktVendorQuotesTable.rfqId,
+      vendorId: mktVendorQuotesTable.vendorId,
+      status: mktVendorQuotesTable.status,
+      rfqNumber: mktRfqsTable.rfqNumber,
+      vendorName: suppliersTable.name,
+    })
+    .from(mktVendorQuotesTable)
+    .innerJoin(mktRfqsTable, eq(mktRfqsTable.id, mktVendorQuotesTable.rfqId))
+    .innerJoin(suppliersTable, eq(suppliersTable.id, mktVendorQuotesTable.vendorId))
+    .where(and(
+      eq(mktVendorQuotesTable.id, quoteId),
+      eq(mktVendorQuotesTable.vendorId, supplierId),
+    ))
+    .limit(1);
+
+  if (!quote) return res.status(404).json({ message: "Undangan RFQ tidak ditemukan" });
+  if (!["invited", "opened", "requote_requested"].includes(quote.status)) {
+    return res.status(409).json({ message: `RFQ tidak dapat ditolak pada status ${quote.status}` });
   }
 
-  // Upsert: update existing quote or insert new one
-  const [existing] = await db.select().from(logisticOrderQuotesTable)
-    .where(and(eq(logisticOrderQuotesTable.rfqId, rfqId), eq(logisticOrderQuotesTable.vendorId, linkedSupplier.id)));
+  const [updated] = await db
+    .update(mktVendorQuotesTable)
+    .set({ status: "rejected", updatedAt: new Date() })
+    .where(and(
+      eq(mktVendorQuotesTable.id, quoteId),
+      eq(mktVendorQuotesTable.vendorId, supplierId),
+      eq(mktVendorQuotesTable.status, quote.status),
+    ))
+    .returning({ id: mktVendorQuotesTable.id });
 
-  const now = new Date();
-  if (existing) {
-    await db.update(logisticOrderQuotesTable).set({
-      vendorPrice: String(vendorPrice),
-      estimatedPickup: estimatedPickup ?? null,
-      estimatedDelivery: estimatedDelivery ?? null,
-      estimatedDays: estimatedDays ?? null,
-      vendorNotes: vendorNotes ?? null,
-      replySource: "portal",
-      replyTimestamp: now,
-    }).where(eq(logisticOrderQuotesTable.id, existing.id));
-    return res.json({ success: true, quoteId: existing.id, action: "updated" });
-  } else {
-    const [inserted] = await db.insert(logisticOrderQuotesTable).values({
-      rfqId,
-      orderId: rfq.orderId,
-      vendorId: linkedSupplier.id,
-      vendorPrice: String(vendorPrice),
-      estimatedPickup: estimatedPickup ?? null,
-      estimatedDelivery: estimatedDelivery ?? null,
-      estimatedDays: estimatedDays ?? null,
-      vendorNotes: vendorNotes ?? null,
-      markupType: "percentage",
-      markupPercentage: "0",
-      quoteStatus: "pending",
-      replySource: "portal",
-      replyTimestamp: now,
-    }).returning();
-    return res.json({ success: true, quoteId: inserted.id, action: "created" });
-  }
+  if (!updated) return res.status(409).json({ message: "Status RFQ berubah, silakan muat ulang dashboard" });
+  await NotificationService.saveAndBroadcast("admin_notification", {
+    type: "mkt_vendor_quote_rejected",
+    orderId: quote.rfqId,
+    orderNumber: quote.rfqNumber ?? `RFQ-${quote.rfqId}`,
+    customerName: quote.vendorName ?? `Vendor #${quote.vendorId}`,
+    title: "Undangan RFQ Marketplace ditolak",
+    body: `${quote.vendorName ?? `Vendor #${quote.vendorId}`} menolak undangan ${quote.rfqNumber ?? `RFQ-${quote.rfqId}`}.`,
+    targetRole: "admin",
+    dedupeKey: `mkt_vendor_quote_rejected:${quote.id}`,
+    rfqId: quote.rfqId,
+    vendorQuoteId: quote.id,
+    vendorId: quote.vendorId,
+  });
+  return res.json({ ok: true, quoteId: updated.id, status: "rejected" });
 });
 
 // ── PORTAL CONTENT (Public) ───────────────────────────────────────────────
-// GET /api/portal/content
-router.get("/content", async (_req, res) => {
-  const rows = await db.select().from(portalContentTable);
-  const content: Record<string, string> = {};
-  for (const r of rows) content[r.key] = r.value;
-  return res.json(content);
+
+// GET /api/portal/content?locale=id-ID
+router.get("/content", async (req, res) => {
+  try {
+    const locale = typeof req.query.locale === "string" && req.query.locale ? req.query.locale : undefined;
+    const content = await getContent(locale);
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+    return res.json(content);
+  } catch (err) {
+    console.error("[portal] getContent error", err);
+    return res.status(500).json({ error: "Gagal memuat konten" });
+  }
 });
 
 // ── PORTAL ADMIN ENDPOINTS ─────────────────────────────────────────────────
-const PORTAL_ADMIN_KEY = process.env.PORTAL_ADMIN_KEY ?? "";
+const MIN_ADMIN_KEY_LEN = 16;
+
+// Rate limiter: max 5 claim attempts per IP per hour
+const _claimAttempts = new Map<string, { count: number; resetAt: number }>();
+function _claimRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = _claimAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    _claimAttempts.set(ip, { count: 1, resetAt: now + 3_600_000 });
+    return true;
+  }
+  if (entry.count >= 5) return false;
+  entry.count++;
+  return true;
+}
 
 // POST /api/portal/admin/claim  — claim admin role using secret key
 router.post("/admin/claim", requirePortalAuth, async (req, res) => {
+  const ip =
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+    req.socket.remoteAddress ??
+    "unknown";
+
+  if (!_claimRateLimit(ip)) {
+    return res.status(429).json({ message: "Terlalu banyak percobaan. Coba lagi dalam 1 jam." });
+  }
+
+  const PORTAL_ADMIN_KEY = await getAppConfig("PORTAL_ADMIN_KEY");
+  if (!PORTAL_ADMIN_KEY || PORTAL_ADMIN_KEY.length < MIN_ADMIN_KEY_LEN) {
+    return res.status(503).json({ message: "Admin claim belum dikonfigurasi dengan benar." });
+  }
+
   const { key } = req.body ?? {};
-  if (!PORTAL_ADMIN_KEY || String(key) !== PORTAL_ADMIN_KEY) {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+
+  if (String(key) !== PORTAL_ADMIN_KEY) {
+    console.warn(`[SECURITY] admin/claim FAILED — ip=${ip} customerId=${customerId}`);
     return res.status(403).json({ message: "Kunci admin tidak valid" });
   }
-  const customerId = (req as PortalAuthReq).portalCustomerId;
+
   await db.update(portalCustomersTable).set({ role: "admin" }).where(eq(portalCustomersTable.id, customerId));
+  console.warn(`[SECURITY] admin/claim SUCCESS — ip=${ip} customerId=${customerId}`);
+  _claimAttempts.delete(ip);
   return res.json({ role: "admin" });
 });
 
@@ -878,35 +1358,29 @@ router.put("/admin/content", requirePortalAdmin, async (req, res) => {
   if (!updates || typeof updates !== "object") {
     return res.status(400).json({ message: "Body harus berupa objek key-value" });
   }
-  for (const [key, value] of Object.entries(updates)) {
-    await db
-      .insert(portalContentTable)
-      .values({ key, value: String(value), updatedAt: new Date() })
-      .onConflictDoUpdate({ target: portalContentTable.key, set: { value: String(value), updatedAt: new Date() } });
+  try {
+    const locale = typeof req.query.locale === "string" && req.query.locale ? req.query.locale : undefined;
+    await updateContent(updates, locale);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[portal] updateContent error", err);
+    return res.status(500).json({ error: "Gagal update konten" });
   }
-  return res.json({ ok: true });
 });
-
-function sanitizeText(val: unknown): string | null {
-  if (val === null || val === undefined) return null;
-  const s = String(val).trim();
-  return s === "" || s === "null" ? null : s;
-}
 
 // PUT /api/portal/admin/services/:id  — update service (admin only)
 router.put("/admin/services/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  const { name, description, price, imageUrl, mediaItems } = req.body ?? {};
-  const updates: Record<string, unknown> = {};
-  if (name !== undefined) updates.name = String(name);
-  if (description !== undefined) updates.description = sanitizeText(description);
-  if (price !== undefined) updates.price = parseFloat(String(price)).toFixed(2);
-  if (imageUrl !== undefined) updates.imageUrl = sanitizeText(imageUrl);
-  if (mediaItems !== undefined) updates.mediaItems = JSON.stringify(Array.isArray(mediaItems) ? mediaItems : []);
-  if (Object.keys(updates).length === 0) return res.status(400).json({ message: "Tidak ada field yang diubah" });
-  const [updated] = await db.update(productsTable).set(updates).where(eq(productsTable.id, id)).returning();
-  return res.json(updated);
+  try {
+    const updated = await updateService(id, req.body ?? {});
+    broadcastToPortal("price_sync", { ts: Date.now() });
+    return res.json(updated);
+  } catch (err: any) {
+    if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
+    console.error("[portal] updateService error", err);
+    return res.status(500).json({ error: "Gagal update layanan" });
+  }
 });
 
 // POST /api/portal/admin/services — tambah jasa baru (JWT admin)
@@ -915,71 +1389,46 @@ router.post("/admin/services", requirePortalAdmin, async (req, res) => {
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ message: "Nama layanan harus diisi" });
   }
-  const parsedPrice = price !== undefined ? parseFloat(String(price)) : 0;
-  const year = new Date().getFullYear();
-  const [maxRow] = await db.select({ maxId: sql<number>`COALESCE(MAX(id), 0)` }).from(productsTable);
-  const nextId = (Number(maxRow?.maxId ?? 0) + 1);
-  const autoSku = `SVC-${year}-${String(nextId).padStart(4, "0")}`;
-  const [created] = await db.insert(productsTable).values({
-    name: name.trim(),
-    sku: autoSku,
-    description: description ? String(description).trim() : null,
-    price: parsedPrice.toFixed(2),
-    imageUrl: imageUrl ? String(imageUrl).trim() : null,
-    mediaItems: "[]",
-    itemType: "jasa",
-    unit: unit ? String(unit) : "pcs",
-    subcategory: subcategory ? String(subcategory) : null,
-    isActive: true,
-  }).returning();
-  return res.status(201).json(created);
+  try {
+    const created = await createService({ name, description, price, imageUrl, subcategory, unit });
+    return res.status(201).json(created);
+  } catch (err) {
+    console.error("[portal] createService error", err);
+    return res.status(500).json({ error: "Gagal membuat layanan" });
+  }
 });
 
 // DELETE /api/portal/admin/services/:id — hapus jasa (JWT admin)
 router.delete("/admin/services/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  await db.delete(productsTable).where(eq(productsTable.id, id));
-  return res.json({ ok: true });
+  try {
+    const { mediaUrlsToDelete } = await deleteService(id);
+    for (const url of mediaUrlsToDelete) deleteFromSupabase(url).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[portal] deleteService error", err);
+    return res.status(500).json({ error: "Gagal hapus layanan" });
+  }
 });
 
 // GET /api/portal/admin/products  — semua produk aktif (admin only, semua item_type)
 router.get("/admin/products", requirePortalAdmin, async (_req, res) => {
-  const rows = await db
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.isActive, true))
-    .orderBy(productsTable.id);
-  const ids = rows.map((p) => p.id);
-  const catMap = await getProductCategories(ids);
-  return res.json(rows.map((p) => {
-    let mediaItems: Array<{ type: string; url: string }> = [];
-    try { mediaItems = JSON.parse(p.mediaItems ?? "[]"); } catch { /* empty */ }
-    let unitOptions: string[] = [];
-    try { unitOptions = JSON.parse(p.unitOptions ?? "[]"); } catch { /* empty */ }
-    return {
-      id: p.id,
-      name: p.name,
-      description: p.description ?? null,
-      price: Number(p.price),
-      stock: p.stock ?? 0,
-      unit: p.unit,
-      unitOptions,
-      imageUrl: p.imageUrl ?? null,
-      mediaItems,
-      itemType: p.itemType,
-      categories: catMap[p.id] ?? [],
-    };
-  }));
+  try {
+    return res.json(await listAdminProducts());
+  } catch (err) {
+    console.error("[portal] listAdminProducts error", err);
+    return res.status(500).json({ error: "Gagal memuat produk" });
+  }
 });
 
 // GET /api/portal/admin/product-categories
 router.get("/admin/product-categories", requirePortalAdmin, async (_req, res) => {
-  const cats = await db
-    .select({ id: productCategoriesTable.id, name: productCategoriesTable.name })
-    .from(productCategoriesTable)
-    .orderBy(productCategoriesTable.name);
-  return res.json(cats);
+  try {
+    return res.json(await listProductCategories());
+  } catch (err) {
+    return res.status(500).json({ error: "Gagal memuat kategori" });
+  }
 });
 
 // POST /api/portal/admin/products  — create a new product (admin only)
@@ -988,88 +1437,42 @@ router.post("/admin/products", requirePortalAdmin, async (req, res) => {
   if (!name || typeof name !== "string" || !name.trim()) {
     return res.status(400).json({ message: "Nama produk harus diisi" });
   }
-  const parsedPrice = price !== undefined ? parseFloat(String(price)) : 0;
-  const year = new Date().getFullYear();
-  const [maxRow] = await db
-    .select({ maxId: sql<number>`COALESCE(MAX(id), 0)` })
-    .from(productsTable);
-  const nextId = (Number(maxRow?.maxId ?? 0) + 1);
-  const autoSku = `PRD-${year}-${String(nextId).padStart(4, "0")}`;
-  const catNames: string[] = Array.isArray(categories) ? categories.map(String).filter(Boolean) : [];
-  const created = await db.transaction(async (tx) => {
-    const [p] = await tx
-      .insert(productsTable)
-      .values({
-        name: name.trim(),
-        sku: autoSku,
-        description: description ? String(description).trim() : null,
-        price: parsedPrice.toFixed(2),
-        imageUrl: imageUrl ? String(imageUrl).trim() : null,
-        mediaItems: mediaItems ? JSON.stringify(mediaItems) : "[]",
-        itemType: "barang",
-        unit: unit ? String(unit).trim() : "pcs",
-        unitOptions: Array.isArray(unitOptions) ? JSON.stringify(unitOptions) : (unitOptions ? JSON.stringify(String(unitOptions).split(",").map((s: string) => s.trim()).filter(Boolean)) : "[]"),
-        isActive: true,
-      })
-      .returning();
-    if (catNames.length > 0) {
-      const validCats = await tx.select().from(productCategoriesTable).where(inArray(productCategoriesTable.name, catNames));
-      if (validCats.length > 0) {
-        await tx.insert(productCategoryMapTable).values(validCats.map((c) => ({ productId: p.id, categoryId: c.id })));
-      }
-    }
-    return { ...p, categories: catNames };
-  });
-  return res.status(201).json(created);
+  try {
+    const created = await createProduct({ name, description, price, imageUrl, mediaItems, unit, unitOptions, categories });
+    return res.status(201).json(created);
+  } catch (err) {
+    console.error("[portal] createProduct error", err);
+    return res.status(500).json({ error: "Gagal membuat produk" });
+  }
 });
 
 // PUT /api/portal/admin/products/:id  — update product (admin only)
 router.put("/admin/products/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  const { name, description, price, stock, imageUrl, mediaItems, unit, unitOptions, categories } = req.body ?? {};
-  const updates: Record<string, unknown> = {};
-  if (name !== undefined) updates.name = String(name);
-  if (description !== undefined) updates.description = sanitizeText(description);
-  if (price !== undefined) updates.price = parseFloat(String(price)).toFixed(2);
-  if (stock !== undefined) updates.stock = Math.max(0, parseInt(String(stock), 10) || 0);
-  if (imageUrl !== undefined) updates.imageUrl = sanitizeText(imageUrl);
-  if (mediaItems !== undefined) updates.mediaItems = JSON.stringify(mediaItems);
-  if (unit !== undefined) updates.unit = String(unit).trim() || "pcs";
-  if (unitOptions !== undefined) {
-    updates.unitOptions = Array.isArray(unitOptions)
-      ? JSON.stringify(unitOptions)
-      : JSON.stringify(String(unitOptions).split(",").map((s: string) => s.trim()).filter(Boolean));
+  try {
+    const result = await updateProduct(id, req.body ?? {});
+    broadcastToPortal("price_sync", { ts: Date.now() });
+    return res.json(result);
+  } catch (err: any) {
+    if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
+    console.error("[portal] updateProduct error", err);
+    return res.status(500).json({ error: "Gagal update produk" });
   }
-  const catNames: string[] = Array.isArray(categories) ? categories.map(String).filter(Boolean) : [];
-  const hasProductUpdates = Object.keys(updates).length > 0;
-  const hasCategoryUpdate = categories !== undefined;
-  if (!hasProductUpdates && !hasCategoryUpdate) return res.status(400).json({ message: "Tidak ada field yang diubah" });
-  const result = await db.transaction(async (tx) => {
-    let updated = hasProductUpdates
-      ? (await tx.update(productsTable).set(updates).where(eq(productsTable.id, id)).returning())[0]
-      : (await tx.select().from(productsTable).where(eq(productsTable.id, id)))[0];
-    if (hasCategoryUpdate) {
-      await tx.delete(productCategoryMapTable).where(eq(productCategoryMapTable.productId, id));
-      if (catNames.length > 0) {
-        const validCats = await tx.select().from(productCategoriesTable).where(inArray(productCategoriesTable.name, catNames));
-        if (validCats.length > 0) {
-          await tx.insert(productCategoryMapTable).values(validCats.map((c) => ({ productId: id, categoryId: c.id })));
-        }
-      }
-    }
-    const catMap = await getProductCategories([id]);
-    return { ...updated, categories: catMap[id] ?? [] };
-  });
-  return res.json(result);
 });
 
 // DELETE /api/portal/admin/products/:id — hapus produk (admin only)
 router.delete("/admin/products/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  await db.delete(productsTable).where(eq(productsTable.id, id));
-  return res.json({ ok: true });
+  try {
+    const { mediaUrlsToDelete } = await deleteProduct(id);
+    for (const url of mediaUrlsToDelete) deleteFromSupabase(url).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[portal] deleteProduct error", err);
+    return res.status(500).json({ error: "Gagal hapus produk" });
+  }
 });
 
 // POST /api/portal/admin/upload  — direct image upload, returns { url } (admin only)
@@ -1079,55 +1482,37 @@ const _multerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 router.post("/admin/upload", requirePortalAdmin, _multerUpload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ message: "File gambar wajib diisi" });
-  if (!file.mimetype.startsWith("image/")) return res.status(415).json({ message: "Hanya file gambar yang diizinkan" });
+  const _ADMIN_IMG_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/svg+xml"]);
+  const mime = file.mimetype.toLowerCase();
+  if (!_ADMIN_IMG_MIME.has(mime)) return res.status(415).json({ message: "Hanya file gambar (JPG, PNG, WebP, SVG) yang diizinkan" });
+  const validation = mime === "image/svg+xml"
+    ? validateSvgImageAsset(file.buffer)
+    : validateMagicBytes(file.buffer, mime);
+  if (!validation.ok) return res.status(400).json({ message: validation.errorMessage });
   try {
-    const { buffer, contentType } = await compressImageBuffer(file.buffer, file.mimetype, "photo");
+    // Raster images are compressed by the storage layer; SVG remains unchanged.
+    const buffer = file.buffer;
+    const contentType = mime === "image/jpg" ? "image/jpeg" : mime;
     const objectId = randomUUID();
     const url = await _objectStorage.uploadPublicAsset(buffer, objectId, contentType);
     return res.json({ url });
   } catch (err) {
+    req.log?.error({ err }, "admin/upload: Supabase upload gagal");
     return res.status(500).json({ message: "Gagal mengunggah gambar" });
   }
 });
-
-// Per-customer rate limit for portal order uploads: 20 per customer per hour.
-// Portal customers are self-registered (public sign-up); keying by customer ID
-// (not IP) prevents bypass via proxy / shared NAT.
-interface _RateEntry { count: number; resetAt: number }
-const _PORTAL_UPLOAD_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const _PORTAL_UPLOAD_LIMIT = 20;
-const _portalUploadCustomerMap = new Map<number, _RateEntry>();
-
-function _checkPortalUploadLimit(customerId: number): boolean {
-  const now = Date.now();
-  let entry = _portalUploadCustomerMap.get(customerId);
-  if (!entry || now > entry.resetAt) {
-    entry = { count: 0, resetAt: now + _PORTAL_UPLOAD_WINDOW_MS };
-  }
-  if (entry.count >= _PORTAL_UPLOAD_LIMIT) return false;
-  entry.count += 1;
-  _portalUploadCustomerMap.set(customerId, entry);
-  return true;
-}
 
 const _portalUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB hard cap enforced by multer/server
 });
 
-const _PORTAL_ALLOWED_MIME = new Set([
-  "application/pdf",
-  "image/jpeg", "image/png", "image/webp", "image/gif",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
 // POST /api/portal/order-upload
 // Server-side proxy upload: file goes through the API server so multer enforces
-// the 20 MB size limit before any byte reaches object storage.  This replaces
-// the old presigned-URL flow (/order-upload-url) which issued unconstrained GCS
+// the 20 MB size limit before any byte reaches Supabase Storage. This replaces
+// the old presigned-URL flow (/order-upload-url) which issued unconstrained
 // PUT URLs that bypassed all server-side size limits.
-router.post("/order-upload", requirePortalAuth, (req, res, next) => {
+router.post("/order-upload", requireCustomerPortalAuth, (req, res, next) => {
   _portalUpload.single("file")(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
@@ -1138,472 +1523,257 @@ router.post("/order-upload", requirePortalAuth, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
-  const portalReq = req as unknown as PortalAuthReq;
-  const customerId = portalReq.portalCustomerId;
-
-  if (!_checkPortalUploadLimit(customerId)) {
-    return res.status(429).json({ message: "Terlalu banyak upload. Coba lagi dalam 1 jam." });
-  }
-
+  const customerId = (req as unknown as PortalAuthReq).portalCustomerId;
   if (!req.file) return res.status(400).json({ message: "File wajib diunggah" });
-
-  const mime = req.file.mimetype;
-  if (!_PORTAL_ALLOWED_MIME.has(mime) && !mime.startsWith("image/")) {
-    return res.status(415).json({ message: "Tipe file tidak diizinkan" });
-  }
-
+  // C2-REMEDIATION: magic-byte signature check
+  const magicCheck = validateMagicBytes(req.file.buffer, req.file.mimetype);
+  if (!magicCheck.ok) return res.status(400).json({ message: magicCheck.errorMessage });
   try {
-    const objectPath = await _objectStorage.uploadPrivateEntity(req.file.buffer, mime);
-    return res.json({ objectPath });
-  } catch (_err) {
+    return res.json(await uploadOrderFile(customerId, req.file));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    return res.status(500).json({ message: "Gagal mengunggah file" });
+  }
+});
+
+// POST /api/portal/payment-proof-upload — requires portal auth (RC2.1 blocker fix)
+// Auth enforced before multer so unauthenticated requests are rejected before
+// any file bytes are processed or written to object storage.
+const _proofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+router.post("/payment-proof-upload", requireCustomerPortalAuth, (req, res, next) => {
+  _proofUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      res.status(413).json({ message: "Ukuran file melebihi batas 10 MB." }); return;
+    }
+    if (err) { res.status(400).json({ message: "Upload gagal" }); return; }
+    next();
+  });
+}, async (req, res) => {
+  const ip = ((req.ip ?? req.socket?.remoteAddress) || "unknown").replace(/^::ffff:/, "");
+  if (!req.file) return res.status(400).json({ message: "File wajib diunggah" });
+  // C2-REMEDIATION: magic-byte signature check
+  const magicCheck = validateMagicBytes(req.file.buffer, req.file.mimetype);
+  if (!magicCheck.ok) return res.status(400).json({ message: magicCheck.errorMessage });
+  try {
+    return res.json(await uploadPaymentProof(ip, req.file));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     return res.status(500).json({ message: "Gagal mengunggah file" });
   }
 });
 
 // POST /api/portal/order-upload-url  — DEPRECATED, kept for backward compat.
 // Returns 410 Gone so old clients fail visibly rather than silently.
-router.post("/order-upload-url", requirePortalAuth, (_req, res) => {
+router.post("/order-upload-url", requireCustomerPortalAuth, (_req, res) => {
   return res.status(410).json({ message: "Endpoint ini sudah tidak aktif. Gunakan /api/portal/order-upload (multipart/form-data)." });
 });
 
-// Shared helper: find or create CRM customer by email
-async function findOrCreateCrmCustomer(portalCustomer: { name: string; email: string; phone: string | null; company: string | null }) {
-  const [existing] = await db.select().from(customersTable).where(eq(customersTable.email, portalCustomer.email));
-  if (existing) return existing;
-  const [created] = await db.insert(customersTable).values({
-    name: portalCustomer.company ? `${portalCustomer.name} (${portalCustomer.company})` : portalCustomer.name,
-    email: portalCustomer.email,
-    phone: portalCustomer.phone,
-  }).returning();
-  return created!;
-}
-
-// Generate portal order number: PO/YYYY/NNNNN
-async function nextPortalOrderNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  const pattern = `PO/${year}/%`;
-  const [row] = await db
-    .select({ maxSeq: sql<number>`COALESCE(MAX(CAST(SPLIT_PART(doc_number, '/', 3) AS int)), 0)` })
-    .from(salesDocumentsTable)
-    .where(sql`doc_number LIKE ${pattern}`);
-  const seq = (Number(row?.maxSeq ?? 0) + 1).toString().padStart(5, "0");
-  return `PO/${year}/${seq}`;
-}
-
-// GET /api/portal/orders  — returns sales orders linked to the portal customer via email → customers table
-router.get("/orders", requirePortalAuth, async (req, res) => {
-  const portalCustId = (req as Request & { portalCustomerId: number }).portalCustomerId;
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, portalCustId));
-  if (!customer) return res.status(401).json({ message: "Customer not found" });
-  const [crmCustomer] = await db.select().from(customersTable).where(eq(customersTable.email, customer.email));
-  if (!crmCustomer) return res.json([]);
-  const orders = await db
-    .select()
-    .from(salesDocumentsTable)
-    .where(eq(salesDocumentsTable.customerId, crmCustomer.id));
-  return res.json(
-    orders.map((o) => ({
-      id: o.id,
-      docNumber: o.docNumber,
-      status: o.status,
-      grandTotal: Number(o.grandTotal ?? 0),
-      createdAt: o.createdAt.toISOString(),
-    }))
-  );
+// GET /api/portal/orders — returns sales orders for the authenticated portal customer
+router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
+  try {
+    return res.json(await listSalesOrders(portalCustId, portalReq.portalCustomer));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
 });
 
-// GET /api/portal/logistic-orders — returns logistic orders for the authenticated portal customer (by email)
-router.get("/logistic-orders", requirePortalAuth, async (req, res) => {
-  const portalCustId = (req as Request & { portalCustomerId: number }).portalCustomerId;
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, portalCustId));
-  if (!customer) return res.status(401).json({ message: "Customer not found" });
-  const orders = await db
-    .select()
-    .from(logisticOrdersTable)
-    .where(eq(logisticOrdersTable.email, customer.email))
-    .orderBy(sql`${logisticOrdersTable.createdAt} DESC`);
-  return res.json(
-    orders.map((o) => ({
-      id: o.id,
-      orderNumber: o.orderNumber,
-      status: o.status,
-      grandTotal: parseFloat(o.grandTotal),
-      createdAt: o.createdAt.toISOString(),
-      shipmentType: o.shipmentType,
-      origin: o.origin,
-      destination: o.destination,
-    }))
-  );
+// GET /api/portal/logistic-orders — returns logistic orders for the authenticated portal customer
+router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
+  try {
+    return res.json(await listLogisticOrders(portalCustId, portalReq.portalCustomer));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
 });
 
-// POST /api/portal/orders  — place a new order from the portal
-router.post("/orders", requirePortalAuth, async (req, res) => {
-  const portalCustId = (req as Request & { portalCustomerId: number }).portalCustomerId;
-  const [portalCustomer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, portalCustId));
-  if (!portalCustomer) return res.status(401).json({ message: "Customer not found" });
+// GET /api/portal/product-orders — returns portal product orders for the customer
+router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  const portalCustId = portalReq.portalCustomerId;
+  try {
+    return res.json(await listProductOrders(portalCustId, portalReq.portalCustomer));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
 
+// GET /api/portal/order-feed — one read for the Customer Portal orders page.
+router.get("/order-feed", requireCustomerPortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  try {
+    return res.json(await listPortalOrderFeed(
+      portalReq.portalCustomerId,
+      portalReq.portalCustomer,
+    ));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/service-orders — canonical cross-service feed for the
+// authenticated customer dashboard. The route never accepts owner IDs from
+// query/body; ownership is derived from the portal session context.
+router.get("/service-orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    return res.json(await listPortalServiceOrders(
+      portalCustId,
+      (req as PortalAuthReq).portalCustomer,
+    ));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// POST /api/portal/orders — place a new order from the portal
+router.post("/orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalCustId = (req as PortalAuthReq).portalCustomerId;
   const { items, notes, expectedDate, paymentType } = req.body ?? {};
-
-  if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ message: "Pesanan harus memiliki minimal satu item" });
+  try {
+    const result = await createSalesOrder(portalCustId, { items, notes, expectedDate, paymentType });
+    return res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-
-  type OrderItem = { productId?: number; name: string; quantity: number; unitPrice: number };
-  const orderItems = items as OrderItem[];
-
-  // Validate items
-  for (const item of orderItems) {
-    if (!item.name || typeof item.quantity !== "number" || item.quantity <= 0) {
-      return res.status(400).json({ message: "Setiap item harus memiliki nama dan jumlah yang valid" });
-    }
-  }
-
-  // Find or create CRM customer
-  const crmCustomer = await findOrCreateCrmCustomer(portalCustomer);
-
-  // Generate doc number
-  const docNumber = await nextPortalOrderNumber();
-
-  // Calculate totals
-  const totalAmount = orderItems.reduce((sum, item) => sum + item.quantity * (item.unitPrice ?? 0), 0);
-
-  // Create sales document
-  const [doc] = await db
-    .insert(salesDocumentsTable)
-    .values({
-      docNumber,
-      kind: "order",
-      status: "draft",
-      customerId: crmCustomer.id,
-      customerName: crmCustomer.name,
-      totalAmount: totalAmount.toFixed(2),
-      grandTotal: totalAmount.toFixed(2),
-      taxAmount: "0",
-      notes: notes ? String(notes) : null,
-      expectedDate: expectedDate ? new Date(String(expectedDate)) : null,
-      paymentType: paymentType ? String(paymentType) : null,
-      createdById: `portal:${portalCustomer.id}`,
-    })
-    .returning();
-
-  // Create lines
-  if (doc) {
-    await db.insert(salesDocumentLinesTable).values(
-      orderItems.map((item) => ({
-        documentId: doc.id,
-        productId: item.productId ?? null,
-        name: item.name,
-        quantity: item.quantity.toFixed(2),
-        unitPrice: (item.unitPrice ?? 0).toFixed(2),
-        subtotal: (item.quantity * (item.unitPrice ?? 0)).toFixed(2),
-      }))
-    );
-  }
-
-  const totalFmt = Number(doc!.grandTotal ?? 0).toLocaleString("id-ID");
-  const itemList = orderItems.map((i) => `• ${i.name} (${i.quantity}x)`).join("\n");
-
-  // Notify customer via WhatsApp (fire-and-forget)
-  if (portalCustomer.phone) {
-    const customerMsg =
-      `🎉 *Pesanan Diterima!*\n` +
-      `No. Pesanan: *${doc!.docNumber}*\n\n` +
-      `Halo ${portalCustomer.name},\n` +
-      `Pesanan Anda telah kami terima dan sedang diproses.\n\n` +
-      `🛒 *Detail Pesanan:*\n` +
-      `${itemList}\n` +
-      `Total: Rp ${totalFmt}\n\n` +
-      `Tim kami akan segera menghubungi Anda untuk konfirmasi lebih lanjut.\n` +
-      `Terima kasih telah menggunakan layanan CST Logistics. 🚢`;
-    sendWhatsApp(portalCustomer.phone, customerMsg).catch((err: unknown) => {
-      req.log.error({ err, phone: portalCustomer.phone }, "sendWhatsApp to customer failed (portal order)");
-    });
-  }
-
-  // Real-time SSE: notify BizPortal admins immediately
-  broadcastToAdmins("new_order", {
-    type: "portal_sales",
-    orderId: doc!.id,
-    orderNumber: doc!.docNumber,
-    customerName: portalCustomer.name,
-    companyName: portalCustomer.company ?? null,
-    grandTotal: Number(doc!.grandTotal),
-    itemCount: orderItems.length,
-    createdAt: doc!.createdAt,
-  });
-
-  // Notify admin via WhatsApp (fire-and-forget)
-  getAdminWa().then((adminWa) => {
-    if (!adminWa) return;
-    const msg =
-      `🛒 *Order Portal Baru*\n` +
-      `No: ${doc!.docNumber}\n` +
-      `Customer: ${portalCustomer.name}${portalCustomer.company ? ` (${portalCustomer.company})` : ""}\n` +
-      `Email: ${portalCustomer.email}\n` +
-      `Total: Rp ${totalFmt}\n` +
-      `Item: ${orderItems.length} produk/jasa`;
-    return sendWhatsApp(adminWa, msg);
-  }).catch(() => undefined);
-
-  return res.status(201).json({
-    id: doc!.id,
-    docNumber: doc!.docNumber,
-    status: doc!.status,
-    grandTotal: Number(doc!.grandTotal),
-    createdAt: doc!.createdAt.toISOString(),
-  });
 });
 
 // PATCH /api/portal/orders/:id/cancel — cancel a portal sales order (owning customer only)
-router.patch("/orders/:id/cancel", requirePortalAuth, async (req, res) => {
-  const portalCustId = (req as Request & { portalCustomerId: number }).portalCustomerId;
-  const id = Number(req.params.id);
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, portalCustId));
-  if (!customer) return res.status(401).json({ message: "Customer not found" });
-  const [crmCustomer] = await db.select().from(customersTable).where(eq(customersTable.email, customer.email));
-  if (!crmCustomer) return res.status(403).json({ message: "Forbidden" });
-  const [doc] = await db
-    .select()
-    .from(salesDocumentsTable)
-    .where(and(eq(salesDocumentsTable.id, id), eq(salesDocumentsTable.customerId, crmCustomer.id)));
-  if (!doc) return res.status(404).json({ message: "Order not found" });
-  if (doc.status === "cancelled" || doc.status === "done") {
-    return res.status(400).json({ message: "Order cannot be cancelled" });
+router.patch("/orders/:id/cancel", requireCustomerPortalAuth, async (req, res) => {
+  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(String(req.params.id));
+  try {
+    return res.json(await cancelSalesOrder(portalCustId, id));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-  const [updated] = await db
-    .update(salesDocumentsTable)
-    .set({ status: "cancelled", updatedAt: new Date() })
-    .where(eq(salesDocumentsTable.id, id))
-    .returning();
-  return res.json({
-    id: updated.id,
-    docNumber: updated.docNumber,
-    status: updated.status,
-    grandTotal: Number(updated.grandTotal ?? 0),
-    createdAt: updated.createdAt.toISOString(),
-  });
 });
 
 // PATCH /api/portal/logistic-orders/:id/cancel — cancel a portal logistic order (owning customer only)
-router.patch("/logistic-orders/:id/cancel", requirePortalAuth, async (req, res) => {
-  const portalCustId = (req as Request & { portalCustomerId: number }).portalCustomerId;
-  const id = Number(req.params.id);
-  const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, portalCustId));
-  if (!customer) return res.status(401).json({ message: "Customer not found" });
-  const [order] = await db
-    .select()
-    .from(logisticOrdersTable)
-    .where(and(eq(logisticOrdersTable.id, id), eq(logisticOrdersTable.email, customer.email)));
-  if (!order) return res.status(404).json({ message: "Order not found" });
-  if (order.status === "Cancelled" || order.status === "Completed") {
-    return res.status(400).json({ message: "Order cannot be cancelled" });
+router.patch("/logistic-orders/:id/cancel", requireCustomerPortalAuth, async (req, res) => {
+  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(String(req.params.id));
+  try {
+    return res.json(await cancelLogisticOrder(portalCustId, id));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
   }
-  const [updated] = await db
-    .update(logisticOrdersTable)
-    .set({ status: "Cancelled" })
-    .where(eq(logisticOrdersTable.id, id))
-    .returning();
-  return res.json({
-    id: updated.id,
-    orderNumber: updated.orderNumber,
-    status: updated.status,
-    grandTotal: parseFloat(updated.grandTotal),
-    createdAt: updated.createdAt.toISOString(),
-    shipmentType: updated.shipmentType,
-    origin: updated.origin,
-    destination: updated.destination,
-  });
 });
 
 // ── Delivery Vendors ────────────────────────────────────────────────────────
 
-const DEFAULT_VENDORS = [
-  { name: "JNE REG",       logo: "📦", eta: "2-3 hari",  fee: "15000", note: null, sortOrder: 1 },
-  { name: "JNE YES",       logo: "⚡", eta: "1 hari",    fee: "35000", note: null, sortOrder: 2 },
-  { name: "J&T Express",   logo: "📫", eta: "2-3 hari",  fee: "14000", note: null, sortOrder: 3 },
-  { name: "SiCepat REG",   logo: "🚀", eta: "2-3 hari",  fee: "13000", note: null, sortOrder: 4 },
-  { name: "AnterAja",      logo: "🏃", eta: "2-4 hari",  fee: "12000", note: null, sortOrder: 5 },
-  { name: "Pos Indonesia", logo: "📮", eta: "3-5 hari",  fee: "10000", note: null, sortOrder: 6 },
-  { name: "GoSend",        logo: "🛵", eta: "Same day",  fee: "25000", note: null, sortOrder: 7 },
-  { name: "Grab Express",  logo: "🟢", eta: "Same day",  fee: "28000", note: null, sortOrder: 8 },
-  { name: "CST Logistics", logo: "🚢", eta: "1-2 hari",  fee: "0",     note: "Harga nego", sortOrder: 9 },
-];
-
-async function ensureDefaultVendors() {
-  const [existing] = await db.select({ id: suppliersTable.id }).from(suppliersTable)
-    .where(eq(suppliersTable.name, "JNE REG")).limit(1);
-  if (!existing) {
-    await db.insert(suppliersTable).values(
-      DEFAULT_VENDORS.map((v) => ({ ...v, isActive: true }))
-    );
-  }
-}
-
-function toVendorResponse(v: typeof suppliersTable.$inferSelect) {
-  return {
-    id: v.id,
-    name: v.name,
-    logo: v.logo,
-    eta: v.eta,
-    fee: Number(v.fee ?? 0),
-    note: v.note,
-    isActive: v.isActive,
-    sortOrder: v.sortOrder,
-    phone: v.phone ?? null,
-    email: v.contactEmail ?? null,
-    serviceType: v.serviceType ?? null,
-  };
-}
-
 // GET /api/portal/delivery-vendors — public: return active vendors (sorted)
 router.get("/delivery-vendors", async (_req, res) => {
-  await ensureDefaultVendors();
-  const vendors = await db
-    .select()
-    .from(suppliersTable)
-    .where(eq(suppliersTable.isActive, true))
-    .orderBy(suppliersTable.sortOrder, suppliersTable.id);
-  return res.json(vendors.map(toVendorResponse));
+  try {
+    return res.json(await listVendors(false));
+  } catch (err) {
+    console.error("[portal] listVendors error", err);
+    return res.status(500).json({ error: "Gagal memuat vendor" });
+  }
 });
 
 // GET /api/portal/admin/delivery-vendors — admin: return ALL vendors
 router.get("/admin/delivery-vendors", requirePortalAdmin, async (_req, res) => {
-  await ensureDefaultVendors();
-  const vendors = await db
-    .select()
-    .from(suppliersTable)
-    .orderBy(suppliersTable.sortOrder, suppliersTable.id);
-  return res.json(vendors.map(toVendorResponse));
+  try {
+    return res.json(await listVendors(true));
+  } catch (err) {
+    console.error("[portal] listVendors (admin) error", err);
+    return res.status(500).json({ error: "Gagal memuat vendor" });
+  }
 });
 
 // POST /api/portal/admin/delivery-vendors — create vendor
 router.post("/admin/delivery-vendors", requirePortalAdmin, async (req, res) => {
-  const { name, logo, eta, fee, note, phone, email, serviceType } = req.body ?? {};
+  const { name } = req.body ?? {};
   if (!name || typeof name !== "string" || !name.trim())
     return res.status(400).json({ message: "Nama vendor harus diisi" });
-  const [maxRow] = await db
-    .select({ max: sql<number>`COALESCE(MAX(sort_order), 0)` })
-    .from(suppliersTable);
-  const nextSort = Number(maxRow?.max ?? 0) + 1;
-  const [created] = await db.insert(suppliersTable).values({
-    name: name.trim(),
-    logo: logo ? String(logo).trim() : "📦",
-    eta: eta ? String(eta).trim() : "2-3 hari",
-    fee: fee !== undefined ? String(parseFloat(String(fee)) || 0) : "0",
-    note: note ? String(note).trim() : null,
-    isActive: true,
-    sortOrder: nextSort,
-    phone: phone ? String(phone).trim() : null,
-    contactEmail: email ? String(email).trim() : null,
-    serviceType: serviceType ? String(serviceType).trim() : null,
-  }).returning();
-  return res.status(201).json(toVendorResponse(created));
+  try {
+    const created = await createVendor(req.body ?? {});
+    return res.status(201).json(created);
+  } catch (err) {
+    console.error("[portal] createVendor error", err);
+    return res.status(500).json({ error: "Gagal membuat vendor" });
+  }
 });
 
 // PUT /api/portal/admin/delivery-vendors/:id — update vendor
 router.put("/admin/delivery-vendors/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  const { name, logo, eta, fee, note, isActive, sortOrder, phone, email, serviceType } = req.body ?? {};
-  const updates: Record<string, unknown> = {};
-  if (name !== undefined) updates.name = String(name).trim();
-  if (logo !== undefined) updates.logo = String(logo).trim();
-  if (eta !== undefined) updates.eta = String(eta).trim();
-  if (fee !== undefined) updates.fee = String(parseFloat(String(fee)) || 0);
-  if (note !== undefined) updates.note = note ? String(note).trim() : null;
-  if (isActive !== undefined) updates.isActive = Boolean(isActive);
-  if (sortOrder !== undefined) updates.sortOrder = parseInt(String(sortOrder)) || 0;
-  if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
-  if (email !== undefined) updates.contactEmail = email ? String(email).trim() : null;
-  if (serviceType !== undefined) updates.serviceType = serviceType ? String(serviceType).trim() : null;
-  if (Object.keys(updates).length === 0)
-    return res.status(400).json({ message: "Tidak ada field yang diubah" });
-  const [updated] = await db.update(suppliersTable).set(updates).where(eq(suppliersTable.id, id)).returning();
-  if (!updated) return res.status(404).json({ message: "Vendor tidak ditemukan" });
-  return res.json(toVendorResponse(updated));
+  try {
+    const updated = await updateVendor(id, req.body ?? {});
+    return res.json(updated);
+  } catch (err: any) {
+    if (err?.statusCode === 400) return res.status(400).json({ message: err.message });
+    if (err?.statusCode === 404) return res.status(404).json({ message: err.message });
+    console.error("[portal] updateVendor error", err);
+    return res.status(500).json({ error: "Gagal update vendor" });
+  }
 });
 
 // DELETE /api/portal/admin/delivery-vendors/:id — delete vendor
 router.delete("/admin/delivery-vendors/:id", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
-  await db.delete(suppliersTable).where(eq(suppliersTable.id, id));
-  return res.json({ ok: true });
+  try {
+    const { logoUrl } = await deleteVendor(id);
+    if (logoUrl) deleteFromSupabase(logoUrl).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[portal] deleteVendor error", err);
+    return res.status(500).json({ error: "Gagal hapus vendor" });
+  }
 });
 
 // ---- Pricing Rates (Trucking & Freight) ----
-const TRUCKING_RATES_KEY = "logistic_trucking_rates";
-const FREIGHT_RATES_KEY  = "logistic_freight_rates";
-
-const DEFAULT_TRUCKING_RATES: Record<string, { ratePerKm: number; loadingFee: number }> = {
-  CDE:     { ratePerKm: 5000,  loadingFee: 500000 },
-  CDD:     { ratePerKm: 7000,  loadingFee: 700000 },
-  Fuso:    { ratePerKm: 10000, loadingFee: 1000000 },
-  Wingbox: { ratePerKm: 12000, loadingFee: 1200000 },
-  Trailer: { ratePerKm: 15000, loadingFee: 1500000 },
-};
-
-const DEFAULT_FREIGHT_RATES = {
-  seaLcl:          { ratePerCbm: 250000,  label: "Sea Freight LCL (per CBM)" },
-  seaFcl20:        { flatRate: 8000000,   label: "Sea Freight FCL 20ft" },
-  seaFcl40:        { flatRate: 14000000,  label: "Sea Freight FCL 40ft" },
-  air:             { ratePerKg: 50000,    label: "Air Freight (per kg)" },
-  customClearance: { flatRate: 2500000,   label: "Custom Clearance" },
-};
-
-async function getPricingKey<T>(key: string, def: T): Promise<T> {
-  const [row] = await db.select().from(portalContentTable).where(eq(portalContentTable.key, key));
-  if (!row) return def;
-  try { return JSON.parse(row.value) as T; } catch { return def; }
-}
-
-async function setPricingKey(key: string, value: unknown) {
-  const json = JSON.stringify(value);
-  const existing = await db.select().from(portalContentTable).where(eq(portalContentTable.key, key));
-  if (existing.length > 0) {
-    await db.update(portalContentTable).set({ value: json }).where(eq(portalContentTable.key, key));
-  } else {
-    await db.insert(portalContentTable).values({ key, value: json });
-  }
-}
 
 // GET /api/portal/trucking-rates — public
 router.get("/trucking-rates", async (_req, res) => {
-  const rates = await getPricingKey(TRUCKING_RATES_KEY, DEFAULT_TRUCKING_RATES);
-  return res.json(rates);
+  return res.json(await getTruckingRates());
 });
 
 // GET /api/portal/admin/trucking-rates
 router.get("/admin/trucking-rates", requirePortalAdmin, async (_req, res) => {
-  const rates = await getPricingKey(TRUCKING_RATES_KEY, DEFAULT_TRUCKING_RATES);
-  return res.json(rates);
+  return res.json(await getTruckingRates());
 });
 
 // PUT /api/portal/admin/trucking-rates
 router.put("/admin/trucking-rates", requirePortalAdmin, async (req, res) => {
   const rates = req.body as Record<string, { ratePerKm: number; loadingFee: number }>;
   if (!rates || typeof rates !== "object") return res.status(400).json({ message: "Format tidak valid" });
-  await setPricingKey(TRUCKING_RATES_KEY, rates);
+  await setTruckingRates(rates);
+  broadcastToPortal("price_sync", { ts: Date.now(), type: "trucking_rates" });
   return res.json({ ok: true });
 });
 
 // GET /api/portal/admin/freight-rates
 router.get("/admin/freight-rates", requirePortalAdmin, async (_req, res) => {
-  const rates = await getPricingKey(FREIGHT_RATES_KEY, DEFAULT_FREIGHT_RATES);
-  return res.json(rates);
+  return res.json(await getFreightRates());
 });
 
 // PUT /api/portal/admin/freight-rates
 router.put("/admin/freight-rates", requirePortalAdmin, async (req, res) => {
   if (!req.body || typeof req.body !== "object") return res.status(400).json({ message: "Format tidak valid" });
-  await setPricingKey(FREIGHT_RATES_KEY, req.body);
+  await setFreightRates(req.body);
+  broadcastToPortal("price_sync", { ts: Date.now(), type: "freight_rates" });
   return res.json({ ok: true });
 });
 
 // POST /api/portal/admin/fix-jasa-names — one-time: strip 'Jasa ' prefix from product names
-router.post("/admin/fix-jasa-names", async (req, res) => {
+router.post("/admin/fix-jasa-names", requirePortalAdmin, async (req, res) => {
   const key = req.headers["x-admin-key"];
-  const adminKey = process.env.PORTAL_ADMIN_KEY ?? "";
+  const adminKey = await getAppConfig("PORTAL_ADMIN_KEY");
   if (!adminKey || key !== adminKey) { res.status(401).json({ message: "Unauthorized" }); return; }
   const rows = await db
     .select({ id: productsTable.id, name: productsTable.name })
@@ -1630,8 +1800,28 @@ router.get("/cargo-types", async (_req, res) => {
   }
 });
 
+// GET /api/portal/logistics-subcategories — public, returns logistics subcategory list
+router.get("/logistics-subcategories", async (_req, res) => {
+  try {
+    const [row] = await db.select().from(portalContentTable).where(eq(portalContentTable.key, "logistics_subcategories"));
+    const cats = row ? JSON.parse(row.value) : LOGISTICS_SUBCATEGORIES_FALLBACK;
+    return res.json(cats);
+  } catch {
+    return res.json(LOGISTICS_SUBCATEGORIES_FALLBACK);
+  }
+});
+
+const requestQuoteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { error: "Terlalu banyak permintaan. Coba lagi dalam 1 jam." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // POST /api/portal/request-quote — public, no auth required
-router.post("/request-quote", async (req, res) => {
+router.post("/request-quote", requestQuoteLimiter, async (req, res) => {
   const {
     name, email, whatsapp, service, origin, destination,
     weight, length, width, height, incoterms, insurance, express, result,
@@ -1646,208 +1836,43 @@ router.post("/request-quote", async (req, res) => {
       total?: number; chargeableWeight?: number; cbm?: number;
     };
   };
-
-  if (!name?.trim() || !whatsapp?.trim()) {
-    return res.status(400).json({ error: "Nama dan WhatsApp wajib diisi" });
-  }
-
-  const fmt = (n?: number) =>
-    n ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n) : "-";
-
-  const serviceLabels: Record<string, string> = {
-    seaFreight: "Sea Freight 🚢", airFreight: "Air Freight ✈️",
-    customs: "Bea Cukai 📦", domestic: "Domestik/Trucking 🚚",
-    warehousing: "Gudang/Warehousing 🏠", projectCargo: "Project Cargo 🌐",
-  };
-  const svcLabel = serviceLabels[service] ?? service;
-  const ts = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
-
-  const waLines = [
-    `🚢 *REQUEST QUOTE BARU — CST Logistics*`,
-    `───────────────────────────`,
-    `👤 *Nama:* ${name}`,
-    `📧 *Email:* ${email || "-"}`,
-    `📱 *WhatsApp:* ${whatsapp}`,
-    `───────────────────────────`,
-    `📦 *Layanan:* ${svcLabel}`,
-    `🌍 *Rute:* ${origin} → ${destination}`,
-    weight ? `⚖️ *Berat:* ${weight} kg` : null,
-    (length && width && height) ? `📐 *Dimensi:* ${length}×${width}×${height} cm` : null,
-    incoterms ? `📋 *Incoterms:* ${incoterms}` : null,
-    insurance ? `🛡️ *Asuransi:* Ya` : null,
-    express ? `⚡ *Express:* Ya` : null,
-    `───────────────────────────`,
-    result?.total ? `💰 *Estimasi Total:* ${fmt(result.total)}` : null,
-    result?.chargeableWeight != null ? `  • Chargeable: ${result.chargeableWeight} kg` : null,
-    result?.cbm != null ? `  • Volume: ${result.cbm} CBM` : null,
-    result?.baseCost ? `  • Biaya Dasar: ${fmt(result.baseCost)}` : null,
-    result?.weightCost ? `  • Biaya Berat/CBM: ${fmt(result.weightCost)}` : null,
-    result?.handlingFee ? `  • Handling: ${fmt(result.handlingFee)}` : null,
-    result?.customsFee ? `  • Bea Cukai: ${fmt(result.customsFee)}` : null,
-    result?.insuranceFee ? `  • Asuransi: ${fmt(result.insuranceFee)}` : null,
-    result?.expressFee ? `  • Express: ${fmt(result.expressFee)}` : null,
-    `───────────────────────────`,
-    `🕐 ${ts}`,
-    ``,
-    `_Segera tindaklanjuti permintaan ini._`,
-  ].filter(Boolean).join("\n");
-
-  const errors: string[] = [];
-
-  // WhatsApp ke admin
   try {
-    const adminTarget = await getAdminWa();
-    if (adminTarget) await sendWhatsApp(adminTarget, waLines);
+    return res.json(await submitRequestQuote({
+      name, email, whatsapp, service, origin, destination,
+      weight, length, width, height, incoterms, insurance, express, result,
+    }));
   } catch (err) {
-    errors.push("WA-admin: " + String(err));
-  }
-
-  // WhatsApp konfirmasi ke customer
-  try {
-    if (whatsapp?.trim()) {
-      const confirmLines = [
-        `✅ *Halo ${name}!*`,
-        ``,
-        `Terima kasih telah menghubungi *CST Logistics*.`,
-        `Tim kami telah menerima permintaan penawaran Anda:`,
-        ``,
-        `📦 *Layanan:* ${svcLabel}`,
-        `🌍 *Rute:* ${origin} → ${destination}`,
-        result?.total ? `💰 *Estimasi:* ${fmt(result.total)}` : null,
-        ``,
-        `Kami akan menghubungi Anda dalam *1×24 jam kerja* untuk konfirmasi dan penawaran resmi.`,
-        ``,
-        `_Salam,_`,
-        `_Tim CST Logistics 🚢_`,
-      ].filter(Boolean).join("\n");
-      await sendWhatsApp(whatsapp, confirmLines);
+    if (err instanceof LogisticOrderServiceError) {
+      return res.status(err.statusCode).json({ error: err.message, ...(err.payload ?? {}) });
     }
-  } catch (err) {
-    errors.push("WA-customer: " + String(err));
+    throw err;
   }
-
-  // Email ke admin
-  try {
-    const adminEmail = process.env.ADMIN_EMAIL?.split(",")[0]?.trim();
-    if (adminEmail && isSmtpConfigured()) {
-      const row = (c: string, v: string) =>
-        `<tr><td style="color:#64748B;padding:4px 0;width:140px;font-size:12px;">${c}</td><td style="font-weight:600;color:#1E293B;font-size:12px;">${v}</td></tr>`;
-
-      const emailHtml = `
-        <div style="font-family:system-ui,sans-serif;max-width:560px;margin:0 auto;background:#F8FAFC;padding:20px;border-radius:12px;">
-          <div style="background:linear-gradient(135deg,#0B3D6B,#1A73D4);padding:18px 22px;border-radius:10px 10px 0 0;">
-            <h2 style="color:white;margin:0;font-size:17px;">🚢 Request Quote Baru</h2>
-            <p style="color:rgba(255,255,255,0.70);margin:3px 0 0;font-size:11px;">${ts}</p>
-          </div>
-          <div style="background:white;padding:18px 22px;border-radius:0 0 10px 10px;border:1px solid #E2E8F0;border-top:none;">
-            <h4 style="color:#0B3D6B;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 10px;">Kontak</h4>
-            <table style="width:100%;border-collapse:collapse;">
-              ${row("Nama", name)}
-              ${row("Email", email || "-")}
-              ${row("WhatsApp", whatsapp)}
-            </table>
-            <hr style="border:none;border-top:1px solid #E2E8F0;margin:14px 0;">
-            <h4 style="color:#0B3D6B;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 10px;">Detail Pengiriman</h4>
-            <table style="width:100%;border-collapse:collapse;">
-              ${row("Layanan", svcLabel)}
-              ${row("Rute", `${origin} → ${destination}`)}
-              ${weight ? row("Berat", `${weight} kg`) : ""}
-              ${length && width && height ? row("Dimensi", `${length} × ${width} × ${height} cm`) : ""}
-              ${incoterms ? row("Incoterms", incoterms) : ""}
-              ${insurance ? row("Asuransi", "✅ Ya") : ""}
-              ${express ? row("Express", "✅ Ya") : ""}
-            </table>
-            ${result?.total ? `
-            <hr style="border:none;border-top:1px solid #E2E8F0;margin:14px 0;">
-            <h4 style="color:#1D4ED8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 10px;">Estimasi Biaya</h4>
-            <table style="width:100%;border-collapse:collapse;">
-              ${result.chargeableWeight != null ? row("Chargeable", `${result.chargeableWeight} kg`) : ""}
-              ${result.cbm != null ? row("Volume", `${result.cbm} CBM`) : ""}
-              ${result.baseCost ? row("Biaya Dasar", fmt(result.baseCost)) : ""}
-              ${result.weightCost ? row("Berat/CBM", fmt(result.weightCost)) : ""}
-              ${result.handlingFee ? row("Handling", fmt(result.handlingFee)) : ""}
-              ${result.customsFee ? row("Bea Cukai", fmt(result.customsFee)) : ""}
-              ${result.insuranceFee ? row("Asuransi", fmt(result.insuranceFee)) : ""}
-              ${result.expressFee ? row("Express", fmt(result.expressFee)) : ""}
-            </table>
-            <div style="margin-top:12px;padding:12px 14px;background:#EFF6FF;border-radius:8px;border:1px solid #BFDBFE;display:flex;justify-content:space-between;align-items:center;">
-              <span style="font-weight:700;color:#1D4ED8;font-size:12px;">TOTAL ESTIMASI</span>
-              <span style="font-weight:800;color:#0B3D6B;font-size:20px;">${fmt(result.total)}</span>
-            </div>` : ""}
-            <div style="margin-top:18px;padding:10px 14px;background:#F1F5F9;border-radius:8px;text-align:center;font-size:10px;color:#94A3B8;">
-              CST Logistics — Sistem Manajemen Logistik Terintegrasi
-            </div>
-          </div>
-        </div>`;
-
-      await sendMail({
-        to: adminEmail,
-        subject: `[Request Quote] ${svcLabel.replace(/[^\w\s→/-]/g, "").trim()} — ${name} — ${origin} → ${destination}`,
-        html: emailHtml,
-        text: waLines,
-      });
-    }
-  } catch (err) {
-    errors.push("Email: " + String(err));
-  }
-
-  // Simpan ke database
-  try {
-    await db.insert(quoteRequestsTable).values({
-      name: name.trim(),
-      email: email?.trim() || null,
-      whatsapp: whatsapp.trim(),
-      service,
-      origin: origin.trim(),
-      destination: destination.trim(),
-      weight: weight ?? null,
-      length: length ?? null,
-      width: width ?? null,
-      height: height ?? null,
-      incoterms: incoterms ?? null,
-      insurance: insurance ?? false,
-      express: express ?? false,
-      estimatedTotal: result?.total != null ? String(result.total) : null,
-      estimatedCbm: result?.cbm != null ? String(result.cbm) : null,
-      estimatedChargeableWeight: result?.chargeableWeight != null ? String(result.chargeableWeight) : null,
-      status: "new",
-    });
-  } catch (err) {
-    errors.push("DB-save: " + String(err));
-  }
-
-  return res.json({ ok: true, warnings: errors.length ? errors : undefined });
 });
 
 // GET /api/portal/quote-requests — daftar semua request quote (BizPortal admin)
 router.get("/quote-requests", async (req, res) => {
   if (!(await requireClerkUser(req, res))) return;
   const status = req.query.status as string | undefined;
-  const conditions = status ? [eq(quoteRequestsTable.status, status)] : [];
-  const items = await db
-    .select()
-    .from(quoteRequestsTable)
-    .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(desc(quoteRequestsTable.createdAt));
-  res.json({ items, total: items.length });
+  try {
+    return res.json(await listQuoteRequests(status));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
 });
 
 // PATCH /api/portal/quote-requests/:id — update status/notes/handledBy (BizPortal admin)
 router.patch("/quote-requests/:id", async (req, res): Promise<void> => {
   if (!(await requireClerkUser(req, res))) return;
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   if (!id) { res.status(400).json({ error: "invalid id" }); return; }
   const { status, notes, handledBy } = req.body ?? {};
-  await db
-    .update(quoteRequestsTable)
-    .set({
-      ...(status != null ? { status } : {}),
-      ...(notes != null ? { notes } : {}),
-      ...(handledBy != null ? { handledBy } : {}),
-      updatedAt: new Date(),
-    })
-    .where(eq(quoteRequestsTable.id, id));
-  res.json({ ok: true });
+  try {
+    res.json(await updateQuoteRequest(id, { status, notes, handledBy }));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) { res.status(err.statusCode).json({ message: err.message }); return; }
+    throw err;
+  }
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1856,493 +1881,4435 @@ router.patch("/quote-requests/:id", async (req, res): Promise<void> => {
 
 const onboardingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-function getOnboardingOpenAI(): OpenAI {
-  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OpenAI API key not configured.");
-  return new OpenAI({ apiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
-}
-
 // GET /api/portal/onboarding/status
 router.get("/onboarding/status", requirePortalAuth, async (req, res): Promise<void> => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const [profile] = await db.select().from(userProfilesTable).where(eq(userProfilesTable.customerId, customerId));
-  if (!profile) {
-    res.json({ status: "incomplete", accountType: null, hasProfile: false });
-    return;
-  }
-  const rejectionReason = profile.status === "rejected" ? profile.rejectionReason : undefined;
+  const result = await getOnboardingStatus(customerId);
+  const context = await getPortalCustomerContext(customerId);
   res.json({
-    hasProfile: true,
-    status: profile.status,
-    accountType: profile.accountType,
-    ...(rejectionReason ? { rejectionReason } : {}),
-    profile: {
-      fullName: profile.fullName,
-      phone: profile.phone,
-      address: profile.address,
-      ktpUrl: profile.ktpUrl,
+    ...result,
+    status: context.status === "company_pending" ? "company_pending" : result.status,
+    customerType: context.customerType,
+    customerContext: {
+      status: context.status,
+      companyId: context.companyId,
+      company: context.company,
+      activeMemberships: context.activeMemberships,
+      pendingRequest: context.pendingRequest,
     },
   });
 });
 
+// Rate limit KTP OCR: max 5 calls per customer per hour (gpt-4o is expensive)
+const _ktpOcrRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "Terlalu banyak permintaan OCR. Coba lagi dalam 1 jam." },
+  keyGenerator: (req) => {
+    const customerId = (req as PortalAuthReq).portalCustomerId?.toString();
+    if (customerId) return customerId;
+    const raw =
+      (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+      req.socket.remoteAddress ??
+      "unknown";
+    return ipKeyGenerator(raw);
+  },
+});
+
+// KTP OCR hanya menerima gambar — PDF dan dokumen lain ditolak sebelum OCR dipanggil
+const _KTP_OCR_ALLOWED_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
+
 // POST /api/portal/onboarding/ktp-ocr — upload KTP image → OCR
-router.post("/onboarding/ktp-ocr", requirePortalAuth, onboardingUpload.single("file"), async (req, res): Promise<void> => {
+router.post("/onboarding/ktp-ocr", requirePortalAuth, _ktpOcrRateLimit, onboardingUpload.single("file"), async (req, res): Promise<void> => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   if (!req.file) { res.status(400).json({ ok: false, error: "File tidak ditemukan." }); return; }
 
+  // C2-REMEDIATION: validasi MIME + magic byte sebelum OCR dipanggil
+  const mimeCheck = validateUploadFile(req.file, {
+    allowedMime: _KTP_OCR_ALLOWED_MIME,
+    allowedExt: ["jpg", "jpeg", "png", "webp"],
+    maxSizeBytes: 10 * 1024 * 1024,
+  });
+  if (!mimeCheck.ok) { res.status(415).json({ ok: false, error: mimeCheck.errorMessage }); return; }
+  const magicCheck = validateMagicBytes(req.file.buffer, req.file.mimetype);
+  if (!magicCheck.ok) { res.status(400).json({ ok: false, error: magicCheck.errorMessage }); return; }
+
   try {
-    const openai = getOnboardingOpenAI();
-    const base64 = req.file.buffer.toString("base64");
-    const mime = req.file.mimetype || "image/jpeg";
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      max_tokens: 800,
-      messages: [{
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `Kamu adalah sistem OCR KTP Indonesia. Ekstrak semua field dari KTP ini dan kembalikan HANYA JSON tanpa markdown, format:
-{"nik":"...","name":"...","birthPlace":"...","birthDate":"...","address":"...","rt":"...","rw":"...","kelurahan":"...","kecamatan":"...","kabupaten":"...","provinsi":"...","gender":"...","religion":"...","maritalStatus":"...","occupation":"...","nationality":"WNI"}
-Isi string kosong jika field tidak terbaca.`,
-          },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${base64}`, detail: "high" } },
-        ],
-      }],
-    });
-
-    const raw = response.choices[0]?.message?.content ?? "{}";
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    let data: Record<string, string> = {};
-    try { data = JSON.parse(cleaned); } catch { /* fallback empty */ }
-
-    // Persist OCR result
-    await db.insert(ocrResultsTable).values({
-      customerId,
-      docType: "ktp",
-      nik: data.nik || null,
-      name: data.name || null,
-      birthPlace: data.birthPlace || null,
-      birthDate: data.birthDate || null,
-      address: data.address || null,
-      rt: data.rt || null,
-      rw: data.rw || null,
-      kelurahan: data.kelurahan || null,
-      kecamatan: data.kecamatan || null,
-      kabupaten: data.kabupaten || null,
-      provinsi: data.provinsi || null,
-      gender: data.gender || null,
-      religion: data.religion || null,
-      maritalStatus: data.maritalStatus || null,
-      occupation: data.occupation || null,
-      nationality: data.nationality || null,
-      rawJson: JSON.stringify(data),
-    }).onConflictDoNothing();
-
+    const data = await runKtpOcr(customerId, req.file.buffer, req.file.mimetype);
     res.json({ ok: true, data });
   } catch (err) {
-    console.error("[ktp-ocr]", err);
-    res.status(500).json({ ok: false, error: "OCR gagal. Pastikan OpenAI API key dikonfigurasi." });
+    const failure = ktpOcrClientResponse(err);
+    const classified = classifyKtpOcrError(err);
+    console.error("[ktp-ocr] failed", {
+      code: classified.code,
+      providerStatus: classified.providerStatus ?? null,
+    });
+    res.status(failure.status).json({ ok: false, error: failure.error });
   }
 });
 
-// POST /api/portal/onboarding/upload-doc — upload any document to object storage
+// POST /api/portal/onboarding/upload-doc — upload any document to object storage (PRIVATE)
+// Dokumen identitas (KTP, SIM, STNK, legality) disimpan di private bucket,
+// bukan public, karena mengandung data sensitif pelanggan.
 router.post("/onboarding/upload-doc", requirePortalAuth, onboardingUpload.single("file"), async (req, res): Promise<void> => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   if (!req.file) { res.status(400).json({ ok: false, error: "File tidak ditemukan." }); return; }
   const docType = String(req.body?.docType ?? "doc");
 
+  // C2-REMEDIATION: magic-byte check — verifikasi konten buffer cocok dengan MIME sebelum disimpan
+  const magicCheck = validateMagicBytes(req.file.buffer, req.file.mimetype);
+  if (!magicCheck.ok) { res.status(400).json({ ok: false, error: magicCheck.errorMessage }); return; }
+
   try {
-    const ext = req.file.originalname.split(".").pop() ?? "bin";
-    const key = `portal/onboarding/${customerId}/${docType}-${randomUUID()}.${ext}`;
-    const storage = new ObjectStorageService();
-    let buf = req.file.buffer;
-    if (req.file.mimetype.startsWith("image/")) {
-      try { buf = await compressImageBuffer(buf, 1400); } catch { /* use original */ }
+    const result = await uploadOnboardingDoc(customerId, req.file.buffer, req.file.mimetype, req.file.originalname, docType);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    if (err instanceof OnboardingServiceError && err.statusCode === 415) {
+      res.status(415).json({ ok: false, error: err.message }); return;
     }
-    const url = await storage.uploadPublic(key, buf, req.file.mimetype);
-    // Record in identity_documents
-    await db.insert(identityDocumentsTable).values({ customerId, docType, url, fileName: req.file.originalname });
-    res.json({ ok: true, url });
-  } catch (err) {
     console.error("[upload-doc]", err);
     res.status(500).json({ ok: false, error: "Gagal upload file." });
   }
 });
 
 // POST /api/portal/onboarding/complete — submit full profile
-router.post("/onboarding/complete", requirePortalAuth, async (req, res): Promise<void> => {
-  const customerId = (req as PortalAuthReq).portalCustomerId;
-  const { fullName, phone, address, accountType, ktpUrl, ocrData, vendor, driver, employee } = req.body ?? {};
+router.post(
+  "/onboarding/complete",
+  requirePortalAuth,
+  validateBody(CompleteOnboardingSchema),
+  async (req, res): Promise<void> => {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    const {
+      fullName, phone, address, accountType, customerType, companyId,
+      requestedCompanyName, requestedRegistrationNumber,
+      ktpUrl, ocrData, vendor, driver, employee,
+    } = req.body ?? {};
 
-  if (!fullName || !phone || !address || !accountType) {
-    res.status(400).json({ ok: false, error: "Data tidak lengkap." });
-    return;
+    try {
+      const result = await completeOnboarding(customerId, {
+        fullName, phone, address, accountType, customerType, companyId,
+        requestedCompanyName, requestedRegistrationNumber,
+        ktpUrl, ocrData, vendor, driver, employee,
+        _devForceFailureStage: process.env.APP_ENV === "development"
+          && process.env.SAFE_DEV_TEST_MODE === "true"
+          && ["customer-mid-flow", "vendor-mid-flow"].includes(String(req.header("x-dev-onboarding-failure") ?? ""))
+          ? String(req.header("x-dev-onboarding-failure")) as "customer-mid-flow" | "vendor-mid-flow"
+          : undefined,
+      });
+      res.json(result);
+    } catch (err: any) {
+      if (err instanceof OnboardingServiceError) {
+        res.status(409).json({ ok: false, error: err.message }); return;
+      }
+      throw err;
+    }
   }
-
-  const isCustomer = accountType === "customer";
-  const status = isCustomer ? "active" : "pending";
-  const now = new Date();
-
-  // Upsert user_profiles
-  await db.insert(userProfilesTable).values({
-    customerId,
-    fullName: String(fullName),
-    phone: String(phone),
-    address: String(address),
-    accountType: String(accountType),
-    status,
-    ktpUrl: ktpUrl ? String(ktpUrl) : null,
-    completedAt: now,
-    updatedAt: now,
-  }).onConflictDoUpdate({
-    target: userProfilesTable.customerId,
-    set: {
-      fullName: String(fullName),
-      phone: String(phone),
-      address: String(address),
-      accountType: String(accountType),
-      status,
-      ktpUrl: ktpUrl ? String(ktpUrl) : null,
-      completedAt: now,
-      updatedAt: now,
-    },
-  });
-
-  // Update portal_customers role + phone
-  await db.update(portalCustomersTable).set({
-    name: String(fullName),
-    phone: String(phone),
-    role: accountType === "vendor" ? "vendor" : accountType === "driver" ? "driver" : accountType === "employee" ? "employee" : "customer",
-  }).where(eq(portalCustomersTable.id, customerId));
-
-  // Update OCR result name if provided
-  if (ocrData?.nik) {
-    await db.update(ocrResultsTable).set({ name: ocrData.name ?? null, nik: ocrData.nik ?? null }).where(eq(ocrResultsTable.customerId, customerId));
-  }
-
-  // Upsert vendor profile
-  if (accountType === "vendor" && vendor) {
-    await db.insert(vendorProfilesTable).values({
-      customerId,
-      companyName: vendor.companyName ?? null,
-      nib: vendor.nib ?? null,
-      npwp: vendor.npwp ?? null,
-      serviceType: vendor.serviceType ?? null,
-      legalityDocUrl: vendor.legalityDocUrl ?? null,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: vendorProfilesTable.customerId,
-      set: {
-        companyName: vendor.companyName ?? null,
-        nib: vendor.nib ?? null,
-        npwp: vendor.npwp ?? null,
-        serviceType: vendor.serviceType ?? null,
-        legalityDocUrl: vendor.legalityDocUrl ?? null,
-        updatedAt: now,
-      },
-    });
-  }
-
-  // Upsert driver profile
-  if (accountType === "driver" && driver) {
-    await db.insert(driverProfilesTable).values({
-      customerId,
-      licenseNumber: driver.licenseNumber ?? null,
-      vehicleType: driver.vehicleType ?? null,
-      plateNumber: driver.plateNumber ?? null,
-      simUrl: driver.simUrl ?? null,
-      stnkUrl: driver.stnkUrl ?? null,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: driverProfilesTable.customerId,
-      set: {
-        licenseNumber: driver.licenseNumber ?? null,
-        vehicleType: driver.vehicleType ?? null,
-        plateNumber: driver.plateNumber ?? null,
-        simUrl: driver.simUrl ?? null,
-        stnkUrl: driver.stnkUrl ?? null,
-        updatedAt: now,
-      },
-    });
-  }
-
-  // Upsert employee profile
-  if (accountType === "employee" && employee) {
-    await db.insert(employeeProfilesTable).values({
-      customerId,
-      companyName: employee.companyName ?? null,
-      branch: employee.branch ?? null,
-      department: employee.department ?? null,
-      division: employee.division ?? null,
-      position: employee.position ?? null,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: employeeProfilesTable.customerId,
-      set: {
-        companyName: employee.companyName ?? null,
-        branch: employee.branch ?? null,
-        department: employee.department ?? null,
-        division: employee.division ?? null,
-        position: employee.position ?? null,
-        updatedAt: now,
-      },
-    });
-  }
-
-  // Create approval request for non-customer accounts
-  if (!isCustomer) {
-    await db.insert(onboardingApprovalsTable).values({
-      customerId,
-      accountType: String(accountType),
-      status: "pending",
-      updatedAt: now,
-    }).onConflictDoNothing();
-
-    // Notify admin via WA
-    void (async () => {
-      try {
-        const adminWa = await getAdminWa();
-        if (adminWa) {
-          const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
-          const msg = [
-            "🔔 *Permohonan Akun Baru*",
-            `👤 Nama   : ${fullName}`,
-            `📧 Email  : ${customer?.email ?? "-"}`,
-            `📱 HP     : ${phone}`,
-            `🏷️ Tipe   : ${accountType}`,
-            `🕐 Waktu  : ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB`,
-            ``,
-            `Tinjau di panel admin portal.`,
-          ].join("\n");
-          await sendWhatsApp(adminWa, msg);
-        }
-      } catch (e) { console.error("[onboarding-notif-wa]", e); }
-    })();
-  }
-
-  res.json({ ok: true, status });
-});
+);
 
 // GET /api/portal/admin/approvals — list approval requests (portal admin)
 router.get("/admin/approvals", requirePortalAdmin, async (req, res): Promise<void> => {
-  const { status, accountType } = req.query;
-  const conds = [];
-  if (status) conds.push(eq(onboardingApprovalsTable.status, String(status)));
-  if (accountType) conds.push(eq(onboardingApprovalsTable.accountType, String(accountType)));
-
-  const rows = await db
-    .select({
-      id: onboardingApprovalsTable.id,
-      customerId: onboardingApprovalsTable.customerId,
-      accountType: onboardingApprovalsTable.accountType,
-      status: onboardingApprovalsTable.status,
-      adminNote: onboardingApprovalsTable.adminNote,
-      reviewedBy: onboardingApprovalsTable.reviewedBy,
-      reviewedAt: onboardingApprovalsTable.reviewedAt,
-      createdAt: onboardingApprovalsTable.createdAt,
-      customerName: portalCustomersTable.name,
-      customerEmail: portalCustomersTable.email,
-      customerPhone: portalCustomersTable.phone,
-    })
-    .from(onboardingApprovalsTable)
-    .leftJoin(portalCustomersTable, eq(onboardingApprovalsTable.customerId, portalCustomersTable.id))
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(onboardingApprovalsTable.createdAt));
-
-  // Attach type-specific profiles
-  const enriched = await Promise.all(rows.map(async (row) => {
-    let typeProfile = null;
-    if (row.accountType === "vendor") {
-      const [vp] = await db.select().from(vendorProfilesTable).where(eq(vendorProfilesTable.customerId, row.customerId));
-      typeProfile = vp ?? null;
-    } else if (row.accountType === "driver") {
-      const [dp] = await db.select().from(driverProfilesTable).where(eq(driverProfilesTable.customerId, row.customerId));
-      typeProfile = dp ?? null;
-    } else if (row.accountType === "employee") {
-      const [ep] = await db.select().from(employeeProfilesTable).where(eq(employeeProfilesTable.customerId, row.customerId));
-      typeProfile = ep ?? null;
-    }
-    const [up] = await db.select().from(userProfilesTable).where(eq(userProfilesTable.customerId, row.customerId));
-    return { ...row, userProfile: up ?? null, typeProfile };
-  }));
-
-  res.json(enriched);
+  try {
+    const data = await listApprovals({
+      status:      req.query.status as string | undefined,
+      accountType: req.query.accountType as string | undefined,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("[portal] listApprovals error", err);
+    res.status(500).json({ error: "Gagal memuat approvals" });
+  }
 });
 
 // PATCH /api/portal/admin/approvals/:id — approve or reject
 router.patch("/admin/approvals/:id", requirePortalAdmin, async (req, res): Promise<void> => {
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   const { status, adminNote, reviewedBy } = req.body ?? {};
   if (!id || !["approved", "rejected"].includes(status)) {
     res.status(400).json({ error: "status must be approved or rejected" });
     return;
   }
-
-  const [approval] = await db.select().from(onboardingApprovalsTable).where(eq(onboardingApprovalsTable.id, id));
-  if (!approval) { res.status(404).json({ error: "Not found" }); return; }
-
-  const now = new Date();
-  await db.update(onboardingApprovalsTable).set({
-    status,
-    adminNote: adminNote ?? null,
-    reviewedBy: reviewedBy ?? null,
-    reviewedAt: now,
-    updatedAt: now,
-  }).where(eq(onboardingApprovalsTable.id, id));
-
-  const newProfileStatus = status === "approved" ? "active" : "rejected";
-  await db.update(userProfilesTable).set({
-    status: newProfileStatus,
-    rejectionReason: status === "rejected" ? (adminNote ?? "Tidak memenuhi syarat") : null,
-    updatedAt: now,
-  }).where(eq(userProfilesTable.customerId, approval.customerId));
-
-  // If approved: update portal_customers role
-  if (status === "approved") {
-    await db.update(portalCustomersTable)
-      .set({ role: approval.accountType })
-      .where(eq(portalCustomersTable.id, approval.customerId));
+  try {
+    const result = await processApproval({
+      id,
+      status,
+      adminNote,
+      reviewedBy,
+      adminPortalCustomerId: (req as import("../lib/supabaseAuth.js").PortalAuthReq).portalCustomerId,
+      portalOrigin: `${req.protocol}://${req.get("host")}`,
+      ip: ((req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim())
+          ?? req.socket?.remoteAddress
+          ?? "unknown",
+      userAgent: (req.headers["user-agent"] as string) ?? "unknown",
+    });
+    res.json(result);
+  } catch (err: any) {
+    if (err?.statusCode === 404) { res.status(404).json({ error: "Not found" }); return; }
+    console.error("[portal] processApproval error", err);
+    res.status(500).json({ error: "Approval transaction failed" });
   }
+});
 
-  // Notify user via WA
-  void (async () => {
-    try {
-      const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, approval.customerId));
-      const adminWa = await getAdminWa();
-      if (adminWa && customer) {
-        const msg = status === "approved"
-          ? `✅ *Akun Anda Disetujui!*\n\nHai ${customer.name}, akun ${approval.accountType} Anda di CST Logistics telah disetujui.\n\nSilakan login kembali untuk mengakses sistem.`
-          : `❌ *Akun Anda Ditolak*\n\nHai ${customer.name}, permintaan akun ${approval.accountType} Anda tidak dapat kami setujui.\n\nAlasan: ${adminNote ?? "Tidak memenuhi syarat"}\n\nHubungi kami untuk informasi lebih lanjut.`;
-        await sendWhatsApp(adminWa, msg);
-      }
-    } catch (e) { console.error("[approval-notif-wa]", e); }
-  })();
+// GET /api/portal/admin/approvals/:id/identity-docs — dokumen identitas vendor/driver
+router.get("/admin/approvals/:id/identity-docs", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "ID tidak valid" }); return; }
+  try {
+    const result = await getApprovalIdentityDocs(id);
+    if (!result) { res.status(404).json({ error: "Approval tidak ditemukan" }); return; }
+    res.json(result);
+  } catch (err) {
+    console.error("[portal] identity-docs error", err);
+    res.status(500).json({ error: "Gagal memuat dokumen" });
+  }
+});
 
-  res.json({ ok: true, status: newProfileStatus });
+// GET /api/portal/admin/approvals/:id/audit — audit trail untuk 1 approval
+router.get("/admin/approvals/:id/audit", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ ok: false, error: "ID tidak valid" });
+    return;
+  }
+  try {
+    const data = await getApprovalAuditTrail(id);
+    res.json(data);
+  } catch (err) {
+    console.error("[portal] audit trail error", err);
+    res.status(500).json({ ok: false, error: "Gagal memuat audit trail" });
+  }
 });
 
 // GET /api/portal/admin/approvals/stats — quick stats for admin dashboard
 router.get("/admin/approvals/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
-  const rows = await db
-    .select({ status: onboardingApprovalsTable.status, accountType: onboardingApprovalsTable.accountType })
-    .from(onboardingApprovalsTable);
-  const stats: Record<string, number> = { pending: 0, approved: 0, rejected: 0, total: rows.length };
-  for (const r of rows) {
-    stats[r.status] = (stats[r.status] ?? 0) + 1;
+  try {
+    const stats = await getApprovalStats();
+    res.json(stats);
+  } catch (err) {
+    console.error("[portal] approvalStats error", err);
+    res.status(500).json({ error: "Gagal memuat stats" });
   }
-  res.json(stats);
+});
+
+// GET /api/portal/admin/wa-logs — daftar log notifikasi WhatsApp (admin only)
+router.get("/admin/wa-logs", requirePortalAdmin, async (req, res): Promise<void> => {
+  try {
+    const status  = String(req.query["status"]  ?? "").trim() || null;
+    const context = String(req.query["context"] ?? "").trim() || null;
+    const refId   = String(req.query["refId"]   ?? "").trim() || null;
+    const from    = req.query["from"] ? new Date(String(req.query["from"])) : null;
+    const to      = req.query["to"]   ? new Date(String(req.query["to"]))   : null;
+    const limit   = Math.min(parseInt(String(req.query["limit"]  ?? "50"), 10) || 50, 200);
+    const offset  = Math.max(parseInt(String(req.query["offset"] ?? "0"),  10) || 0, 0);
+
+    const conditions = [eq(notificationLogsTable.channel, "wa")];
+    if (status)  conditions.push(eq(notificationLogsTable.status, status));
+    if (context) conditions.push(eq(notificationLogsTable.context, context));
+    if (refId)   conditions.push(eq(notificationLogsTable.refId, refId));
+    if (from && !isNaN(from.getTime())) conditions.push(gte(notificationLogsTable.createdAt, from));
+    if (to   && !isNaN(to.getTime()))   conditions.push(lte(notificationLogsTable.createdAt, to));
+
+    const [rows, [{ total }]] = await Promise.all([
+      db
+        .select({
+          id:               notificationLogsTable.id,
+          recipient:        notificationLogsTable.recipient,
+          status:           notificationLogsTable.status,
+          context:          notificationLogsTable.context,
+          refType:          notificationLogsTable.refType,
+          refId:            notificationLogsTable.refId,
+          errorMsg:         notificationLogsTable.errorMsg,
+          retryCount:       notificationLogsTable.retryCount,
+          nextRetryAt:      notificationLogsTable.nextRetryAt,
+          waMessageId:      notificationLogsTable.waMessageId,
+          waDeliveryStatus: notificationLogsTable.waDeliveryStatus,
+          deliveredAt:      notificationLogsTable.deliveredAt,
+          readAt:           notificationLogsTable.readAt,
+          createdAt:        notificationLogsTable.createdAt,
+        })
+        .from(notificationLogsTable)
+        .where(and(...conditions))
+        .orderBy(desc(notificationLogsTable.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ total: sql<number>`COUNT(*)::int` })
+        .from(notificationLogsTable)
+        .where(and(...conditions)),
+    ]);
+
+    res.json({
+      total, limit, offset,
+      rows: rows.map((r) => ({
+        ...r,
+        nextRetryAt: r.nextRetryAt?.toISOString() ?? null,
+        deliveredAt: r.deliveredAt?.toISOString() ?? null,
+        readAt:      r.readAt?.toISOString() ?? null,
+        createdAt:   r.createdAt.toISOString(),
+      })),
+    });
+  } catch (err) {
+    console.error("[portal] waLogs error", err);
+    res.status(500).json({ error: "Gagal memuat log WhatsApp" });
+  }
+});
+
+// GET /api/portal/admin/wa-logs/stats — ringkasan sukses/gagal notifikasi WA (admin only)
+router.get("/admin/wa-logs/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const [allTime, today] = await Promise.all([
+      db.select({
+          status: notificationLogsTable.status,
+          count:  sql<number>`COUNT(*)::int`,
+        })
+        .from(notificationLogsTable)
+        .where(eq(notificationLogsTable.channel, "wa"))
+        .groupBy(notificationLogsTable.status),
+      db.select({
+          status: notificationLogsTable.status,
+          count:  sql<number>`COUNT(*)::int`,
+        })
+        .from(notificationLogsTable)
+        .where(and(eq(notificationLogsTable.channel, "wa"), gte(notificationLogsTable.createdAt, todayStart)))
+        .groupBy(notificationLogsTable.status),
+    ]);
+
+    function agg(rows: { status: string; count: number }[]) {
+      const r = { sent: 0, failed: 0, deduped: 0 };
+      for (const row of rows) {
+        if (row.status === "sent")    r.sent    += row.count;
+        if (row.status === "failed") r.failed += row.count;
+        if (row.status === "deduped") r.deduped += row.count;
+      }
+      return r;
+    }
+
+    res.json({ allTime: agg(allTime), today: agg(today) });
+  } catch (err) {
+    console.error("[portal] waLogsStats error", err);
+    res.status(500).json({ error: "Gagal memuat stats WhatsApp" });
+  }
+});
+
+// POST /api/portal/admin/wa-logs/:id/retry — kirim ulang manual notifikasi WA gagal (admin only)
+router.post("/admin/wa-logs/:id/retry", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = parseInt(String(req.params["id"] ?? ""), 10);
+  if (isNaN(id)) { res.status(400).json({ message: "ID tidak valid" }); return; }
+
+  const [row] = await db
+    .select()
+    .from(notificationLogsTable)
+    .where(and(eq(notificationLogsTable.id, id), eq(notificationLogsTable.channel, "wa")))
+    .limit(1);
+
+  if (!row) { res.status(404).json({ message: "Log tidak ditemukan" }); return; }
+  if (row.status !== "failed") { res.status(400).json({ message: "Hanya log berstatus 'failed' yang bisa di-retry" }); return; }
+  if ((row.retryCount ?? 0) >= 3) { res.status(400).json({ message: "Sudah mencapai batas maksimum retry (3x)" }); return; }
+
+  const fonnteToken = process.env["FONNTE_TOKEN"] ?? "";
+  if (!fonnteToken) { res.status(500).json({ message: "FONNTE_TOKEN tidak dikonfigurasi" }); return; }
+
+  try {
+    const params: Record<string, string> = { target: row.recipient, message: row.message };
+    if (row.mediaUrl?.trim()) params["url"] = row.mediaUrl.trim();
+
+    const fRes = await fetch("https://api.fonnte.com/send", {
+      method: "POST",
+      headers: { Authorization: fonnteToken, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString(),
+    });
+    const fBody = await fRes.json() as Record<string, unknown>;
+    const ok = fRes.ok && fBody["status"] !== false && fBody["status"] !== "false";
+    const rawId = fBody["id"] ?? fBody["message_id"] ?? fBody["messageId"];
+    const waMessageId = ok && rawId ? String(Array.isArray(rawId) ? rawId[0] : rawId) : undefined;
+    const newRetryCount = (row.retryCount ?? 0) + 1;
+
+    if (ok) {
+      await db.update(notificationLogsTable).set({
+        status: "sent",
+        retryCount: newRetryCount,
+        nextRetryAt: null,
+        errorMsg: null,
+        waMessageId: waMessageId ?? null,
+        waDeliveryStatus: waMessageId ? "sent" : null,
+      }).where(eq(notificationLogsTable.id, id));
+
+      res.json({ ok: true, waMessageId });
+      return;
+    } else {
+      const errMsg = String(fBody["reason"] ?? fBody["message"] ?? `HTTP ${fRes.status}`);
+      const backoffMs = 5 * 60 * 1000 * Math.pow(2, newRetryCount - 1);
+      const nextRetry = newRetryCount < 3 ? new Date(Date.now() + backoffMs) : null;
+
+      await db.update(notificationLogsTable).set({
+        retryCount: newRetryCount,
+        nextRetryAt: nextRetry,
+        errorMsg: `[retry ${newRetryCount}] ${errMsg}`,
+      }).where(eq(notificationLogsTable.id, id));
+
+      res.status(502).json({ ok: false, message: errMsg });
+      return;
+    }
+  } catch (err) {
+    console.error("[portal] waLogsRetry error", err);
+    res.status(500).json({ message: "Gagal melakukan retry" });
+  }
+});
+
+// GET /api/portal/admin/customers/stats — quick stats
+// Must be registered before /:id so "stats" is not parsed as an ID.
+router.get("/admin/customers/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
+  try {
+    const stats = await getCustomerStats();
+    res.json(stats);
+  } catch (err) {
+    console.error("[portal] customerStats error", err);
+    res.status(500).json({ error: "Gagal memuat statistik customers" });
+  }
+});
+
+// GET /api/portal/admin/customers/:id — detail satu customer (admin only)
+router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "ID tidak valid" }); return; }
+  try {
+    const [cust] = await db
+      .select({
+        id:          portalCustomersTable.id,
+        name:        portalCustomersTable.name,
+        email:       portalCustomersTable.email,
+        phone:       portalCustomersTable.phone,
+        company:     portalCustomersTable.company,
+        role:        portalCustomersTable.role,
+        accountStatus: portalCustomersTable.accountStatus,
+        sanctionReason: portalCustomersTable.sanctionReason,
+        sanctionUntil: portalCustomersTable.sanctionUntil,
+        statusChangedAt: portalCustomersTable.statusChangedAt,
+        statusChangedBy: portalCustomersTable.statusChangedBy,
+        avatarUrl:   sql<string | null>`${portalCustomersTable}.avatar_url`,
+        oauthProvider: portalCustomersTable.oauthProvider,
+        createdAt:   portalCustomersTable.createdAt,
+      })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, id))
+      .limit(1);
+    if (!cust) { res.status(404).json({ error: "Customer tidak ditemukan" }); return; }
+
+    const [prof] = await db
+      .select()
+      .from(portalCustomerProfilesTable)
+      .where(eq(portalCustomerProfilesTable.customerId, id))
+      .limit(1);
+
+    const memberships = await listPortalCustomerMemberships(id);
+    const customerContext = await getPortalCustomerContext(id);
+    const requests = await getPortalCustomerOrganizationState(id);
+    res.json({
+      ...cust,
+      customerType: customerContext.customerType,
+      profile: prof ?? null,
+      memberships,
+      customerContext,
+      pendingRequests: requests.requests,
+    });
+  } catch (err) {
+    console.error("[portal] GET /admin/customers/:id error", err);
+    res.status(500).json({ error: "Gagal memuat data customer" });
+  }
+});
+
+// GET /api/portal/admin/customers/:id/memberships — explicit company mappings
+router.get("/admin/customers/:id/memberships", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    res.status(400).json({ error: "ID tidak valid" });
+    return;
+  }
+  try {
+    res.json({ items: await listPortalCustomerMemberships(customerId) });
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// GET /api/portal/admin/company-requests — pending company mappings
+router.get("/admin/company-requests", requirePortalAdmin, async (_req, res): Promise<void> => {
+  res.json({ items: await listPendingPortalCompanyRequests() });
+});
+
+// PATCH /api/portal/admin/company-requests/:id — approve/reject a request
+router.patch("/admin/company-requests/:id", requirePortalAdmin, async (req, res): Promise<void> => {
+  const requestId = Number(req.params["id"]);
+  const action = req.body?.action;
+  if (!Number.isInteger(requestId) || requestId <= 0 || (action !== "approve" && action !== "reject")) {
+    res.status(400).json({ error: "Request ID atau aksi tidak valid." });
+    return;
+  }
+  try {
+    const result = await reviewPortalCompanyRequest({
+      requestId,
+      adminCustomerId: (req as PortalAuthReq).portalCustomerId,
+      action,
+      companyId: req.body?.companyId,
+      reviewNote: req.body?.reviewNote,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof PortalCustomerOrganizationError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// PUT /api/portal/admin/customers/:id/memberships — assign/reactivate one mapping
+router.put("/admin/customers/:id/memberships", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  const companyId = Number(req.body?.companyId);
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  if (!Number.isInteger(customerId) || customerId <= 0 || !Number.isInteger(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "Customer ID dan Company ID wajib valid." });
+    return;
+  }
+
+  try {
+    const membership = await assignPortalCustomerMembership({
+      customerId,
+      companyId,
+      buyerRole: req.body?.buyerRole === undefined ? undefined : String(req.body.buyerRole),
+      department: req.body?.department,
+      costCenter: req.body?.costCenter,
+      approvalLevel: req.body?.approvalLevel === undefined ? undefined : Number(req.body.approvalLevel),
+      spendingLimit: req.body?.spendingLimit,
+      invitedBy: actorId > 0 ? actorId : null,
+    });
+
+    writeAuditLog({
+      userId: actorId > 0 ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "ASSIGN",
+      module: "portal_company_membership",
+      referenceId: String(membership.id),
+      entityType: "portal_company_member",
+      entityId: String(membership.id),
+      oldData: null,
+      newData: {
+        portalCustomerId: customerId,
+        companyId,
+        buyerRole: membership.buyerRole,
+        isActive: membership.isActive,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json(membership);
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// DELETE /api/portal/admin/customers/:id/memberships/:companyId — deactivate mapping
+router.delete("/admin/customers/:id/memberships/:companyId", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  const companyId = Number(req.params["companyId"]);
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const result = await deactivatePortalCustomerMembership(customerId, companyId);
+    writeAuditLog({
+      userId: actorId > 0 ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "DEACTIVATE",
+      module: "portal_company_membership",
+      referenceId: String(result.id),
+      entityType: "portal_company_member",
+      entityId: String(result.id),
+      oldData: { portalCustomerId: customerId, companyId, isActive: true },
+      newData: { portalCustomerId: customerId, companyId, isActive: false },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// PATCH /api/portal/admin/customers/:id — edit profile/role/status akun (admin only)
+router.patch("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "ID tidak valid" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const allowedRoles = ["customer", "vendor", "driver", "employee", "admin"];
+  const allowedStatuses: PortalAccountStatus[] = ["active", "inactive", "sanctioned"];
+  const role = body.role === undefined ? undefined : String(body.role);
+  const accountStatus = body.accountStatus === undefined ? undefined : String(body.accountStatus) as PortalAccountStatus;
+  const email = body.email === undefined ? undefined : String(body.email).trim().toLowerCase();
+  const name = body.name === undefined ? undefined : String(body.name).trim();
+  const sanctionReason = body.sanctionReason === undefined || body.sanctionReason === null
+    ? null
+    : String(body.sanctionReason).trim();
+  const sanctionUntilRaw = body.sanctionUntil === undefined || body.sanctionUntil === null || body.sanctionUntil === ""
+    ? null
+    : new Date(String(body.sanctionUntil));
+
+  if (role !== undefined && !allowedRoles.includes(role)) {
+    res.status(400).json({ error: "Role akun tidak valid" });
+    return;
+  }
+  if (accountStatus !== undefined && !allowedStatuses.includes(accountStatus)) {
+    res.status(400).json({ error: "Status akun tidak valid" });
+    return;
+  }
+  if (email !== undefined && (!email.includes("@") || email.length > 254)) {
+    res.status(400).json({ error: "Email tidak valid" });
+    return;
+  }
+  if (name !== undefined && !name) {
+    res.status(400).json({ error: "Nama wajib diisi" });
+    return;
+  }
+  if (accountStatus === "sanctioned" && !sanctionReason) {
+    res.status(400).json({ error: "Alasan sanksi wajib diisi" });
+    return;
+  }
+  if (sanctionUntilRaw && Number.isNaN(sanctionUntilRaw.getTime())) {
+    res.status(400).json({ error: "Tanggal berakhir sanksi tidak valid" });
+    return;
+  }
+
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  const [current] = await db
+    .select()
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, id))
+    .limit(1);
+  if (!current) {
+    res.status(404).json({ error: "Customer tidak ditemukan" });
+    return;
+  }
+  // Jangan izinkan admin mencabut akses dirinya sendiri atau menurunkan role admin
+  // dari akun yang sedang dipakai untuk menjalankan operasi.
+  if (actorId === id && ((accountStatus && accountStatus !== "active") || (role && role !== "admin"))) {
+    res.status(400).json({ error: "Admin tidak dapat menonaktifkan atau menurunkan role akunnya sendiri" });
+    return;
+  }
+
+  try {
+    const updated = await updatePortalCustomer(id, {
+      name,
+      email,
+      phone: body.phone === undefined ? undefined : body.phone === null ? null : String(body.phone),
+      company: body.company === undefined ? undefined : body.company === null ? null : String(body.company),
+      role,
+      accountStatus,
+      sanctionReason,
+      sanctionUntil: sanctionUntilRaw,
+      statusChangedBy: actorId ? String(actorId) : null,
+    });
+    if (!updated) {
+      res.status(404).json({ error: "Customer tidak ditemukan" });
+      return;
+    }
+
+    writeAuditLog({
+      userId: actorId ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "UPDATE",
+      module: "portal_account",
+      referenceId: String(id),
+      entityType: "portal_customer",
+      entityId: String(id),
+      oldData: {
+        name: current.name,
+        email: current.email,
+        phone: current.phone,
+        company: current.company,
+        role: current.role,
+        accountStatus: current.accountStatus,
+        sanctionReason: current.sanctionReason,
+        sanctionUntil: current.sanctionUntil,
+      },
+      newData: {
+        name: updated.name,
+        email: updated.email,
+        phone: updated.phone,
+        company: updated.company,
+        role: updated.role,
+        accountStatus: updated.accountStatus,
+        sanctionReason: updated.sanctionReason,
+        sanctionUntil: updated.sanctionUntil,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json(updated);
+  } catch (err: any) {
+    if (err?.code === "23505") {
+      res.status(409).json({ error: "Email sudah digunakan oleh akun lain" });
+      return;
+    }
+    req.log?.error({ err }, "portal admin customer update error");
+    res.status(500).json({ error: "Gagal menyimpan perubahan akun" });
+  }
 });
 
 // GET /api/portal/admin/customers — list all portal customers (with onboarding status)
 router.get("/admin/customers", requirePortalAdmin, async (req, res): Promise<void> => {
-  const { role, q } = req.query;
-  const conds = [];
-  if (role) conds.push(eq(portalCustomersTable.role, String(role)));
-
-  const rows = await db
-    .select({
-      id: portalCustomersTable.id,
-      name: portalCustomersTable.name,
-      email: portalCustomersTable.email,
-      phone: portalCustomersTable.phone,
-      company: portalCustomersTable.company,
-      role: portalCustomersTable.role,
-      oauthProvider: portalCustomersTable.oauthProvider,
-      createdAt: portalCustomersTable.createdAt,
-      profileStatus: userProfilesTable.status,
-      profileAccountType: userProfilesTable.accountType,
-      profileFullName: userProfilesTable.fullName,
-      profileAddress: userProfilesTable.address,
-    })
-    .from(portalCustomersTable)
-    .leftJoin(userProfilesTable, eq(userProfilesTable.customerId, portalCustomersTable.id))
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(portalCustomersTable.createdAt));
-
-  const search = q ? String(q).toLowerCase().trim() : "";
-  const filtered = search
-    ? rows.filter((r) =>
-        (r.name ?? "").toLowerCase().includes(search) ||
-        (r.email ?? "").toLowerCase().includes(search) ||
-        (r.phone ?? "").toLowerCase().includes(search) ||
-        (r.company ?? "").toLowerCase().includes(search))
-    : rows;
-
-  // Derive registration source: WA (email ends with @wa.local), OAuth, or email/password
-  const enriched = filtered.map((r) => {
-    let source: "wa" | "oauth" | "email" = "email";
-    if (r.email && r.email.endsWith("@wa.local")) source = "wa";
-    else if (r.oauthProvider) source = "oauth";
-    const profileState = r.profileStatus ?? "not_started";
-    return {
-      id: r.id,
-      name: r.name,
-      email: r.email,
-      phone: r.phone,
-      company: r.company,
-      role: r.role,
-      source,
-      createdAt: r.createdAt,
-      profileStatus: profileState,
-      profileAccountType: r.profileAccountType,
-      profileFullName: r.profileFullName,
-      profileAddress: r.profileAddress,
-    };
-  });
-
-  res.json({ items: enriched, total: enriched.length });
+  try {
+    const data = await listCustomers({
+      role: req.query.role as string | undefined,
+      accountStatus: req.query.accountStatus as string | undefined,
+      q:    req.query.q    as string | undefined,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("[portal] listCustomers error", err);
+    res.status(500).json({ error: "Gagal memuat customers" });
+  }
 });
 
-// GET /api/portal/admin/customers/stats — quick stats
-router.get("/admin/customers/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
-  const rows = await db
-    .select({
-      id: portalCustomersTable.id,
-      role: portalCustomersTable.role,
-      email: portalCustomersTable.email,
-      profileStatus: userProfilesTable.status,
-    })
-    .from(portalCustomersTable)
-    .leftJoin(userProfilesTable, eq(userProfilesTable.customerId, portalCustomersTable.id));
-  const stats = {
-    total: rows.length,
-    wa: rows.filter((r) => r.email?.endsWith("@wa.local")).length,
-    customer: rows.filter((r) => r.role === "customer").length,
-    vendor: rows.filter((r) => r.role === "vendor").length,
-    profileIncomplete: rows.filter((r) => !r.profileStatus || r.profileStatus === "incomplete" || r.profileStatus === "not_started").length,
-    profilePending: rows.filter((r) => r.profileStatus === "pending").length,
-    profileActive: rows.filter((r) => r.profileStatus === "active").length,
-  };
-  res.json(stats);
+// ════════════════════════════════════════════════════════════════════════════
+// VENDOR MINI FORM — portal admin routes
+// ════════════════════════════════════════════════════════════════════════════
+
+router.get("/admin/vendor-form/links", requirePortalAdmin, async (req, res) => {
+  try {
+    const formTarget = (req.query["formTarget"] as string) || "vendor";
+    return res.json(await listVendorFormLinks(formTarget));
+  } catch (err) {
+    console.error("[portal] listVendorFormLinks error", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/admin/vendor-form/schemas", requirePortalAdmin, async (_req, res) => {
+  return res.json(SERVICE_SCHEMAS);
+});
+
+router.post("/admin/vendor-form/links", requirePortalAdmin, async (req, res) => {
+  try {
+    const link = await createVendorFormLink(req.body ?? {});
+    return res.status(201).json(link);
+  } catch (err: any) {
+    if (err?.statusCode === 400) return res.status(400).json({ error: err.message });
+    req.log?.error({ err }, "portal admin POST vendor-form/links error");
+    return res.status(500).json({ error: "Gagal membuat link" });
+  }
+});
+
+router.patch("/admin/vendor-form/links/:id", requirePortalAdmin, async (req, res) => {
+  const id = Number(req.params["id"]);
+  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  try {
+    const updated = await patchVendorFormLink(id, req.body ?? {});
+    invalidateTokenCache(updated.token);
+    return res.json(updated);
+  } catch (err: any) {
+    if (err?.statusCode === 400) return res.status(400).json({ error: err.message });
+    if (err?.statusCode === 404) return res.status(404).json({ error: err.message });
+    req.log?.error({ err }, "portal admin PATCH vendor-form/links error");
+    return res.status(500).json({ error: "Gagal update link" });
+  }
+});
+
+router.delete("/admin/vendor-form/links/:id", requirePortalAdmin, async (req, res) => {
+  const id = Number(req.params["id"]);
+  if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+  try {
+    const { token } = await deleteVendorFormLink(id);
+    invalidateTokenCache(token);
+    return res.json({ ok: true });
+  } catch (err: any) {
+    if (err?.statusCode === 404) return res.status(404).json({ error: err.message });
+    req.log?.error({ err }, "portal admin DELETE vendor-form/links error");
+    return res.status(500).json({ error: "Gagal hapus link" });
+  }
+});
+
+router.get("/admin/vendor-form/submissions", requirePortalAdmin, async (_req, res) => {
+  try {
+    return res.json(await listVendorFormSubmissions());
+  } catch (err) {
+    console.error("[vendor-form/submissions] error:", err);
+    return res.status(500).json({ error: "Internal server error", detail: String(err) });
+  }
 });
 
 // ════════════════════════════════════════════════════════════════════════════
 // CALCULATOR RATES
 // ════════════════════════════════════════════════════════════════════════════
 
-// GET /api/portal/calculator-rates — public, returns current calculator rates
-router.get("/calculator-rates", async (_req, res) => {
+// GET /api/portal/admin/erp-stats — quick stats for the BizPortal ERP tab (portal admin only)
+router.get("/admin/erp-stats", requirePortalAdmin, async (_req, res) => {
   try {
-    const [row] = await db.select().from(portalContentTable).where(eq(portalContentTable.key, "calculator_rates"));
-    const rates = row ? JSON.parse(row.value) : {
-      airFreight:  { baseCost: 500000,  ratePerKg: 90000,    handlingPct: 5, customsFee: 1200000 },
-      seaFreight:  { baseCost: 750000,  ratePerCbm: 2500000, handlingPct: 5, customsFee: 1500000 },
-      customs:     { baseCost: 1500000, ratePerKg: 5000,     handlingFee: 500000, customsPct: 0.5 },
-      domestic:    { baseCost: 500000,  ratePerKg: 8500,     handlingPct: 5 },
-      warehousing: { baseCost: 5000000, ratePerCbm: 2500000, handlingFee: 500000 },
-    };
-    return res.json(rates);
-  } catch {
+    const stats = await getErpStats();
+    return res.json(stats);
+  } catch (err) {
+    console.error("[erp-stats]", err);
+    return res.status(500).json({ error: "Gagal mengambil statistik ERP" });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+
+// GET /api/portal/calculator-rates — public, returns current calculator rates (legacy)
+router.get("/calculator-rates", async (_req, res) => {
+  return res.json(await getCalculatorRates());
+});
+
+// GET /api/portal/calculator-rates-v2 — public, returns extended service-specific rates
+router.get("/calculator-rates-v2", async (_req, res) => {
+  return res.json(await getCalculatorRatesV2());
+});
+
+// ── Customer / Vendor Dashboard Stats ──────────────────────────────────────
+// GET /api/portal/me/dashboard-stats
+// Returns role-based stats: customer gets order/invoice stats, vendor gets RFQ stats
+router.get("/me/dashboard-stats", requirePortalAuth, async (req, res) => {
+  const portalReq = req as PortalAuthReq;
+  const { portalCustomerId: customerId, portalRole: role } = portalReq;
+  try {
+    return res.json(await getPortalDashboardStats(customerId, role));
+  } catch (err) {
+    req.log?.error({ err }, "dashboard-stats error");
+    // Do not turn a database/schema error into valid-looking zero statistics.
+    // The portal can render the other feeds, while the UI marks these stats
+    // unavailable and the server log retains the actual failure.
+    return res.status(500).json({ message: "Gagal memuat statistik dashboard" });
+  }
+});
+
+// GET /api/portal/me/invoices — Customer invoice list (from sales_documents)
+//
+// Ownership is deliberately resolved from immutable/canonical relations:
+//   - the originating logistic order owns individual customer invoices; or
+//   - an active portal company membership owns company-scoped invoices.
+//
+// Never use customer_name, email, phone, or a mutable display field here.
+router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const result = await db.execute<{
+      id: number;
+      invoiceNumber: string;
+      amount: string;
+       amountPaid: string | null;
+      status: string;
+      dueDate: string | null;
+      createdAt: string;
+      orderNumber: string | null;
+    }>(sql`
+      SELECT
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.due_date AS "dueDate",
+        sd.created_at AS "createdAt",
+        COALESCE(lo.order_number, sd.doc_number) AS "orderNumber"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      WHERE sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      ORDER BY sd.created_at DESC
+      LIMIT 100
+    `);
+    return res.json(result.rows.map(r => ({
+      ...r,
+      amount: Number(r.amount ?? 0),
+      amountPaid: Number(r.amountPaid ?? 0),
+    })));
+  } catch (err) {
+    req.log?.error({ err }, "portal me/invoices error");
+    return res.status(500).json({ error: "Gagal memuat invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id — customer-owned invoice detail.
+// The resource check intentionally mirrors the already-validated invoice list:
+// display fields are never used as an authorization boundary.
+router.get("/me/invoices/:id", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        sd.id,
+        COALESCE(sd.invoice_number, sd.doc_number) AS "invoiceNumber",
+        sd.doc_number AS "documentNumber",
+        sd.invoice_date AS "invoiceDate",
+        sd.due_date AS "dueDate",
+        sd.total_amount AS subtotal,
+        sd.tax_amount AS "taxAmount",
+        sd.grand_total AS amount,
+        sd.amount_paid AS "amountPaid",
+        sd.payment_status AS status,
+        sd.notes,
+        sd.invoice_pdf_url AS "invoicePdfUrl",
+        sd.proof_url IS NOT NULL AS "hasPaymentProof",
+        sd.proof_uploaded_at AS "proofUploadedAt",
+        sd.proof_remarks AS "proofRemarks",
+        COALESCE(lo.order_number, po.po_number, sd.doc_number) AS "orderNumber",
+        CASE
+          WHEN lo.id IS NOT NULL THEN 'logistic'
+          WHEN po.id IS NOT NULL THEN 'marketplace'
+          ELSE 'sales'
+        END AS "sourceType"
+      FROM sales_documents sd
+      LEFT JOIN logistic_orders lo ON lo.id = sd.logistic_order_id
+      LEFT JOIN mkt_purchase_orders po ON po.sales_document_id = sd.id
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM logistic_orders owner_order
+            WHERE owner_order.id = sd.logistic_order_id
+              AND owner_order.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+
+    const invoice = result.rows[0] as Record<string, unknown> | undefined;
+    if (!invoice) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+
+    const lineResult = await db.execute(sql`
+      SELECT
+        id,
+        name,
+        description,
+        quantity,
+        unit_price AS "unitPrice",
+        subtotal
+      FROM sales_document_lines
+      WHERE document_id = ${id}
+      ORDER BY id ASC
+    `);
+
+    const amount = Number(invoice.amount ?? 0);
+    const amountPaid = Number(invoice.amountPaid ?? 0);
     return res.json({
-      airFreight:  { baseCost: 500000,  ratePerKg: 90000,    handlingPct: 5, customsFee: 1200000 },
-      seaFreight:  { baseCost: 750000,  ratePerCbm: 2500000, handlingPct: 5, customsFee: 1500000 },
-      customs:     { baseCost: 1500000, ratePerKg: 5000,     handlingFee: 500000, customsPct: 0.5 },
-      domestic:    { baseCost: 500000,  ratePerKg: 8500,     handlingPct: 5 },
-      warehousing: { baseCost: 5000000, ratePerCbm: 2500000, handlingFee: 500000 },
+      ...invoice,
+      amount,
+      amountPaid,
+      outstanding: Math.max(0, amount - amountPaid),
+      lines: lineResult.rows.map((line) => ({
+        ...line,
+        quantity: Number((line as any).quantity ?? 0),
+        unitPrice: Number((line as any).unitPrice ?? 0),
+        subtotal: Number((line as any).subtotal ?? 0),
+      })),
+      paymentProof: {
+        uploaded: invoice.hasPaymentProof === true,
+        uploadedAt: invoice.proofUploadedAt ?? null,
+        remarks: invoice.proofRemarks ?? null,
+      },
+      // Never return the stored object path or an unscoped public URL.
+      invoicePdfUrl: null,
+      canDownload:
+        typeof invoice.invoicePdfUrl === "string" &&
+        invoice.invoicePdfUrl.startsWith("/") &&
+        !/^https?:\/\//i.test(invoice.invoicePdfUrl),
+    });
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice detail error");
+    return res.status(500).json({ error: "Gagal memuat detail invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/download — owner-guarded private PDF access.
+// Legacy/public URLs fail closed until the document is stored as a private
+// object-storage path that can be signed for this authenticated owner.
+router.get("/me/invoices/:id/download", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT sd.invoice_pdf_url AS "invoicePdfUrl"
+      FROM sales_documents sd
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          EXISTS (
+            SELECT 1 FROM logistic_orders lo
+            WHERE lo.id = sd.logistic_order_id
+              AND lo.portal_customer_id = ${customerId}
+          )
+          OR EXISTS (
+            SELECT 1 FROM portal_company_members pcm
+            WHERE pcm.portal_customer_id = ${customerId}
+              AND pcm.company_id = sd.company_id
+              AND pcm.is_active = TRUE
+          )
+        )
+      LIMIT 1
+    `);
+    const storedPath = (result.rows[0] as { invoicePdfUrl?: unknown } | undefined)?.invoicePdfUrl;
+    if (typeof storedPath !== "string" || !storedPath.trim()) {
+      return res.status(404).json({ error: "PDF invoice belum tersedia" });
+    }
+    if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+      return res.status(409).json({ error: "PDF invoice legacy belum tersedia melalui kanal privat" });
+    }
+
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal invoice download error");
+    return res.status(500).json({ error: "Gagal mengakses PDF invoice" });
+  }
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof — owner-guarded proof metadata.
+router.get("/me/invoices/:id/payment-proof", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.id, sd.proof_url AS "proofUrl", sd.proof_uploaded_at AS "uploadedAt",
+           sd.proof_remarks AS remarks
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const proof = result.rows[0] as Record<string, unknown> | undefined;
+  if (!proof) return res.status(404).json({ error: "Invoice tidak ditemukan" });
+  return res.json({
+    uploaded: Boolean(proof.proofUrl),
+    uploadedAt: proof.uploadedAt ?? null,
+    remarks: proof.remarks ?? null,
+    downloadUrl: proof.proofUrl ? `/api/portal/me/invoices/${id}/payment-proof/file` : null,
+  });
+});
+
+// GET /api/portal/me/invoices/:id/payment-proof/file — customer-owned signed URL.
+router.get("/me/invoices/:id/payment-proof/file", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "id invoice tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT sd.proof_url AS "proofUrl"
+    FROM sales_documents sd
+    WHERE sd.id = ${id}
+      AND sd.proof_url IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM logistic_orders lo
+          WHERE lo.id = sd.logistic_order_id
+            AND lo.portal_customer_id = ${customerId}
+        )
+        OR EXISTS (
+          SELECT 1 FROM portal_company_members pcm
+          WHERE pcm.portal_customer_id = ${customerId}
+            AND pcm.company_id = sd.company_id
+            AND pcm.is_active = TRUE
+        )
+      )
+    LIMIT 1
+  `);
+  const storedPath = (result.rows[0] as { proofUrl?: unknown } | undefined)?.proofUrl;
+  if (typeof storedPath !== "string" || !storedPath.trim()) {
+    return res.status(404).json({ error: "Bukti pembayaran belum tersedia" });
+  }
+  if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+    return res.status(409).json({ error: "Bukti pembayaran legacy belum tersedia melalui kanal privat" });
+  }
+  try {
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (err) {
+    req.log?.error({ err, invoiceId: id }, "portal payment proof download error");
+    return res.status(500).json({ error: "Gagal mengakses bukti pembayaran" });
+  }
+});
+
+// ── GET /api/portal/vendor-catalog/compare — Perbandingan harga antar vendor ──
+router.get("/vendor-catalog/compare", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const { type } = req.query as Record<string, string>;
+    return res.json(await compareVendorCatalog(type));
+  } catch (err) {
+    req.log?.error({ err }, "vendor-catalog/compare error");
+    return res.status(500).json({ message: "Gagal memuat perbandingan" });
+  }
+});
+
+// ── GET /api/portal/vendor-catalog — Etalase vendor publik ───────────────────
+router.get("/vendor-catalog", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const { type, kategori } = req.query as Record<string, string>;
+    return res.json(await listVendorCatalogPublic({ type, kategori }));
+  } catch (err) {
+    req.log?.error({ err }, "vendor-catalog error");
+    return res.status(500).json({ message: "Gagal memuat katalog vendor" });
+  }
+});
+
+// ── GET /api/portal/product-templates — Template produk publik ────────────────
+router.get("/product-templates", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    return res.json(await listProductTemplates());
+  } catch (err) {
+    req.log?.error({ err }, "product-templates error");
+    return res.status(500).json({ message: "Gagal memuat template produk" });
+  }
+});
+
+// ── GET /api/portal/service-templates — Template layanan publik ───────────────
+router.get("/service-templates", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    return res.json(await listServiceTemplates());
+  } catch (err) {
+    req.log?.error({ err }, "service-templates error");
+    return res.status(500).json({ message: "Gagal memuat template layanan" });
+  }
+});
+
+// Rate limiter untuk catalog inquiry
+const catalogInquiryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: keyGen,
+  message: { message: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ── POST /api/portal/catalog-inquiry — Minta penawaran dari katalog ──────────
+router.post("/catalog-inquiry", catalogInquiryLimiter, async (req, res) => {
+  try {
+    await submitCatalogInquiry(req.body ?? {}, req.log);
+    return res.json({ success: true, message: "Permintaan penawaran berhasil dikirim" });
+  } catch (err: unknown) {
+    const e = err as Error & { status?: number };
+    if (e.status === 400) return res.status(400).json({ message: e.message });
+    req.log?.error({ err }, "catalog-inquiry error");
+    return res.status(500).json({ message: "Gagal mengirim permintaan" });
+  }
+});
+
+// primaryImageSubquery, CATALOG_PUBLIC_COLS — moved to portalVendorCatalogService.ts
+
+// GET /api/portal/marketplace/:id/related — items from the same vendor
+router.get("/marketplace/:id/related", async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+  const item = await getCatalogItemPublic(id);
+  if (!item) return res.status(404).json({ error: "Item tidak ditemukan" });
+  try {
+    return res.json(await getRelatedItems(id, item));
+  } catch (err) {
+    req.log?.error({ err }, "related items error");
+    return res.status(500).json({ error: "Gagal memuat related items" });
+  }
+});
+
+// GET /api/portal/marketplace/:id/similar — "customers also viewed" (other vendors)
+router.get("/marketplace/:id/similar", async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+  const item = await getCatalogItemPublic(id);
+  if (!item) return res.status(404).json({ error: "Item tidak ditemukan" });
+  try {
+    return res.json(await getSimilarItems(id, item));
+  } catch (err) {
+    req.log?.error({ err }, "similar items error");
+    return res.status(500).json({ error: "Gagal memuat similar items" });
+  }
+});
+
+// GET /api/portal/marketplace/:id/same-province — products from other vendors in the same province
+router.get("/marketplace/:id/same-province", async (req, res) => {
+  const id = parseInt(String(req.params.id));
+  if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
+  const item = await getCatalogItemPublic(id);
+  if (!item) return res.status(404).json({ error: "Item tidak ditemukan" });
+  try {
+    return res.json(await getSameProvinceItems(id, item));
+  } catch (err) {
+    req.log?.error({ err }, "same-province items error");
+    return res.status(500).json({ error: "Gagal memuat item provinsi yang sama" });
+  }
+});
+
+// GET /api/portal/vendors/:vendorId/public-profile — vendor mini profile (no auth, rate limited)
+router.get("/vendors/:vendorId/public-profile", vendorPublicProfileLimiter, async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  const result = await getVendorPublicProfile(vendorId);
+  if (!result) return res.status(404).json({ error: "Vendor tidak ditemukan" });
+  return res.json(result);
+});
+
+// GET /api/portal/vendors/:vendorId/reviews — public: hanya review published + approved
+router.get("/vendors/:vendorId/reviews", async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=60");
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+
+  const rows = await db
+    .select({
+      id: supplierReviewsTable.id,
+      ratingOverall: supplierReviewsTable.ratingOverall,
+      ratingDelivery: supplierReviewsTable.ratingDelivery,
+      ratingCommunication: supplierReviewsTable.ratingCommunication,
+      ratingQuality: supplierReviewsTable.ratingQuality,
+      reviewText: supplierReviewsTable.reviewText,
+      createdAt: supplierReviewsTable.createdAt,
+    })
+    .from(supplierReviewsTable)
+    .where(
+      and(
+        eq(supplierReviewsTable.supplierId, vendorId),
+        eq(supplierReviewsTable.isPublished, true),
+        eq(supplierReviewsTable.moderationStatus, "approved"),
+      )
+    )
+    .orderBy(desc(supplierReviewsTable.createdAt))
+    .limit(50);
+
+  return res.json(rows);
+});
+
+// POST /api/portal/vendors/:vendorId/reviews — buyer membuat review setelah transaksi selesai
+// Satu review per transaksi (ditegakkan oleh unique index di DB). Butuh moderasi admin
+// sebelum tampil publik (moderationStatus dimulai "pending", isPublished=false).
+router.post("/vendors/:vendorId/reviews", requirePortalAuth, async (req, res) => {
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+
+  const {
+    sourceTransactionType,
+    sourceTransactionId,
+    ratingOverall,
+    ratingDelivery,
+    ratingCommunication,
+    ratingQuality,
+    reviewText,
+  } = req.body ?? {};
+
+  const txId = parseInt(String(sourceTransactionId));
+  if (!sourceTransactionType || isNaN(txId)) {
+    return res.status(400).json({ error: "sourceTransactionType dan sourceTransactionId wajib diisi" });
+  }
+  const rating = Number(ratingOverall);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: "ratingOverall harus angka 1-5" });
+  }
+
+  // Akun portal customer ini mungkin terhubung (email/phone) ke supplier tertentu
+  // (mis. akun vendor yang juga login sebagai portal customer) — dipakai anti self-review.
+  const linkedSupplier = await getLinkedSupplier(customerId).catch(() => null);
+
+  // Verifikasi kepemilikan transaksi + status selesai — tidak semua vendor/customer
+  // boleh diklaim, hanya buyer yang benar-benar bertransaksi dengan vendor ini.
+  let transactionFound = false;
+  let transactionVendorId: number | null = null;
+  let transactionCustomerId: number | null = null;
+  let transactionStatusEligible = false;
+
+  if (sourceTransactionType === "mkt_purchase_order") {
+    const [row] = await db
+      .select({ vendorId: mktPurchaseOrdersTable.vendorId, status: mktPurchaseOrdersTable.status, portalCustomerId: mktRfqsTable.portalCustomerId })
+      .from(mktPurchaseOrdersTable)
+      .innerJoin(mktRfqsTable, eq(mktRfqsTable.id, mktPurchaseOrdersTable.rfqId))
+      .where(eq(mktPurchaseOrdersTable.id, txId))
+      .limit(1);
+    transactionFound = !!row;
+    transactionVendorId = row?.vendorId ?? null;
+    transactionCustomerId = row?.portalCustomerId ?? null;
+    transactionStatusEligible = !!row && ["completed", "closed", "delivered"].includes(String(row.status));
+  } else if (sourceTransactionType === "product_order") {
+    // portal_product_orders tidak punya kolom portalCustomerId maupun vendorId eksplisit
+    // (hanya vendorNameSelected berupa teks bebas dan email/phone pemesan) — verifikasi
+    // kepemilikan via kecocokan email/phone dengan akun customer yang login, dan verifikasi
+    // vendor via kecocokan nama vendor dengan supplier yang sedang dinilai.
+    const [row] = await db
+      .select({
+        companyId: portalProductOrdersTable.companyId,
+        status: portalProductOrdersTable.status,
+        email: portalProductOrdersTable.email,
+        phone: portalProductOrdersTable.phone,
+        vendorNameSelected: portalProductOrdersTable.vendorNameSelected,
+      })
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, txId))
+      .limit(1);
+    transactionFound = !!row && row.companyId != null;
+    transactionStatusEligible = !!row && String(row.status ?? "").toLowerCase().includes("complete");
+
+    if (row) {
+      const [requestingCustomer] = await db
+        .select({ email: portalCustomersTable.email, phone: portalCustomersTable.phone })
+        .from(portalCustomersTable)
+        .where(eq(portalCustomersTable.id, customerId))
+        .limit(1);
+      const normPhone = (p: string | null | undefined) => (p ? p.replace(/[^\d]/g, "").replace(/^0/, "62") : null);
+      const emailMatch = !!requestingCustomer?.email && requestingCustomer.email.toLowerCase() === String(row.email ?? "").toLowerCase();
+      const phoneMatch = !!requestingCustomer?.phone && normPhone(requestingCustomer.phone) === normPhone(row.phone);
+      transactionCustomerId = (emailMatch || phoneMatch) ? customerId : -1;
+
+      // Ambil nama supplier untuk dicocokkan (case-insensitive) — hanya dianggap transaksi
+      // milik vendor ini jika nama vendor yang tercatat pada order cocok dengan nama supplier.
+      if (row.vendorNameSelected) {
+        const [supplierRow] = await db.select({ name: suppliersTable.name }).from(suppliersTable).where(eq(suppliersTable.id, vendorId)).limit(1);
+        transactionVendorId = supplierRow && supplierRow.name.trim().toLowerCase() === String(row.vendorNameSelected).trim().toLowerCase() ? vendorId : null;
+      }
+    }
+  } else {
+    return res.status(400).json({ error: "sourceTransactionType tidak dikenali" });
+  }
+
+  const guard = evaluateReviewEligibility({
+    linkedSupplierId: linkedSupplier?.id ?? null,
+    vendorId,
+    transactionVendorId,
+    transactionCustomerId,
+    requestingCustomerId: customerId,
+    transactionStatusEligible,
+    transactionFound,
+  });
+  if (!guard.ok) {
+    return res.status(guard.status).json({ success: false, code: guard.code, message: guard.message });
+  }
+
+  try {
+    const [created] = await db
+      .insert(supplierReviewsTable)
+      .values({
+        supplierId: vendorId,
+        customerId,
+        sourceTransactionType,
+        sourceTransactionId: txId,
+        ratingOverall: String(rating),
+        ratingDelivery: ratingDelivery != null ? String(Number(ratingDelivery)) : null,
+        ratingCommunication: ratingCommunication != null ? String(Number(ratingCommunication)) : null,
+        ratingQuality: ratingQuality != null ? String(Number(ratingQuality)) : null,
+        reviewText: reviewText ? String(reviewText).slice(0, 2000) : null,
+        isPublished: false,
+        moderationStatus: "pending",
+      })
+      .returning();
+    return res.status(201).json({ ok: true, review: created, message: "Review terkirim, menunggu moderasi admin" });
+  } catch (err: any) {
+    if (String(err?.message ?? "").includes("supplier_reviews_one_per_transaction_idx")) {
+      return res.status(409).json({ error: "Anda sudah memberikan review untuk transaksi ini" });
+    }
+    return res.status(500).json({ error: "Gagal menyimpan review" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDOR BOOKMARKS — authenticated portal customer can save/unsave vendors
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/portal/vendors/:vendorId/bookmark — check if current user has bookmarked this vendor
+router.get("/vendors/:vendorId/bookmark", requirePortalAuth, async (req, res) => {
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const result = await db.execute(sql`
+      SELECT id FROM vendor_bookmarks
+      WHERE customer_id = ${customerId} AND vendor_id = ${vendorId}
+      LIMIT 1
+    `);
+    const rows = (result as { rows?: unknown[] }).rows ?? [];
+    return res.json({ bookmarked: rows.length > 0 });
+  } catch (err) {
+    req.log?.warn({ err }, "vendor bookmark check error");
+    return res.status(500).json({ error: "Gagal memeriksa bookmark" });
+  }
+});
+
+// POST /api/portal/vendors/:vendorId/bookmark — add bookmark
+router.post("/vendors/:vendorId/bookmark", requirePortalAuth, async (req, res) => {
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    await db.execute(sql`
+      INSERT INTO vendor_bookmarks (customer_id, vendor_id)
+      VALUES (${customerId}, ${vendorId})
+      ON CONFLICT ON CONSTRAINT vendor_bookmarks_customer_vendor_uidx DO NOTHING
+    `);
+    return res.json({ bookmarked: true });
+  } catch (err) {
+    req.log?.warn({ err }, "vendor bookmark add error");
+    return res.status(500).json({ error: "Gagal menyimpan bookmark" });
+  }
+});
+
+// DELETE /api/portal/vendors/:vendorId/bookmark — remove bookmark
+router.delete("/vendors/:vendorId/bookmark", requirePortalAuth, async (req, res) => {
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    await db.execute(sql`
+      DELETE FROM vendor_bookmarks
+      WHERE customer_id = ${customerId} AND vendor_id = ${vendorId}
+    `);
+    return res.json({ bookmarked: false });
+  } catch (err) {
+    req.log?.warn({ err }, "vendor bookmark delete error");
+    return res.status(500).json({ error: "Gagal menghapus bookmark" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDOR GALLERY — public product media for a vendor
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/portal/vendors/:vendorId/gallery — fetch product_media images for this vendor
+router.get("/vendors/:vendorId/gallery", async (req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        pm.id,
+        pm.vendor_catalog_item_id,
+        pm.vendor_id,
+        pm.media_type,
+        pm.file_url,
+        pm.thumbnail_url,
+        pm.title,
+        pm.description,
+        pm.sort_order,
+        pm.is_primary,
+        vci.name AS item_name,
+        vci.template_kind
+      FROM product_media pm
+      LEFT JOIN vendor_catalog_items vci ON vci.id = pm.vendor_catalog_item_id
+      WHERE pm.vendor_id = ${vendorId}
+        AND pm.is_active = true
+        AND pm.file_url IS NOT NULL
+        AND (pm.media_type = 'image' OR pm.media_type IS NULL)
+      ORDER BY pm.is_primary DESC, pm.sort_order ASC, pm.id ASC
+      LIMIT 100
+    `);
+    const rows = (result as { rows?: unknown[] }).rows ?? [];
+    return res.json(rows);
+  } catch (err) {
+    req.log?.error({ err }, "vendor gallery error");
+    return res.status(500).json({ error: "Gagal memuat galeri" });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDOR CONTACT INQUIRY — submit a contact form to a specific vendor
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _contactInquiryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: keyGen,
+  message: { error: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// POST /api/portal/vendors/:vendorId/contact — submit contact inquiry
+router.post("/vendors/:vendorId/contact", _contactInquiryLimiter, async (req, res) => {
+  const vendorId = parseInt(String(req.params.vendorId));
+  if (isNaN(vendorId)) return res.status(400).json({ error: "vendorId tidak valid" });
+
+  const { name, company, email, phone, country, productInterested, quantity, message } = req.body ?? {};
+
+  if (!name || !String(name).trim()) return res.status(400).json({ error: "Nama wajib diisi" });
+  if (!phone || !String(phone).trim()) return res.status(400).json({ error: "Nomor telepon wajib diisi" });
+
+  // Generate short inquiry number
+  const ts = Date.now().toString(36).toUpperCase();
+  const rnd = randomBytes(3).toString("hex").toUpperCase();
+  const inquiryNumber = `INQ-${ts}-${rnd}`;
+
+  try {
+    // Save to DB
+    await db.execute(sql`
+      INSERT INTO vendor_contact_inquiries (
+        inquiry_number, vendor_id, name, company, email, phone,
+        country, product_interested, quantity, message
+      ) VALUES (
+        ${inquiryNumber},
+        ${vendorId},
+        ${String(name).trim()},
+        ${company ? String(company).trim() : null},
+        ${email ? String(email).trim() : null},
+        ${String(phone).trim()},
+        ${country ? String(country).trim() : null},
+        ${productInterested ? String(productInterested).trim() : null},
+        ${quantity ? String(quantity).trim() : null},
+        ${message ? String(message).trim() : null}
+      )
+    `);
+
+    // Send WA notification to admin (non-fatal)
+    try {
+      const adminWa = await getAdminWa();
+      const appName = await getAppConfig("APP_NAME", "B2B Marketplace and Logistic");
+      if (adminWa) {
+        const msg = [
+          `📬 *CONTACT SUPPLIER INQUIRY*`,
+          `No: ${inquiryNumber}`,
+          ``,
+          `👤 *Nama:* ${String(name).trim()}`,
+          company ? `🏢 *Perusahaan:* ${company}` : null,
+          email ? `📧 *Email:* ${email}` : null,
+          `📱 *Phone:* ${String(phone).trim()}`,
+          country ? `🌏 *Negara:* ${country}` : null,
+          ``,
+          productInterested ? `📦 *Produk diminati:* ${productInterested}` : null,
+          quantity ? `🔢 *Qty:* ${quantity}` : null,
+          message ? `📝 *Pesan:* ${message}` : null,
+          ``,
+          `_${appName}_`,
+        ].filter(Boolean).join("\n");
+        await sendWhatsApp(adminWa, msg);
+      }
+    } catch (waErr) {
+      req.log?.warn({ waErr }, "WA notification failed for contact inquiry (non-fatal)");
+    }
+
+    return res.status(201).json({ success: true, inquiryNumber });
+  } catch (err: unknown) {
+    req.log?.error({ err }, "vendor contact inquiry error");
+    return res.status(500).json({ error: "Gagal mengirim inquiry. Silakan coba lagi." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VENDOR CATALOG MEDIA — vendor self-service photo upload
+// ─────────────────────────────────────────────────────────────────────────────
+
+// _getLinkedSupplier — moved to portalVendorCatalogService.ts as getLinkedSupplier, imported above
+
+const _vendorImgUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+/**
+ * Resubmit the current item snapshot through the canonical review queue.
+ * An existing submitted row is reused so retries and media edits are idempotent.
+ */
+async function resubmitCatalogItemForReview(itemId: number, supplierId: number) {
+  const [item] = await db
+    .select()
+    .from(vendorCatalogItemsTable)
+    .where(and(
+      eq(vendorCatalogItemsTable.id, itemId),
+      eq(vendorCatalogItemsTable.vendorId, supplierId),
+    ));
+  if (!item) return null;
+
+  const now = new Date();
+  await db.update(vendorCatalogItemsTable)
+    .set({
+      status: "pending_review",
+      isPublished: false,
+      isActive: true,
+      publishedAt: null,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(vendorCatalogItemsTable.id, itemId),
+      eq(vendorCatalogItemsTable.vendorId, supplierId),
+    ));
+
+  const [pending] = await db
+    .select({ id: vendorCatalogSubmissionsTable.id })
+    .from(vendorCatalogSubmissionsTable)
+    .where(and(
+      eq(vendorCatalogSubmissionsTable.catalogItemId, itemId),
+      eq(vendorCatalogSubmissionsTable.status, "submitted"),
+    ))
+    .limit(1);
+
+  const values = {
+    supplierId,
+    vendorName: item.vendorName,
+    categoryKey: item.categoryKey,
+    serviceType: item.serviceType,
+    templateKind: item.templateKind ?? item.type,
+    templateId: item.templateId,
+    templateVersion: item.templateVersion,
+    templateSnapshot: item.templateSnapshot as Record<string, unknown> | null,
+    specValues: item.specValues as Record<string, unknown> | null,
+    name: item.name,
+    description: item.description,
+    unit: item.unit,
+    mediaAssets: item.mediaAssets ?? [],
+    priceBase: item.priceBase,
+    currency: item.currency,
+    stockStatus: item.stockStatus,
+    stockQty: item.stockQty,
+    leadTime: item.leadTime,
+    validityDate: item.validityDate,
+    location: item.location,
+    origin: item.origin,
+    status: "submitted" as const,
+    catalogItemId: itemId,
+    updatedAt: now,
+  };
+
+  let submissionId = pending?.id;
+  const shouldNotify = !submissionId;
+  if (submissionId) {
+    await db.update(vendorCatalogSubmissionsTable)
+      .set(values)
+      .where(and(
+        eq(vendorCatalogSubmissionsTable.id, submissionId),
+        eq(vendorCatalogSubmissionsTable.status, "submitted"),
+      ));
+  } else {
+    const [created] = await db.insert(vendorCatalogSubmissionsTable)
+      .values({ ...values, linkId: null, token: randomUUID(), submittedAt: now })
+      .returning({ id: vendorCatalogSubmissionsTable.id });
+    submissionId = created?.id;
+  }
+
+  if (submissionId) {
+    await db.update(vendorCatalogItemsTable)
+      .set({ sourceSubmissionId: submissionId, updatedAt: now })
+      .where(eq(vendorCatalogItemsTable.id, itemId));
+  }
+
+  if (shouldNotify) void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+    type: "vendor_product_submitted",
+    orderId: itemId,
+    orderNumber: String(itemId),
+    customerName: item.vendorName ?? "Vendor",
+    title: "Produk Menunggu Persetujuan",
+    body: `"${item.name}" dari ${item.vendorName ?? "Vendor"} menunggu review admin.`,
+    targetRole: "admin",
+    supplierId,
+    productName: item.name,
+    catalogItemId: itemId,
+    submissionId,
+  }).catch((notificationError: unknown) => {
+    console.error("[portal] vendor product resubmission notification failed", notificationError);
+  });
+
+  return { itemId, submissionId };
+}
+
+// GET /api/portal/vendor/catalog — list vendor's own catalog items with media
+router.get("/vendor/catalog", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+  try {
+    return res.json(await listVendorOwnCatalog(supplier.id, supplier.name));
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// POST /api/portal/vendor/catalog/:itemId/media/upload
+router.post(
+  "/vendor/catalog/:itemId/media/upload",
+  requirePortalAuth,
+  requireActiveVendor,
+  (req: any, res: any, next: any) =>
+    (_vendorImgUpload.single("file") as any)(req, res, (err: any) => {
+      if (err?.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "Ukuran foto maks 5 MB" });
+      }
+      next(err);
+    }),
+  async (req: any, res: any) => {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    const itemId = parseInt(String(req.params.itemId));
+    if (isNaN(itemId)) return res.status(400).json({ error: "ID item tidak valid" });
+    if (!req.file) return res.status(400).json({ error: "Tidak ada file yang diunggah" });
+
+    const supplier = await getLinkedSupplier(customerId);
+    if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+    const [customer] = await db
+      .select({ email: portalCustomersTable.email })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId));
+
+    try {
+      const inserted = await uploadVendorCatalogMedia({
+        itemId,
+        supplierId:    supplier.id,
+        uploaderEmail: customer?.email ?? null,
+        buffer:        req.file.buffer as Buffer,
+        mimetype:      req.file.mimetype as string,
+      });
+      return res.status(201).json({ media: inserted });
+    } catch (e: any) {
+      const code = (e as any)?.statusCode;
+      if (code === 415) return res.status(415).json({ error: e.message });
+      if (code === 404) return res.status(404).json({ error: e.message });
+      if (code === 403) return res.status(403).json({ error: e.message });
+      return res.status(500).json({ error: e?.message });
+    }
+  },
+);
+
+// DELETE /api/portal/vendor/catalog/media/:mediaId
+router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const mediaId = parseInt(String(req.params.mediaId));
+  if (isNaN(mediaId)) return res.status(400).json({ error: "ID media tidak valid" });
+
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+  try {
+    const result = await deleteVendorCatalogMedia(mediaId, supplier.id);
+    if (result.storagePath) await deleteFromSupabase(result.storagePath);
+    return res.json({ success: true });
+  } catch (e: any) {
+    const code = (e as any)?.statusCode;
+    if (code === 404) return res.status(404).json({ error: e.message });
+    if (code === 403) return res.status(403).json({ error: e.message });
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// ── Vendor: direct catalog CRUD ───────────────────────────────────────────────
+
+// POST /api/portal/vendor/catalog — Create new catalog item (pending review)
+router.post("/vendor/catalog", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+  const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode } = req.body ?? {};
+  if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
+
+  try {
+    // Direct vendor submissions must follow the same approval contract as the
+    // catalog-engine form. The submission record gives admins a reviewable
+    // queue item and keeps the product hidden until approval.
+    const [submission] = await db
+      .insert(vendorCatalogSubmissionsTable)
+      .values({
+        linkId:         null,
+        token:          randomUUID(),
+        supplierId:     supplier.id,
+        vendorName:     supplier.name ?? null,
+        categoryKey:    categoryKey ?? null,
+        serviceType:    normalizedTemplateKind === "service" ? (categoryKey ?? null) : null,
+        templateKind:   normalizedTemplateKind,
+        specValues:     null,
+        name:           String(name).trim().slice(0, 200),
+        description:    description ?? null,
+        unit:           unit ?? null,
+        mediaAssets:    [],
+        priceBase:      "0",
+        currency:       "IDR",
+        status:         "submitted",
+      })
+      .returning({ id: vendorCatalogSubmissionsTable.id });
+
+    const [row] = await db
+      .insert(vendorCatalogItemsTable)
+      .values({
+        vendorId:     supplier.id,
+        vendorName:   supplier.name ?? null,
+        type:         normalizedTemplateKind,
+        name:         String(name).trim().slice(0, 200),
+        templateKind: normalizedTemplateKind,
+        description:  description ?? null,
+        kategori:     kategori ?? null,
+        categoryKey:  categoryKey ?? null,
+        priceSell:    priceSell != null ? String(priceSell) : null,
+        unit:         unit ?? null,
+        moq:          moq != null ? String(moq) : null,
+        origin:       origin ?? null,
+        hsCode:       hsCode ?? null,
+        status:       "pending_review",
+        isPublished:  false,
+        isActive:     true,
+        mediaAssets:  [],
+        sourceSubmissionId: submission.id,
+      })
+      .returning({ id: vendorCatalogItemsTable.id });
+
+    await db
+      .update(vendorCatalogSubmissionsTable)
+      .set({ catalogItemId: row.id, updatedAt: new Date() })
+      .where(eq(vendorCatalogSubmissionsTable.id, submission.id));
+
+    void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+      type:         "vendor_product_submitted",
+      orderId:      row.id,
+      orderNumber:  String(row.id),
+      customerName: supplier.name ?? "Vendor",
+      title:        "Produk Baru Menunggu Persetujuan",
+      body:         `"${String(name).trim().slice(0, 200)}" dari ${supplier.name ?? "Vendor"} menunggu review admin.`,
+      targetRole:   "admin",
+      supplierId:   supplier.id,
+      productName:  String(name).trim().slice(0, 200),
+      catalogItemId: row.id,
+      submissionId:  submission.id,
+    }).catch((notificationError: unknown) => {
+      console.error("[portal] vendor product notification failed", notificationError);
+    });
+
+    return res.status(201).json({ id: row.id, ok: true });
+  } catch (e: any) {
+    console.error("[portal] POST vendor/catalog error", e);
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// PUT /api/portal/vendor/catalog/:id — Edit own catalog item details
+router.put("/vendor/catalog/:id", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+  const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode, specValues } = req.body ?? {};
+  if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET name          = ${String(name).trim().slice(0, 200)},
+           type          = ${normalizedTemplateKind},
+           template_kind = ${normalizedTemplateKind},
+          description   = ${description ?? null},
+          kategori      = ${kategori ?? null},
+          category_key  = ${categoryKey ?? null},
+          price_sell    = ${priceSell != null ? String(priceSell) : null},
+          unit          = ${unit ?? null},
+          moq           = ${moq != null ? String(moq) : null},
+          origin        = ${origin ?? null},
+          hs_code       = ${hsCode ?? null},
+          spec_values   = ${specValues != null ? JSON.stringify(specValues) : null}::jsonb,
+           status        = 'pending_review',
+           is_published  = false,
+           is_active     = true,
+           published_at  = NULL,
+          updated_at    = NOW()
+      WHERE id = ${id} AND vendor_id = ${supplier.id}
+      RETURNING id
+    `);
+    if (!(result as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+     await resubmitCatalogItemForReview(id, supplier.id);
+    return res.json({ ok: true });
+  } catch (e: any) {
+    console.error("[portal] PUT vendor/catalog error", e);
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// POST /api/portal/vendor/catalog/:id/media-assets/upload
+// Upload file → Supabase Storage → return URL. Frontend manages the array and PATCHes below.
+router.post(
+  "/vendor/catalog/:id/media-assets/upload",
+  requirePortalAuth,
+  requireActiveVendor,
+  (req: any, res: any, next: any) =>
+    (_portalUpload.single("file") as any)(req, res, (err: any) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE")
+        return res.status(413).json({ message: "Ukuran file terlalu besar (maks 20 MB)" });
+      next(err);
+    }),
+  async (req: any, res: any) => {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    const id = parseInt(String(req.params.id), 10);
+    if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+    if (!req.file) return res.status(400).json({ message: "File wajib disertakan" });
+
+    const supplier = await getLinkedSupplier(customerId);
+    if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+    const ownerRows = await db.execute(sql`
+      SELECT id FROM vendor_catalog_items WHERE id = ${id} AND vendor_id = ${supplier.id}
+    `);
+    if (!(ownerRows as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+
+    const ALLOWED = [
+      "image/jpeg","image/jpg","image/png","image/webp",
+      "video/mp4","video/webm","video/quicktime",
+      "application/pdf",
+    ];
+    if (!ALLOWED.includes(req.file.mimetype as string))
+      return res.status(415).json({ message: "Tipe file tidak didukung (JPG, PNG, WebP, MP4, WebM, PDF)" });
+
+    try {
+      const mime = req.file.mimetype as string;
+      const folder = mime.startsWith("video/")
+        ? "catalog-videos"
+        : mime === "application/pdf"
+          ? "catalog-docs"
+          : `product-media/vendor-${supplier.id}/item-${id}`;
+      const { publicUrl, storagePath } = await uploadToSupabase(req.file.buffer as Buffer, mime, folder);
+      return res.status(201).json({
+        url:        publicUrl,
+        objectPath: storagePath,
+        mimeType:   mime,
+        sizeBytes:  req.file.size,
+      });
+    } catch (e: any) {
+      console.error("[portal] vendor media-assets upload error", e);
+      return res.status(500).json({ message: e?.message ?? "Upload gagal" });
+    }
+  },
+);
+
+// PATCH /api/portal/vendor/catalog/:id/media-assets — Replace media_assets JSONB
+router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+
+  const { mediaAssets } = req.body ?? {};
+  if (!Array.isArray(mediaAssets)) return res.status(400).json({ message: "mediaAssets harus berupa array" });
+
+  const [ownerRow] = await db
+    .select({ documents: vendorCatalogItemsTable.documents })
+    .from(vendorCatalogItemsTable)
+    .where(and(eq(vendorCatalogItemsTable.id, id), eq(vendorCatalogItemsTable.vendorId, supplier.id)));
+  if (!ownerRow) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+
+  const validation = validateMediaAssetsPayload(mediaAssets, ownerRow.documents);
+  if (!validation.ok) return res.status(400).json({ message: validation.message });
+
+  try {
+    await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET media_assets = ${JSON.stringify(validation.clean)}::jsonb, updated_at = NOW()
+      WHERE id = ${id} AND vendor_id = ${supplier.id}
+    `);
+    await resubmitCatalogItemForReview(id, supplier.id);
+    return res.json({ ok: true, count: validation.clean.length });
+  } catch (e: any) {
+    console.error("[portal] vendor PATCH media-assets error", e);
+    return res.status(500).json({ message: e?.message ?? "Gagal menyimpan media assets" });
+  }
+});
+
+// POST /api/portal/vendor/catalog/:id/publish
+router.post("/vendor/catalog/:id/publish", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+  try {
+    const [item] = await db
+      .select({ status: vendorCatalogItemsTable.status })
+      .from(vendorCatalogItemsTable)
+      .where(and(
+        eq(vendorCatalogItemsTable.id, id),
+        eq(vendorCatalogItemsTable.vendorId, supplier.id),
+      ));
+    if (!item) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+    if (item.status !== "published") {
+      return res.status(409).json({
+        message: "Produk harus disetujui admin terlebih dahulu sebelum dapat dipublikasikan.",
+        code: "ADMIN_APPROVAL_REQUIRED",
+      });
+    }
+
+    const result = await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET is_published = true, is_active = true, status = 'published',
+          published_at = COALESCE(published_at, NOW()), updated_at = NOW()
+      WHERE id = ${id} AND vendor_id = ${supplier.id}
+      RETURNING id
+    `);
+    if (!(result as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// POST /api/portal/vendor/catalog/:id/unpublish
+router.post("/vendor/catalog/:id/unpublish", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+  try {
+    const result = await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET is_published = false, status = 'draft', updated_at = NOW()
+      WHERE id = ${id} AND vendor_id = ${supplier.id}
+      RETURNING id
+    `);
+    if (!(result as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// POST /api/portal/vendor/catalog/:id/archive — Soft delete (no hard DELETE)
+router.post("/vendor/catalog/:id/archive", requirePortalAuth, requireActiveVendor, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  const supplier = await getLinkedSupplier(customerId);
+  if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
+  try {
+    const result = await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET is_active = false, is_published = false, status = 'archived', updated_at = NOW()
+      WHERE id = ${id} AND vendor_id = ${supplier.id}
+      RETURNING id
+    `);
+    if (!(result as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// ── Vendor: notification endpoints ────────────────────────────────────────────
+
+// GET /api/portal/vendor/notifications — list this vendor's in-app notifications
+router.get("/vendor/notifications", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    const limit = Math.min(Number(req.query["limit"] ?? 50), 100);
+    const onlyUnread = req.query["unread"] === "1";
+
+    const conditions = [eq(vendorNotificationsTable.vendorId, customerId)];
+    if (onlyUnread) conditions.push(eq(vendorNotificationsTable.isRead, false));
+
+    const rows = await db
+      .select()
+      .from(vendorNotificationsTable)
+      .where(and(...conditions))
+      .orderBy(desc(vendorNotificationsTable.createdAt))
+      .limit(limit);
+
+    const [unreadCount] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(vendorNotificationsTable)
+      .where(and(
+        eq(vendorNotificationsTable.vendorId, customerId),
+        eq(vendorNotificationsTable.isRead, false),
+      ));
+
+    res.json({ notifications: rows, unreadCount: unreadCount?.count ?? 0 });
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// POST /api/portal/vendor/notifications/read-all — mark all as read
+router.post("/vendor/notifications/read-all", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    await db.update(vendorNotificationsTable)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(
+        eq(vendorNotificationsTable.vendorId, customerId),
+        eq(vendorNotificationsTable.isRead, false),
+      ));
+
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// POST /api/portal/vendor/notifications/:id/read — mark one as read
+router.post("/vendor/notifications/:id/read", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+    const notifId = Number(req.params.id);
+
+    await db.update(vendorNotificationsTable)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(
+        eq(vendorNotificationsTable.id, notifId),
+        eq(vendorNotificationsTable.vendorId, customerId),
+      ));
+
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Vendor: profile detail ─────────────────────────────────────────────────────
+
+// GET /api/portal/vendor/vendor-profile — full vendor_profiles record
+router.get("/vendor/vendor-profile", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+    const result = await getVendorFullProfile(customerId);
+    res.json(result);
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// PATCH /api/portal/vendor/profile — vendor self-edit profil sendiri (P1 — G9 fix)
+// Vendor hanya dapat mengubah field profil miliknya. Tidak dapat mengubah status,
+// marketplace status, supplier ownership, atau dokumen.
+router.patch(
+  "/vendor/profile",
+  requirePortalAuth,
+  requireActiveVendor,
+  validateBody(VendorSelfProfileSchema),
+  async (req: PortalAuthReq, res) => {
+    try {
+      const customerId = req.portalCustomerId;
+      if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+      const {
+        picName, phone, email, fullAddress, province, city, postalCode,
+        bankName, bankAccountName, bankAccountNumber,
+        companyDescription, logoUrl, expectedUpdatedAt,
+      } = req.body as {
+        picName?: string | null; phone?: string | null; email?: string | null;
+        fullAddress?: string | null;
+        province?: string | null; city?: string | null; postalCode?: string | null;
+        bankName?: string | null; bankAccountName?: string | null; bankAccountNumber?: string | null;
+        companyDescription?: string | null; logoUrl?: string | null;
+        expectedUpdatedAt?: string;
+      };
+
+      // Ambil data sebelum update untuk audit + optimistic locking
+      const [vp] = await db
+        .select({
+          supplierId: vendorProfilesTable.supplierId,
+          picName: vendorProfilesTable.picName,
+          phone: vendorProfilesTable.phone,
+          email: vendorProfilesTable.email,
+          fullAddress: vendorProfilesTable.fullAddress,
+          companyDescription: vendorProfilesTable.companyDescription,
+          updatedAt: vendorProfilesTable.updatedAt,
+        })
+        .from(vendorProfilesTable)
+        .where(eq(vendorProfilesTable.customerId, customerId))
+        .limit(1);
+
+      if (!vp) {
+        res.status(404).json({ error: "Profil vendor tidak ditemukan" });
+        return;
+      }
+
+      // Optimistic locking uses the row actually being edited. suppliers.updatedAt
+      // is unrelated to ordinary vendor profile changes.
+      const versionBounds = expectedUpdatedAt
+        ? getVendorProfileVersionBounds(expectedUpdatedAt)
+        : null;
+      if (expectedUpdatedAt) {
+        if (!isCurrentVendorProfileVersion(vp.updatedAt, versionBounds)) {
+          res.status(409).json({
+            message: "Conflict: data telah diubah. Refresh dan coba lagi.",
+            currentUpdatedAt: vp.updatedAt ?? null,
+          });
+          return;
+        }
+      }
+
+      // Update vendor_profiles
+      const vpUpdates: Record<string, unknown> = {};
+      if (picName !== undefined) vpUpdates.picName = picName;
+      if (phone !== undefined) vpUpdates.phone = phone;
+      if (email !== undefined) vpUpdates.email = email;
+      if (fullAddress !== undefined) vpUpdates.fullAddress = fullAddress;
+      if (province !== undefined) vpUpdates.province = province;
+      if (city !== undefined) vpUpdates.city = city;
+      if (postalCode !== undefined) vpUpdates.postalCode = postalCode;
+      if (bankName !== undefined) vpUpdates.bankName = bankName;
+      if (bankAccountName !== undefined) vpUpdates.bankAccountName = bankAccountName;
+      if (bankAccountNumber !== undefined) vpUpdates.bankAccountNumber = bankAccountNumber;
+      if (companyDescription !== undefined) vpUpdates.companyDescription = companyDescription;
+
+      if (Object.keys(vpUpdates).length > 0) {
+        const now = new Date();
+        // PostgreSQL may retain microseconds while browser JSON carries only
+        // milliseconds. The half-open range still matches the current row and
+        // rejects a row changed into any later millisecond.
+        const updateWhere = versionBounds
+          ? and(
+              eq(vendorProfilesTable.customerId, customerId),
+              gte(vendorProfilesTable.updatedAt, versionBounds.start),
+              lt(vendorProfilesTable.updatedAt, versionBounds.end),
+            )
+          : eq(vendorProfilesTable.customerId, customerId);
+        const [updatedProfile] = await db
+          .update(vendorProfilesTable)
+          .set({ ...vpUpdates, updatedAt: now })
+          .where(updateWhere)
+          .returning({ updatedAt: vendorProfilesTable.updatedAt });
+
+        if (!updatedProfile) {
+          res.status(409).json({
+            message: "Conflict: data telah diubah. Refresh dan coba lagi.",
+          });
+          return;
+        }
+        vp.updatedAt = updatedProfile.updatedAt;
+      }
+
+      // Update suppliers (logoUrl — jika disertakan dan ada supplierId)
+      if (vp.supplierId && logoUrl !== undefined) {
+        await db
+          .update(suppliersTable)
+          .set({ logoUrl, updatedAt: new Date() })
+          .where(eq(suppliersTable.id, vp.supplierId));
+      }
+
+      const actor = vendorActorFromReq(req);
+      if (vp.supplierId) {
+        void logVendorAudit({
+          supplierId: vp.supplierId,
+          action: "profile_edited_vendor",
+          actor,
+          before: {
+            picName: vp.picName,
+            phone: vp.phone,
+            email: vp.email,
+            fullAddress: vp.fullAddress,
+            companyDescription: vp.companyDescription,
+          },
+          after: { picName, phone, email, fullAddress, companyDescription, logoUrl },
+          ip: vendorIpFromReq(req),
+          userAgent: vendorUaFromReq(req),
+        });
+      }
+
+      res.json({ ok: true, updatedAt: vp.updatedAt });
+    } catch (e: unknown) {
+      res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+    }
+  }
+);
+
+// ── Vendor: catalog submissions ────────────────────────────────────────────────
+
+// GET /api/portal/vendor/catalog-submissions — submissions this vendor has made
+router.get("/vendor/catalog-submissions", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const customerId = (req as PortalAuthReq).portalCustomerId;
+    if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
+    return res.json(await listVendorCatalogSubmissions(customerId));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Vendor: Featured Product / Produk Unggulan ──────────────────────────────
+// Vendors are portal_customers rows with a vendor role; resolveVendorSupplierId
+// maps the logged-in customer to their suppliers.id (same heuristic as the
+// vendor dashboard). requireActiveVendor blocks pending/rejected vendors.
+
+async function _requireVendorSupplierId(req: PortalAuthReq, res: Response): Promise<number | null> {
+  const customerId = req.portalCustomerId;
+  if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return null; }
+  const vendorId = await resolveVendorSupplierId(customerId);
+  if (!vendorId) { res.status(403).json({ error: "Akun ini tidak terhubung ke profil vendor" }); return null; }
+  return vendorId;
+}
+
+// GET /api/portal/vendor/featured-packages — packages a vendor can pick from
+router.get("/vendor/featured-packages", requirePortalAuth, requireActiveVendor, async (_req, res) => {
+  try {
+    res.json(await listFeaturedPackages(false, { internalOnly: false }));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// GET /api/portal/vendor/featured-requests — this vendor's own requests
+router.get("/vendor/featured-requests", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = await _requireVendorSupplierId(req, res);
+    if (!vendorId) return;
+    res.json(await listFeaturedRequestsForVendor(vendorId));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// GET /api/portal/vendor/featured-requests/:id — detail of one owned request
+router.get("/vendor/featured-requests/:id", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = await _requireVendorSupplierId(req, res);
+    if (!vendorId) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await getFeaturedRequestDetailForVendor(vendorId, id));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// POST /api/portal/vendor/featured-requests — submit a new featured-product request
+router.post("/vendor/featured-requests", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = await _requireVendorSupplierId(req, res);
+    if (!vendorId) return;
+    const { catalogItemId, packageId, requestedStartAt } = req.body ?? {};
+    const row = await createFeaturedRequest(vendorId, {
+      catalogItemId: Number(catalogItemId),
+      packageId: Number(packageId),
+      requestedStartAt: requestedStartAt ? new Date(requestedStartAt) : new Date(),
+    });
+    res.status(201).json(row);
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// POST /api/portal/vendor/featured-requests/:id/cancel — vendor cancels own request
+router.post("/vendor/featured-requests/:id/cancel", requirePortalAuth, requireActiveVendor, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = await _requireVendorSupplierId(req, res);
+    if (!vendorId) return;
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await cancelFeaturedRequestByVendor(vendorId, id));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// POST /api/portal/vendor/featured-requests/:id/payment-proof — upload payment proof
+const _featuredProofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+router.post(
+  "/vendor/featured-requests/:id/payment-proof",
+  requirePortalAuth,
+  requireActiveVendor,
+  (req, res, next) => {
+    _featuredProofUpload.single("file")(req, res, (err) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        res.status(413).json({ error: "Ukuran file melebihi batas 10 MB." }); return;
+      }
+      if (err) { res.status(400).json({ error: "Upload gagal" }); return; }
+      next();
+    });
+  },
+  async (req: PortalAuthReq, res) => {
+    try {
+      const vendorId = await _requireVendorSupplierId(req, res);
+      if (!vendorId) return;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+      if (!req.file) return res.status(400).json({ error: "File wajib diunggah" });
+
+      const storage = new ObjectStorageService();
+      const ext = (req.file.originalname.split(".").pop() || "jpg").toLowerCase();
+      const storagePath = `featured-product-proofs/${vendorId}-${id}-${Date.now()}.${ext}`;
+      const url = await storage.uploadPublicFile(req.file.buffer, storagePath, req.file.mimetype);
+
+      const paymentReference = typeof req.body?.paymentReference === "string" ? req.body.paymentReference : null;
+      res.json(await submitPaymentProofForVendor(vendorId, id, url, paymentReference));
+    } catch (e: unknown) {
+      if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+      res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+    }
+  },
+);
+
+// ── Admin: Featured Product / Produk Unggulan ───────────────────────────────
+// Shared by Customer Portal admin UI and BizPortal admin UI — same backend,
+// same requirePortalAdmin (accepts BizPortal internal session OR portal admin token).
+
+function _adminIdOf(req: PortalAuthReq): string | null {
+  const u = req.user as { id?: string } | undefined;
+  if (u?.id) return String(u.id);
+  const pcid = req.portalCustomerId;
+  return pcid != null ? String(pcid) : null;
+}
+
+// ── Packages ──
+router.get("/admin/featured-packages", requirePortalAdmin, async (req, res) => {
+  try {
+    res.json(await listFeaturedPackages(req.query.includeInactive === "true"));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Admin shortcut: Internal Vendor → Featured Product ───────────────────────
+// This is intentionally separate from the vendor request flow: no vendor login,
+// payment proof, or payment verification is needed. The shared service still
+// creates the normal featured request and catalog state for expiry/history.
+router.get("/admin/internal-featured/vendors", requirePortalAdmin, async (_req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: suppliersTable.id,
+        name: suppliersTable.name,
+        companyId: suppliersTable.companyId,
+      })
+      .from(suppliersTable)
+      .where(and(eq(suppliersTable.isInternalVendor, true), eq(suppliersTable.isActive, true)))
+      .orderBy(asc(suppliersTable.name));
+    return res.json(rows);
+  } catch (e: unknown) {
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal memuat vendor internal" });
+  }
+});
+
+router.get("/admin/internal-featured/vendors/:vendorId/catalog", requirePortalAdmin, async (req, res) => {
+  const vendorId = Number(req.params.vendorId);
+  if (!Number.isInteger(vendorId) || vendorId <= 0) return res.status(400).json({ error: "vendorId tidak valid" });
+  try {
+    const rows = await db
+      .select({
+        id: vendorCatalogItemsTable.id,
+        vendorId: vendorCatalogItemsTable.vendorId,
+        name: vendorCatalogItemsTable.name,
+        description: vendorCatalogItemsTable.description,
+        currency: vendorCatalogItemsTable.currency,
+        priceSell: vendorCatalogItemsTable.priceSell,
+        isFeatured: vendorCatalogItemsTable.isFeatured,
+      })
+      .from(vendorCatalogItemsTable)
+      .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+      .where(and(
+        eq(vendorCatalogItemsTable.vendorId, vendorId),
+        eq(suppliersTable.isInternalVendor, true),
+        eq(vendorCatalogItemsTable.isActive, true),
+        eq(vendorCatalogItemsTable.isPublished, true),
+        eq(vendorCatalogItemsTable.status, "published"),
+        eq(vendorCatalogItemsTable.isFeatured, false),
+      ))
+      .orderBy(asc(vendorCatalogItemsTable.name));
+    return res.json(rows);
+  } catch (e: unknown) {
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal memuat katalog internal" });
+  }
+});
+
+router.post("/admin/internal-featured/activate", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = Number(req.body?.vendorId);
+    const catalogItemId = Number(req.body?.catalogItemId);
+    const packageId = Number(req.body?.packageId);
+    const startAt = new Date(String(req.body?.startAt ?? ""));
+    const endAt = new Date(String(req.body?.endAt ?? ""));
+    if (![vendorId, catalogItemId, packageId].every((n) => Number.isInteger(n) && n > 0)) {
+      return res.status(400).json({ error: "Vendor, produk, dan paket wajib dipilih" });
+    }
+    const row = await activateInternalFeaturedProduct(
+      { vendorId, catalogItemId, packageId, startAt, endAt },
+      _adminIdOf(req),
+    );
+    return res.status(201).json(row);
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal mengaktifkan Produk Unggulan" });
+  }
+});
+
+router.post("/admin/featured-packages", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    res.status(201).json(await createFeaturedPackage(req.body ?? {}, _adminIdOf(req)));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.patch("/admin/featured-packages/:id", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await updateFeaturedPackage(id, req.body ?? {}, _adminIdOf(req)));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-packages/:id/deactivate", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    await deactivateFeaturedPackage(id, _adminIdOf(req));
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Featured Maintenance (RC3 Fase 2/3 — legacy data repair) ──
+// Read-only scan: aman dipanggil kapan saja, tidak pernah menulis apapun.
+router.get("/admin/featured-maintenance/scan", requirePortalAdmin, async (_req, res) => {
+  try {
+    res.json(await scanFeaturedIntegrity());
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// Repair: default dry-run kecuali body eksplisit { mode: "execute" }.
+router.post("/admin/featured-maintenance/repair", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const mode = req.body?.mode === "execute" ? "execute" : "dry-run";
+    res.json(await repairFeaturedIntegrity(mode, _adminIdOf(req)));
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Requests (Daftar Pengajuan / Riwayat) ──
+router.get("/admin/featured-requests", requirePortalAdmin, async (req, res) => {
+  try {
+    const { status, paymentStatus, vendorId, limit, offset } = req.query;
+    res.json(
+      await listFeaturedRequests({
+        status: typeof status === "string" ? status : undefined,
+        paymentStatus: typeof paymentStatus === "string" ? paymentStatus : undefined,
+        vendorId: vendorId ? Number(vendorId) : undefined,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      }),
+    );
+  } catch (e: unknown) {
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.get("/admin/featured-requests/:id", requirePortalAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await getFeaturedRequestDetail(id));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/:id/approve", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    const { approvedStartAt, approvedEndAt, adminNotes, waivePayment } = req.body ?? {};
+    res.json(
+      await approveFeaturedRequest(id, _adminIdOf(req), {
+        approvedStartAt: approvedStartAt ? new Date(approvedStartAt) : undefined,
+        approvedEndAt: approvedEndAt ? new Date(approvedEndAt) : undefined,
+        adminNotes,
+        waivePayment: !!waivePayment,
+      }),
+    );
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/:id/reject", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await rejectFeaturedRequest(id, _adminIdOf(req), String(req.body?.reason ?? "")));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/:id/verify-payment", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    const { approve, reason } = req.body ?? {};
+    res.json(await verifyFeaturedPayment(id, _adminIdOf(req), !!approve, reason));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/:id/activate", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await activateFeaturedProduct(id, _adminIdOf(req), { overridePayment: !!req.body?.overridePayment }));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/:id/cancel", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id tidak valid" });
+    res.json(await cancelFeaturedProduct(id, _adminIdOf(req), req.body?.reason));
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+router.post("/admin/featured-requests/reorder", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    await reorderFeaturedProducts(items, _adminIdOf(req));
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Portal Admin: Vendor Invitations ─────────────────────────────────────────
+// Boot migration — idempotent, split per pgBouncer transaction-mode constraint
+async function _ensureVendorInvTable() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS portal_vendor_invitations (
+      id          SERIAL PRIMARY KEY,
+      vendor_name TEXT NOT NULL,
+      phone       TEXT,
+      email       TEXT,
+      service_type TEXT,
+      notes       TEXT,
+      token       TEXT NOT NULL UNIQUE,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      valid_until TIMESTAMPTZ NOT NULL,
+      sent_via_wa BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pvi_created_at_idx
+      ON portal_vendor_invitations(created_at DESC)
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS documents JSONB NOT NULL DEFAULT '[]'::jsonb
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS rejection_reason TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS products JSONB NOT NULL DEFAULT '[]'::jsonb
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS vendor_message TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS category TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS category_label TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS contact_name TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS company_name TEXT
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ
+  `).catch(() => {});
+  await db.execute(sql`
+    ALTER TABLE portal_vendor_invitations
+      ADD COLUMN IF NOT EXISTS approved_by TEXT
+  `).catch(() => {});
+}
+_ensureVendorInvTable().catch(e => console.error("[portal] vendor-inv migration error", e));
+
+// GET /api/portal/admin/vendor-invitations — list all invitations
+router.get("/admin/vendor-invitations", requirePortalAdmin, async (_req, res) => {
+  try {
+    const rows = await db.execute(sql`
+      SELECT id, vendor_name, phone, email, service_type, notes,
+             status, valid_until, sent_via_wa, created_at, documents,
+             rejection_reason, rejected_at, products, vendor_message, accepted_at,
+             category, category_label, contact_name, company_name,
+             supplier_id, approved_at, approved_by
+      FROM portal_vendor_invitations
+      ORDER BY created_at DESC
+      LIMIT 200
+    `);
+    const invitations = (rows.rows ?? []) as any[];
+
+    // Documents are stored in the private bucket — mint a short-lived signed
+    // URL per document here (admin-only route) instead of ever persisting or
+    // returning a public URL. Never leak the raw storage path to the client.
+    const withSignedDocs = await Promise.all(
+      invitations.map(async (inv) => {
+        const docs: any[] = Array.isArray(inv.documents) ? inv.documents : [];
+        const signedDocs = await Promise.all(
+          docs.map(async (d) => {
+            if (!d?.path) return d; // legacy rows stored a direct public URL — pass through
+            try {
+              const signedUrl = await _objectStorage.getSignedUrl(d.path, 300);
+              return { docType: d.docType, url: signedUrl, fileName: d.fileName };
+            } catch {
+              return { docType: d.docType, url: null, fileName: d.fileName };
+            }
+          }),
+        );
+        return { ...inv, documents: signedDocs };
+      }),
+    );
+
+    return res.json(withSignedDocs);
+  } catch (e) {
+    console.error("[portal] GET vendor-invitations error", e);
+    return res.status(500).json({ error: "Gagal memuat undangan" });
+  }
+});
+
+// POST /api/portal/admin/vendor-invitations — create invitation + optional WA
+router.post("/admin/vendor-invitations", requirePortalAdmin, async (req, res) => {
+  const { vendor_name, phone, email, service_type, notes, send_wa } = req.body ?? {};
+  if (!vendor_name || typeof vendor_name !== "string" || !vendor_name.trim()) {
+    return res.status(400).json({ message: "Nama vendor harus diisi" });
+  }
+
+  const token = randomBytes(32).toString("hex");
+  const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+  try {
+    const normalizedEmail = typeof email === "string" && email.trim()
+      ? email.trim().toLowerCase()
+      : null;
+    const matchingIdentities = normalizedEmail
+      ? await db
+          .select({ role: portalCustomersTable.role })
+          .from(portalCustomersTable)
+          .where(eq(portalCustomersTable.email, normalizedEmail))
+          .limit(2)
+      : [];
+    const emailDecision = evaluateVendorInvitationEmail(email, matchingIdentities);
+    if (!emailDecision.ok) {
+      return res.status(409).json({
+        code: emailDecision.code,
+        message: emailDecision.message,
+      });
+    }
+
+    await db.execute(sql`
+      INSERT INTO portal_vendor_invitations
+        (vendor_name, phone, email, service_type, notes, token, valid_until, sent_via_wa)
+      VALUES
+        (${vendor_name.trim()}, ${phone ?? null}, ${emailDecision.email},
+         ${service_type ?? null}, ${notes ?? null}, ${token}, ${validUntil}, ${false})
+    `);
+
+    let sentWa = false;
+    if (send_wa && phone) {
+      const cleanPhone = String(phone).replace(/\D/g, "");
+      const portalOrigin = process.env.PORTAL_ORIGIN ?? "https://cstlogistic.co.id";
+      const link = `${portalOrigin}/vendor-register?token=${token}`;
+      const msg = [
+        `Halo *${vendor_name.trim()}*! 👋`,
+        ``,
+        `Anda mendapat undangan dari *CST Logistic* untuk bergabung sebagai mitra vendor di platform B2B kami.`,
+        ``,
+        `Klik link berikut untuk mendaftar:`,
+        link,
+        ``,
+        `Link berlaku hingga ${validUntil.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}.`,
+        ``,
+        `Terima kasih 🙏`,
+      ].join("\n");
+
+      try {
+        await sendWhatsApp(cleanPhone, msg);
+        await db.execute(sql`
+          UPDATE portal_vendor_invitations SET sent_via_wa = TRUE WHERE token = ${token}
+        `);
+        sentWa = true;
+      } catch (waErr) {
+        console.error("[portal] vendor-inv WA send error", waErr);
+      }
+    }
+
+    return res.status(201).json({ token, sent_via_wa: sentWa, valid_until: validUntil });
+  } catch (e) {
+    console.error("[portal] POST vendor-invitations error", e);
+    return res.status(500).json({ error: "Gagal membuat undangan" });
+  }
+});
+
+// ── PUBLIC: POST /vendor-invite/:token/upload — vendor uploads a supporting document ──
+const _vendorInviteUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const VENDOR_INVITE_UPLOAD_ALLOWED_MIME = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp",
+  "application/pdf",
+  "video/mp4", "video/quicktime", "video/x-msvideo", "video/webm",
+]);
+const VENDOR_INVITE_UPLOAD_ALLOWED_EXT = new Set(["jpg", "jpeg", "png", "webp", "pdf", "mp4", "mov", "avi", "webm"]);
+const VENDOR_INVITE_DOC_TYPES = new Set(["npwp", "siup_nib", "akta", "ktp_pic", "other", "product_photo", "product_video"]);
+const VENDOR_INVITE_REQUIRED_DOC_TYPES = ["npwp", "siup_nib", "ktp_pic"];
+const VENDOR_INVITE_SERVICE_LABEL: Record<string, string> = {
+  marketplace: "Produk Marketplace B2B",
+  sea_freight: "Layanan Sea Freight (FCL/LCL)",
+  air_freight: "Layanan Air Freight",
+  trucking:    "Layanan Trucking / Darat",
+  ppjk:        "Layanan PPJK / Custom Clearance",
+  warehousing: "Layanan Pergudangan",
+  other:       "Layanan Lainnya",
+};
+// Doc types that support multiple uploads (append, not replace)
+const VENDOR_INVITE_MULTI_DOC_TYPES = new Set(["product_photo", "product_video"]);
+// Only "marketplace" invitations submit a product catalog; every other
+// service_type registers a service capability (no per-item category to
+// validate against). Must stay in sync with MARKETPLACE_PRODUCT_CATEGORIES
+// in the vendor-register.tsx frontend.
+const VENDOR_INVITE_MARKETPLACE_CATEGORIES = new Set([
+  "Elektronik",
+  "Fashion & Tekstil",
+  "Makanan & Minuman",
+  "Kesehatan & Kecantikan",
+  "Rumah Tangga & Furnitur",
+  "Otomotif & Sparepart",
+  "Bahan Baku & Industri",
+  "Alat Tulis & Kantor",
+  "Lainnya",
+]);
+// Per-IP: max 60 uploads/hour (raised to cover multi-product media uploads)
+const _vendorInviteUploadIpLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Terlalu banyak upload dari jaringan ini. Coba lagi dalam 1 jam." },
+  keyGenerator: (req) => ipKeyGenerator(
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim()
+      ?? req.socket.remoteAddress
+      ?? "unknown"
+  ),
+});
+const _vendorInviteUploadTokenAttempts = new Map<string, { count: number; resetAt: number }>();
+const _VENDOR_INVITE_TOKEN_ATTEMPTS_MAX_ENTRIES = 5000;
+function _checkVendorInviteTokenLimit(token: string): boolean {
+  const now = Date.now();
+  // Opportunistic sweep of expired entries to keep this bounded; also hard-cap
+  // total tracked tokens so an attacker spamming random tokens can't grow this
+  // map without limit (oldest entries evicted first once at capacity).
+  if (_vendorInviteUploadTokenAttempts.size > _VENDOR_INVITE_TOKEN_ATTEMPTS_MAX_ENTRIES) {
+    for (const [k, v] of _vendorInviteUploadTokenAttempts) {
+      if (v.resetAt < now) _vendorInviteUploadTokenAttempts.delete(k);
+    }
+    while (_vendorInviteUploadTokenAttempts.size > _VENDOR_INVITE_TOKEN_ATTEMPTS_MAX_ENTRIES) {
+      const oldestKey = _vendorInviteUploadTokenAttempts.keys().next().value;
+      if (oldestKey === undefined) break;
+      _vendorInviteUploadTokenAttempts.delete(oldestKey);
+    }
+  }
+  const rec = _vendorInviteUploadTokenAttempts.get(token);
+  if (!rec || rec.resetAt < now) {
+    _vendorInviteUploadTokenAttempts.set(token, { count: 1, resetAt: now + 60 * 60_000 });
+    return true;
+  }
+  if (rec.count >= 20) return false;
+  rec.count += 1;
+  return true;
+}
+
+router.post(
+  "/vendor-invite/:token/upload",
+  _vendorInviteUploadIpLimiter,
+  _vendorInviteUpload.single("file"),
+  async (req, res) => {
+    const token = String(req.params.token ?? "").trim();
+    if (!token) return res.status(400).json({ message: "Token tidak valid" });
+    if (!_checkVendorInviteTokenLimit(token)) {
+      return res.status(429).json({ message: "Batas upload untuk link ini telah tercapai. Coba lagi dalam 1 jam." });
+    }
+    if (!req.file) return res.status(400).json({ message: "Tidak ada file" });
+
+    const rawDocType = String((req.body as any)?.docType ?? "other").trim();
+    const docType = VENDOR_INVITE_DOC_TYPES.has(rawDocType) ? rawDocType : "other";
+
+    // Product media (photo/video) allows up to 50 MB; legal docs stay at 10 MB
+    const isProductMedia = VENDOR_INVITE_MULTI_DOC_TYPES.has(docType);
+    const validation = validateUploadFile(req.file, {
+      allowedMime: VENDOR_INVITE_UPLOAD_ALLOWED_MIME,
+      allowedExt: VENDOR_INVITE_UPLOAD_ALLOWED_EXT,
+      maxSizeBytes: isProductMedia ? 50 * 1024 * 1024 : 10 * 1024 * 1024,
+    });
+    if (!validation.ok) return res.status(415).json({ message: validation.errorMessage });
+
+    try {
+      // Re-check token validity + re-fetch documents right before the DB write below to
+      // minimize (not fully eliminate) the TOCTOU window against concurrent accept calls.
+      const rows = await db.execute(sql`
+        SELECT id, status, valid_until, documents FROM portal_vendor_invitations WHERE token = ${token} LIMIT 1
+      `);
+      const inv = (rows as any).rows?.[0];
+      if (!inv) return res.status(404).json({ message: "Token tidak valid" });
+      if (new Date(inv.valid_until) < new Date()) return res.status(410).json({ message: "Link sudah kadaluarsa" });
+      if (inv.status === "accepted") return res.status(409).json({ message: "Undangan ini sudah pernah diterima." });
+
+      const existingDocs: any[] = Array.isArray(inv.documents) ? inv.documents : [];
+      if (existingDocs.length >= 30) {
+        return res.status(400).json({ message: "Jumlah dokumen sudah mencapai batas maksimum." });
+      }
+
+      const fileName = req.file.originalname ?? "";
+      // Legal identity documents (NPWP/NIB/Akta/KTP/other) are sensitive — store
+      // them in the PRIVATE bucket. Only admins can ever read them back, via a
+      // short-lived signed URL minted server-side in GET /admin/vendor-invitations.
+      // Product photos/videos are meant for public catalog display, so those
+      // still go to the public bucket as before.
+      const isLegalDoc = !VENDOR_INVITE_MULTI_DOC_TYPES.has(docType);
+      let docEntry: { docType: string; url: string | null; fileName: string; path?: string };
+      if (isLegalDoc) {
+        const path = await _objectStorage.uploadPrivateEntity(req.file.buffer, req.file.mimetype);
+        docEntry = { docType, url: null, fileName, path };
+      } else {
+        const objectId = randomUUID();
+        const ext = req.file.originalname?.split(".").pop()?.toLowerCase() ?? "bin";
+        const subPath = `vendor-invite-documents/${objectId}.${ext}`;
+        const url = await _objectStorage.uploadPublicRaw(subPath, req.file.buffer, req.file.mimetype);
+        docEntry = { docType, url, fileName };
+      }
+
+      // Multi-upload types (product_photo, product_video) append; others replace same slot.
+      const isMulti = VENDOR_INVITE_MULTI_DOC_TYPES.has(docType);
+      const nextDocs = isMulti
+        ? [...existingDocs, docEntry]
+        : [...existingDocs.filter((d: any) => d?.docType !== docType), docEntry];
+      await db.execute(sql`
+        UPDATE portal_vendor_invitations
+        SET documents = ${JSON.stringify(nextDocs)}::jsonb
+        WHERE token = ${token} AND status != 'accepted'
+      `);
+
+      // For legal docs there is no public url to hand back (private bucket) —
+      // the client only needs to know the upload succeeded and which slot it filled.
+      return res.json({ url: docEntry.url, fileName, docType, uploaded: true });
+    } catch (e) {
+      console.error("[portal] vendor-invite upload error", e);
+      return res.status(500).json({ message: "Gagal upload" });
+    }
+  }
+);
+
+// GET /api/portal/vendor-invite/:token — public: validate invitation token (rate limited)
+router.get("/vendor-invite/:token", vendorInviteLimiter, async (req, res) => {
+  const token = String(req.params.token ?? "").trim();
+  if (!token) return res.status(400).json({ message: "Token tidak valid" });
+  try {
+    const rows = await db.execute(sql`
+      SELECT id, vendor_name, service_type, notes, status, valid_until
+      FROM portal_vendor_invitations
+      WHERE token = ${token}
+      LIMIT 1
+    `);
+    const inv = (rows as any).rows?.[0];
+    if (!inv) return res.status(404).json({ message: "Undangan tidak ditemukan atau sudah dicabut" });
+    const expired = new Date(inv.valid_until) < new Date();
+    if (expired) return res.status(410).json({ message: "Link undangan sudah kadaluarsa (30 hari). Hubungi admin untuk link baru." });
+    if (inv.status === "accepted") return res.status(409).json({ message: "Undangan ini sudah pernah diterima." });
+    return res.json({
+      ok: true,
+      vendor_name: inv.vendor_name,
+      service_type: inv.service_type,
+      notes: inv.notes,
+      valid_until: inv.valid_until,
+    });
+  } catch (e) {
+    console.error("[portal] GET vendor-invite error", e);
+    return res.status(500).json({ error: "Gagal validasi token" });
+  }
+});
+
+// POST /api/portal/vendor-invite/:token/accept — public: vendor submits their data (rate limited)
+router.post("/vendor-invite/:token/accept", vendorInviteLimiter, validateBody(VendorInviteAcceptSchema), async (req, res) => {
+  const token = String(req.params.token ?? "").trim();
+  const { contact_name, phone, email, company_name, message, products } = req.body ?? {};
+  if (!token) return res.status(400).json({ message: "Token tidak valid" });
+
+  try {
+    const rows = await db.execute(sql`
+      SELECT id, vendor_name, status, valid_until, documents, service_type
+      FROM portal_vendor_invitations
+      WHERE token = ${token}
+      LIMIT 1
+    `);
+    const inv = (rows as any).rows?.[0];
+    if (!inv) return res.status(404).json({ message: "Undangan tidak ditemukan" });
+    if (new Date(inv.valid_until) < new Date()) return res.status(410).json({ message: "Link sudah kadaluarsa" });
+    if (inv.status === "accepted") return res.status(409).json({ message: "Sudah diterima sebelumnya" });
+
+    // Documents are bound server-side via the /upload endpoint (never trust
+    // client-supplied document URLs/types here) — just check the required
+    // slots were actually uploaded for this token before accepting.
+    const existingDocs: any[] = Array.isArray(inv.documents) ? inv.documents : [];
+    const uploadedTypes = new Set(existingDocs.map((d: any) => d?.docType));
+    const missing = VENDOR_INVITE_REQUIRED_DOC_TYPES.filter((t) => !uploadedTypes.has(t));
+    if (missing.length > 0) {
+      return res.status(400).json({ message: `Dokumen wajib belum diunggah: ${missing.join(", ")}` });
+    }
+
+    // Category always comes from the invitation's own service_type (set by
+    // admin when the invite was created) — never from the client request
+    // body — so the recorded scope always matches what the vendor was
+    // actually invited to join as, regardless of what the form submits.
+    // Products/message are stored as structured JSON (not squashed into the
+    // free-text `notes` field) so the admin UI can render them properly and
+    // validate product entries against the invited category later.
+    const serviceLabel = VENDOR_INVITE_SERVICE_LABEL[inv.service_type as string] ?? inv.service_type ?? "Umum";
+    const isMarketplaceInvite = !inv.service_type || inv.service_type === "marketplace";
+    const productList: { name: string; description: string; category: string; mediaUrls: string[] }[] =
+      (Array.isArray(products) ? products.slice(0, 10) : [])
+        .map((p: any) => ({
+          name: String(p?.name ?? "").slice(0, 200),
+          description: String(p?.description ?? "").slice(0, 2000),
+          category: typeof p?.category === "string" ? p.category.trim().slice(0, 100) : "",
+          mediaUrls: Array.isArray(p?.mediaUrls) ? p.mediaUrls.filter((u: unknown) => typeof u === "string").slice(0, 8) : [],
+        }));
+
+    // Products in a marketplace invitation must declare a category from the
+    // fixed taxonomy so admin can verify the vendor is offering products
+    // that match the category they were invited to sell under — a bare
+    // free-text `notes` blob can't be validated or filtered this way.
+    if (isMarketplaceInvite) {
+      const invalidProducts = productList.filter(
+        (p) => p.name.trim() && !VENDOR_INVITE_MARKETPLACE_CATEGORIES.has(p.category),
+      );
+      if (invalidProducts.length > 0) {
+        return res.status(400).json({
+          message: `Kategori produk tidak valid untuk: ${invalidProducts.map((p) => p.name).join(", ")}. Pilih kategori dari daftar yang tersedia.`,
+        });
+      }
+    }
+
+    const vendorMessage = typeof message === "string" && message.trim() ? message.trim().slice(0, 2000) : null;
+
+    await db.execute(sql`
+      UPDATE portal_vendor_invitations
+      SET status = 'accepted',
+          category = ${inv.service_type ?? null},
+          category_label = ${serviceLabel},
+          products = ${JSON.stringify(productList)}::jsonb,
+          vendor_message = ${vendorMessage},
+          accepted_at = NOW(),
+          contact_name = ${typeof contact_name === "string" ? contact_name.slice(0, 200) : null},
+          company_name = ${typeof company_name === "string" ? company_name.slice(0, 200) : null},
+          phone = COALESCE(phone, ${phone ?? null}),
+          email = COALESCE(email, ${email ?? null})
+      WHERE token = ${token} AND status != 'accepted'
+    `);
+
+    NotificationService.saveAndBroadcast("admin_notification", {
+      type: "vendor_invitation_accepted",
+      orderNumber: String(inv.id),
+      customerName: company_name || inv.vendor_name,
+      title: "Vendor Baru Mendaftar",
+      body: `${contact_name || inv.vendor_name} (${company_name || inv.vendor_name}) telah melengkapi pendaftaran mitra vendor dan mengunggah ${existingDocs.length} dokumen.`,
+      targetRole: "admin",
+    } as any).catch((e: unknown) => console.error("[portal] notify vendor-invite accepted failed:", e));
+
+    (async () => {
+      try {
+        const adminWa = await getAdminWa();
+        if (!adminWa) return;
+        const waMessage = [
+          `*Vendor Baru Mendaftar*`,
+          ``,
+          `Vendor: ${company_name || inv.vendor_name}`,
+          `Kontak: ${contact_name || "-"}`,
+          `Kategori: ${serviceLabel}`,
+          `Dokumen: ${existingDocs.length} berkas`,
+          ``,
+          `Silakan tinjau & setujui di panel admin (tab "Undang Vendor").`,
+        ].join("\n");
+        await sendWhatsApp(adminWa, waMessage, {
+          context: "vendor_invitation_accepted",
+          refType: "portal_vendor_invitations",
+          refId: String(inv.id),
+        });
+      } catch (e) {
+        console.error("[portal] WA notify admin vendor-invite accepted failed:", e);
+      }
+    })();
+
+    return res.json({ ok: true, vendor_name: inv.vendor_name });
+  } catch (e) {
+    console.error("[portal] POST vendor-invite accept error", e);
+    return res.status(500).json({ error: "Gagal menyimpan data" });
+  }
+});
+
+// POST /api/portal/vendor-invite/:token/reject — public: vendor declines terms and sends a reason
+router.post("/vendor-invite/:token/reject", async (req, res) => {
+  const token = String(req.params.token ?? "").trim();
+  const reason = String(req.body?.reason ?? "").trim();
+  if (!token) return res.status(400).json({ message: "Token tidak valid" });
+  if (!reason) return res.status(400).json({ message: "Alasan tidak boleh kosong" });
+
+  try {
+    const rows = await db.execute(sql`
+      SELECT id, vendor_name, status, valid_until
+      FROM portal_vendor_invitations
+      WHERE token = ${token}
+      LIMIT 1
+    `);
+    const inv = (rows as any).rows?.[0];
+    if (!inv) return res.status(404).json({ message: "Undangan tidak ditemukan" });
+    if (new Date(inv.valid_until) < new Date()) return res.status(410).json({ message: "Link sudah kadaluarsa" });
+    if (inv.status === "accepted") return res.status(409).json({ message: "Undangan ini sudah pernah diterima." });
+    if (inv.status === "rejected") return res.status(409).json({ message: "Anda sudah pernah mengirim alasan untuk undangan ini." });
+
+    // Strict predicate + affected-row check so a second/duplicate submission
+    // (e.g. two rapid clicks) never overwrites the reason or re-notifies admin.
+    const updated = await db.execute(sql`
+      UPDATE portal_vendor_invitations
+      SET status = 'rejected',
+          rejection_reason = ${reason},
+          rejected_at = NOW()
+      WHERE token = ${token} AND status = 'pending' AND valid_until >= NOW()
+      RETURNING id
+    `);
+    if (((updated as any).rows?.length ?? 0) === 0) {
+      return res.status(409).json({ message: "Undangan ini tidak lagi dapat diperbarui." });
+    }
+
+    NotificationService.saveAndBroadcast("admin_notification", {
+      type: "vendor_invitation_rejected",
+      orderNumber: String(inv.id),
+      customerName: inv.vendor_name,
+      title: "Vendor Menolak Syarat dan Ketentuan",
+      body: `${inv.vendor_name} tidak menyetujui Syarat dan Ketentuan Vendor. Alasan: ${reason}`,
+      targetRole: "admin",
+    } as any).catch((e: unknown) => console.error("[portal] notify vendor-invite rejected failed:", e));
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[portal] POST vendor-invite reject error", e);
+    return res.status(500).json({ error: "Gagal mengirim alasan" });
+  }
+});
+
+// POST /api/portal/admin/vendor-invitations/:id/approve — admin approves an
+// accepted invitation and atomically activates the vendor, publishes the
+// supplier, creates the vendor account mapping, and queues submitted items for
+// separate product review.
+router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  const adminIdentity = (req as PortalAuthReq).portalCustomerId != null
+    ? String((req as PortalAuthReq).portalCustomerId)
+    : "admin";
+  const portalOrigin = process.env.PORTAL_ORIGIN ?? `${req.protocol}://${req.get("host")}`;
+  const queuedProductNotifications: Array<{
+    catalogItemId: number;
+    submissionId: number;
+    productName: string;
+    vendorName: string;
+    supplierId: number;
+  }> = [];
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Lock the invitation so two admin clicks cannot create two suppliers.
+      const rows = await tx.execute(sql`
+        SELECT id, vendor_name, company_name, contact_name, phone, email,
+               service_type, vendor_message, products, supplier_id, status
+        FROM portal_vendor_invitations
+        WHERE id = ${id}
+        LIMIT 1
+        FOR UPDATE
+      `);
+      const inv = (rows as any).rows?.[0];
+      if (!inv) {
+        throw Object.assign(new Error("Undangan tidak ditemukan"), { statusCode: 404 });
+      }
+      if (inv.status !== "accepted") {
+        throw Object.assign(
+          new Error("Hanya undangan yang sudah diterima vendor yang bisa disetujui"),
+          { statusCode: 409 },
+        );
+      }
+
+      const supplierName = String(inv.company_name || inv.vendor_name);
+      const vendorName = String(inv.contact_name || inv.company_name || inv.vendor_name);
+      const vendorEmail = typeof inv.email === "string" && inv.email.trim()
+        ? inv.email.toLowerCase().trim()
+        : null;
+      const vendorPhone = inv.phone ? normalizePhoneID(String(inv.phone)) : null;
+      const accountEmail = vendorEmail ?? (vendorPhone ? `${vendorPhone}@wa.local` : null);
+      if (!accountEmail && !inv.supplier_id) {
+        throw Object.assign(
+          new Error("Email atau nomor WhatsApp vendor diperlukan untuk membuat akun login"),
+          { statusCode: 422 },
+        );
+      }
+
+      // Reuse the canonical supplier when this is a retry or when the same
+      // vendor already exists. A retry never creates a duplicate supplier.
+      let supplierId = Number(inv.supplier_id ?? 0) || null;
+      let persistedSupplierName = supplierName;
+      if (supplierId) {
+        const existingSupplier = await tx.execute(sql`
+          SELECT id, name
+          FROM suppliers
+          WHERE id = ${supplierId}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const supplier = (existingSupplier as any).rows?.[0];
+        if (!supplier) {
+          throw new Error("Supplier yang terhubung ke undangan tidak ditemukan");
+        }
+        persistedSupplierName = String(supplier.name);
+      } else {
+        const existingSupplierRows = await tx.execute(sql`
+          SELECT id, name
+          FROM suppliers
+          WHERE (${vendorEmail}::text IS NOT NULL AND contact_email = ${vendorEmail}::text)
+             OR (${vendorPhone}::text IS NOT NULL AND phone = ${vendorPhone}::text)
+          ORDER BY id
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const existingSupplier = (existingSupplierRows as any).rows?.[0];
+        if (existingSupplier) {
+          supplierId = Number(existingSupplier.id);
+          persistedSupplierName = String(existingSupplier.name);
+        } else {
+          const insertedSupplier = await tx.execute(sql`
+            INSERT INTO suppliers
+              (name, contact_email, contact_person, phone, tax_id, service_type,
+               note, is_active, status, is_verified)
+            VALUES
+              (${supplierName}, ${vendorEmail}, ${inv.contact_name ?? null},
+               ${vendorPhone}, NULL, ${inv.service_type ?? null},
+               ${inv.vendor_message ?? null}, FALSE, 'pending', FALSE)
+            RETURNING id, name
+          `);
+          const supplier = (insertedSupplier as any).rows?.[0];
+          supplierId = supplier ? Number(supplier.id) : null;
+          persistedSupplierName = supplier ? String(supplier.name) : supplierName;
+        }
+      }
+      if (!supplierId) throw new Error("Gagal membuat data supplier");
+
+      // These are state-critical approval invariants. Any failure aborts the
+      // whole transaction; no approved-but-unpublished supplier is allowed.
+      await verifySupplier({
+        supplierId,
+        actorUserId: adminIdentity,
+        dbOrTx: tx as any,
+      });
+      const marketplaceResult = await updateMarketplaceStatus({
+        supplierId,
+        newMarketplaceStatus: "published",
+        actorUserId: adminIdentity,
+        dbOrTx: tx as any,
+      });
+      if (!marketplaceResult.ok) {
+        throw new Error(`Vendor approval gagal dipublish ke Marketplace: ${marketplaceResult.error ?? "unknown error"}`);
+      }
+
+      // Account creation/upgrade is idempotent and never overwrites an
+      // existing password hash. Empty hash means password setup is required.
+      let portalCustomerId: number | null = null;
+      let credentialEmail: string | null = null;
+      let credentialNeedsSetup = false;
+      if (accountEmail) {
+        const byEmail = await tx.execute(sql`
+          SELECT id, email, role, password_hash
+          FROM portal_customers
+          WHERE email = ${accountEmail}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        let customer = (byEmail as any).rows?.[0];
+        if (!customer && vendorPhone) {
+          const byPhone = await tx.execute(sql`
+            SELECT id, email, role, password_hash
+            FROM portal_customers
+            WHERE phone = ${vendorPhone}
+            LIMIT 1
+            FOR UPDATE
+          `);
+          customer = (byPhone as any).rows?.[0];
+        }
+
+        if (customer?.role === "admin") {
+          throw new Error("Akun admin tidak boleh dipromosikan menjadi akun vendor");
+        }
+
+        if (customer) {
+          portalCustomerId = Number(customer.id);
+          credentialEmail = String(customer.email);
+          credentialNeedsSetup = !hasUsablePortalPassword(customer.password_hash);
+          await tx.execute(sql`
+            UPDATE portal_customers
+            SET role = 'vendor',
+                name = COALESCE(NULLIF(name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone})
+            WHERE id = ${portalCustomerId}
+          `);
+        } else {
+          const insertedCustomer = await tx.execute(sql`
+            INSERT INTO portal_customers (name, email, phone, role, password_hash)
+            VALUES (${vendorName}, ${accountEmail}, ${vendorPhone}, 'vendor', '')
+            RETURNING id, email
+          `);
+          const created = (insertedCustomer as any).rows?.[0];
+          portalCustomerId = created ? Number(created.id) : null;
+          credentialEmail = created ? String(created.email) : null;
+          credentialNeedsSetup = true;
+        }
+        if (!portalCustomerId) throw new Error("Gagal membuat akun portal vendor");
+
+        const vpRows = await tx.execute(sql`
+          SELECT id FROM vendor_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1 FOR UPDATE
+        `);
+        if ((vpRows as any).rows?.length > 0) {
+          await tx.execute(sql`
+            UPDATE vendor_profiles
+            SET company_name = COALESCE(NULLIF(company_name, ''), ${supplierName}),
+                service_type = ${inv.service_type ?? null},
+                pic_name = COALESCE(NULLIF(pic_name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone}),
+                email = COALESCE(email, ${vendorEmail}),
+                supplier_id = ${supplierId},
+                verification_status = 'verified',
+                approved_at = NOW(),
+                updated_at = NOW()
+            WHERE customer_id = ${portalCustomerId}
+          `);
+        } else {
+          await tx.execute(sql`
+            INSERT INTO vendor_profiles
+              (customer_id, company_name, service_type, pic_name, phone, email,
+               supplier_id, verification_status, approved_at)
+            VALUES
+              (${portalCustomerId}, ${supplierName}, ${inv.service_type ?? null},
+               ${vendorName}, ${vendorPhone}, ${vendorEmail},
+               ${supplierId}, 'verified', NOW())
+          `);
+        }
+
+        const upRows = await tx.execute(sql`
+          SELECT id FROM user_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1 FOR UPDATE
+        `);
+        if ((upRows as any).rows?.length > 0) {
+          await tx.execute(sql`
+            UPDATE user_profiles
+            SET status = 'active',
+                account_type = 'vendor',
+                full_name = COALESCE(NULLIF(full_name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone}),
+                completed_at = COALESCE(completed_at, NOW()),
+                updated_at = NOW()
+            WHERE customer_id = ${portalCustomerId}
+          `);
+        } else {
+          await tx.execute(sql`
+            INSERT INTO user_profiles
+              (customer_id, full_name, phone, account_type, status, completed_at)
+            VALUES
+              (${portalCustomerId}, ${vendorName}, ${vendorPhone}, 'vendor', 'active', NOW())
+          `);
+        }
+      }
+
+      // Persist the approval before creating product submissions. Re-running
+      // the transaction keeps the same supplier and uses the NOT EXISTS guard.
+      await tx.execute(sql`
+        UPDATE portal_vendor_invitations
+        SET supplier_id = ${supplierId},
+            approved_at = COALESCE(approved_at, NOW()),
+            approved_by = COALESCE(approved_by, ${adminIdentity})
+        WHERE id = ${id}
+      `);
+
+      const isMarketplace = !inv.service_type || inv.service_type === "marketplace";
+      const products: any[] = Array.isArray(inv.products) ? inv.products : [];
+      if (isMarketplace) {
+        for (const p of products) {
+          if (!p?.name?.trim()) continue;
+          const productName = String(p.name).trim().slice(0, 200);
+          const pCat = typeof p.category === "string" ? p.category.trim() : null;
+          const pCatKey = pCat && hasInCodeTemplate(pCat) ? pCat : null;
+          const pTpl = pCatKey ? resolveTemplate(pCatKey) : null;
+
+          const existing = await tx.execute(sql`
+            SELECT id
+            FROM vendor_catalog_items
+            WHERE vendor_id = ${supplierId}
+              AND type = 'product'
+              AND name = ${productName}
+            LIMIT 1
+          `);
+          if ((existing as any).rows?.length) continue;
+
+          const mediaAssets = Array.isArray(p.mediaUrls)
+            ? p.mediaUrls
+                .filter((u: unknown): u is string => typeof u === "string" && u.trim() !== "")
+                .map((url: string) => ({ url: url.trim() }))
+            : [];
+
+          const [submission] = await tx
+            .insert(vendorCatalogSubmissionsTable)
+            .values({
+              linkId:          null,
+              token:           randomUUID(),
+              supplierId,
+              vendorName:      persistedSupplierName,
+              categoryKey:     pCatKey,
+              serviceType:     "product",
+              templateKind:    "product",
+              templateId:      pTpl?.category ?? null,
+              templateVersion: pTpl?.version ?? null,
+              templateSnapshot: pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              specValues:      null,
+              name:            productName,
+              description:     typeof p.description === "string" ? p.description.trim() || null : null,
+              unit:            typeof p.unit === "string" ? p.unit.trim() || null : null,
+              mediaAssets,
+              priceBase:       "0",
+              currency:        "IDR",
+              status:          "submitted",
+            })
+            .returning({ id: vendorCatalogSubmissionsTable.id });
+
+          if (!submission) throw new Error(`Gagal membuat submission produk "${productName}"`);
+
+          const [catalogItem] = await tx
+            .insert(vendorCatalogItemsTable)
+            .values({
+              vendorId:          supplierId,
+              vendorName:        persistedSupplierName,
+              type:              "product",
+              name:              productName,
+              description:       typeof p.description === "string" ? p.description.trim() || null : null,
+              kategori:          pCat,
+              categoryKey:       pCatKey,
+              templateId:        pTpl?.category ?? null,
+              templateVersion:   pTpl?.version ?? null,
+              templateSnapshot:  pTpl
+                ? (pTpl as unknown as Record<string, unknown>)
+                : null,
+              mediaAssets,
+              status:             "pending_review",
+              isPublished:       false,
+              isActive:           true,
+              sourceSubmissionId: submission.id,
+            })
+            .returning({ id: vendorCatalogItemsTable.id });
+
+          if (!catalogItem) throw new Error(`Gagal membuat item katalog "${productName}"`);
+
+          await tx
+            .update(vendorCatalogSubmissionsTable)
+            .set({ catalogItemId: catalogItem.id, updatedAt: new Date() })
+            .where(eq(vendorCatalogSubmissionsTable.id, submission.id));
+
+          queuedProductNotifications.push({
+            catalogItemId: catalogItem.id,
+            submissionId: submission.id,
+            productName,
+            vendorName: persistedSupplierName,
+            supplierId,
+          });
+        }
+      }
+
+      return {
+        supplierId,
+        queuedProducts: queuedProductNotifications.length,
+        portalCustomerId,
+        credentialEmail,
+        credentialNeedsSetup,
+        loginIdentifier: vendorEmail ? "email/password" : "WhatsApp OTP",
+      };
+    });
+
+    for (const product of queuedProductNotifications) {
+      void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+        type:         "vendor_product_submitted",
+        orderId:      product.catalogItemId,
+        orderNumber:  String(product.catalogItemId),
+        customerName: product.vendorName,
+        title:        "Produk Vendor Menunggu Persetujuan",
+        body:         `"${product.productName}" dari ${product.vendorName} menunggu review admin.`,
+        targetRole:   "admin",
+        supplierId:   product.supplierId,
+        productName:  product.productName,
+        catalogItemId: product.catalogItemId,
+        submissionId: product.submissionId,
+      }).catch((notificationError: unknown) => {
+        console.error("[portal] vendor invitation product notification failed", notificationError);
+      });
+    }
+
+    let credentialSetup = result.loginIdentifier === "WhatsApp OTP"
+      ? "whatsapp_otp"
+      : "existing_password";
+    if (result.credentialNeedsSetup && result.credentialEmail) {
+      try {
+        await forgotPasswordCustom(result.credentialEmail, portalOrigin);
+        credentialSetup = "password_reset_link_requested";
+      } catch (credentialError) {
+        console.error("[portal] vendor credential setup request failed", credentialError);
+        credentialSetup = "manual_password_reset_required";
+      }
+    }
+
+    return res.json({
+      ok: true,
+      supplier_id: result.supplierId,
+      portal_customer_id: result.portalCustomerId,
+      credential_setup: credentialSetup,
+      login_url: `${portalOrigin}/login`,
+      login_identifier: result.loginIdentifier,
+      dashboard_url: `${portalOrigin}/vendor-dashboard`,
+      products_pending_review: result.queuedProducts,
+    });
+  } catch (e: any) {
+    console.error("[portal] POST vendor-invitations approve error", e);
+    const statusCode = Number.isInteger(e?.statusCode) ? e.statusCode : 500;
+    return res.status(statusCode).json({
+      message: statusCode === 500 ? "Gagal menyetujui & mengaktifkan vendor" : e?.message,
     });
   }
 });
+
+// DELETE /api/portal/admin/vendor-invitations/:id — revoke invitation
+router.delete("/admin/vendor-invitations/:id", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  try {
+    await db.execute(sql`DELETE FROM portal_vendor_invitations WHERE id = ${id}`);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[portal] DELETE vendor-invitations error", e);
+    return res.status(500).json({ error: "Gagal hapus undangan" });
+  }
+});
+
+// ─── Supplier Marketplace Management ──────────────────────────────────────────
+
+// GET /api/portal/admin/suppliers — daftar semua supplier dengan status marketplace
+router.get("/admin/suppliers", requirePortalAdmin, async (_req, res) => {
+  try {
+    const rows = await db.execute(sql`
+      SELECT
+        s.id,
+        s.name,
+        s.phone,
+        s.status,
+        s.is_active,
+        s.is_verified,
+        s.marketplace_status,
+        s.is_premium,
+        s.created_at,
+        COUNT(vci.id) FILTER (WHERE vci.is_published = true AND vci.is_active = true)::int AS published_items,
+        COUNT(vci.id)::int AS total_items
+      FROM suppliers s
+      LEFT JOIN vendor_catalog_items vci ON vci.vendor_id = s.id
+      GROUP BY s.id
+      ORDER BY s.created_at DESC
+    `);
+    return res.json((rows as any).rows ?? []);
+  } catch (e) {
+    console.error("[portal] GET admin/suppliers error", e);
+    return res.status(500).json({ error: "Gagal mengambil data supplier" });
+  }
+});
+
+// PATCH /api/portal/admin/suppliers/:id/marketplace — set is_verified + marketplace_status
+router.patch("/admin/suppliers/:id/marketplace", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  const { isVerified, marketplaceStatus } = req.body as {
+    isVerified?: boolean;
+    marketplaceStatus?: "draft" | "published" | "unpublished";
+  };
+
+  const validStatuses = ["draft", "published", "unpublished"];
+  if (marketplaceStatus !== undefined && !validStatuses.includes(marketplaceStatus)) {
+    return res.status(400).json({ message: "marketplaceStatus tidak valid" });
+  }
+  if (isVerified !== undefined && typeof isVerified !== "boolean") {
+    return res.status(400).json({ message: "isVerified harus boolean" });
+  }
+
+  try {
+    if (isVerified === undefined && marketplaceStatus === undefined) {
+      return res.status(400).json({ message: "Tidak ada perubahan" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          id: suppliersTable.id,
+          status: suppliersTable.status,
+          isActive: suppliersTable.isActive,
+          isVerified: suppliersTable.isVerified,
+          marketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, id))
+        .limit(1);
+      if (!current) {
+        throw Object.assign(new Error("Supplier tidak ditemukan"), { statusCode: 404 });
+      }
+
+      const actorUserId = req.portalCustomerId ? String(req.portalCustomerId) : "admin";
+      if (isVerified !== undefined) {
+        if (isVerified) {
+          await verifySupplier({ supplierId: id, actorUserId, dbOrTx: tx as any });
+        } else {
+          await setSupplierVerification({ supplierId: id, isVerified: false, actorUserId, dbOrTx: tx as any });
+        }
+      }
+
+      if (marketplaceStatus !== undefined) {
+        const published = await updateMarketplaceStatus({
+          supplierId: id,
+          newMarketplaceStatus: marketplaceStatus,
+          actorUserId,
+          dbOrTx: tx as any,
+        });
+        if (!published.ok) {
+          throw Object.assign(new Error(published.error ?? "Supplier belum memenuhi syarat Marketplace"), {
+            statusCode: 409,
+          });
+        }
+      }
+
+      const [updated] = await tx
+        .select({
+          id: suppliersTable.id,
+          status: suppliersTable.status,
+          isActive: suppliersTable.isActive,
+          isVerified: suppliersTable.isVerified,
+          marketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, id))
+        .limit(1);
+      return updated;
+    });
+
+    const updates: Record<string, unknown> = {
+      is_verified: result.isVerified,
+      marketplace_status: result.marketplaceStatus,
+    };
+
+    const adminId = req.portalCustomerId ? String(req.portalCustomerId) : "admin";
+    try {
+      await writeAuditLog({
+        action:     "supplier.marketplace.update",
+        module:     "portal",
+        entityType: "suppliers",
+        entityId:   String(id),
+        userId:     adminId,
+        newData:    updates,
+      });
+    } catch { /* audit log failure is non-fatal */ }
+
+    return res.json({ ok: true, id, ...updates });
+  } catch (e) {
+    console.error("[portal] PATCH admin/suppliers/:id/marketplace error", e);
+    if (Number((e as any)?.statusCode) === 404) return res.status(404).json({ message: (e as Error).message });
+    if (Number((e as any)?.statusCode) === 409) return res.status(409).json({ message: (e as Error).message });
+    return res.status(500).json({ error: "Gagal mengupdate status marketplace" });
+  }
+});
+
+// GET /api/portal/admin/vendor-catalog-items — list ALL vendor catalog items with media.
+// No invitation filter — shows items regardless of how the vendor was onboarded.
+router.get("/admin/vendor-catalog-items", requirePortalAdmin, async (_req, res) => {
+  try {
+    const rows = await db.execute(sql`
+      SELECT vci.id, vci.vendor_id, vci.vendor_name, vci.name, vci.description,
+             vci.kategori, vci.type, vci.template_kind, vci.status, vci.is_published, vci.is_active,
+             vci.price_base, vci.markup_pct, vci.price_sell, vci.currency, vci.created_at,
+             COALESCE(vci.media_assets, '[]'::jsonb) AS media_assets,
+             COALESCE(vci.documents, '[]'::jsonb) AS documents,
+             s.service_type AS supplier_service_type, s.contact_email, s.phone,
+             COALESCE(s.is_internal_vendor, FALSE) AS is_internal_vendor,
+             COALESCE(
+               json_agg(
+                 json_build_object('id', pm.id, 'file_url', pm.file_url, 'is_primary', pm.is_primary)
+                 ORDER BY pm.created_at
+               ) FILTER (WHERE pm.id IS NOT NULL),
+               '[]'::json
+             ) AS media
+      FROM vendor_catalog_items vci
+      LEFT JOIN suppliers s ON s.id = vci.vendor_id
+      LEFT JOIN product_media pm ON pm.vendor_catalog_item_id = vci.id
+      GROUP BY vci.id, vci.vendor_id, vci.vendor_name, vci.name, vci.description,
+                vci.kategori, vci.type, vci.template_kind, vci.status, vci.is_published, vci.is_active,
+               vci.price_base, vci.markup_pct, vci.price_sell, vci.currency, vci.created_at,
+               vci.media_assets, vci.documents,
+               s.service_type, s.contact_email, s.phone, s.is_internal_vendor
+      ORDER BY vci.vendor_name ASC, vci.created_at DESC
+      LIMIT 500
+    `);
+    return res.json(rows.rows ?? []);
+  } catch (e) {
+    console.error("[portal] GET vendor-catalog-items error", e);
+    return res.status(500).json({ error: "Gagal memuat katalog vendor" });
+  }
+});
+
+// POST /api/portal/admin/vendor-catalog-items — admin creates a new vendor catalog item
+// Uses same tables as BizPortal/vendor-dashboard — no extra sync needed.
+router.post("/admin/vendor-catalog-items", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  const {
+    vendor_id, master_item_id,
+    name, description, kategori, type,
+    price_base, markup_pct, currency,
+    moq, lead_time, origin, hs_code, unit,
+    is_published, is_featured,
+  } = req.body ?? {};
+
+  const vid = parseInt(String(vendor_id ?? ""), 10);
+  if (!vid || isNaN(vid))
+    return res.status(400).json({ message: "vendor_id wajib diisi" });
+  if (!String(name ?? "").trim())
+    return res.status(400).json({ message: "Nama produk wajib diisi" });
+
+  // ── Validate price_base (must be >= 0) ────────────────────────────────────
+  const rawBase = (price_base != null && price_base !== "")
+    ? (typeof price_base === "string" ? parseFloat(price_base) : Number(price_base))
+    : 0;
+  if (!isFinite(rawBase) || isNaN(rawBase))
+    return res.status(400).json({ message: "Harga dasar tidak valid (harus angka)" });
+  if (rawBase < 0)
+    return res.status(400).json({ message: "Harga dasar tidak boleh negatif" });
+  const baseNum = rawBase;
+
+  // ── Validate markup_pct (must be 0–100) ───────────────────────────────────
+  const rawMarkup = (markup_pct != null && markup_pct !== "")
+    ? (typeof markup_pct === "string" ? parseFloat(markup_pct) : Number(markup_pct))
+    : 0;
+  if (!isFinite(rawMarkup) || isNaN(rawMarkup))
+    return res.status(400).json({ message: "Markup tidak valid (harus angka)" });
+  if (rawMarkup < 0)
+    return res.status(400).json({ message: "Markup tidak boleh negatif" });
+  if (rawMarkup > 100)
+    return res.status(400).json({ message: "Markup tidak boleh melebihi 100%" });
+  const markupN = rawMarkup;
+
+  const sellNum  = baseNum > 0 ? Math.ceil(baseNum * (1 + markupN / 100)) : null;
+
+  // Duplicate guard: same vendor + master item
+  if (master_item_id) {
+    const mid = parseInt(String(master_item_id), 10);
+    if (!isNaN(mid)) {
+      const dup = await db.execute(sql`
+        SELECT id FROM vendor_catalog_items
+        WHERE vendor_id = ${vid} AND master_item_id = ${mid} AND is_active = true
+        LIMIT 1
+      `).catch(() => ({ rows: [] }));
+      if (((dup as any).rows ?? []).length > 0)
+        return res.status(409).json({ message: "Vendor sudah memiliki item ini di katalog" });
+    }
+  }
+
+  try {
+    // Resolve vendor name
+    const vRow = await db.execute(sql`SELECT name FROM suppliers WHERE id = ${vid}`).catch(() => ({ rows: [] }));
+    const resolvedVendorName = ((vRow as any).rows?.[0] as any)?.name ?? null;
+
+    const [row] = await db
+      .insert(vendorCatalogItemsTable)
+      .values({
+        vendorId:     vid,
+        vendorName:   resolvedVendorName,
+        masterItemId: master_item_id ? (parseInt(String(master_item_id), 10) || null) : null,
+        type:         String(type ?? "product"),
+        templateKind: String(type ?? "product") === "service" ? "service" : "product",
+        name:         String(name).trim().slice(0, 200),
+        description:  description ? String(description).trim() : null,
+        kategori:     kategori     ? String(kategori).trim()    : null,
+        unit:         unit         ? String(unit).trim()        : null,
+        priceBase:    String(baseNum),
+        markupPct:    String(markupN),
+        priceSell:    sellNum != null ? String(sellNum) : null,
+        currency:     String(currency ?? "IDR"),
+        moq:          moq  != null ? String(parseFloat(String(moq))  || 0) : null,
+        leadTime:     lead_time ? String(lead_time).trim() : null,
+        origin:       origin    ? String(origin).trim()   : null,
+        hsCode:       hs_code   ? String(hs_code).trim()  : null,
+        status:       is_published ? "published" : "draft",
+        isPublished:  !!is_published,
+        isFeatured:   !!is_featured,
+        isActive:     true,
+        mediaAssets:  [],
+      })
+      .returning({ id: vendorCatalogItemsTable.id });
+
+    // Audit trail (best-effort)
+    const actor = String((req as any).portalCustomerId ?? "admin");
+    await db.execute(sql`
+      INSERT INTO vendor_audit_logs (supplier_id, action, actor, after)
+      VALUES (${vid}, 'catalog_item_created', ${actor},
+              ${JSON.stringify({ id: row.id, name: String(name).trim(), price_base: baseNum, markup_pct: markupN, created_by: "admin" })}::jsonb)
+    `).catch(() => {});
+
+    return res.status(201).json({ id: row.id, ok: true });
+  } catch (e: any) {
+    console.error("[portal] POST admin/vendor-catalog-items error", e);
+    return res.status(500).json({ error: e?.message ?? "Gagal membuat produk" });
+  }
+});
+
+// POST /api/portal/admin/vendor-catalog-items/bulk — bulk publish / unpublish / delete
+router.post("/admin/vendor-catalog-items/bulk", requirePortalAdmin, async (req, res) => {
+  const { action, ids } = req.body ?? {};
+  if (!Array.isArray(ids) || ids.length === 0)
+    return res.status(400).json({ message: "ids wajib berisi setidaknya 1 item" });
+  if (!["publish", "unpublish", "delete"].includes(action))
+    return res.status(400).json({ message: "action tidak valid" });
+
+  const intIds = ids.map((id: unknown) => parseInt(String(id), 10)).filter((n: number) => !isNaN(n));
+  if (intIds.length === 0) return res.status(400).json({ message: "ids tidak valid" });
+
+  try {
+    if (action === "publish") {
+      const rows = await db
+        .select({
+          id: vendorCatalogItemsTable.id,
+          supplierStatus: suppliersTable.status,
+          supplierIsActive: suppliersTable.isActive,
+          supplierIsVerified: suppliersTable.isVerified,
+          supplierMarketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(vendorCatalogItemsTable)
+        .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+        .where(inArray(vendorCatalogItemsTable.id, intIds));
+      const missingIds = intIds.filter((itemId) => !rows.some((row) => row.id === itemId));
+      if (missingIds.length > 0) {
+        return res.status(404).json({ message: "Sebagian produk tidak ditemukan", missingIds });
+      }
+      const blocked = rows.filter((row) => !canSupplierAppearInMarketplace({
+        status: row.supplierStatus,
+        isActive: row.supplierIsActive,
+        isVerified: row.supplierIsVerified,
+        marketplaceStatus: row.supplierMarketplaceStatus,
+      }));
+      if (blocked.length > 0) {
+        return res.status(409).json({
+          message: "Produk tidak dapat dipublish sebelum supplier aktif, terverifikasi, dan dipublish ke Marketplace.",
+          blockedIds: blocked.map((row) => row.id),
+        });
+      }
+      await db.update(vendorCatalogItemsTable)
+        .set({ isPublished: true, status: "published", updatedAt: new Date() })
+        .where(inArray(vendorCatalogItemsTable.id, intIds));
+    } else if (action === "unpublish") {
+      await db.update(vendorCatalogItemsTable)
+        .set({ isPublished: false, status: "draft", updatedAt: new Date() })
+        .where(inArray(vendorCatalogItemsTable.id, intIds));
+    } else {
+      // Soft delete
+      await db.update(vendorCatalogItemsTable)
+        .set({ isActive: false, status: "archived", updatedAt: new Date() })
+        .where(inArray(vendorCatalogItemsTable.id, intIds));
+    }
+    return res.json({ ok: true, affected: intIds.length });
+  } catch (e: any) {
+    console.error("[portal] POST admin/vendor-catalog-items/bulk error", e);
+    return res.status(500).json({ error: e?.message ?? "Gagal bulk action" });
+  }
+});
+
+// ── media-assets endpoints (canonical media_assets JSONB — preferred over product_media) ─────────
+
+// POST /api/portal/admin/vendor-catalog-items/:id/media-assets/upload
+// Upload file → Supabase Storage → return URL + metadata. Frontend saves array via PATCH below.
+router.post(
+  "/admin/vendor-catalog-items/:id/media-assets/upload",
+  requirePortalAdmin,
+  (req: any, res: any, next: any) =>
+    (_portalUpload.single("file") as any)(req, res, (err: any) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE")
+        return res.status(413).json({ message: "Ukuran file terlalu besar (maks 20 MB)" });
+      next(err);
+    }),
+  async (req: any, res: any) => {
+    const itemId = parseInt(String(req.params.id), 10);
+    if (isNaN(itemId)) return res.status(400).json({ message: "ID tidak valid" });
+    if (!req.file) return res.status(400).json({ message: "File wajib disertakan" });
+
+    const ALLOWED = [
+      "image/jpeg","image/jpg","image/png","image/webp",
+      "video/mp4","video/webm","video/quicktime",
+      "application/pdf",
+    ];
+    if (!ALLOWED.includes(req.file.mimetype as string))
+      return res.status(415).json({ message: "Tipe file tidak didukung" });
+
+    try {
+      const folder = (req.file.mimetype as string).startsWith("video/") ? "catalog-videos" : "catalog-media";
+      const { publicUrl, storagePath } = await uploadToSupabase(req.file.buffer as Buffer, req.file.mimetype as string, folder);
+      return res.status(201).json({
+        url:        publicUrl,
+        objectPath: storagePath,
+        mimeType:   req.file.mimetype,
+        sizeBytes:  req.file.size,
+      });
+    } catch (e: any) {
+      console.error("[portal] media-assets upload error", e);
+      return res.status(500).json({ message: e?.message ?? "Upload gagal" });
+    }
+  },
+);
+
+// PATCH /api/portal/admin/vendor-catalog-items/:id/media-assets
+// Replace entire media_assets JSONB array.
+// Validates documentKey (must match documents[].key for this item), visibility enum,
+// PDF-only doc types, and enforces one active file per documentKey (replace, not duplicate).
+router.patch("/admin/vendor-catalog-items/:id/media-assets", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  const { mediaAssets } = req.body ?? {};
+  if (!Array.isArray(mediaAssets)) return res.status(400).json({ message: "mediaAssets harus berupa array" });
+
+  const [ownerRow] = await db
+    .select({ documents: vendorCatalogItemsTable.documents })
+    .from(vendorCatalogItemsTable)
+    .where(eq(vendorCatalogItemsTable.id, id));
+  if (!ownerRow) return res.status(404).json({ message: "Item tidak ditemukan" });
+
+  const validation = validateMediaAssetsPayload(mediaAssets, ownerRow.documents);
+  if (!validation.ok) return res.status(400).json({ message: validation.message });
+
+  try {
+    await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET media_assets = ${JSON.stringify(validation.clean)}::jsonb, updated_at = NOW()
+      WHERE id = ${id}
+    `);
+    return res.json({ ok: true, count: validation.clean.length });
+  } catch (e: any) {
+    console.error("[portal] PATCH media-assets error", e);
+    return res.status(500).json({ message: e?.message ?? "Gagal menyimpan media assets" });
+  }
+});
+
+// GET /api/portal/admin/vendor-catalog-items/:id/media-assets — get media_assets for a single item
+router.get("/admin/vendor-catalog-items/:id/media-assets", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  try {
+    const rows = await db.execute(sql`
+      SELECT media_assets FROM vendor_catalog_items WHERE id = ${id}
+    `);
+    const row = rows.rows?.[0] as any;
+    if (!row) return res.status(404).json({ message: "Item tidak ditemukan" });
+    return res.json({ mediaAssets: row.media_assets ?? [] });
+  } catch (e: any) {
+    return res.status(500).json({ message: e?.message ?? "Gagal memuat media assets" });
+  }
+});
+
+// ── product_media legacy endpoints (kept for backward compat) ─────────────────
+
+// POST /api/portal/admin/vendor-catalog-items/:id/media — upload image for any vendor item (admin)
+router.post(
+  "/admin/vendor-catalog-items/:id/media",
+  requirePortalAdmin,
+  (req: any, res: any, next: any) =>
+    (_vendorImgUpload.single("file") as any)(req, res, (err: any) => {
+      if (err?.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Ukuran foto maks 5 MB" });
+      next(err);
+    }),
+  async (req: any, res: any) => {
+    const itemId = parseInt(String(req.params.id), 10);
+    if (isNaN(itemId)) return res.status(400).json({ error: "ID tidak valid" });
+    if (!req.file) return res.status(400).json({ error: "Tidak ada file yang diunggah" });
+    try {
+      const itemRows = await db.execute(sql`SELECT vendor_id FROM vendor_catalog_items WHERE id = ${itemId}`);
+      const supplierId = (itemRows.rows?.[0] as any)?.vendor_id;
+      if (!supplierId) return res.status(404).json({ error: "Item tidak ditemukan" });
+      const inserted = await uploadVendorCatalogMedia({
+        itemId,
+        supplierId: Number(supplierId),
+        uploaderEmail: "admin",
+        buffer: req.file.buffer as Buffer,
+        mimetype: req.file.mimetype as string,
+      });
+      return res.status(201).json({ media: inserted });
+    } catch (e: any) {
+      const code = (e as any)?.statusCode;
+      if (code === 415) return res.status(415).json({ error: e.message });
+      if (code === 404) return res.status(404).json({ error: e.message });
+      return res.status(500).json({ error: e?.message });
+    }
+  }
+);
+
+// DELETE /api/portal/admin/vendor-catalog-items/media/:mediaId — delete any vendor media (admin)
+router.delete("/admin/vendor-catalog-items/media/:mediaId", requirePortalAdmin, async (req, res) => {
+  const mediaId = parseInt(String(req.params.mediaId), 10);
+  if (isNaN(mediaId)) return res.status(400).json({ error: "ID media tidak valid" });
+  try {
+    const mediaRows = await db.execute(sql`
+      SELECT pm.id, pm.storage_path FROM product_media pm WHERE pm.id = ${mediaId}
+    `);
+    const row = mediaRows.rows?.[0] as any;
+    if (!row) return res.status(404).json({ error: "Media tidak ditemukan" });
+    if (row.storage_path) {
+      await deleteFromSupabase(String(row.storage_path)).catch(() => {});
+    }
+    await db.execute(sql`DELETE FROM product_media WHERE id = ${mediaId}`);
+    return res.json({ success: true });
+  } catch (e: any) {
+    console.error("[portal] DELETE admin media error", e);
+    return res.status(500).json({ error: e?.message });
+  }
+});
+
+// PATCH /api/portal/admin/vendor-catalog-items/:id — toggle publish/active status
+router.patch("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  const { is_published, is_active } = req.body ?? {};
+  try {
+    await db.transaction(async (tx) => {
+      const [state] = await tx.execute(sql`
+        SELECT vci.id, vci.is_active, s.status AS supplier_status,
+               s.is_active AS supplier_is_active,
+               s.is_verified AS supplier_is_verified,
+               s.marketplace_status AS supplier_marketplace_status
+        FROM vendor_catalog_items vci
+        INNER JOIN suppliers s ON s.id = vci.vendor_id
+        WHERE vci.id = ${id}
+        LIMIT 1
+        FOR UPDATE
+      `).then((result) => (result.rows as any[]));
+      if (!state) throw Object.assign(new Error("Item tidak ditemukan"), { statusCode: 404 });
+
+      const finalIsActive = typeof is_active === "boolean" ? is_active : state.is_active;
+      if (is_published === true && (!finalIsActive || !canSupplierAppearInMarketplace({
+        status: state.supplier_status,
+        isActive: state.supplier_is_active,
+        isVerified: state.supplier_is_verified,
+        marketplaceStatus: state.supplier_marketplace_status,
+      }))) {
+        throw Object.assign(
+          new Error("Produk tidak dapat dipublish sebelum produk aktif dan supplier Marketplace eligible."),
+          { statusCode: 409 },
+        );
+      }
+
+      if (typeof is_published === "boolean") {
+        await tx.execute(sql`
+          UPDATE vendor_catalog_items
+          SET is_published = ${is_published},
+              status = ${is_published ? "published" : "draft"},
+              updated_at = NOW()
+          WHERE id = ${id}
+        `);
+      }
+      if (typeof is_active === "boolean") {
+        await tx.execute(sql`
+          UPDATE vendor_catalog_items
+          SET is_active = ${is_active}, updated_at = NOW()
+          WHERE id = ${id}
+        `);
+      }
+    });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[portal] PATCH vendor-catalog-items error", e);
+    if (Number((e as any)?.statusCode) === 404) return res.status(404).json({ message: (e as Error).message });
+    if (Number((e as any)?.statusCode) === 409) return res.status(409).json({ message: (e as Error).message });
+    return res.status(500).json({ error: "Gagal memperbarui item katalog" });
+  }
+});
+
+// PUT /api/portal/admin/vendor-catalog-items/:id — update product detail (name, description, price, markup, kategori)
+// SECURITY: price_sell is always computed server-side; client-supplied price_sell is silently ignored.
+// VALIDATION: price_base ≥ 0, markup_pct ∈ [0, 100], both must be finite numeric or omitted.
+// AUDIT: every price change is logged to erp_audit_logs with before/after values.
+router.put("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+
+  // Destructure — price_sell from client is intentionally NOT read (always computed server-side).
+  // is_published IS supported in PUT as a full update; use PATCH for quick toggle-only calls.
+  const { name, description, price_base, markup_pct, kategori, template_kind, is_published } = req.body ?? {};
+
+  if (!name?.trim()) return res.status(400).json({ message: "Nama produk harus diisi" });
+
+  if (is_published === true) {
+    const [visibility] = await db
+      .select({
+        isActive: vendorCatalogItemsTable.isActive,
+        supplierStatus: suppliersTable.status,
+        supplierIsActive: suppliersTable.isActive,
+        supplierIsVerified: suppliersTable.isVerified,
+        supplierMarketplaceStatus: suppliersTable.marketplaceStatus,
+      })
+      .from(vendorCatalogItemsTable)
+      .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+      .where(eq(vendorCatalogItemsTable.id, id))
+      .limit(1);
+    if (!visibility) return res.status(404).json({ message: "Item tidak ditemukan" });
+    if (!visibility.isActive || !canSupplierAppearInMarketplace({
+      status: visibility.supplierStatus,
+      isActive: visibility.supplierIsActive,
+      isVerified: visibility.supplierIsVerified,
+      marketplaceStatus: visibility.supplierMarketplaceStatus,
+    })) {
+      return res.status(409).json({
+        message: "Produk tidak dapat dipublish sebelum produk aktif dan supplier Marketplace eligible.",
+      });
+    }
+  }
+
+  // ── Validate price_base ────────────────────────────────────────────────────
+  let base: number | null = null;
+  if (price_base != null && price_base !== "") {
+    const parsed = typeof price_base === "string" ? parseFloat(price_base) : Number(price_base);
+    if (!isFinite(parsed) || isNaN(parsed)) {
+      return res.status(400).json({ message: "Harga dasar tidak valid (harus angka)" });
+    }
+    if (parsed < 0) {
+      return res.status(400).json({ message: "Harga dasar tidak boleh negatif" });
+    }
+    if (parsed > 999_999_999_999) { // max Rp 999 miliar — batas bisnis marketplace
+      return res.status(400).json({ message: "Harga dasar melebihi batas maksimum (Rp 999.999.999.999)" });
+    }
+    base = parsed;
+  }
+
+  // ── Validate markup_pct ────────────────────────────────────────────────────
+  let markup = 0;
+  if (markup_pct != null && markup_pct !== "") {
+    const parsed = typeof markup_pct === "string" ? parseFloat(markup_pct) : Number(markup_pct);
+    if (!isFinite(parsed) || isNaN(parsed)) {
+      return res.status(400).json({ message: "Markup tidak valid (harus angka)" });
+    }
+    if (parsed < 0) {
+      return res.status(400).json({ message: "Markup tidak boleh negatif" });
+    }
+    if (parsed > 100) {
+      return res.status(400).json({ message: "Markup tidak boleh melebihi 100%" });
+    }
+    markup = parsed;
+  }
+
+  // ── Check if vendor is internal (no platform markup for internal vendors) ────
+  const vendorFlagRows = await db.execute(sql`
+    SELECT COALESCE(s.is_internal_vendor, FALSE) AS is_internal_vendor
+    FROM vendor_catalog_items vci
+    JOIN suppliers s ON s.id = vci.vendor_id
+    WHERE vci.id = ${id}
+  `);
+  const isInternalVendor = (vendorFlagRows.rows?.[0] as any)?.is_internal_vendor === true;
+
+  const normalizedTemplateKind = template_kind == null || template_kind === ""
+    ? null
+    : String(template_kind).trim().toLowerCase();
+  if (normalizedTemplateKind !== null && !["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "template_kind harus berupa product atau service" });
+  }
+
+  // ── Apply internal vendor override (zero markup for internal vendors) ────────
+  const requestedMarkup = markup;
+  const effectiveMarkup = isInternalVendor ? 0 : markup;
+  const markupOverrideReason = isInternalVendor ? "Internal Company Vendor" : null;
+
+  try {
+    // ── Fetch before-values early (needed for normalization safety + audit log) ──
+    const beforeRows = await db.execute(sql`
+      SELECT price_base, markup_pct, price_sell FROM vendor_catalog_items WHERE id = ${id}
+    `);
+    const before = beforeRows.rows?.[0] as Record<string, unknown> | undefined;
+
+    // ── Compute price_sell server-side (never from client) ─────────────────────
+    // SAFE normalization rules (non-destructive):
+    //
+    //   External vendor:
+    //     base > 0 → sell = ceil(base * (1 + markup/100))
+    //     base = 0 → sell = null
+    //
+    //   Internal vendor (is_internal_vendor=true, markup forced to 0):
+    //     base > 0 → sell = base
+    //     base = 0 AND existing sell IS NULL → sell = null (no change)
+    //     base = 0 AND existing sell > 0 →
+    //       LEGACY_PRICE_CONFLICT: preserve existing sell, do NOT overwrite with null.
+    //       Admin must explicitly set price_base to update price_sell.
+    const existingSell = before?.price_sell != null ? Number(before.price_sell) : null;
+    let legacyPriceConflict = false;
+    let sell: number | null;
+
+    if (isInternalVendor && (base == null || base === 0) && existingSell != null && existingSell > 0) {
+      // Safety guard: refuse to silently destroy a non-zero price_sell for internal vendor
+      // when no valid base price was provided. Classify as legacy_price_conflict.
+      sell = existingSell;
+      legacyPriceConflict = true;
+    } else {
+      sell = base != null && base > 0 ? Math.ceil(base * (1 + effectiveMarkup / 100)) : null;
+    }
+
+    // ── Apply update ─────────────────────────────────────────────────────────
+    // is_published: only mutated when caller explicitly sends a boolean.
+    // Truthy/falsy coercion avoided — typeof check guards boolean false.
+    const publishFields: Partial<{
+      isPublished: boolean;
+      status: string;
+    }> = typeof is_published === "boolean"
+      ? { isPublished: is_published, status: is_published ? "published" : "draft" }
+      : {};
+
+    const [updated] = await db
+      .update(vendorCatalogItemsTable)
+      .set({
+        name:        String(name).slice(0, 200),
+        description: description?.trim() || null,
+        priceBase:   base != null ? String(base) : "0",
+        markupPct:   String(effectiveMarkup),
+        priceSell:   sell != null ? String(sell) : null,
+        kategori:    kategori?.trim() || null,
+        ...(normalizedTemplateKind !== null
+          ? {
+              templateKind: normalizedTemplateKind,
+              type: normalizedTemplateKind,
+            }
+          : {}),
+        updatedAt:   new Date(),
+        ...publishFields,
+      })
+      .where(eq(vendorCatalogItemsTable.id, id))
+      .returning({ id: vendorCatalogItemsTable.id });
+
+    if (!updated) return res.status(404).json({ message: "Item tidak ditemukan" });
+
+    // ── Audit log (non-blocking, never fails the request) ─────────────────────
+    const actor = _adminIdOf(req as PortalAuthReq);
+    const actorEmail = (req as any).user?.email ?? (req as any).portalUser?.email ?? null;
+    void db.execute(sql`
+      INSERT INTO erp_audit_logs
+        (user_id, user_email, action, module, reference_id, old_data, new_data, ip_address, created_at)
+      VALUES (
+        ${actor ?? "unknown"},
+        ${actorEmail},
+        'UPDATE_CATALOG_PRICE',
+        'marketplace_catalog',
+        ${String(id)},
+        ${JSON.stringify({ price_base: before?.price_base ?? null, markup_pct: before?.markup_pct ?? null, price_sell: before?.price_sell ?? null })}::jsonb,
+        ${JSON.stringify({ price_base: base, markup_pct: effectiveMarkup, price_sell: sell, requested_markup: requestedMarkup, effective_markup: effectiveMarkup, reason: markupOverrideReason, legacy_price_conflict: legacyPriceConflict || undefined })}::jsonb,
+        ${req.ip ?? null},
+        NOW()
+      )
+    `).catch(e => console.error("[catalog-price-audit] log error", e));
+
+    return res.json({
+      ok: true,
+      price_sell: sell,
+      is_internal_vendor: isInternalVendor,
+      effective_markup: effectiveMarkup,
+      ...(typeof is_published === "boolean" ? { is_published } : {}),
+      ...(legacyPriceConflict ? {
+        legacy_price_conflict: true,
+        warning: "Internal vendor dengan price_base=0 memiliki price_sell yang dipertahankan. Set price_base untuk mengupdate price_sell.",
+      } : {}),
+    });
+  } catch (e) {
+    console.error("[portal] PUT vendor-catalog-items error", e);
+    return res.status(500).json({ error: "Gagal memperbarui detail produk" });
+  }
+});
+
+// DELETE /api/portal/admin/vendor-catalog-items/:id — soft-archive item (no hard delete)
+router.delete("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req, res) => {
+  const id = parseInt(String(req.params.id), 10);
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  try {
+    await db.execute(sql`
+      UPDATE vendor_catalog_items
+      SET is_active = false, is_published = false, status = 'archived', updated_at = NOW()
+      WHERE id = ${id}
+    `);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[portal] DELETE vendor-catalog-items error", e);
+    return res.status(500).json({ error: "Gagal mengarsip item katalog" });
+  }
+});
+
+// ── C1 FIX: Cookie-based session endpoints ────────────────────────────────────
+
+/**
+ * POST /api/portal/auth/set-cookie
+ * Menerima Bearer token (dari localStorage), menyimpannya sebagai HttpOnly cookie.
+ * Migration path: frontend memanggil ini setelah login berhasil.
+ * Setelah migrasi selesai, token tidak perlu lagi disimpan di localStorage.
+ */
+router.post("/auth/set-cookie", requirePortalAuth, (req, res) => {
+  // Token sudah divalidasi oleh requirePortalAuth (bisa dari cookie atau Bearer)
+  // Ambil token dari header Bearer untuk di-set ke cookie
+  const bearerHeader = req.headers.authorization;
+  const cookieToken = (req.cookies as Record<string, string>)?.[PORTAL_SESSION_COOKIE];
+  const token = (bearerHeader?.startsWith("Bearer ") ? bearerHeader.slice(7) : null) ?? cookieToken;
+
+  if (!token) {
+    return res.status(400).json({ error: "No token to persist" });
+  }
+
+  setPortalSessionCookie(res, token);
+  return res.json({ ok: true, message: "Session persisted as HttpOnly cookie" });
+});
+
+// NOTE: /auth/logout is also registered earlier (line ~591) using clearPortalSessionCookie.
+// The duplicate below has been removed to avoid Express registering two handlers for the same route.
+/**
+ * POST /api/portal/auth/logout
+ * Menghapus HttpOnly session cookie dan invalidasi sesi.
+ * Frontend harus tetap menghapus localStorage entries sendiri.
+ */
+router.post("/auth/logout", async (req, res) => {
+  const bearerHeader = req.headers.authorization;
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const token = (bearerHeader?.startsWith("Bearer ") ? bearerHeader.slice(7) : null) ?? cookieToken;
+  if (token) {
+    try {
+      await revokePortalSession(token);
+    } catch (err) {
+      req.log?.error({ err }, "portal logout session revocation failed");
+      return res.status(503).json({ message: "Sesi belum dapat dicabut. Coba lagi." });
+    }
+  }
+  clearPortalSessionCookie(res);
+  return res.json({ ok: true, message: "Logged out" });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default router;

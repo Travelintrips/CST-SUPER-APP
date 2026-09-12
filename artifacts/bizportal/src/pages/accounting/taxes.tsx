@@ -23,7 +23,35 @@ import { useToast } from "@/hooks/use-toast";
 import { type AccountingTax } from "@workspace/api-client-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useCompany } from "@/contexts/CompanyContext";
-import { Check, ChevronsUpDown, Pencil, Plus, Receipt } from "lucide-react";
+import { Check, ChevronsUpDown, Pencil, Plus, Receipt, ArrowLeft } from "lucide-react";
+import { Link } from "wouter";
+
+type TaxKind = "sale" | "purchase" | "withholding";
+type CutType = "self_borne" | "withholding";
+
+const KIND_LABEL: Record<TaxKind, string> = {
+  sale: "PPN Keluaran",
+  purchase: "PPN Masukan",
+  withholding: "PPh (Pajak Penghasilan)",
+};
+
+const KIND_BADGE_CLASS: Record<TaxKind, string> = {
+  sale: "bg-blue-900/30 text-blue-300 border-blue-700",
+  purchase: "bg-green-900/30 text-green-300 border-green-700",
+  withholding: "bg-orange-900/30 text-orange-300 border-orange-700",
+};
+
+const CUT_LABEL: Record<CutType, string> = {
+  self_borne: "Ditanggung Sendiri",
+  withholding: "Dipotong dari Pembayaran",
+};
+
+const CUT_BADGE_CLASS: Record<CutType, string> = {
+  self_borne: "bg-slate-800 text-slate-300 border-slate-600",
+  withholding: "bg-red-900/30 text-red-300 border-red-700",
+};
+
+type TaxRow = AccountingTax & { cutType?: CutType };
 
 export default function TaxesPage() {
   const qc = useQueryClient();
@@ -32,7 +60,7 @@ export default function TaxesPage() {
   const { activeCompanyId } = useCompany();
 
   const taxesQK = ["taxes", activeCompanyId] as const;
-  const { data: taxes } = useQuery<AccountingTax[]>({
+  const { data: taxes } = useQuery<TaxRow[]>({
     queryKey: taxesQK,
     queryFn: async ({ signal }) => {
       const res = await fetch(`/api/accounting/taxes?company=${activeCompanyId}`, {
@@ -80,18 +108,39 @@ export default function TaxesPage() {
   });
 
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<AccountingTax | null>(null);
+  const [editing, setEditing] = useState<TaxRow | null>(null);
   const [form, setForm] = useState({
-    name: "", rate: 0, kind: "sale" as AccountingTax["kind"], accountId: 0, isActive: true,
+    name: "",
+    rate: 0,
+    kind: "sale" as TaxKind,
+    cutType: "self_borne" as CutType,
+    accountId: 0,
+    isActive: true,
   });
   const [accountPopoverOpen, setAccountPopoverOpen] = useState(false);
 
-  const reset = () => { setEditing(null); setForm({ name: "", rate: 0, kind: "sale", accountId: 0, isActive: true }); };
+  const reset = () => {
+    setEditing(null);
+    setForm({ name: "", rate: 0, kind: "sale", cutType: "self_borne", accountId: 0, isActive: true });
+  };
 
-  const startEdit = (tax: AccountingTax) => {
+  const startEdit = (tax: TaxRow) => {
     setEditing(tax);
-    setForm({ name: tax.name, rate: tax.rate, kind: tax.kind, accountId: tax.accountId, isActive: tax.isActive });
+    setForm({
+      name: tax.name,
+      rate: tax.rate as unknown as number,
+      kind: tax.kind as TaxKind,
+      cutType: (tax.cutType ?? "self_borne") as CutType,
+      accountId: tax.accountId,
+      isActive: tax.isActive,
+    });
     setOpen(true);
+  };
+
+  // Auto-suggest cutType based on kind
+  const handleKindChange = (kind: TaxKind) => {
+    const defaultCut: CutType = kind === "withholding" ? "withholding" : "self_borne";
+    setForm((f) => ({ ...f, kind, cutType: defaultCut }));
   };
 
   const submit = async () => {
@@ -108,8 +157,8 @@ export default function TaxesPage() {
       }
       qc.invalidateQueries({ queryKey: taxesQK });
       reset(); setOpen(false);
-    } catch (e: any) {
-      toast({ title: t.common.error, description: e?.message ?? String(e), variant: "destructive" });
+    } catch (e: unknown) {
+      toast({ title: t.common.error, description: (e as Error)?.message ?? String(e), variant: "destructive" });
     }
   };
 
@@ -123,26 +172,66 @@ export default function TaxesPage() {
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2"><Receipt className="h-6 w-6" />Pajak</h1>
+            <Link href="/accounting"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Receipt className="h-6 w-6" />Pajak
+            </h1>
             <p className="text-sm text-muted-foreground">PPN keluaran/masukan & PPh (Pajak Penghasilan)</p>
           </div>
+
           <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
-            <DialogTrigger asChild><Button data-testid="button-add-tax"><Plus className="h-4 w-4 mr-2" />Tambah Pajak</Button></DialogTrigger>
+            <DialogTrigger asChild>
+              <Button data-testid="button-add-tax">
+                <Plus className="h-4 w-4 mr-2" />Tambah Pajak
+              </Button>
+            </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>{editing ? "Edit Pajak" : "Pajak Baru"}</DialogTitle></DialogHeader>
               <div className="space-y-3">
-                <div><Label>Nama</Label><Input data-testid="input-tax-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="PPN 11% Keluaran" /></div>
-                <div><Label>Tarif (%)</Label><Input data-testid="input-tax-rate" type="number" step="0.01" value={form.rate} onChange={(e) => setForm({ ...form, rate: parseFloat(e.target.value) || 0 })} /></div>
                 <div>
-                  <Label>Jenis</Label>
-                  <Select value={form.kind} onValueChange={(v) => setForm({ ...form, kind: v as AccountingTax["kind"] })}>
+                  <Label>Nama</Label>
+                  <Input
+                    data-testid="input-tax-name"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="Contoh: PPh 21"
+                  />
+                </div>
+                <div>
+                  <Label>Tarif (%)</Label>
+                  <Input
+                    data-testid="input-tax-rate"
+                    type="number"
+                    step="0.001"
+                    value={form.rate}
+                    onChange={(e) => setForm({ ...form, rate: parseFloat(e.target.value) || 0 })}
+                  />
+                </div>
+                <div>
+                  <Label>Jenis Pajak</Label>
+                  <Select value={form.kind} onValueChange={(v) => handleKindChange(v as TaxKind)}>
                     <SelectTrigger data-testid="select-tax-kind"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="sale">PPN Penjualan (Output/Keluaran)</SelectItem>
-                      <SelectItem value="purchase">PPN Pembelian (Input/Masukan)</SelectItem>
+                      <SelectItem value="sale">PPN Keluaran (Output)</SelectItem>
+                      <SelectItem value="purchase">PPN Masukan (Input)</SelectItem>
                       <SelectItem value="withholding">PPh (Pajak Penghasilan)</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div>
+                  <Label>Cara Pemotongan</Label>
+                  <Select value={form.cutType} onValueChange={(v) => setForm({ ...form, cutType: v as CutType })}>
+                    <SelectTrigger data-testid="select-cut-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="self_borne">Ditanggung Sendiri (Self-Borne)</SelectItem>
+                      <SelectItem value="withholding">Dipotong dari Pembayaran (Withholding)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {form.cutType === "withholding"
+                      ? "Pajak dipotong saat pembayaran dilakukan (mis. PPh 21, PPh 23)"
+                      : "Pajak dibayar sendiri oleh perusahaan (mis. PPN)"}
+                  </p>
                 </div>
                 <div>
                   <Label>Akun Pajak</Label>
@@ -156,7 +245,10 @@ export default function TaxesPage() {
                       >
                         <span className="truncate">
                           {form.accountId
-                            ? (() => { const a = (accounts ?? []).find((x) => x.id === form.accountId); return a ? `${a.code} ${a.name}` : "Pilih akun"; })()
+                            ? (() => {
+                                const a = (accounts ?? []).find((x) => x.id === form.accountId);
+                                return a ? `${a.code} ${a.name}` : "Pilih akun";
+                              })()
                             : "Pilih akun"}
                         </span>
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -190,37 +282,90 @@ export default function TaxesPage() {
                   </Popover>
                 </div>
                 <div className="flex items-center gap-2">
-                  <input type="checkbox" id="active" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+                  <input
+                    type="checkbox"
+                    id="active"
+                    checked={form.isActive}
+                    onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+                  />
                   <Label htmlFor="active">Aktif</Label>
                 </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => { setOpen(false); reset(); }}>Batal</Button>
-                <Button onClick={submit} data-testid="button-save-tax">Simpan</Button>
+                <Button
+                  onClick={submit}
+                  disabled={createMut.isPending || updateMut.isPending}
+                  data-testid="button-save-tax"
+                >
+                  {(createMut.isPending || updateMut.isPending) ? "Menyimpan..." : "Simpan"}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
 
-        <Card><CardContent className="p-4">
-          <Table>
-            <TableHeader><TableRow><TableHead>Nama</TableHead><TableHead>Tarif</TableHead><TableHead>Jenis</TableHead><TableHead>Akun</TableHead><TableHead>Status</TableHead><TableHead className="w-20 text-right">Aksi</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {(taxes ?? []).length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">Tidak ada pajak</TableCell></TableRow>
-              ) : taxes!.map((tax) => (
-                <TableRow key={tax.id} data-testid={`row-tax-${tax.id}`}>
-                  <TableCell>{tax.name}</TableCell>
-                  <TableCell>{tax.rate}%</TableCell>
-                  <TableCell><Badge variant="outline">{tax.kind === "sale" ? "PPN Keluaran" : tax.kind === "purchase" ? "PPN Masukan" : "PPh"}</Badge></TableCell>
-                  <TableCell className="text-xs">{accLabel(tax.accountId)}</TableCell>
-                  <TableCell>{tax.isActive ? <Badge>Aktif</Badge> : <Badge variant="secondary">Non-aktif</Badge>}</TableCell>
-                  <TableCell className="text-right"><Button size="icon" variant="ghost" onClick={() => startEdit(tax)} data-testid={`button-edit-${tax.id}`}><Pencil className="h-4 w-4" /></Button></TableCell>
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nama Pajak</TableHead>
+                  <TableHead className="w-20 text-right">Tarif</TableHead>
+                  <TableHead>Jenis</TableHead>
+                  <TableHead>Cara Potong</TableHead>
+                  <TableHead>Akun</TableHead>
+                  <TableHead className="w-24">Status</TableHead>
+                  <TableHead className="w-16 text-right">Aksi</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent></Card>
+              </TableHeader>
+              <TableBody>
+                {(taxes ?? []).length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                      Tidak ada pajak — data akan muncul setelah server selesai migrasi
+                    </TableCell>
+                  </TableRow>
+                ) : taxes!.map((tax) => {
+                  const kind = tax.kind as TaxKind;
+                  const cut = (tax.cutType ?? "self_borne") as CutType;
+                  return (
+                    <TableRow key={tax.id} data-testid={`row-tax-${tax.id}`}>
+                      <TableCell className="font-medium">{tax.name}</TableCell>
+                      <TableCell className="text-right font-mono">{Number(tax.rate).toFixed(3)}%</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={KIND_BADGE_CLASS[kind] ?? ""}>
+                          {KIND_LABEL[kind] ?? kind}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={CUT_BADGE_CLASS[cut] ?? ""}>
+                          {CUT_LABEL[cut] ?? cut}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{accLabel(tax.accountId)}</TableCell>
+                      <TableCell>
+                        {tax.isActive
+                          ? <Badge className="bg-emerald-900/30 text-emerald-300 border-emerald-700">Aktif</Badge>
+                          : <Badge variant="secondary">Non-aktif</Badge>}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => startEdit(tax)}
+                          data-testid={`button-edit-${tax.id}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
   );

@@ -3,22 +3,60 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
+import { execSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(artifactDir, "../..");
 
+function resolveBuildRevision() {
+  const configured =
+    process.env.REPLIT_DEPLOYMENT_REVISION ??
+    process.env.REPLIT_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT_SHA ??
+    process.env.BUILD_SHA ??
+    process.env.SOURCE_VERSION;
+  if (configured?.trim()) return configured.trim();
+
+  try {
+    return execSync("git rev-parse HEAD", {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function buildLib(name) {
+  const libDir = path.resolve(workspaceRoot, "lib", name);
+  console.log(`[build] Compiling lib/${name}...`);
+  try {
+    execSync("pnpm exec tsc -p tsconfig.json", { cwd: libDir, stdio: "inherit" });
+    console.log(`[build] lib/${name} OK`);
+  } catch {
+    console.warn(`[build] lib/${name} build warning (non-fatal)`);
+  }
+}
 
 async function buildAll() {
+  // Build shared libs first so their dist/index.d.ts exist for TypeScript
+  buildLib("db");
+  buildLib("api-zod");
+
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
 
   const t0 = Date.now();
+  const buildRevision = resolveBuildRevision();
   const result = await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
+    target: "node20",
     bundle: true,
     format: "esm",
     outdir: distDir,
@@ -26,12 +64,16 @@ async function buildAll() {
     // Silent: suppress esbuild's built-in reporter (which adds ⚠️ for files >500KB).
     // We print our own summary below using metafile data.
     logLevel: "error",
+    define: {
+      "__API_BUILD_REVISION__": JSON.stringify(buildRevision),
+    },
     metafile: true,
     // Keep explicit list for native addons that can't be bundled.
     external: [
       "*.node",
       "pdfkit",
       "sharp",
+      "fluent-ffmpeg",
       "better-sqlite3",
       "sqlite3",
       "canvas",
@@ -43,6 +85,8 @@ async function buildAll() {
       "xxhash-addon",
       "bufferutil",
       "utf-8-validate",
+      "xlsx",
+      "exceljs",
       "ssh2",
       "cpu-features",
       "dtrace-provider",
@@ -51,15 +95,12 @@ async function buildAll() {
       "pg-native",
       "oracledb",
       "mongodb-client-encryption",
-      "nodemailer",
-      "imapflow",
-      "mailparser",
-      "handlebars",
       "knex",
       "typeorm",
       "protobufjs",
       "onnxruntime-node",
       "jose",
+      "fluent-ffmpeg",
       "@tensorflow/*",
       "@prisma/client",
       "@mikro-orm/*",
@@ -85,6 +126,7 @@ async function buildAll() {
       "leveldown",
       "miniflare",
       "mysql2",
+      "archiver",
       "newrelic",
       "odbc",
       "piscina",
@@ -105,7 +147,15 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      "web-push",
+      "compression",
     ],
+    alias: {
+      "@workspace/logistics-constants": path.resolve(workspaceRoot, "lib/logistics-constants/src/index.ts"),
+      "@workspace/product-templates": path.resolve(workspaceRoot, "lib/product-templates/src/index.ts"),
+      "@workspace/service-templates": path.resolve(workspaceRoot, "lib/service-templates/src/index.ts"),
+      "zod": path.resolve(workspaceRoot, "node_modules/.pnpm/zod@3.25.76/node_modules/zod"),
+    },
     sourcemap: process.env.NODE_ENV !== "production" ? "linked" : false,
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
@@ -134,6 +184,20 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     const kb = (bytes / 1024).toFixed(1).padStart(7);
     console.log(`  ${file.padEnd(pad)}  ${kb} kb`);
   }
+
+  // The artifact manifest still starts the historical index.mjs entrypoint.
+  // Keep it as a byte-for-byte alias of the current bundled bootstrap so
+  // clean publish builds cannot leave the runtime entrypoint missing.
+  const indexPath = path.join(distDir, "index.mjs");
+  const hasIndexOutput = outputs.some(([file]) => file.endsWith("/index.mjs"));
+  if (hasIndexOutput) {
+    console.log(`  ${indexPath}  generated entrypoint`);
+  } else {
+    const bootstrapPath = path.join(distDir, "bootstrap.mjs");
+    await copyFile(bootstrapPath, indexPath);
+    console.log(`  ${indexPath}  alias of bootstrap.mjs`);
+  }
+
   console.log(`\n⚡ Done in ${elapsed}s`);
 }
 

@@ -8,23 +8,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Search, ShoppingCart, Truck, ChevronRight, X, Container, ArrowLeft } from "lucide-react";
+import { Search, ShoppingCart, Truck, ChevronRight, X, Container, ArrowLeft, Calculator, ArrowRight } from "lucide-react";
 import { useLocation } from "wouter";
 import { resolveImageUrl } from "@/lib/utils";
 import { getServiceFallbackImage } from "@/lib/categoryImages";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { translateServiceName, translateCategory } from "@/i18n/serviceData";
+import { GROUPED_DISPLAY_CATEGORIES } from "@workspace/logistics-constants";
+import PageSeo from "@/components/PageSeo";
+import { CUSTOMER_ASSETS, staticAsset } from "@/lib/staticAssets";
 
 const formatIDR = (v: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v);
 
 const stripJasa = (name: string) => name.replace(/^Jasa\s+/i, "");
 
-const GROUPED_CATEGORIES = ["Trucking", "Container"];
-
 function isGrouped(service: { categories?: string[] }) {
-  return service.categories?.some((c) => GROUPED_CATEGORIES.includes(c));
+  return service.categories?.some((c) => (GROUPED_DISPLAY_CATEGORIES as readonly string[]).includes(c));
 }
 
 type Service = {
@@ -58,17 +61,63 @@ function ServiceImage({ service, className = "" }: { service: Service; className
   );
 }
 
+function useServicesRealtime() {
+  const qc = useQueryClient();
+  const [connected, setConnected] = useState(false);
+  const [justUpdated, setJustUpdated] = useState(false);
+
+  const handleChange = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ["listPortalServices"] });
+    qc.invalidateQueries({ queryKey: ["listPortalServicesJasa"] });
+    setJustUpdated(true);
+    setTimeout(() => setJustUpdated(false), 3000);
+  }, [qc]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const channel = supabase
+      .channel("portal-services-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, handleChange)
+      .subscribe((status) => {
+        setConnected(status === "SUBSCRIBED");
+      });
+    return () => {
+      supabase!.removeChannel(channel);
+      setConnected(false);
+    };
+  }, [handleChange]);
+
+  return { connected, justUpdated };
+}
+
 export default function Services() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    setLocation("/jasa");
+  }, [setLocation]);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [truckingOpen, setTruckingOpen] = useState(false);
   const { t, locale } = useLanguage();
-  const [, setLocation] = useLocation();
+  const qc = useQueryClient();
+  const { connected: realtimeConnected, justUpdated: realtimeUpdated } = useServicesRealtime();
 
   const { data: servicesData, isLoading } = useListPortalServices({
     query: { queryKey: ["listPortalServices"] }
   });
 
-  const allServices: Service[] = Array.isArray(servicesData) ? servicesData : [];
+  useEffect(() => {
+    const es = new EventSource("/api/ecommerce/events");
+    es.addEventListener("price_sync", () => {
+      qc.invalidateQueries({ queryKey: ["listPortalServices"] });
+    });
+    return () => es.close();
+  }, [qc]);
+
+  const allServices: Service[] = Array.isArray(servicesData)
+    ? (servicesData as Service[]).map((s) => ({ ...s, description: s.description ?? undefined }))
+    : [];
 
   const groupedServices = allServices.filter(isGrouped);
   const regularServices = allServices.filter((s) => !isGrouped(s));
@@ -95,6 +144,7 @@ export default function Services() {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
+      <PageSeo path="/services" />
       {/* Hero header */}
       <div
         className="relative overflow-hidden"
@@ -155,6 +205,7 @@ export default function Services() {
             zIndex: 1,
           }}
         />
+        {/* Routes layer: local fallback first, Supabase on top (same zIndex, later DOM = in front) */}
         <div
           aria-hidden="true"
           className="svc-routes-layer"
@@ -164,7 +215,26 @@ export default function Services() {
             top: "22%",
             width: "48%",
             height: "56%",
-            backgroundImage: "url(/images/logistics-routes.svg)",
+            backgroundImage: `url(${CUSTOMER_ASSETS.logisticsRoutes})`,
+            backgroundRepeat: "no-repeat",
+            backgroundSize: "contain",
+            backgroundPosition: "center right",
+            opacity: 0.45,
+            filter: "drop-shadow(0 0 18px rgba(255,255,255,0.20))",
+            pointerEvents: "none",
+            zIndex: 1,
+          }}
+        />
+        <div
+          aria-hidden="true"
+          className="svc-routes-layer"
+          style={{
+            position: "absolute",
+            right: "3%",
+            top: "22%",
+            width: "48%",
+            height: "56%",
+            backgroundImage: `url(${CUSTOMER_ASSETS.logisticsRoutes})`,
             backgroundRepeat: "no-repeat",
             backgroundSize: "contain",
             backgroundPosition: "center right",
@@ -206,7 +276,7 @@ export default function Services() {
             }}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Kembali
+            {t("services.back")}
           </button>
 
           <p
@@ -256,6 +326,77 @@ export default function Services() {
 
       {/* Catalog Grid */}
       <div className="container px-4 md:px-6 mt-12">
+        <div className="flex items-center justify-between mb-6">
+          <span className="text-[13px] text-slate-500 font-medium">
+            {allServices.length} {t("services.serviceUnit")}
+          </span>
+          {realtimeConnected && (
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-full px-2.5 py-1"
+              style={{
+                background: realtimeUpdated ? "rgba(245,158,11,0.10)" : "rgba(34,197,94,0.10)",
+                color: realtimeUpdated ? "#B45309" : "#15803D",
+                border: `1px solid ${realtimeUpdated ? "rgba(245,158,11,0.25)" : "rgba(34,197,94,0.25)"}`,
+              }}
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{
+                  background: realtimeUpdated ? "#F59E0B" : "#22C55E",
+                  animation: "pulse 1.5s ease-in-out infinite",
+                }}
+              />
+              {realtimeUpdated ? t("services.realtimeUpdated") : t("services.realtimeLive")}
+            </span>
+          )}
+        </div>
+
+        {/* ── Trucking Booking Banner ── */}
+        <div
+          className="mb-8 rounded-2xl overflow-hidden relative cursor-pointer group"
+          style={{ background: "linear-gradient(135deg, #1e3a5f 0%, #1d4ed8 55%, #2563eb 100%)" }}
+          onClick={() => setLocation("/trucking")}
+        >
+          {/* dot-grid overlay */}
+          <div aria-hidden="true" className="absolute inset-0 pointer-events-none"
+            style={{ backgroundImage: "radial-gradient(rgba(255,255,255,0.10) 1px, transparent 1px)", backgroundSize: "28px 28px" }} />
+          {/* truck silhouette bg */}
+          <div aria-hidden="true" className="absolute right-0 top-0 bottom-0 w-1/2 flex items-center justify-end pr-8 opacity-20 pointer-events-none select-none">
+            <Truck className="w-48 h-48 text-white" strokeWidth={0.6} />
+          </div>
+
+          <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 px-6 py-6">
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 bg-white/15 border border-white/25 rounded-full px-3 py-0.5">
+                <Truck className="w-3 h-3 text-white" />
+                <span className="text-[11px] font-semibold text-white uppercase tracking-wider">{t("services.truckingBannerBadge")}</span>
+              </div>
+              <h3 className="text-xl font-bold text-white leading-tight">
+                {t("services.truckingBannerTitle")}
+              </h3>
+              <p className="text-[13px] text-blue-100 max-w-md leading-relaxed">
+                {t("services.truckingBannerDesc")}
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {["Pickup Kecil", "Engkel", "CDD Long", "Fuso", "Tronton", "Truk Trailer"].map((v) => (
+                  <span key={v} className="text-[11px] bg-white/15 border border-white/20 text-white rounded-full px-2.5 py-0.5">{v}</span>
+                ))}
+              </div>
+            </div>
+            <div className="shrink-0">
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setLocation("/trucking"); }}
+                className="flex items-center gap-2 bg-white text-blue-700 font-bold text-[13px] rounded-xl px-5 py-3 shadow-lg group-hover:shadow-xl group-hover:scale-105 transition-all duration-200"
+              >
+                <Calculator className="w-4 h-4" />
+                {t("services.truckingBannerCta")}
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -282,7 +423,7 @@ export default function Services() {
                 {/* Visual: premium banner image */}
                 <div className="aspect-video w-full overflow-hidden relative">
                   <img
-                    src={`${import.meta.env.BASE_URL}images/banner-trucking-container.png`}
+                    src={staticAsset("images/banner-trucking-container.png")}
                     alt="Trucking & Container"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     onError={(e) => {
@@ -299,13 +440,13 @@ export default function Services() {
                   {/* Sub-count badge */}
                   <div className="absolute top-3 left-3">
                     <Badge className="bg-white/20 text-white backdrop-blur-sm border-white/30 text-xs font-semibold">
-                      {groupedServices.length} Layanan
+                      {groupedServices.length} {t("services.serviceUnit")}
                     </Badge>
                   </div>
                   {/* Folder indicator */}
                   <div className="absolute top-3 right-3 flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-lg px-2 py-1">
                     <ChevronRight className="w-3.5 h-3.5 text-white" />
-                    <span className="text-[11px] text-white font-medium">Lihat Isi</span>
+                    <span className="text-[11px] text-white font-medium">{t("services.folderViewContents")}</span>
                   </div>
                 </div>
 
@@ -316,7 +457,7 @@ export default function Services() {
                   </div>
                   <CardTitle className="text-xl">Trucking &amp; Container</CardTitle>
                   <CardDescription className="text-sm mt-2 leading-relaxed">
-                    Layanan transportasi darat dan sewa container untuk kebutuhan pengiriman lokal maupun antar kota.
+                    {t("services.folderCardDesc")}
                   </CardDescription>
                 </CardHeader>
 
@@ -330,13 +471,13 @@ export default function Services() {
                     ))}
                     {groupedServices.length > 4 && (
                       <span className="text-xs bg-slate-100 text-slate-500 rounded-full px-2.5 py-0.5 border border-slate-200">
-                        +{groupedServices.length - 4} lainnya
+                        +{groupedServices.length - 4} {t("services.folderMore")}
                       </span>
                     )}
                   </div>
                   <Button className="w-full gap-2 bg-slate-800 hover:bg-slate-700 text-white">
                     <ChevronRight className="h-4 w-4" />
-                    Lihat Semua Layanan
+                    {t("services.folderViewAll")}
                   </Button>
                 </CardContent>
               </Card>
@@ -363,7 +504,7 @@ export default function Services() {
                 </CardHeader>
                 <CardContent className="mt-auto pt-0 space-y-3">
                   <div className="bg-gray-50 rounded-lg p-4 flex items-center justify-between">
-                    <span className="text-sm font-medium text-muted-foreground">{t("services.price")}</span>
+                    <span className="text-sm font-medium text-muted-foreground">{t("services.sellingPrice")}</span>
                     {service.price > 0 ? (
                       <span className="font-bold text-lg text-primary">{formatIDR(service.price)}</span>
                     ) : (
@@ -383,7 +524,7 @@ export default function Services() {
           </div>
         ) : (
           <div className="text-center py-24 bg-white rounded-xl border border-dashed border-border">
-            <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="CST Logistics" className="h-12 w-auto mx-auto mb-4 object-contain opacity-35" />
+            <img src={staticAsset("images/logo.png")} alt="B2B Marketplace and Logistic" className="h-12 w-auto mx-auto mb-4 object-contain opacity-35" />
             <h3 className="text-xl font-medium mb-2">{t("services.noServices")}</h3>
             <p className="text-muted-foreground">
               {searchQuery ? t("services.tryOther") : t("services.noResults")}
@@ -403,7 +544,7 @@ export default function Services() {
                 </div>
                 <div>
                   <DialogTitle className="text-xl font-bold text-slate-800">Trucking &amp; Container</DialogTitle>
-                  <p className="text-sm text-slate-500 mt-0.5">Pilih layanan yang sesuai kebutuhan Anda</p>
+                  <p className="text-sm text-slate-500 mt-0.5">{t("services.dialogSub")}</p>
                 </div>
               </div>
             </div>
@@ -437,7 +578,7 @@ export default function Services() {
                   )}
                   <div className="flex items-center justify-between mt-3">
                     <div>
-                      <span className="text-xs text-slate-400 block">{t("services.price")}</span>
+                      <span className="text-xs text-slate-400 block">{t("services.sellingPrice")}</span>
                       {service.price > 0 ? (
                         <span className="font-bold text-primary">{formatIDR(service.price)}</span>
                       ) : (

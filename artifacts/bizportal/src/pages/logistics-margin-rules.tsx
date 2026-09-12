@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Percent, DollarSign, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Percent, DollarSign, RefreshCw } from "lucide-react";
+import { Link } from "wouter";
 
 interface MarginRule {
   id: number;
@@ -152,6 +153,8 @@ export default function LogisticsMarginRulesPage() {
       <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
+            <Link href="/logistics"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-2xl font-bold text-gray-900">Aturan Margin</h1>
             <p className="text-sm text-gray-500 mt-1">Konfigurasi margin otomatis berdasarkan jenis layanan dan rute</p>
           </div>

@@ -1,3 +1,4 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useEffect } from "react";
 import { useLocation, useParams, useSearch } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
@@ -13,7 +14,7 @@ import { Plus, Trash2, CheckCircle, XCircle, ChevronLeft, ArrowRight } from "luc
 import { toast } from "sonner";
 import { Link } from "wouter";
 
-interface GRLine { id?: number; poLineId?: number; productId?: number; name: string; qtyOrdered: string; qtyReceived: string; qtyRejected: string; unit: string; unitCost: string; subtotal: string; notes: string; }
+interface GRLine { id?: number; poLineId?: number; productId?: number; name: string; qtyOrdered: string; qtyReceived: string; qtyRejected: string; unit: string; unitCost: string; subtotal: string; notes: string; condition?: string; receivingNotes?: string; }
 interface GR { id: number; grNumber: string; status: string; poId: number; warehouseId?: number; supplierId?: number; receiveDate: string; deliveryNote?: string; notes?: string; lines: GRLine[]; po?: Record<string, unknown>; }
 
 const apiFetch = (path: string, opts?: RequestInit) => fetch(`/api${path}`, { credentials: "include", headers: { "Content-Type": "application/json" }, ...opts });
@@ -47,7 +48,7 @@ export default function GoodsReceiptEditorPage() {
   useEffect(() => {
     if (gr) {
       setForm({ poId: String(gr.poId), warehouseId: String(gr.warehouseId ?? ""), receiveDate: gr.receiveDate.substring(0, 10), deliveryNote: gr.deliveryNote ?? "", notes: gr.notes ?? "" });
-      setLines(gr.lines?.length ? gr.lines.map(l => ({ ...l, qtyOrdered: String(l.qtyOrdered), qtyReceived: String(l.qtyReceived), qtyRejected: String(l.qtyRejected), unitCost: String(l.unitCost), subtotal: String(l.subtotal) })) : []);
+      setLines(gr.lines?.length ? gr.lines.map(l => ({ ...l, qtyOrdered: String(l.qtyOrdered), qtyReceived: String(l.qtyReceived), qtyRejected: String(l.qtyRejected), unitCost: String(l.unitCost), subtotal: String(l.subtotal), condition: (l as any).condition ?? "", receivingNotes: (l as any).receivingNotes ?? "" })) : []);
     }
   }, [gr]);
 
@@ -64,9 +65,11 @@ export default function GoodsReceiptEditorPage() {
         unitCost: String(l.unitCost ?? "0"),
         subtotal: String(Number(l.quantity ?? 0) * Number(l.unitCost ?? 0)),
         notes: "",
+        condition: "",
+        receivingNotes: "",
       })));
     }
-  }, [poData, isNew]);
+  }, [poData, isNew, lines.length]);
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -147,7 +150,7 @@ export default function GoodsReceiptEditorPage() {
           <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div><Label>No. PO</Label><Input value={form.poId} onChange={e => setForm(f => ({ ...f, poId: e.target.value }))} disabled={!isDraft} placeholder="ID PO..." /></div>
             <div><Label>ID Gudang</Label><Input value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))} disabled={!isDraft} placeholder="ID Gudang..." /></div>
-            <div><Label>Tanggal Terima</Label><Input type="date" value={form.receiveDate} onChange={e => setForm(f => ({ ...f, receiveDate: e.target.value }))} disabled={!isDraft} /></div>
+            <div><Label>Tanggal Terima</Label><DatePicker value={form.receiveDate} onChange={v => setForm(f => ({ ...f, receiveDate: v }))} disabled={!isDraft} /></div>
             <div><Label>No. Surat Jalan</Label><Input value={form.deliveryNote} onChange={e => setForm(f => ({ ...f, deliveryNote: e.target.value }))} disabled={!isDraft} /></div>
             <div className="md:col-span-2"><Label>Catatan</Label><Input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} disabled={!isDraft} /></div>
           </CardContent>
@@ -169,6 +172,7 @@ export default function GoodsReceiptEditorPage() {
                     <th className="text-left py-2 px-2 w-24">Qty Tolak</th>
                     <th className="text-left py-2 px-2 w-20">Satuan</th>
                     <th className="text-left py-2 px-2 w-32">Harga Satuan</th>
+                    <th className="text-left py-2 px-2 w-28">Kondisi</th>
                     <th className="text-left py-2 px-2 w-32">Subtotal</th>
                     {isDraft && <th className="w-10" />}
                   </tr>
@@ -176,18 +180,37 @@ export default function GoodsReceiptEditorPage() {
                 <tbody>
                   {lines.map((line, i) => (
                     <tr key={i} className="border-b">
-                      <td className="py-1 px-2"><Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-8" /></td>
+                      <td className="py-1 px-2">
+                        <Input value={line.name} onChange={e => updateLine(i, "name", e.target.value)} disabled={!isDraft} className="h-8" />
+                        {(line.receivingNotes !== undefined) && (
+                          <Input value={line.receivingNotes ?? ""} onChange={e => updateLine(i, "receivingNotes" as keyof GRLine, e.target.value)} disabled={!isDraft} className="h-7 mt-1 text-xs text-muted-foreground" placeholder="Catatan penerimaan..." />
+                        )}
+                      </td>
                       <td className="py-1 px-2"><Input type="number" value={line.qtyOrdered} onChange={e => updateLine(i, "qtyOrdered", e.target.value)} disabled={!isDraft} className="h-8" /></td>
                       <td className="py-1 px-2"><Input type="number" value={line.qtyReceived} onChange={e => updateLine(i, "qtyReceived", e.target.value)} disabled={!isDraft} className="h-8" /></td>
                       <td className="py-1 px-2"><Input type="number" value={line.qtyRejected} onChange={e => updateLine(i, "qtyRejected", e.target.value)} disabled={!isDraft} className="h-8" /></td>
                       <td className="py-1 px-2"><Input value={line.unit} onChange={e => updateLine(i, "unit", e.target.value)} disabled={!isDraft} className="h-8" /></td>
                       <td className="py-1 px-2"><Input type="number" value={line.unitCost} onChange={e => updateLine(i, "unitCost", e.target.value)} disabled={!isDraft} className="h-8" /></td>
+                      <td className="py-1 px-2">
+                        <select
+                          className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                          value={line.condition ?? ""}
+                          onChange={e => updateLine(i, "condition" as keyof GRLine, e.target.value)}
+                          disabled={!isDraft}
+                        >
+                          <option value="">—</option>
+                          <option value="good">Baik</option>
+                          <option value="damaged">Rusak</option>
+                          <option value="partial">Sebagian</option>
+                          <option value="expired">Kadaluarsa</option>
+                        </select>
+                      </td>
                       <td className="py-1 px-2 text-right font-mono text-xs">{Number(line.subtotal).toLocaleString("id-ID")}</td>
                       {isDraft && <td className="py-1 px-2"><Button size="icon" variant="ghost" onClick={() => setLines(prev => prev.filter((_, idx) => idx !== i))} className="h-8 w-8"><Trash2 className="h-4 w-4 text-destructive" /></Button></td>}
                     </tr>
                   ))}
                   <tr className="font-semibold">
-                    <td colSpan={6} className="text-right py-2 px-2">Total:</td>
+                    <td colSpan={7} className="text-right py-2 px-2">Total:</td>
                     <td className="py-2 px-2 text-right font-mono text-sm">{lines.reduce((s, l) => s + Number(l.subtotal), 0).toLocaleString("id-ID")}</td>
                     {isDraft && <td />}
                   </tr>

@@ -1,16 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { Bot, Save, Loader2, RotateCcw, Info, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Bot, Save, Loader2, RotateCcw, Info, CheckCircle2 } from "lucide-react";
+import { Link } from "wouter";
 
-const DEFAULT_PROMPT = `Kamu adalah asisten logistik virtual dari CST Logistics — perusahaan jasa pengiriman dan kepabeanan terkemuka di Indonesia.
+const DEFAULT_PROMPT = `Kamu adalah asisten logistik virtual dari B2B Marketplace and Logistic — perusahaan jasa pengiriman dan kepabeanan terkemuka di Indonesia.
 
 Tugasmu:
-1. Menyapa pelanggan dengan ramah dan memperkenalkan layanan CST Logistics
+1. Menyapa pelanggan dengan ramah dan memperkenalkan layanan B2B Marketplace and Logistic
 2. Menjawab pertanyaan seputar layanan logistik (sea freight, air freight, trucking, customs/pabean)
 3. MEMBUAT ORDER: Ketika pelanggan ingin membuat order atau booking — LANGSUNG panggil show_order_form. JANGAN tanya satu per satu. Form akan tampil di chat untuk diisi pelanggan.
 4. CEK STATUS: Ketika pelanggan bertanya status/tracking/posisi paket — LANGSUNG panggil get_order_status.
@@ -42,11 +43,7 @@ export default function AiChatbotSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/ai-agent/settings", {
@@ -61,7 +58,11 @@ export default function AiChatbotSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [t.common.error, toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function handleSave() {
     setSaving(true);
@@ -93,6 +94,8 @@ export default function AiChatbotSettingsPage() {
             <Bot className="h-5 w-5 text-sky-600" />
           </div>
           <div>
+            <Link href="/settings"><Button variant="ghost" size="icon" aria-label="Kembali"><ArrowLeft className="h-4 w-4" /></Button></Link>
+
             <h1 className="text-xl font-semibold text-gray-900">Pengaturan AI Chatbot</h1>
             <p className="text-sm text-gray-500">Atur kepribadian, pengetahuan, dan cara kerja chatbot pelanggan</p>
           </div>

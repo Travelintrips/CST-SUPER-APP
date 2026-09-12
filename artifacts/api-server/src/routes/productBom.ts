@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deleteFromSupabase } from "../lib/supabaseStorage.js";
 
 const router = Router();
 
@@ -11,13 +12,55 @@ router.use(async (req: Request, res: Response, next) => {
   next();
 });
 
+// ── KATEGORI PRODUK ───────────────────────────────────────────────────────────
+
+router.get("/categories", async (req: Request, res: Response) => {
+  const companyId = resolveCompanyId(req);
+  const rows = await db.execute(sql`
+    SELECT DISTINCT subcategory
+    FROM products
+    WHERE company_id = ${companyId}
+      AND subcategory IS NOT NULL
+      AND subcategory <> ''
+    ORDER BY subcategory ASC
+  `);
+  const categories = rows.rows.map((r: Record<string, unknown>) => r.subcategory as string);
+  res.json(categories);
+});
+
+router.put("/categories/:name", async (req: Request, res: Response) => {
+  const companyId = resolveCompanyId(req);
+  const oldName = decodeURIComponent(String(req.params.name));
+  const { newName } = req.body as { newName?: string };
+  if (!newName || !newName.trim()) {
+    res.status(400).json({ message: "newName wajib diisi" }); return;
+  }
+  const result = await db.execute(sql`
+    UPDATE products
+    SET subcategory = ${newName.trim()}
+    WHERE company_id = ${companyId} AND subcategory = ${oldName}
+  `);
+  res.json({ updated: result.rowCount ?? 0 });
+});
+
+router.delete("/categories/:name", async (req: Request, res: Response) => {
+  const companyId = resolveCompanyId(req);
+  const name = decodeURIComponent(String(req.params.name));
+  const result = await db.execute(sql`
+    UPDATE products
+    SET subcategory = NULL
+    WHERE company_id = ${companyId} AND subcategory = ${name}
+  `);
+  res.json({ updated: result.rowCount ?? 0 });
+});
+
 // ── PRODUK JUAL (dari tabel products) ────────────────────────────────────────
 
 router.get("/products", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
   const search = req.query.search as string | undefined;
   const rows = await db.execute(sql`
-    SELECT id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory
+    SELECT id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory, currency_code
     FROM products
     WHERE company_id = ${companyId}
       ${search ? sql`AND (name ILIKE ${"%" + search + "%"} OR sku ILIKE ${"%" + search + "%"})` : sql``}
@@ -29,51 +72,122 @@ router.get("/products", async (req: Request, res: Response) => {
 
 router.post("/products", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const { name, sku, unit, price, costPrice, itemType, subcategory, isActive } = req.body as {
+  const { name, sku, unit, price, costPrice, itemType, subcategory, isActive, currencyCode } = req.body as {
     name: string; sku: string; unit?: string; price?: number; costPrice?: number;
-    itemType?: string; subcategory?: string; isActive?: boolean;
+    itemType?: string; subcategory?: string; isActive?: boolean; currencyCode?: string;
   };
   if (!name || !sku) { res.status(400).json({ message: "name dan sku wajib diisi" }); return; }
   const result = await db.execute(sql`
-    INSERT INTO products (company_id, name, sku, unit, price, cost_price, item_type, subcategory, is_active)
+    INSERT INTO products (company_id, name, sku, unit, price, cost_price, item_type, subcategory, is_active, currency_code)
     VALUES (${companyId}, ${name}, ${sku}, ${unit ?? "pcs"}, ${price ?? 0}, ${costPrice ?? 0},
-            ${itemType ?? "barang"}, ${subcategory ?? null}, ${isActive ?? true})
-    RETURNING id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory
+            ${itemType ?? "barang"}, ${subcategory ?? null}, ${isActive ?? true}, ${currencyCode ?? "IDR"})
+    RETURNING id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory, currency_code
   `);
   res.status(201).json(result.rows[0]);
 });
 
 router.put("/products/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
-  const { name, sku, unit, price, costPrice, itemType, subcategory, isActive } = req.body as {
+  const id = Number(String(req.params.id));
+  const { name, sku, unit, price, costPrice, itemType, subcategory, isActive, currencyCode } = req.body as {
     name?: string; sku?: string; unit?: string; price?: number; costPrice?: number;
-    itemType?: string; subcategory?: string; isActive?: boolean;
+    itemType?: string; subcategory?: string; isActive?: boolean; currencyCode?: string;
   };
   const check = await db.execute(sql`SELECT id FROM products WHERE id = ${id} AND company_id = ${companyId}`);
   if (check.rows.length === 0) { res.status(404).json({ message: "Produk tidak ditemukan" }); return; }
   const result = await db.execute(sql`
     UPDATE products SET
-      name        = COALESCE(${name ?? null}, name),
-      sku         = COALESCE(${sku ?? null}, sku),
-      unit        = COALESCE(${unit ?? null}, unit),
-      price       = COALESCE(${price ?? null}, price),
-      cost_price  = COALESCE(${costPrice ?? null}, cost_price),
-      item_type   = COALESCE(${itemType ?? null}, item_type),
-      subcategory = COALESCE(${subcategory ?? null}, subcategory),
-      is_active   = COALESCE(${isActive ?? null}, is_active)
+      name          = COALESCE(${name ?? null}, name),
+      sku           = COALESCE(${sku ?? null}, sku),
+      unit          = COALESCE(${unit ?? null}, unit),
+      price         = COALESCE(${price ?? null}, price),
+      cost_price    = COALESCE(${costPrice ?? null}, cost_price),
+      item_type     = COALESCE(${itemType ?? null}, item_type),
+      subcategory   = COALESCE(${subcategory ?? null}, subcategory),
+      is_active     = COALESCE(${isActive ?? null}, is_active),
+      currency_code = COALESCE(${currencyCode ?? null}, currency_code)
     WHERE id = ${id} AND company_id = ${companyId}
-    RETURNING id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory
+    RETURNING id, name, sku, unit, price::float, cost_price::float, is_active, item_type, subcategory, currency_code
   `);
   res.json(result.rows[0]);
 });
 
+router.post("/products/import", async (req: Request, res: Response) => {
+  const companyId = resolveCompanyId(req);
+  const { rows } = req.body as {
+    rows: Array<{
+      name: string; sku: string; unit?: string; price?: number; costPrice?: number;
+      itemType?: string; subcategory?: string;
+      weightKg?: number; lengthCm?: number; widthCm?: number; heightCm?: number; goodsType?: string;
+    }>;
+  };
+  if (!Array.isArray(rows) || rows.length === 0) {
+    res.status(400).json({ message: "Tidak ada data untuk diimport" }); return;
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const row of rows) {
+    if (!row.name?.trim() || !row.sku?.trim()) {
+      errors.push(`Baris dilewati: nama/SKU kosong (${row.name || "?"})`);
+      skipped++;
+      continue;
+    }
+    try {
+      await db.execute(sql`
+        INSERT INTO products (
+          company_id, name, sku, unit, price, cost_price, item_type, subcategory,
+          weight_kg, length_cm, width_cm, height_cm, goods_type, is_active
+        )
+        VALUES (
+          ${companyId}, ${row.name.trim()}, ${row.sku.trim()},
+          ${row.unit ?? "pcs"}, ${row.price ?? 0}, ${row.costPrice ?? 0},
+          ${row.itemType ?? "barang"}, ${row.subcategory ?? null},
+          ${row.weightKg ?? null}, ${row.lengthCm ?? null},
+          ${row.widthCm ?? null}, ${row.heightCm ?? null},
+          ${row.goodsType ?? null}, true
+        )
+        ON CONFLICT (sku) DO UPDATE SET
+          name        = EXCLUDED.name,
+          unit        = EXCLUDED.unit,
+          price       = EXCLUDED.price,
+          cost_price  = EXCLUDED.cost_price,
+          item_type   = EXCLUDED.item_type,
+          subcategory = EXCLUDED.subcategory,
+          weight_kg   = EXCLUDED.weight_kg,
+          length_cm   = EXCLUDED.length_cm,
+          width_cm    = EXCLUDED.width_cm,
+          height_cm   = EXCLUDED.height_cm,
+          goods_type  = EXCLUDED.goods_type
+      `);
+      imported++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`SKU ${row.sku}: ${msg}`);
+      skipped++;
+    }
+  }
+
+  res.json({ imported, skipped, errors });
+});
+
 router.delete("/products/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
-  const check = await db.execute(sql`SELECT id FROM products WHERE id = ${id} AND company_id = ${companyId}`);
+  const id = Number(String(req.params.id));
+  const check = await db.execute(sql`SELECT id, image_url, media_items FROM products WHERE id = ${id} AND company_id = ${companyId}`);
   if (check.rows.length === 0) { res.status(404).json({ message: "Produk tidak ditemukan" }); return; }
   await db.execute(sql`DELETE FROM products WHERE id = ${id} AND company_id = ${companyId}`);
+  // Cascade storage cleanup
+  const row = check.rows[0] as { image_url?: string; media_items?: string };
+  const urls: string[] = [];
+  if (row.image_url) urls.push(row.image_url);
+  try {
+    const items: Array<{ url?: string }> = JSON.parse(row.media_items ?? "[]");
+    for (const item of items) { if (item.url) urls.push(item.url); }
+  } catch { /* ignore */ }
+  for (const url of urls) deleteFromSupabase(url).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -110,7 +224,7 @@ router.post("/raw-materials", async (req: Request, res: Response) => {
 
 router.put("/raw-materials/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   const { name, sku, unit, costPrice, description, isActive } = req.body as {
     name?: string; sku?: string; unit?: string; costPrice?: number; description?: string; isActive?: boolean;
   };
@@ -136,7 +250,7 @@ router.put("/raw-materials/:id", async (req: Request, res: Response) => {
 
 router.delete("/raw-materials/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   const check = await db.execute(sql`SELECT id FROM raw_materials WHERE id = ${id} AND company_id = ${companyId}`);
   if (check.rows.length === 0) { res.status(404).json({ message: "Bahan baku tidak ditemukan" }); return; }
   await db.execute(sql`DELETE FROM raw_materials WHERE id = ${id} AND company_id = ${companyId}`);
@@ -183,7 +297,7 @@ router.get("/recipes", async (req: Request, res: Response) => {
 
 router.get("/recipes/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   const rows = await db.execute(sql`
     SELECT r.id, r.company_id, r.product_id, r.note, r.is_active, r.created_at, r.updated_at,
            p.name AS product_name, p.sku AS product_sku
@@ -258,7 +372,7 @@ router.post("/recipes", async (req: Request, res: Response) => {
 
 router.delete("/recipes/:id", async (req: Request, res: Response) => {
   const companyId = resolveCompanyId(req);
-  const id = Number(req.params.id);
+  const id = Number(String(req.params.id));
   const check = await db.execute(sql`SELECT id FROM recipes WHERE id = ${id} AND company_id = ${companyId}`);
   if (check.rows.length === 0) { res.status(404).json({ message: "Recipe tidak ditemukan" }); return; }
   await db.execute(sql`DELETE FROM recipes WHERE id = ${id} AND company_id = ${companyId}`);

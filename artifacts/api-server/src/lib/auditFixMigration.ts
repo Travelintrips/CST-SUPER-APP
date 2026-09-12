@@ -35,7 +35,7 @@ export async function runAuditFixMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS products_company_idx ON products(company_id)
     `);
 
-    // ── 4. users: add company_id, branch_id, department, custom_role_id ───────
+    // ── 4. users: add company_id, branch_id, department, custom_role_id, system_role, default_branch_id ───────
     await db.execute(sql`
       ALTER TABLE users
         ADD COLUMN IF NOT EXISTS company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL
@@ -46,7 +46,19 @@ export async function runAuditFixMigration(): Promise<void> {
     `);
     await db.execute(sql`
       ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS division TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE users
         ADD COLUMN IF NOT EXISTS department TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS system_role TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS default_branch_id INTEGER
     `);
 
     // ── 5. sales_documents: add warehouse_id ─────────────────────────────────
@@ -127,6 +139,9 @@ export async function runAuditFixMigration(): Promise<void> {
         is_active   BOOLEAN NOT NULL DEFAULT TRUE,
         created_at  TIMESTAMP NOT NULL DEFAULT NOW()
       )
+    `);
+    await db.execute(sql`
+      ALTER TABLE departments ADD COLUMN IF NOT EXISTS division_id INTEGER REFERENCES divisions(id) ON DELETE SET NULL
     `);
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS departments_company_idx ON departments(company_id)

@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
-import cstLogo from "@assets/WhatsApp_Image_2026-05-04_at_18.59.18__1_-removebg-preview_1777916047606.png";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLanguage } from "@/i18n/LanguageContext";
+import { WhatsAppButtonStandalone } from "@/components/WhatsAppButton";
 import { useParams, Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +28,7 @@ import { formatCurrency } from "@/lib/utils";
 import { isAuthenticated } from "@/lib/auth";
 import { AirportCombobox } from "@/components/AirportCombobox";
 import { LocationCombobox, type GeoLocation } from "@/components/LocationCombobox";
+import { staticAsset } from "@/lib/staticAssets";
 
 const stripJasa = (name: string) => name.replace(/^Jasa\s+/i, "");
 
@@ -244,6 +247,7 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number): numb
 
 export default function JasaDetail() {
   const params = useParams<{ id: string }>();
+  const { t } = useLanguage();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { addItem, items: cartItems } = useCart();
@@ -268,7 +272,17 @@ export default function JasaDetail() {
   const [cargoPhotoFiles, setCargoPhotoFiles] = useState<File[]>([]);
   const [cargoPhotoUrls, setCargoPhotoUrls] = useState<string[]>([]);
   const [pendingOrder, setPendingOrder] = useState<{ serviceId: number; productName: string } | null>(null);
-  const [truckingRates, setTruckingRates] = useState<Record<string, { ratePerKm: number; loadingFee: number }>>({});
+  const qc = useQueryClient();
+  const { data: truckingRatesData } = useQuery<Record<string, { ratePerKm: number; loadingFee: number }>>({
+    queryKey: ["portal-trucking-rates"],
+    queryFn: () => fetch("/api/portal/trucking-rates").then(r => r.ok ? r.json() : {}),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    refetchInterval: 60_000,
+  });
+  const truckingRates = truckingRatesData ?? {};
   const [truckingPayment, setTruckingPayment] = useState<"transfer" | "gateway" | "">("");
   const [truckingTransferTerm, setTruckingTransferTerm] = useState<"full" | "termin" | "dp" | "">("");
   const [truckingPayTerm, setTruckingPayTerm] = useState<"net7" | "net14" | "net30" | "net60" | "">("");
@@ -285,11 +299,13 @@ export default function JasaDetail() {
   }, [params.id]);
 
   useEffect(() => {
-    fetch("/api/portal/trucking-rates")
-      .then(r => r.ok ? r.json() as Promise<Record<string, { ratePerKm: number; loadingFee: number }>> : Promise.reject())
-      .then(setTruckingRates)
-      .catch(() => {/* fallback: empty, user can input manually */});
-  }, []);
+    const es = new EventSource("/api/ecommerce/events");
+    es.addEventListener("price_sync", () => {
+      qc.invalidateQueries({ queryKey: ["portal-trucking-rates"] });
+      qc.invalidateQueries({ queryKey: ["listPortalServicesDetail"] });
+    });
+    return () => es.close();
+  }, [qc]);
 
   // Trucking always uses Schedule
   useEffect(() => {
@@ -323,8 +339,8 @@ export default function JasaDetail() {
     const hasService = added || cartItems.some((i) => i.calculatorType !== "product");
     if (!hasService) {
       toast({
-        title: "Tambahkan layanan ke pesanan terlebih dahulu",
-        description: "Klik tombol \"Tambahkan ke Pesanan\" sebelum melanjutkan.",
+        title: t("jasaDetail.toastAddServiceFirst"),
+        description: t("jasaDetail.toastAddServiceDesc"),
         variant: "destructive",
       });
       return;
@@ -392,16 +408,17 @@ export default function JasaDetail() {
   const fetchDistance = useCallback(async (from: GeoLocation, to: GeoLocation) => {
     setCalcDist(true);
     try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
+      const osrmBase = import.meta.env.VITE_OSRM_URL ?? "https://router.project-osrm.org";
+      const url = `${osrmBase}/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
       const res = await fetch(url);
       const data = await res.json() as { routes?: Array<{ distance: number }> };
       if (data.routes && data.routes.length > 0) {
         const km = Math.round(data.routes[0].distance / 1000);
         set("distance", String(km));
-        toast({ title: `Jarak otomatis: ${km} km`, description: `${from.label.split(",")[0]} → ${to.label.split(",")[0]}` });
+        toast({ title: t("jasaDetail.toastAutoDistance").replace('{km}', String(km)), description: `${from.label.split(",")[0]} → ${to.label.split(",")[0]}` });
       }
     } catch {
-      toast({ title: "Gagal menghitung jarak", description: "Isi jarak secara manual", variant: "destructive" });
+      toast({ title: t("jasaDetail.toastDistanceFail"), description: t("jasaDetail.toastDistanceFailDesc"), variant: "destructive" });
     } finally {
       setCalcDist(false);
     }
@@ -447,8 +464,8 @@ export default function JasaDetail() {
         `}</style>
         <div className="flex flex-col items-center gap-5">
           <img
-            src={`${import.meta.env.BASE_URL}images/logo.png`}
-            alt="CST Logistics"
+            src={staticAsset("images/logo.png")}
+            alt="B2B Marketplace and Logistic"
             className="cst-logo-loading"
             style={{ width: "clamp(60px, 9vw, 88px)", height: "auto" }}
           />
@@ -466,10 +483,10 @@ export default function JasaDetail() {
   if (!item) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="CST Logistics" className="h-16 w-auto object-contain opacity-40" />
-        <h2 className="text-2xl font-bold">Layanan tidak ditemukan</h2>
+        <img src={staticAsset("images/logo.png")} alt="B2B Marketplace and Logistic" className="h-16 w-auto object-contain opacity-40" />
+        <h2 className="text-2xl font-bold">{t("jasa.serviceNotFound")}</h2>
         <Link href="/jasa">
-          <Button variant="outline"><ArrowLeft className="h-4 w-4 mr-2" /> Kembali ke Katalog</Button>
+          <Button variant="outline"><ArrowLeft className="h-4 w-4 mr-2" /> {t("jasa.backToCatalog")}</Button>
         </Link>
       </div>
     );
@@ -540,7 +557,7 @@ export default function JasaDetail() {
       setDestGeo(newDestEntry.geo);
       setTruckingStops(newStopEntries.map(s => ({ id: s.id, city: s.city, geo: s.geo, receiverName: s.receiverName, receiverPhone: s.receiverPhone })));
     }
-    toast({ title: "Rute dioptimalkan", description: "Urutan stop disusun ulang secara otomatis." });
+    toast({ title: t("jasaDetail.toastRouteOptimized"), description: t("jasaDetail.toastRouteOptimizedDesc") });
   }
 
   function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -563,81 +580,81 @@ export default function JasaDetail() {
       // Jadwal
       if (!orderNow) {
         if (!state.pickupDate) {
-          toast({ title: "Pilih tanggal pickup", variant: "destructive" });
+          toast({ title: t("jasaDetail.toastNoDate"), variant: "destructive" });
           return;
         }
         const today = new Date().toISOString().split("T")[0];
         if (state.pickupDate < today) {
-          toast({ title: "Tanggal pickup tidak boleh sebelum hari ini", variant: "destructive" });
+          toast({ title: t("jasaDetail.toastDatePast"), variant: "destructive" });
           return;
         }
         if (!state.pickupTime) {
-          toast({ title: "Pilih jam pickup", variant: "destructive" });
+          toast({ title: t("jasaDetail.toastNoTime"), variant: "destructive" });
           return;
         }
       }
       // Pengirim
       if (!senderName.trim()) {
-        toast({ title: "Isi nama pengirim", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoSenderName"), variant: "destructive" });
         return;
       }
       if (!senderPhone.trim()) {
-        toast({ title: "Isi no. telepon pengirim", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoSenderPhone"), variant: "destructive" });
         return;
       }
       // Rute
       if (!state.pickupCity) {
-        toast({ title: "Isi kota asal", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoOrigin"), variant: "destructive" });
         return;
       }
       if (!state.destCity) {
-        toast({ title: "Isi kota tujuan", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoDest"), variant: "destructive" });
         return;
       }
       if (!receiverName.trim()) {
-        toast({ title: "Isi nama penerima", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoReceiverName"), variant: "destructive" });
         return;
       }
       if (!receiverPhone.trim()) {
-        toast({ title: "Isi no. telepon penerima", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoReceiverPhone"), variant: "destructive" });
         return;
       }
       for (let si = 0; si < truckingStops.length; si++) {
         const s = truckingStops[si];
         if (!s.receiverName.trim()) {
-          toast({ title: `Isi nama penerima stop ${si + 1}`, variant: "destructive" });
+          toast({ title: t("jasaDetail.toastNoStopReceiverName").replace('{n}', String(si + 1)), variant: "destructive" });
           return;
         }
         if (!s.receiverPhone.trim()) {
-          toast({ title: `Isi no. telepon penerima stop ${si + 1}`, variant: "destructive" });
+          toast({ title: t("jasaDetail.toastNoStopReceiverPhone").replace('{n}', String(si + 1)), variant: "destructive" });
           return;
         }
       }
       // Barang
       if (!cargoCategory) {
-        toast({ title: "Pilih kategori barang (wajib)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoCargo"), variant: "destructive" });
         return;
       }
       if (!koliQty || parseFloat(koliQty) <= 0) {
-        toast({ title: "Jumlah koli wajib diisi (> 0)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoKoli"), variant: "destructive" });
         return;
       }
       if (!grossWeight || parseFloat(grossWeight) <= 0) {
-        toast({ title: "Gross weight wajib diisi (> 0)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoWeight"), variant: "destructive" });
         return;
       }
       // Foto (wajib)
       if (cargoPhotoUrls.length === 0) {
-        toast({ title: "Upload minimal 1 foto barang (wajib)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoPhoto"), variant: "destructive" });
         return;
       }
       // Payment (wajib)
       if (!truckingPayment) {
-        toast({ title: "Pilih jenis pembayaran (wajib)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoPayment"), variant: "destructive" });
         return;
       }
       if (truckingPayment === "transfer" && !truckingTransferTerm) {
-        toast({ title: "Pilih jenis transfer (Full Payment, Termin, atau DP / Advance)", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoTransferType"), variant: "destructive" });
         return;
       }
       setTruckingStep(2);
@@ -647,12 +664,12 @@ export default function JasaDetail() {
   function handleAddToCart() {
     if (!item) return;
     if (subtotal <= 0) {
-      toast({ title: "Isi data kalkulator terlebih dahulu", variant: "destructive" });
+      toast({ title: t("jasaDetail.toastFillCalc"), variant: "destructive" });
       return;
     }
     if (item.calculatorType === "trucking") {
       if (!state.vehicleType) {
-        toast({ title: "Pilih armada kendaraan terlebih dahulu", variant: "destructive" });
+        toast({ title: t("jasaDetail.toastNoVehicle"), variant: "destructive" });
         return;
       }
     }
@@ -698,7 +715,7 @@ export default function JasaDetail() {
       subtotal,
     });
     setAdded(true);
-    toast({ title: `${item.name} ditambahkan ke keranjang pesanan!` });
+    toast({ title: t("jasaDetail.toastAddedToCart").replace('{name}', item.name) });
   }
 
   function requireAuthThenBook() {
@@ -750,7 +767,7 @@ export default function JasaDetail() {
       badgeText:   "#1e40af",
       glowA:       "#3B82F6",
       glowB:       "#60A5FA",
-      image:       "https://images.unsplash.com/photo-1578575437130-527eed3abbec?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-udara.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(219,234,254,0.72) 100%)",
       tintOverlay: "rgba(59,130,246,0.07)",
       features:    ["Air Freight", "Sea FCL / LCL", "Door-to-Door", "Multi-Modal"],
@@ -764,7 +781,7 @@ export default function JasaDetail() {
       badgeText:   "#065F46",
       glowA:       "#10B981",
       glowB:       "#34D399",
-      image:       "https://images.unsplash.com/photo-1605745341112-85968b19335b?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/customs-clearance.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(167,243,208,0.72) 100%)",
       tintOverlay: "rgba(16,185,129,0.06)",
       features:    ["Import & Export", "PIB / PEB", "HS Code Konsultasi", "PPJK Resmi"],
@@ -778,7 +795,7 @@ export default function JasaDetail() {
       badgeText:   "#5B21B6",
       glowA:       "#8B5CF6",
       glowB:       "#A78BFA",
-      image:       "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(221,214,254,0.72) 100%)",
       tintOverlay: "rgba(109,40,217,0.06)",
       features:    ["Origin Handling", "Destination Handling", "Kargo Berbahaya", "Tim Profesional"],
@@ -792,7 +809,7 @@ export default function JasaDetail() {
       badgeText:   "#0F766E",
       glowA:       "#14B8A6",
       glowB:       "#2DD4BF",
-      image:       "https://images.unsplash.com/photo-1553413077-190dd305871c?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/biaya-storage.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(153,246,228,0.72) 100%)",
       tintOverlay: "rgba(13,148,136,0.06)",
       features:    ["Gudang Umum", "Bonded Warehouse", "Cold Storage", "Sewa Fleksibel"],
@@ -806,7 +823,7 @@ export default function JasaDetail() {
       badgeText:   "#92400E",
       glowA:       "#F59E0B",
       glowB:       "#FCD34D",
-      image:       "https://images.unsplash.com/photo-1601584115197-04ecc0da31d7?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/trucking-container.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(253,230,138,0.72) 100%)",
       tintOverlay: "rgba(245,158,11,0.07)",
       features:    ["5 Jenis Armada", "Kalkulasi Otomatis", "Harga Transparan", "Berlisensi & Profesional"],
@@ -820,7 +837,7 @@ export default function JasaDetail() {
       badgeText:   "#3730A3",
       glowA:       "#6366F1",
       glowB:       "#818CF8",
-      image:       "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(199,210,254,0.72) 100%)",
       tintOverlay: "rgba(99,102,241,0.06)",
       features:    ["Bill of Lading", "Air Waybill", "COO / SKA", "Packing List"],
@@ -834,7 +851,7 @@ export default function JasaDetail() {
       badgeText:   "#9F1239",
       glowA:       "#F43F5E",
       glowB:       "#FB7185",
-      image:       "https://images.unsplash.com/photo-1516733968668-dbdce39c4651?w=1600&q=90&auto=format&fit=crop",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(253,164,175,0.72) 100%)",
       tintOverlay: "rgba(244,63,94,0.06)",
       features:    ["Asuransi Kargo", "Surveyor", "Perizinan", "BPOM / SNI"],
@@ -1029,7 +1046,7 @@ export default function JasaDetail() {
               }}
             >
               <ArrowLeft className="h-3.5 w-3.5" />
-              Kembali
+              {t("jasa.backBtn")}
             </button>
 
             {/* Breadcrumb */}
@@ -1038,14 +1055,14 @@ export default function JasaDetail() {
                 href="/"
                 className="text-[11.5px] font-medium text-slate-400 hover:text-slate-600 transition-colors duration-150"
               >
-                CST Logistics
+                B2B Marketplace and Logistic
               </Link>
               <ChevronRight className="h-3 w-3 text-slate-300 mx-1 flex-shrink-0" />
               <Link
                 href="/jasa"
                 className="text-[11.5px] font-medium text-slate-400 hover:text-slate-600 transition-colors duration-150"
               >
-                Katalog Jasa
+                {t("jasa.catalogLabel")}
               </Link>
               <ChevronRight className="h-3 w-3 text-slate-300 mx-1 flex-shrink-0" />
               <span
@@ -1076,7 +1093,7 @@ export default function JasaDetail() {
               }}
             >
               {ct === "trucking" ? (
-                <img src={cstLogo} alt="CST Logistic" className="h-10 w-auto max-w-[90px] object-contain" />
+                <img src={staticAsset("images/logo-baru.png")} alt="CST Logistic" className="h-10 w-auto max-w-[90px] object-contain" />
               ) : (
                 <div style={{ color: hero.accentColor, filter: `drop-shadow(0 4px 12px ${hero.accentColor}40)` }}>
                   <IconComp className="h-10 w-10" />
@@ -1180,8 +1197,8 @@ export default function JasaDetail() {
                       <Calculator className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <h2 className="text-[18px] font-bold text-slate-900 leading-tight tracking-tight">Kalkulator Estimasi Biaya</h2>
-                      <p className="text-[13px] text-slate-400 mt-0.5">Isi parameter layanan untuk mendapatkan estimasi harga</p>
+                      <h2 className="text-[18px] font-bold text-slate-900 leading-tight tracking-tight">{t("jasaDetail.calcTitle")}</h2>
+                      <p className="text-[13px] text-slate-400 mt-0.5">{t("jasaDetail.calcSubtitle")}</p>
                     </div>
                   </div>
                 </div>
@@ -1191,7 +1208,7 @@ export default function JasaDetail() {
                 {ct === "air_freight" && <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Origin Airport</Label>
+                      <Label>{t("jasaDetail.originAirport")}</Label>
                       <AirportCombobox
                         value={state.originAirport || ""}
                         onChange={(v) => set("originAirport", v)}
@@ -1199,7 +1216,7 @@ export default function JasaDetail() {
                       />
                     </div>
                     <div>
-                      <Label>Destination Airport</Label>
+                      <Label>{t("jasaDetail.destAirport")}</Label>
                       <AirportCombobox
                         value={state.destinationAirport || ""}
                         onChange={(v) => set("destinationAirport", v)}
@@ -1217,7 +1234,7 @@ export default function JasaDetail() {
                       return (
                         <div key={row.id} className="border border-border rounded-xl p-4 space-y-3 bg-gray-50/50 relative">
                           <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-foreground">Quantity #{idx + 1}</p>
+                            <p className="text-sm font-semibold text-foreground">{t("jasaDetail.quantityLabel")} #{idx + 1}</p>
                             {airRows.length > 1 && (
                               <button
                                 type="button"
@@ -1230,25 +1247,25 @@ export default function JasaDetail() {
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div>
-                              <Label className="text-xs">Gross Weight (kg)</Label>
+                              <Label className="text-xs">{t("jasaDetail.grossWeightKg")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.grossWeight} onChange={e => setAirRow(row.id, "grossWeight", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Quantity (pcs)</Label>
+                              <Label className="text-xs">{t("jasaDetail.quantityPcs")}</Label>
                               <Input type="number" placeholder="1" className="mt-1 h-9" value={row.quantity} onChange={e => setAirRow(row.id, "quantity", e.target.value)} />
                             </div>
                           </div>
                           <div className="grid grid-cols-3 gap-3">
                             <div>
-                              <Label className="text-xs">Length (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.lengthCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.length} onChange={e => setAirRow(row.id, "length", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Width (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.widthCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.width} onChange={e => setAirRow(row.id, "width", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Height (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.heightCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.height} onChange={e => setAirRow(row.id, "height", e.target.value)} />
                             </div>
                           </div>
@@ -1271,60 +1288,60 @@ export default function JasaDetail() {
                     onClick={addAirRow}
                   >
                     <Plus className="h-4 w-4" />
-                    Tambah Quantity Lain
+                    {t("jasaDetail.airAddQty")}
                   </Button>
 
-                  <div><Label>Rate per Kg (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerKg || ""} onChange={e => set("ratePerKg", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.ratePerKg")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerKg || ""} onChange={e => set("ratePerKg", e.target.value)} /></div>
 
                   {subtotal > 0 && (
                     <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm space-y-1.5">
-                      <p className="text-blue-700 font-medium">Ringkasan Kalkulasi ({airRows.length} jenis quantity):</p>
-                      <p className="text-muted-foreground">Total Vol. Weight: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowVolumeWeight(r), 0).toFixed(2)} kg</span></p>
-                      <p className="text-muted-foreground">Total Chargeable Weight: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowChargeableWeight(r), 0).toFixed(2)} kg</span></p>
+                      <p className="text-blue-700 font-medium">{t("jasaDetail.airCalcSummary").replace('{count}', String(airRows.length))}</p>
+                      <p className="text-muted-foreground">{t("jasaDetail.totalVolWeight")}: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowVolumeWeight(r), 0).toFixed(2)} kg</span></p>
+                      <p className="text-muted-foreground">{t("jasaDetail.totalChargeableWeight")}: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowChargeableWeight(r), 0).toFixed(2)} kg</span></p>
                     </div>
                   )}
                 </>}
 
                 {ct === "sea_fcl" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Origin Port</Label><Input placeholder="IDJKT" className="mt-1" value={state.originPort || ""} onChange={e => set("originPort", e.target.value)} /></div>
-                    <div><Label>Destination Port</Label><Input placeholder="SGSIN" className="mt-1" value={state.destinationPort || ""} onChange={e => set("destinationPort", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.originPort")}</Label><Input placeholder="IDJKT" className="mt-1" value={state.originPort || ""} onChange={e => set("originPort", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.destPort")}</Label><Input placeholder="SGSIN" className="mt-1" value={state.destinationPort || ""} onChange={e => set("destinationPort", e.target.value)} /></div>
                   </div>
-                  <div><Label>Container Type</Label>
-                    <Select value={state.containerType || ""} onValueChange={v => set("containerType", v)}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih container" /></SelectTrigger>
+                  <div><Label>{t("jasaDetail.containerType")}</Label>
+                    <Select value={state.containerType || undefined} onValueChange={v => set("containerType", v)}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder={t("jasaDetail.selectContainer")} /></SelectTrigger>
                       <SelectContent>{["20 ft", "40 ft", "40 ft (High Cube)", "20 ft Suspensi", "40 ft Suspensi"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Freight Rate (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.freightRate || ""} onChange={e => set("freightRate", e.target.value)} /></div>
-                    <div><Label>Handling Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.handlingFee || ""} onChange={e => set("handlingFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.freightRate")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.freightRate || ""} onChange={e => set("freightRate", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.handlingFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.handlingFee || ""} onChange={e => set("handlingFee", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "sea_lcl" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>CBM</Label><Input type="number" placeholder="0" className="mt-1" value={state.cbm || ""} onChange={e => set("cbm", e.target.value)} /></div>
-                    <div><Label>Weight (kg)</Label><Input type="number" placeholder="0" className="mt-1" value={state.weight || ""} onChange={e => set("weight", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.cbm")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.cbm || ""} onChange={e => set("cbm", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.weightKg")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.weight || ""} onChange={e => set("weight", e.target.value)} /></div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Rate per CBM (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerCbm || ""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
-                    <div><Label>Minimum Charge (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.minimumCharge || ""} onChange={e => set("minimumCharge", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.ratePerCbm")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerCbm || ""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.minimumCharge")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.minimumCharge || ""} onChange={e => set("minimumCharge", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "customs" && <>
-                  <div><Label>Shipment Type</Label>
-                    <Select value={state.shipmentType || ""} onValueChange={v => set("shipmentType", v)}>
+                  <div><Label>{t("jasaDetail.shipmentType")}</Label>
+                    <Select value={state.shipmentType || undefined} onValueChange={v => set("shipmentType", v)}>
                       <SelectTrigger className="mt-1"><SelectValue placeholder="Import / Export" /></SelectTrigger>
                       <SelectContent><SelectItem value="Import">Import</SelectItem><SelectItem value="Export">Export</SelectItem></SelectContent>
                     </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Customs Service Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.customsFee || ""} onChange={e => set("customsFee", e.target.value)} /></div>
-                    <div><Label>Document Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.documentFee || ""} onChange={e => set("documentFee", e.target.value)} /></div>
-                    <div><Label>PIB/PEB Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.pibPebFee || ""} onChange={e => set("pibPebFee", e.target.value)} /></div>
-                    <div><Label>Additional Permit Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.permitFee || ""} onChange={e => set("permitFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.customsFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.customsFee || ""} onChange={e => set("customsFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.documentFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.documentFee || ""} onChange={e => set("documentFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.pibPebFee")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.pibPebFee || ""} onChange={e => set("pibPebFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.permitFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.permitFee || ""} onChange={e => set("permitFee", e.target.value)} /></div>
                   </div>
                 </>}
 
@@ -1334,8 +1351,8 @@ export default function JasaDetail() {
                       {/* ── Stepper (2 langkah) ── */}
                       <div className="flex items-center px-3 pt-4 pb-3">
                         {([
-                          {n:1,l:"Detail Pengiriman"},
-                          {n:2,l:"Armada & Konfirmasi"},
+                          {n:1,l:t("jasaDetail.truckStep1Label")},
+                          {n:2,l:t("jasaDetail.truckStep2Label")},
                         ]).map((s, i, arr) => (
                           <div key={s.n} className="flex items-center flex-1 min-w-0">
                             <div className={`flex items-center gap-1 ${truckingStep >= s.n ? "text-white" : "text-blue-300/70"}`}>
@@ -1356,7 +1373,7 @@ export default function JasaDetail() {
                           {/* ─ Jadwal ─ */}
                           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
                             <div className="px-4 pt-3 pb-1">
-                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">Jadwal Pickup</p>
+                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">{t("jasaDetail.scheduleLabel")}</p>
                             </div>
                             <div className="px-4 pb-4 space-y-3">
                               <div className="flex items-center gap-3 py-2">
@@ -1367,26 +1384,26 @@ export default function JasaDetail() {
                                   <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${orderNow ? "translate-x-5" : "translate-x-0"}`}/>
                                 </button>
                                 <div>
-                                  <p className="text-sm font-semibold text-gray-800">Pesan Sekarang</p>
-                                  <p className="text-[11px] text-gray-400">Pickup dijadwalkan hari ini</p>
+                                  <p className="text-sm font-semibold text-gray-800">{t("jasaDetail.orderNowLabel")}</p>
+                                  <p className="text-[11px] text-gray-400">{t("jasaDetail.orderNowDesc")}</p>
                                 </div>
-                                {orderNow && <span className="ml-auto text-[11px] font-medium text-[#0B5CAD] bg-blue-50 px-2 py-0.5 rounded-full">Aktif</span>}
+                                {orderNow && <span className="ml-auto text-[11px] font-medium text-[#0B5CAD] bg-blue-50 px-2 py-0.5 rounded-full">{t("jasaDetail.activeLabel")}</span>}
                               </div>
                               {!orderNow ? (
                                 <div className="grid grid-cols-2 gap-3">
                                   <div>
-                                    <label className="text-xs text-gray-500 font-medium block mb-1">Tanggal <span className="text-red-500">*</span></label>
+                                    <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.dateLabel")} <span className="text-red-500">*</span></label>
                                     <Input type="date" min={new Date().toISOString().split("T")[0]} value={state.pickupDate || ""} onChange={e => set("pickupDate", e.target.value)}/>
                                   </div>
                                   <div>
-                                    <label className="text-xs text-gray-500 font-medium block mb-1">Jam <span className="text-red-500">*</span></label>
+                                    <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.timeLabel")} <span className="text-red-500">*</span></label>
                                     <Input type="time" value={state.pickupTime || ""} onChange={e => set("pickupTime", e.target.value)}/>
                                   </div>
                                 </div>
                               ) : (
                                 state.pickupDate && (
                                   <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-[#0B5CAD] font-medium">
-                                    Jadwal: {state.pickupDate} pukul {state.pickupTime}
+                                    {t("jasaDetail.scheduleDisplay").replace('{date}', state.pickupDate || '').replace('{time}', state.pickupTime || '')}
                                   </div>
                                 )
                               )}
@@ -1396,13 +1413,13 @@ export default function JasaDetail() {
                           {/* ─ Pengirim ─ */}
                           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
                             <div className="px-4 pt-3 pb-1">
-                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">Data Pengirim</p>
+                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">{t("jasaDetail.senderLabel")}</p>
                             </div>
                             <div className="px-4 pb-4 pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
-                                <label className="text-xs text-gray-500 font-medium block mb-1">Nama Pengirim <span className="text-red-500">*</span></label>
+                                <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.senderNameLabel")} <span className="text-red-500">*</span></label>
                                 <Input
-                                  placeholder="Nama lengkap pengirim"
+                                  placeholder={t("jasaDetail.senderNamePlaceholder")}
                                   value={senderName}
                                   onChange={e => setSenderName(e.target.value)}
                                   className="h-9"
@@ -1410,7 +1427,7 @@ export default function JasaDetail() {
                                 />
                               </div>
                               <div>
-                                <label className="text-xs text-gray-500 font-medium block mb-1">No. Telepon Pengirim <span className="text-red-500">*</span></label>
+                                <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.senderPhoneLabel")} <span className="text-red-500">*</span></label>
                                 <Input
                                   type="tel"
                                   placeholder="+62..."
@@ -1426,7 +1443,7 @@ export default function JasaDetail() {
                           {/* ─ Rute ─ */}
                           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
                             <div className="px-4 pt-3 pb-1">
-                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">Rute Pengiriman <span className="text-red-500">*</span></p>
+                              <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">{t("jasaDetail.routeLabel")} <span className="text-red-500">*</span></p>
                             </div>
                             <div className="flex items-stretch">
                               <div className="flex flex-col items-center pt-4 pb-4 pl-4 pr-2 flex-shrink-0">
@@ -1442,23 +1459,23 @@ export default function JasaDetail() {
                               </div>
                               <div className="flex-1 min-w-0 divide-y divide-gray-100">
                                 <div className="py-2 pr-3">
-                                  <LocationCombobox value={state.pickupCity || ""} onChange={handlePickupChange} placeholder="Kota asal..." countryCode="id"/>
+                                  <LocationCombobox value={state.pickupCity || ""} onChange={handlePickupChange} placeholder={t("jasaDetail.originPlaceholder")} countryCode="id"/>
                                 </div>
                                 {truckingStops.map((stop, i) => (
                                   <div key={stop.id} className="py-2 pr-3 space-y-2">
                                     <div className="flex items-center gap-1">
                                       <div className="flex-1 min-w-0">
-                                        <LocationCombobox value={stop.city} onChange={(city, geo) => updateTruckingStop(stop.id, city, geo)} placeholder={`Kota stop ${i + 1}...`} countryCode="id"/>
+                                        <LocationCombobox value={stop.city} onChange={(city, geo) => updateTruckingStop(stop.id, city, geo)} placeholder={t("jasaDetail.stopCityPlaceholder").replace('{n}', String(i + 1))} countryCode="id"/>
                                       </div>
-                                      <button type="button" onClick={() => removeTruckingStop(stop.id)} className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 hover:bg-red-100 hover:text-red-500 text-gray-400 flex items-center justify-center transition-colors" aria-label="Hapus stop">
+                                      <button type="button" onClick={() => removeTruckingStop(stop.id)} className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 hover:bg-red-100 hover:text-red-500 text-gray-400 flex items-center justify-center transition-colors" aria-label={t("jasaDetail.removeStop")}>
                                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                                       </button>
                                     </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                       <div>
-                                        <label className="text-xs text-gray-500 font-medium block mb-1">Nama Penerima Stop {i + 1} <span className="text-red-500">*</span></label>
+                                        <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.stopReceiverNameLabel").replace('{n}', String(i + 1))} <span className="text-red-500">*</span></label>
                                         <Input
-                                          placeholder="Nama penerima"
+                                          placeholder={t("jasaDetail.receiverNamePlaceholder")}
                                           value={stop.receiverName}
                                           onChange={e => updateTruckingStopContact(stop.id, "receiverName", e.target.value)}
                                           className="h-8 text-sm"
@@ -1466,7 +1483,7 @@ export default function JasaDetail() {
                                         />
                                       </div>
                                       <div>
-                                        <label className="text-xs text-gray-500 font-medium block mb-1">No. Telepon Penerima Stop {i + 1} <span className="text-red-500">*</span></label>
+                                        <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.stopReceiverPhoneLabel").replace('{n}', String(i + 1))} <span className="text-red-500">*</span></label>
                                         <Input
                                           type="tel"
                                           placeholder="+62..."
@@ -1480,12 +1497,12 @@ export default function JasaDetail() {
                                   </div>
                                 ))}
                                 <div className="py-2 pr-3 space-y-2">
-                                  <LocationCombobox value={state.destCity || ""} onChange={handleDestChange} placeholder="Kota tujuan..." countryCode="id"/>
+                                  <LocationCombobox value={state.destCity || ""} onChange={handleDestChange} placeholder={t("jasaDetail.destPlaceholder")} countryCode="id"/>
                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                                     <div>
-                                      <label className="text-xs text-gray-500 font-medium block mb-1">Nama Penerima <span className="text-red-500">*</span></label>
+                                      <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.receiverNameLabel")} <span className="text-red-500">*</span></label>
                                       <Input
-                                        placeholder="Nama penerima"
+                                        placeholder={t("jasaDetail.receiverNamePlaceholder")}
                                         value={receiverName}
                                         onChange={e => setReceiverName(e.target.value)}
                                         className="h-8 text-sm"
@@ -1493,7 +1510,7 @@ export default function JasaDetail() {
                                       />
                                     </div>
                                     <div>
-                                      <label className="text-xs text-gray-500 font-medium block mb-1">No. Telepon Penerima <span className="text-red-500">*</span></label>
+                                      <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.receiverPhoneLabel")} <span className="text-red-500">*</span></label>
                                       <Input
                                         type="tel"
                                         placeholder="+62..."
@@ -1509,7 +1526,7 @@ export default function JasaDetail() {
                             </div>
                             <div className="border-t border-gray-100 px-4 py-2.5">
                               <button type="button" onClick={addTruckingStop} className="flex items-center gap-1.5 text-[#0B5CAD] text-sm font-semibold hover:text-[#083B70] transition-colors">
-                                <Plus className="h-3.5 w-3.5"/> Add Stop
+                                <Plus className="h-3.5 w-3.5"/> {t("jasaDetail.addStop")}
                               </button>
                             </div>
                             <div className="border-t border-gray-100 px-4 py-3 flex items-start gap-3">
@@ -1519,15 +1536,15 @@ export default function JasaDetail() {
                                 <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${optimizeRoute ? "translate-x-5" : "translate-x-0"}`}/>
                               </button>
                               <div>
-                                <p className="text-xs font-semibold text-gray-800">Optimize Route</p>
-                                <p className="text-[11px] text-gray-400 leading-snug mt-0.5">Mengurutkan stop agar perjalanan lebih efisien.</p>
+                                <p className="text-xs font-semibold text-gray-800">{t("jasaDetail.optimizeRoute")}</p>
+                                <p className="text-[11px] text-gray-400 leading-snug mt-0.5">{t("jasaDetail.optimizeRouteDesc")}</p>
                               </div>
                             </div>
                             {(state.distance || calcDist) && (
                               <div className="border-t border-gray-100 px-4 py-2.5 flex items-center justify-between">
-                                <span className="text-xs text-gray-500 font-medium">Estimasi Jarak</span>
+                                <span className="text-xs text-gray-500 font-medium">{t("jasaDetail.distanceEstLabel")}</span>
                                 {calcDist
-                                  ? <span className="text-[#0B5CAD] text-xs flex items-center gap-1"><svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Menghitung...</span>
+                                  ? <span className="text-[#0B5CAD] text-xs flex items-center gap-1"><svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>{t("jasaDetail.calculatingLabel")}</span>
                                   : <span className="text-[#0B5CAD] font-bold text-sm">{state.distance} km</span>
                                 }
                               </div>
@@ -1536,29 +1553,34 @@ export default function JasaDetail() {
 
                           {/* ─ Barang ─ */}
                           <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
-                            <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">Informasi Barang</p>
+                            <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">{t("jasaDetail.cargoLabel")}</p>
                             <div>
-                              <p className="text-xs text-gray-600 font-medium mb-1.5">Kategori Barang <span className="text-red-500">*</span></p>
+                              <p className="text-xs text-gray-600 font-medium mb-1.5">{t("jasaDetail.cargoCategoryLabel")} <span className="text-red-500">*</span></p>
                               <div className="grid grid-cols-2 gap-2">
-                                {["Umum", "Mudah Pecah Belah", "Dangerous Goods (DG)", "Perlu Penanganan Khusus"].map(cat => (
-                                  <button key={cat} type="button" onClick={() => setCargoCategory(cat)}
-                                    className={`py-2 px-3 rounded-lg text-xs font-medium border-2 transition-all text-left leading-snug ${cargoCategory === cat ? "border-[#0B5CAD] bg-blue-50 text-[#0B5CAD]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}
-                                  >{cat}</button>
+                                {([
+                                  { key: "Umum", label: t("jasaDetail.cargoCatGeneral") },
+                                  { key: "Mudah Pecah Belah", label: t("jasaDetail.cargoCatFragile") },
+                                  { key: "Dangerous Goods (DG)", label: t("jasaDetail.cargoCatDG") },
+                                  { key: "Perlu Penanganan Khusus", label: t("jasaDetail.cargoCatSpecial") },
+                                ] as { key: string; label: string }[]).map(({ key, label }) => (
+                                  <button key={key} type="button" onClick={() => setCargoCategory(key)}
+                                    className={`py-2 px-3 rounded-lg text-xs font-medium border-2 transition-all text-left leading-snug ${cargoCategory === key ? "border-[#0B5CAD] bg-blue-50 text-[#0B5CAD]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}
+                                  >{label}</button>
                                 ))}
                               </div>
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <label className="text-xs text-gray-500 font-medium block mb-1">Jumlah Koli <span className="text-red-500">*</span></label>
+                                <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.koliQtyLabel")} <span className="text-red-500">*</span></label>
                                 <Input type="number" min="1" placeholder="0" value={koliQty} onChange={e => setKoliQty(e.target.value)}/>
                               </div>
                               <div>
-                                <label className="text-xs text-gray-500 font-medium block mb-1">Gross Weight (kg) <span className="text-red-500">*</span></label>
+                                <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.grossWeightKg")} <span className="text-red-500">*</span></label>
                                 <Input type="number" min="0.1" step="0.1" placeholder="0" value={grossWeight} onChange={e => setGrossWeight(e.target.value)}/>
                               </div>
                             </div>
                             <div>
-                              <p className="text-xs text-gray-600 font-medium mb-1.5">Dimensi &amp; Kubikasi</p>
+                              <p className="text-xs text-gray-600 font-medium mb-1.5">{t("jasaDetail.dimensionsLabel")}</p>
                               <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1.5rem] gap-1.5 text-[10px] text-gray-400 font-medium mb-1.5">
                                 <span>P (cm)</span><span>L (cm)</span><span>T (cm)</span><span>Koli</span><span/>
                               </div>
@@ -1577,20 +1599,20 @@ export default function JasaDetail() {
                                 ))}
                               </div>
                               <button type="button" onClick={() => setDimensions(prev => [...prev, newDimRow()])} className="mt-2 flex items-center gap-1.5 text-[#0B5CAD] text-xs font-semibold hover:text-[#083B70] transition-colors">
-                                <Plus className="h-3.5 w-3.5"/> Tambah Dimensi
+                                <Plus className="h-3.5 w-3.5"/> {t("jasaDetail.addDimension")}
                               </button>
                               {calcTotalVolumeM3(dimensions) > 0 && (
                                 <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 flex items-center justify-between">
-                                  <span className="text-xs text-gray-600 font-medium">Total Volume / Kubikasi</span>
+                                  <span className="text-xs text-gray-600 font-medium">{t("jasaDetail.totalVolumeLabel")}</span>
                                   <span className="text-sm font-bold text-[#0B5CAD]">{calcTotalVolumeM3(dimensions).toFixed(3)} M³</span>
                                 </div>
                               )}
                             </div>
                             <div>
-                              <label className="text-xs text-gray-600 font-medium block mb-1.5">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+                              <label className="text-xs text-gray-600 font-medium block mb-1.5">{t("jasaDetail.notesOptional")}</label>
                               <textarea
                                 rows={2}
-                                placeholder="Catatan tambahan tentang barang, penanganan, atau instruksi khusus..."
+                                placeholder={t("jasaDetail.notesPlaceholder")}
                                 value={truckingNotes}
                                 onChange={e => setTruckingNotes(e.target.value)}
                                 className="w-full rounded-lg border border-gray-200 text-xs px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-[#0B5CAD]/30 focus:border-[#0B5CAD] placeholder:text-gray-400"
@@ -1598,13 +1620,13 @@ export default function JasaDetail() {
                             </div>
                             <div>
                               <div className="flex items-baseline justify-between mb-1.5">
-                                <p className="text-xs text-gray-600 font-medium">Upload Foto Barang <span className="text-red-500">*</span></p>
-                                <span className="text-[11px] text-gray-400">{cargoPhotoUrls.length}/5 foto</span>
+                                <p className="text-xs text-gray-600 font-medium">{t("jasaDetail.uploadPhotoLabel")} <span className="text-red-500">*</span></p>
+                                <span className="text-[11px] text-gray-400">{t("jasaDetail.photoCount").replace('{n}', String(cargoPhotoUrls.length))}</span>
                               </div>
                               {cargoPhotoUrls.length < 5 && (
                                 <label className="flex items-center gap-2.5 border-2 border-dashed border-gray-200 rounded-lg px-4 py-3 cursor-pointer hover:border-[#0B5CAD] hover:bg-blue-50 transition-colors">
                                   <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>
-                                  <span className="text-xs text-gray-500">Pilih foto (jpg, jpeg, png, webp) · maks. 5 foto</span>
+                                  <span className="text-xs text-gray-500">{t("jasaDetail.photoPickerHint")}</span>
                                   <input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" multiple className="hidden" onChange={handlePhotoUpload}/>
                                 </label>
                               )}
@@ -1624,10 +1646,10 @@ export default function JasaDetail() {
 
                           {/* ─ Pembayaran (wajib) ─ */}
                           <div className="bg-white rounded-xl shadow-sm p-4 space-y-3">
-                            <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">Jenis Pembayaran <span className="text-red-500">*</span></p>
+                            <p className="text-xs font-bold text-[#0B5CAD] uppercase tracking-wide">{t("jasaDetail.paymentLabel")} <span className="text-red-500">*</span></p>
                             <div className="grid grid-cols-2 gap-2">
                               {(["transfer", "gateway"] as const).map(type => {
-                                const lb = { transfer: { title: "Transfer", desc: "Bayar via bank transfer" }, gateway: { title: "Payment Gateway", desc: "Bayar via gateway online" } };
+                                const lb = { transfer: { title: "Transfer", desc: t("jasaDetail.transferDesc") }, gateway: { title: "Payment Gateway", desc: t("jasaDetail.gatewayDesc") } };
                                 const sel = truckingPayment === type;
                                 return (
                                   <button key={type} type="button"
@@ -1642,10 +1664,10 @@ export default function JasaDetail() {
                             </div>
                             {truckingPayment === "transfer" && (
                               <div className="rounded-xl border border-[#0B5CAD]/20 bg-blue-50 p-3 space-y-2">
-                                <p className="text-[11px] font-semibold text-[#0B5CAD]">Pilih Jenis Transfer</p>
+                                <p className="text-[11px] font-semibold text-[#0B5CAD]">{t("jasaDetail.selectTransferLabel")}</p>
                                 <div className="grid grid-cols-3 gap-2">
                                   {(["full", "termin", "dp"] as const).map(term => {
-                                    const tl = { full: { title: "Full Payment", desc: "Bayar penuh" }, termin: { title: "Termin", desc: "Cicil berkala" }, dp: { title: "DP / Advance", desc: "Uang muka" } };
+                                    const tl = { full: { title: "Full Payment", desc: t("jasaDetail.fullPayDesc") }, termin: { title: "Termin", desc: t("jasaDetail.terminDesc") }, dp: { title: "DP / Advance", desc: t("jasaDetail.dpDesc") } };
                                     const sel = truckingTransferTerm === term;
                                     return (
                                       <button key={term} type="button"
@@ -1660,7 +1682,7 @@ export default function JasaDetail() {
                                 </div>
                                 {truckingTransferTerm === "termin" && (
                                   <div className="pt-1 space-y-1.5">
-                                    <p className="text-[11px] font-medium text-[#0B5CAD]/80">Jangka Waktu Termin</p>
+                                    <p className="text-[11px] font-medium text-[#0B5CAD]/80">{t("jasaDetail.terminPeriodLabel")}</p>
                                     <div className="grid grid-cols-4 gap-1.5">
                                       {(["net7","net14","net30","net60"] as const).map(t => (
                                         <button key={t} type="button" onClick={() => setTruckingPayTerm(truckingPayTerm === t ? "" : t)}
@@ -1672,10 +1694,10 @@ export default function JasaDetail() {
                                 )}
                                 {truckingTransferTerm === "dp" && (
                                   <div className="pt-1 space-y-1.5">
-                                    <p className="text-[11px] font-medium text-[#0B5CAD]/80">Pelunasan Berikutnya</p>
+                                    <p className="text-[11px] font-medium text-[#0B5CAD]/80">{t("jasaDetail.nextPaymentLabel")}</p>
                                     <div className="grid grid-cols-2 gap-1.5">
                                       {(["lunas-delivery","lunas-net30","lunas-net60","cicil"] as const).map(opt => {
-                                        const dl: Record<string,string> = { "lunas-delivery":"Setelah Pengiriman","lunas-net30":"Net 30 Hari","lunas-net60":"Net 60 Hari","cicil":"Cicilan Bertahap" };
+                                        const dl: Record<string,string> = { "lunas-delivery":t("jasaDetail.afterDelivery"),"lunas-net30":t("jasaDetail.net30Days"),"lunas-net60":t("jasaDetail.net60Days"),"cicil":t("jasaDetail.installments") };
                                         return (
                                           <button key={opt} type="button" onClick={() => setTruckingDpNext(truckingDpNext === opt ? "" : opt)}
                                             className={`rounded-lg border-2 px-2 py-2 text-[11px] font-semibold text-center transition-all ${truckingDpNext === opt ? "border-[#0B5CAD] bg-[#0B5CAD] text-white" : "border-gray-200 bg-white text-gray-700 hover:border-[#0B5CAD]/50"}`}
@@ -1702,13 +1724,13 @@ export default function JasaDetail() {
 
                           {/* Mini summary */}
                           <div className="bg-white/10 rounded-xl px-4 py-3 space-y-1.5 text-xs text-white/90">
-                            <p className="font-bold text-white text-[11px] uppercase tracking-wide mb-2">Ringkasan Pesanan</p>
+                            <p className="font-bold text-white text-[11px] uppercase tracking-wide mb-2">{t("jasaDetail.orderSummaryLabel")}</p>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Jadwal</span>
-                              <span className="font-medium">{orderNow ? "Sekarang" : `${state.pickupDate || "—"}${state.pickupTime ? ` · ${state.pickupTime}` : ""}`}</span>
+                              <span className="text-white/70">{t("jasaDetail.summarySchedule")}</span>
+                              <span className="font-medium">{orderNow ? t("jasaDetail.summaryNow") : `${state.pickupDate || "—"}${state.pickupTime ? ` · ${state.pickupTime}` : ""}`}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70 flex-shrink-0">Rute</span>
+                              <span className="text-white/70 flex-shrink-0">{t("jasaDetail.summaryRoute")}</span>
                               <span className="font-medium text-right text-[11px] leading-snug">
                                 {(state.pickupCity || "").split(",")[0]}
                                 {truckingStops.filter(s => s.city).map(s => ` → ${s.city.split(",")[0]}`).join("")}
@@ -1717,32 +1739,32 @@ export default function JasaDetail() {
                             </div>
                             {state.distance && (
                               <div className="flex justify-between gap-2">
-                                <span className="text-white/70">Jarak</span>
+                                <span className="text-white/70">{t("jasaDetail.summaryDistance")}</span>
                                 <span className="font-bold text-white">{state.distance} km</span>
                               </div>
                             )}
                             {cargoCategory && (
                               <div className="flex justify-between gap-2">
-                                <span className="text-white/70 flex-shrink-0">Kategori</span>
+                                <span className="text-white/70 flex-shrink-0">{t("jasaDetail.summaryCategory")}</span>
                                 <span className="font-medium text-right text-[11px]">{cargoCategory}</span>
                               </div>
                             )}
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Muatan</span>
+                              <span className="text-white/70">{t("jasaDetail.summaryCargo")}</span>
                               <span className="font-medium">{koliQty} koli · {grossWeight} kg{calcTotalVolumeM3(dimensions) > 0 ? ` · ${calcTotalVolumeM3(dimensions).toFixed(2)} m³` : ""}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Foto</span>
-                              <span className="font-medium">{cargoPhotoUrls.length} foto terupload</span>
+                              <span className="text-white/70">{t("jasaDetail.summaryPhoto")}</span>
+                              <span className="font-medium">{t("jasaDetail.photoUploaded").replace('{n}', String(cargoPhotoUrls.length))}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Pembayaran</span>
+                              <span className="text-white/70">{t("jasaDetail.summaryPayment")}</span>
                               <span className="font-medium">
                                 {truckingPayment === "gateway" ? "Payment Gateway"
-                                  : truckingTransferTerm === "full" ? "Transfer · Full Payment"
-                                  : truckingTransferTerm === "termin" ? `Transfer · Termin ${truckingPayTerm || ""}`
-                                  : truckingTransferTerm === "dp" ? "Transfer · DP/Advance"
-                                  : "Transfer"}
+                                  : truckingTransferTerm === "full" ? t("jasaDetail.payTransferFull")
+                                  : truckingTransferTerm === "termin" ? t("jasaDetail.payTransferTermin").replace('{term}', truckingPayTerm || "")
+                                  : truckingTransferTerm === "dp" ? t("jasaDetail.payTransferDp")
+                                  : t("jasaDetail.payTransfer")}
                               </span>
                             </div>
                           </div>
@@ -1751,7 +1773,7 @@ export default function JasaDetail() {
                           {(totalWgt > 0 || totalVol > 0) && (
                             <div className="bg-white/10 rounded-xl px-3 py-2.5 flex items-center gap-3 text-xs text-white/90">
                               <svg className="w-4 h-4 flex-shrink-0 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10"/></svg>
-                              <span>Muatan: <span className="font-semibold text-white">{totalWgt > 0 ? `${totalWgt} kg` : "—"}</span> · <span className="font-semibold text-white">{totalVol > 0 ? `${totalVol.toFixed(2)} m³` : "—"}</span></span>
+                              <span>{t("jasaDetail.summaryCargo")}: <span className="font-semibold text-white">{totalWgt > 0 ? `${totalWgt} kg` : "—"}</span> · <span className="font-semibold text-white">{totalVol > 0 ? `${totalVol.toFixed(2)} m³` : "—"}</span></span>
                             </div>
                           )}
 
@@ -1778,8 +1800,8 @@ export default function JasaDetail() {
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-center gap-1.5 flex-wrap">
                                         <span className={`text-sm font-bold ${isSelected ? "text-[#0B5CAD]" : "text-gray-800"}`}>{v.label}</span>
-                                        {isRecommended && !disabled && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold border border-green-200">Rekomendasi</span>}
-                                        {disabled && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-500 font-semibold border border-red-200">Tidak Cocok</span>}
+                                        {isRecommended && !disabled && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold border border-green-200">{t("jasaDetail.recommended")}</span>}
+                                        {disabled && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-500 font-semibold border border-red-200">{t("jasaDetail.notSuitable")}</span>}
                                         {isSelected && <CheckCircle2 className="h-4 w-4 text-[#0B5CAD] ml-auto flex-shrink-0"/>}
                                       </div>
                                       <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">{v.desc}</p>
@@ -1794,24 +1816,24 @@ export default function JasaDetail() {
                                     <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
                                       <div>
                                         <div className="flex items-center justify-between mb-1">
-                                          <label className="text-[10px] text-gray-500 font-medium">Jarak (km)</label>
-                                          {calcDist && <span className="text-[10px] text-[#0B5CAD] flex items-center gap-1"><svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Menghitung...</span>}
-                                          {!calcDist && pickupGeo && destGeo && state.distance && <span className="text-[10px] text-[#0B5CAD]">✓ Otomatis</span>}
+                                          <label className="text-[10px] text-gray-500 font-medium">{t("jasaDetail.distanceKmLabel")}</label>
+                                          {calcDist && <span className="text-[10px] text-[#0B5CAD] flex items-center gap-1"><svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>{t("jasaDetail.calculatingLabel")}</span>}
+                                          {!calcDist && pickupGeo && destGeo && state.distance && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.autoLabel")}</span>}
                                         </div>
                                         <Input type="number" placeholder="0" className="h-8 text-xs" value={state.distance || ""} onChange={e => set("distance", e.target.value)} disabled={calcDist}/>
                                       </div>
                                       <div className="grid grid-cols-2 gap-2">
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
-                                            <label className="text-[10px] text-gray-500 font-medium">Rate/km (IDR)</label>
-                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">✓ admin</span>}
+                                            <label className="text-[10px] text-gray-500 font-medium">{t("jasaDetail.ratePerKmIDR")}</label>
+                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.truckingRate || ""} onChange={e => set("truckingRate", e.target.value)}/>
                                         </div>
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
-                                            <label className="text-[10px] text-gray-500 font-medium">Loading Fee (IDR)</label>
-                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">✓ admin</span>}
+                                            <label className="text-[10px] text-gray-500 font-medium">{t("jasaDetail.loadingFeeIDR")}</label>
+                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.loadingFee || ""} onChange={e => set("loadingFee", e.target.value)}/>
                                         </div>
@@ -1826,32 +1848,32 @@ export default function JasaDetail() {
                           {/* Estimasi biaya */}
                           {subtotal > 0 ? (
                             <div className="bg-white rounded-xl p-4 shadow-sm space-y-1.5 text-sm">
-                              <p className="font-semibold text-gray-900">Rincian Biaya</p>
+                              <p className="font-semibold text-gray-900">{t("jasaDetail.costBreakdownLabel")}</p>
                               <div className="flex justify-between text-gray-500">
                                 <span>{parseFloat(state.distance)||0} km × {formatCurrency(parseFloat(state.truckingRate)||0)}/km</span>
                                 <span>{formatCurrency((parseFloat(state.distance)||0)*(parseFloat(state.truckingRate)||0))}</span>
                               </div>
                               {(parseFloat(state.loadingFee)||0) > 0 && (
                                 <div className="flex justify-between text-gray-500">
-                                  <span>Loading Fee</span>
+                                  <span>{t("jasaDetail.loadingFeeLabel")}</span>
                                   <span>{formatCurrency(parseFloat(state.loadingFee)||0)}</span>
                                 </div>
                               )}
                               <div className="flex justify-between font-bold text-gray-900 border-t border-gray-100 pt-2">
-                                <span>Total Estimasi</span>
+                                <span>{t("jasaDetail.totalEstLabel")}</span>
                                 <span className="text-[#0B5CAD] text-base">{formatCurrency(subtotal)}</span>
                               </div>
                             </div>
                           ) : state.vehicleType ? (
                             <div className="bg-white/15 rounded-xl p-3 text-white text-sm text-center">
-                              <p>Isi rate/km dan jarak untuk melihat estimasi biaya.</p>
+                              <p>{t("jasaDetail.fillRateHint")}</p>
                             </div>
                           ) : null}
 
                           {added && (
                             <div className="bg-white rounded-xl p-3.5 flex items-center gap-2 shadow-sm">
                               <CheckCircle2 className="h-5 w-5 text-[#0B5CAD] flex-shrink-0"/>
-                              <p className="text-sm font-medium text-gray-800">{item.name} berhasil ditambahkan ke pesanan!</p>
+                              <p className="text-sm font-medium text-gray-800">{t("jasaDetail.addedToCartMsg").replace('{name}', item.name)}</p>
                             </div>
                           )}
                         </div>
@@ -1863,41 +1885,41 @@ export default function JasaDetail() {
 
                 {ct === "storage" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Number of Days</Label><Input type="number" placeholder="0" className="mt-1" value={state.days || ""} onChange={e => set("days", e.target.value)} /></div>
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.numDays")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.days || ""} onChange={e => set("days", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
                   </div>
-                  <div><Label>Unit</Label>
-                    <Select value={state.unit || ""} onValueChange={v => set("unit", v)}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih unit" /></SelectTrigger>
+                  <div><Label>{t("jasaDetail.unitLabel")}</Label>
+                    <Select value={state.unit || undefined} onValueChange={v => set("unit", v)}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder={t("jasaDetail.selectUnit")} /></SelectTrigger>
                       <SelectContent>{["CBM", "Pallet", "KG"].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
-                  <div><Label>Rate per Day (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerDay || ""} onChange={e => set("ratePerDay", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.ratePerDayIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerDay || ""} onChange={e => set("ratePerDay", e.target.value)} /></div>
                 </>}
 
                 {ct === "document" && <>
-                  <div><Label>Document Type</Label><Input placeholder="Bill of Lading" className="mt-1" value={state.documentType || ""} onChange={e => set("documentType", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.documentType")}</Label><Input placeholder="Bill of Lading" className="mt-1" value={state.documentType || ""} onChange={e => set("documentType", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
-                    <div><Label>Fee per Document (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.feePerDocument || ""} onChange={e => set("feePerDocument", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.feePerDocIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.feePerDocument || ""} onChange={e => set("feePerDocument", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "additional" && <>
-                  <div><Label>Service Type</Label><Input placeholder="Insurance / Survey..." className="mt-1" value={state.serviceType || ""} onChange={e => set("serviceType", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.serviceType")}</Label><Input placeholder="Insurance / Survey..." className="mt-1" value={state.serviceType || ""} onChange={e => set("serviceType", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Service Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.serviceFee || ""} onChange={e => set("serviceFee", e.target.value)} /></div>
-                    <div><Label>Admin Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.adminFee || ""} onChange={e => set("adminFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.serviceFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.serviceFee || ""} onChange={e => set("serviceFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.adminFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.adminFee || ""} onChange={e => set("adminFee", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "generic" && <>
-                  <div><Label>Service Name</Label><Input placeholder={item.name} className="mt-1" value={state.serviceName || ""} onChange={e => set("serviceName", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.serviceName")}</Label><Input placeholder={item.name} className="mt-1" value={state.serviceName || ""} onChange={e => set("serviceName", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
-                    <div><Label>Unit Price (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.unitPrice || ""} onChange={e => set("unitPrice", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.unitPriceIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.unitPrice || ""} onChange={e => set("unitPrice", e.target.value)} /></div>
                   </div>
-                  <div><Label>Notes (optional)</Label><Input placeholder="Detail tambahan..." className="mt-1" value={state.notes || ""} onChange={e => set("notes", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.notesOptional")}</Label><Input placeholder="Detail tambahan..." className="mt-1" value={state.notes || ""} onChange={e => set("notes", e.target.value)} /></div>
                 </>}
 
                 {ct !== "trucking" && (
@@ -1918,13 +1940,13 @@ export default function JasaDetail() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: subtotal > 0 ? "rgba(255,255,255,0.6)" : "#94A3B8" }}>
-                            Estimasi Subtotal
+                            {t("jasaDetail.estimatedSubtotal")}
                           </p>
                           <p className="text-[2rem] font-bold tracking-tight leading-none" style={{ color: subtotal > 0 ? "#FFFFFF" : "#CBD5E1" }}>
                             {subtotal > 0 ? formatCurrency(subtotal) : "—"}
                           </p>
                           <p className="text-[11px] mt-2" style={{ color: subtotal > 0 ? "rgba(255,255,255,0.5)" : "#94A3B8" }}>
-                            Estimasi harga · dikonfirmasi tim CST
+                            {t("jasaDetail.estimatedSubtotalNote")}
                           </p>
                         </div>
                         {subtotal > 0 && (
@@ -1949,13 +1971,13 @@ export default function JasaDetail() {
                         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 16px ${hero.accentColor}35`; (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; }}
                       >
                         <ShoppingCart className="h-5 w-5" />
-                        Tambahkan ke Pesanan
+                        {t("jasaDetail.addToOrderBtn")}
                       </button>
                     ) : (
                       <div className="space-y-2.5">
                         <div className="flex items-center gap-2.5 text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200/80 rounded-xl px-4 py-3 text-[13px] font-semibold">
                           <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                          {item.name} berhasil ditambahkan ke pesanan
+                          {t("jasaDetail.addedToCartConfirm").replace('{name}', item.name)}
                         </div>
                         <div className="grid grid-cols-2 gap-2.5">
                           <Button variant="outline" onClick={() => {
@@ -1971,7 +1993,7 @@ export default function JasaDetail() {
                             setCargoPhotoUrls([]);
                             setTruckingStep(1);
                           }} className="gap-1.5 rounded-xl border-slate-200 text-slate-600 h-11">
-                            <Calculator className="h-4 w-4" /> Hitung Ulang
+                            <Calculator className="h-4 w-4" /> {t("jasaDetail.recalcBtn")}
                           </Button>
                           <button
                             type="button"
@@ -1979,7 +2001,7 @@ export default function JasaDetail() {
                             className="rounded-xl text-white font-semibold text-[13px] flex items-center justify-center gap-1.5 h-11 transition-all"
                             style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)` }}
                           >
-                            <ArrowRight className="h-4 w-4" /> Lanjut Pesan
+                            <ArrowRight className="h-4 w-4" /> {t("jasaDetail.proceedBtn")}
                           </button>
                         </div>
                       </div>
@@ -2015,7 +2037,7 @@ export default function JasaDetail() {
                 <div className="absolute -bottom-6 -left-6 w-20 h-20 rounded-full opacity-10" style={{ background: "white" }} />
                 <div className="relative z-10">
                   <div className="flex items-center justify-between mb-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/60">Informasi Layanan</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/60">{t("jasaDetail.sidebarInfoLabel")}</p>
                     <span className="text-[10px] px-2.5 py-0.5 bg-white/20 text-white/85 rounded-full font-semibold backdrop-blur-sm">
                       {item.category}
                     </span>
@@ -2024,7 +2046,7 @@ export default function JasaDetail() {
                     {subtotal > 0 ? formatCurrency(subtotal) : "—"}
                   </p>
                   <p className="text-[11.5px] text-white/55 mt-2 leading-snug">
-                    {ct === "trucking" ? "Sesuai kalkulasi jarak & armada" : "Negosiasi / Quotation"}
+                    {ct === "trucking" ? t("jasaDetail.sidebarTruckingNote") : t("jasaDetail.quotation")}
                   </p>
                 </div>
               </div>
@@ -2032,27 +2054,27 @@ export default function JasaDetail() {
               {/* White body */}
               <div className="bg-white divide-y divide-slate-100/80">
                 <div className="flex justify-between items-center px-5 py-3.5">
-                  <span className="text-[12px] text-slate-400 font-medium">Kategori</span>
+                  <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.summaryCategory")}</span>
                   <span
                     className="text-[11px] font-bold px-2.5 py-0.5 rounded-full"
                     style={{ background: hero.badgeBg, color: hero.badgeText }}
                   >{item.category}</span>
                 </div>
                 <div className="flex justify-between items-center px-5 py-3.5">
-                  <span className="text-[12px] text-slate-400 font-medium">Status</span>
+                  <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.statusLabel")}</span>
                   <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full ring-1 ring-emerald-200/80">
-                    ● Tersedia
+                    {t("jasaDetail.availableLabel")}
                   </span>
                 </div>
                 {ct === "trucking" && state.vehicleType && (
                   <div className="flex justify-between items-center px-5 py-3.5">
-                    <span className="text-[12px] text-slate-400 font-medium">Kendaraan</span>
+                    <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.vehicleLabel")}</span>
                     <span className="text-[11px] font-semibold text-slate-700 text-right max-w-[150px] leading-snug">{state.vehicleType}</span>
                   </div>
                 )}
                 {ct === "trucking" && state.distance && (
                   <div className="flex justify-between items-center px-5 py-3.5">
-                    <span className="text-[12px] text-slate-400 font-medium">Jarak</span>
+                    <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.distanceLabel")}</span>
                     <span className="text-[11px] font-semibold text-slate-700">{state.distance} km</span>
                   </div>
                 )}
@@ -2072,7 +2094,7 @@ export default function JasaDetail() {
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 16px ${hero.accentColor}3A`; (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; }}
                 >
                   <ShoppingCart className="h-4 w-4" />
-                  Lihat Keranjang Pesanan
+                  {t("jasaDetail.viewCartBtn")}
                 </button>
               </div>
             </div>
@@ -2082,13 +2104,13 @@ export default function JasaDetail() {
               className="bg-white rounded-2xl px-5 py-4"
               style={{ border: "1px solid rgba(0,0,0,0.07)", boxShadow: "0 2px 12px rgba(0,0,0,0.05)" }}
             >
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-3">Mengapa CST Logistics?</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-3">{t("jasaDetail.whyUsLabel")}</p>
               <div className="space-y-2.5">
                 {[
-                  { icon: "🛡️", text: "Berlisensi & Terdaftar Resmi" },
-                  { icon: "⏱️", text: "Respon Cepat & Profesional" },
-                  { icon: "📦", text: "Kargo Aman & Terlindungi" },
-                  { icon: "💬", text: "Dukungan WhatsApp 24/7" },
+                  { icon: "🛡️", text: t("jasaDetail.trustBadge1") },
+                  { icon: "⏱️", text: t("jasaDetail.trustBadge2") },
+                  { icon: "📦", text: t("jasaDetail.trustBadge3") },
+                  { icon: "💬", text: t("jasaDetail.trustBadge4") },
                 ].map(b => (
                   <div key={b.text} className="flex items-center gap-2.5">
                     <span className="text-base flex-shrink-0">{b.icon}</span>
@@ -2106,7 +2128,7 @@ export default function JasaDetail() {
               >
                 <div className="px-5 pt-4 pb-3">
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                    Layanan {item.category} Lainnya
+                    {t("jasaDetail.relatedServicesLabel").replace('{category}', item.category)}
                   </p>
                 </div>
                 <div className="divide-y divide-slate-100/80 px-2 pb-2">
@@ -2140,7 +2162,7 @@ export default function JasaDetail() {
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.border = "1px solid transparent"; }}
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
-                Lihat Semua Layanan
+                {t("jasaDetail.viewAllServices")}
               </button>
             </Link>
           </div>
@@ -2168,7 +2190,7 @@ export default function JasaDetail() {
                     onClick={() => setTruckingStep(truckingStep - 1)}
                     className="sm:min-w-[130px] py-3.5 px-6 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:border-slate-300 hover:bg-slate-50 transition-all flex items-center justify-center gap-1.5"
                   >
-                    ← Kembali
+                    {t("jasaDetail.backBtn")}
                   </button>
                 ) : <div />}
                 {truckingStep < 2 ? (
@@ -2179,7 +2201,7 @@ export default function JasaDetail() {
                     className="sm:min-w-[200px] text-white py-3.5 px-8 rounded-xl font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                   >
-                    Lanjut <ArrowRight className="h-4 w-4" />
+                    {t("jasaDetail.nextBtn")} <ArrowRight className="h-4 w-4" />
                   </button>
                 ) : (
                   <button
@@ -2190,7 +2212,7 @@ export default function JasaDetail() {
                     style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                   >
                     <ShoppingCart className="h-4 w-4" />
-                    Tambahkan ke Pesanan
+                    {t("jasaDetail.addToOrderBtn")}
                   </button>
                 )}
               </>
@@ -2201,7 +2223,7 @@ export default function JasaDetail() {
                   onClick={() => { setAdded(false); setState({}); setTruckingStep(1); setTruckingStops([]); setOrderNow(false); setCargoCategory(""); setKoliQty(""); setGrossWeight(""); setDimensions([newDimRow()]); setCargoPhotoFiles([]); setCargoPhotoUrls([]); setTruckingPayment(""); setTruckingTransferTerm(""); setTruckingPayTerm(""); setTruckingDpNext(""); }}
                   className="flex-1 sm:flex-none sm:min-w-[130px] py-3.5 px-5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:border-slate-300 hover:bg-slate-50 transition-all flex items-center justify-center gap-1.5"
                 >
-                  <Calculator className="h-4 w-4" /> Hitung Ulang
+                  <Calculator className="h-4 w-4" /> {t("jasaDetail.recalcBtn")}
                 </button>
                 <button
                   type="button"
@@ -2209,7 +2231,7 @@ export default function JasaDetail() {
                   className="flex-1 sm:flex-none sm:min-w-[160px] text-white font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 py-3.5 px-5 rounded-xl"
                   style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                 >
-                  Lanjut Pesan <ArrowRight className="h-4 w-4" />
+                  {t("jasaDetail.proceedBtn")} <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
             )}
@@ -2222,13 +2244,13 @@ export default function JasaDetail() {
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-primary/20 shadow-[0_-4px_24px_rgba(0,0,0,0.10)]">
           <div className="container max-w-4xl px-4 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-foreground">Layanan ini dipilih sebagai pengiriman</p>
+              <p className="text-sm font-semibold text-foreground">{t("jasaDetail.pendingOrderTitle")}</p>
               <p className="text-xs text-muted-foreground truncate">
-                Pesanan: <span className="font-medium text-foreground">{pendingOrder.productName}</span>
+                {t("jasaDetail.pendingOrderLabel")} <span className="font-medium text-foreground">{pendingOrder.productName}</span>
                 {" · "}
                 {(added || cartItems.some((i) => i.calculatorType !== "product"))
-                  ? "Layanan sudah ditambahkan. Klik Konfirmasi untuk lanjut."
-                  : <span className="text-amber-600 font-medium">Klik "Tambahkan ke Pesanan" terlebih dahulu.</span>}
+                  ? t("jasaDetail.pendingOrderAdded")
+                  : <span className="text-amber-600 font-medium">{t("jasaDetail.pendingOrderHint")}</span>}
               </p>
             </div>
             <div className="flex gap-2 shrink-0">
@@ -2240,7 +2262,7 @@ export default function JasaDetail() {
                   setPendingOrder(null);
                 }}
               >
-                Batal
+                {t("jasaDetail.cancelBtn")}
               </Button>
               <Button
                 size="sm"
@@ -2249,12 +2271,13 @@ export default function JasaDetail() {
                 onClick={confirmJasaAndCheckout}
               >
                 <CheckCircle2 className="h-4 w-4" />
-                Konfirmasi &amp; Lanjutkan Pesanan
+                {t("jasaDetail.confirmOrderBtn")}
               </Button>
             </div>
           </div>
         </div>
       )}
+      <WhatsAppButtonStandalone />
     </div>
   );
 }

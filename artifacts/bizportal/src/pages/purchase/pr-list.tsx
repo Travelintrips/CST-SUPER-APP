@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCompany } from "@/contexts/CompanyContext";
-import { Plus, Eye, ClipboardList } from "lucide-react";
+import { ArrowLeft, Plus, Eye, ClipboardList } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 const idr = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -29,6 +29,7 @@ export default function PurchaseRequestListPage() {
     <AppShell>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
+          <Link href="/purchase"><Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button></Link>
           <div>
             <h1 className="text-2xl font-bold">Purchase Request (PR)</h1>
             <p className="text-sm text-muted-foreground">Daftar permintaan pembelian internal</p>

@@ -1,92 +1,160 @@
-# BizPortal
+# CST Super App
 
-BizPortal is a multi-module ERP system designed for internal operations, covering Sales, Purchase, Accounting, Logistics, Expense Management, Correspondence, Ecommerce, Trading, and POS.
+A multi-service monorepo ERP/operations platform for logistics and sport center management. Built with TypeScript, Express, React (Vite), Drizzle ORM, and Supabase.
 
-## Run & Operate
+## Project Structure
 
-To run BizPortal, ensure the following environment variables are set:
+```
+artifacts/
+  api-server/       — Express REST API, Drizzle ORM, Supabase Postgres
+  bizportal/        — Admin/back-office dashboard (React + Vite)
+  customer-portal/  — Public-facing customer app (React + Vite)
+  logistic-order/   — Logistics order management
+  qr-menu/          — QR-based menu/ordering
+  mockup-sandbox/   — UI prototyping sandbox
+config/             — Shared configuration
+docs/               — Architecture and deployment documentation
+```
+## Architecture
 
-- `FONNTE_TOKEN`: Fonnte API token
-- `FONNTE_ADMIN_WA`: Fallback WhatsApp admin group ID (can be overridden by DB)
-- `ADMIN_EMAIL`: Admin email address
-- `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`: SMTP configuration for email (optional)
-- `PORTAL_ADMIN_KEY`: Key to claim admin role in the customer portal
+### Sub-apps (`artifacts/`)
+| App | Port | Purpose |
+|-----|------|---------|
+| `api-server` | 18444 | Core REST API (Express + Drizzle ORM + Supabase Postgres) |
+| `bizportal` | 18442 | Admin/back-office UI (React + Vite) |
+| `customer-portal` | 23434 | Customer-facing storefront/booking UI |
+| `logistic-order` | 19368 | Logistics order management UI |
+| `customer-poster` | — | Customer poster/print generation |
+| `qr-menu` | — | QR-code menu viewer |
+| `mockup-sandbox` | — | UI component mockup sandbox |
 
-Commands:
+## Key Architecture Decisions
 
-- **Start all services**: `pnpm dev`
-- **Build API client**: `pnpm --filter @workspace/api-client-react run codegen` (after backend schema/route changes)
-- **Database Migrations**:
-    - Update Drizzle schema in `lib/db/src/schema/`
-    - Generate migration: `drizzle-kit generate`
-    - Push migration: `drizzle-kit push`
+- **Gateway on port 5000** routes to all internal services
+- **APP_ENV** (not NODE_ENV) is the source of truth for dev vs. prod
+- **GCP Secret Manager** loads production secrets at startup; dev secrets come from Replit Secrets
+- **Supabase** for database (separate dev and prod projects)
+- **Accounting entries are immutable** — no updates/deletes on posted journals; reversal only
+- **AI is advisor only** — never auto-approves or auto-posts financial entries
 
-## Stack
+## Required Secrets (to run)
 
-- **Runtime**: Node.js 24, TypeScript 5.9
-- **Backend**: Express 5, Drizzle ORM, Zod/v4, OpenID Connect (Auth)
-- **Database**: PostgreSQL
-- **Frontend**: React 19, Vite, Tailwind CSS, shadcn/ui, Wouter, TanStack Query v5, Orval
-- **Storage**: Replit Object Storage
-- **PDF**: `@react-pdf/renderer` (browser print)
-- **Email**: Nodemailer
-- **AI**: OpenAI GPT-4 Vision (via Replit AI Integrations proxy)
-- **Barcode/QR**: ZXing
+See `.env.example` for the full list. Minimum to start the API:
+- `GCP_PROJECT_ID`, `GCP_SECRET_ID`, `GCP_SECRET_MANAGER_BOOTSTRAP_JSON`
+- `SUPABASE_DATABASE_URL_DEV`
+- `SESSION_SECRET`
 
-## Where things live
+## To Run (development)
 
-- **API Server**: `artifacts/api-server/`
-- **Frontend (BizPortal)**: `artifacts/bizportal/`
-- **Customer Portal**: `artifacts/customer-portal/`
-- **CST Driver Mobile App**: `artifacts/cst-driver/`
-- **DB Schema & Migrations**: `lib/db/src/schema/`
-- **API Client (Orval-generated)**: `packages/api-client-react/`
-- **API Routes**: `artifacts/api-server/src/routes/`
-- **Frontend Pages**: `artifacts/bizportal/src/pages/`
-- **Fonnte Webhook**: `artifacts/api-server/src/lib/orderNotification.ts`
+```bash
+pnpm install
+bash start-dev.sh
+```
 
-## Architecture decisions
+The gateway starts on port 5000 and proxies to all sub-services.
+| Secret | Purpose |
+|---|---|
+| `GCP_PROJECT_ID` | GCP project that owns the Secret Manager secrets |
+| `GCP_SECRET_ID` | Secret name in Secret Manager (e.g. `replit-app-secrets`) |
+| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | Service account JSON with `roles/secretmanager.secretAccessor` |
+| `SUPABASE_DATABASE_URL_DEV` | PostgreSQL connection string for the **dev** Supabase project |
+| `SUPABASE_URL_DEV` | Supabase API URL for the dev project |
+| `SUPABASE_ANON_KEY_DEV` | Anon key for the dev project |
+| `SUPABASE_SERVICE_ROLE_KEY_DEV` | Service role key for the dev project |
 
-- **Monorepo Structure**: Utilizes `pnpm workspace` for managing multiple applications and shared libraries.
-- **Full Double-Entry Accounting**: Every confirmed financial transaction automatically generates accounting entries for robust financial tracking.
-- **Dynamic Customer Portal Content**: Website content is editable via an admin CMS and stored in the database, with hardcoded defaults as fallback.
-- **Multi-channel Notifications**: Automated WhatsApp and email notifications are sent to admins, vendors, and customers for new logistic orders, ensuring broad communication.
-- **Orval-generated API Client**: Frontend API interactions rely on automatically generated hooks, promoting type safety and reducing manual effort for API integration.
-- **Unified Vendor Table**: `delivery_vendors` merged into `suppliers` — all vendor types (purchase & logistics service) live in one table. New fields: `serviceType`, `isActive`, `logo`, `eta`, `fee`, `note`, `sortOrder`. Portal API maps `contactEmail` → `email` for backward compat. `logistics-vendors` page redirects to `purchase/vendors`.
-- **Vendor Etalase (Catalog)**: Each vendor has its own product/service catalog (`vendor_catalog_items` table). Catalog items have type (product/service), name, description, unit, price_base, markup_pct, is_active, sort_order. Managed via `/purchase/vendors/:id` detail page in BizPortal. API: `GET/POST /api/trading/suppliers/:id/catalog`, `PUT/DELETE /api/trading/suppliers/catalog/:itemId`.
+All other application secrets (OpenAI, Paylabs, SMTP, etc.) are loaded automatically from Google Cloud Secret Manager at startup via `load-secrets.mjs`. The `_DEV` Supabase keys above are read from Replit Secrets directly as a local override.
 
-## Product
+### Services & Ports
 
-- **Comprehensive ERP**: Manages sales, purchases, accounting, logistics, expenses, and more in a unified system.
-- **Logistics Module**: Features freight shipment lifecycle management, RFQ/quote flows, stage tracking, and profitability analysis with operational expense comparison.
-- **Customer Portal**: Public-facing portal with a homepage, freight cost calculator, mega menu for services, and i18n support.
-- **Customer Portal Admin CMS**: Allows administrators to manage website content, services, and products dynamically.
-- **Vendor Detail & Etalase**: Clicking the Store icon on any vendor row opens a dedicated detail page showing vendor info cards + an Etalase table. Per-item pricing with Harga Dasar, Markup (%), and Harga Jual computed live.
-- **Integrated Object Storage**: Handles product images and document attachments with support for public and private access.
-- **Document Generation**: Supports generating sales quotes/orders and Bills of Lading, with email integration for PDF attachments.
-- **AI-Powered Document Scanning**: Utilizes OpenAI GPT-4 Vision for structured data extraction from scanned documents.
+| Service | Dev Port | Workflow name |
+|---|---|---|
+| API Server | 18444 | `artifacts/api-server: API Server` |
+| BizPortal (admin) | 18442 | `artifacts/bizportal: web` |
+| Customer Portal | 23434 | `artifacts/customer-portal: web` |
+| Logistic Order | varies | `artifacts/logistic-order: web` |
+
+### Start / Restart
+
+Each service has its own workflow. Start or restart them from the Workflows panel. The API server must be running for the frontends to function fully.
+
+```bash
+# Install all dependencies (run once after cloning or adding packages)
+pnpm install
+```
+
+## Key Documentation
+
+- `AI_ARCHITECTURE_GUARDRAILS.md` — Architecture constitution
+- `ARCHITECTURE_DECISIONS.md` — Formal ADRs
+- `AI_RULES.md` — Rules for AI agents
+- `docs/ui-color-contrast-guidelines.md` — Aturan kontras warna untuk UI BizPortal bertema gelap
+- `docs/` — Deployment, secret architecture, and more
+
+## User Preferences
+
+- This project was imported for exploration/study purposes only.
+- `APP_ENV=development` is enforced in every `start-dev.sh` — never change this.
+- `load-secrets.mjs` runs before the server starts and injects secrets. `*_DEV` keys from GCP (or Replit Secrets) are promoted to their canonical names in dev mode.
+- The API server will **refuse to start** if it detects a production database in development mode. Always ensure `SUPABASE_DATABASE_URL_DEV` is set.
+- See `AI_ARCHITECTURE_GUARDRAILS.md` and `ARCHITECTURE_DECISIONS.md` for immutable architecture rules.
 
 ## User preferences
 
-- STOP explaining. Just give me the code.
-- Gunakan Bahasa Indonesia dalam semua komunikasi dengan pengguna.
-- Prefer iterative development with clear rationale for each step.
-- Ask for confirmation before major architectural or schema changes.
-- Do **not** make changes to files outside the `artifacts`, `lib`, and `packages` directories.
+- Keep the existing monorepo structure and stack
+- Use pnpm (not npm or yarn)
 
-## Gotchas
+---
 
-- Frontend API client (`@workspace/api-client-react`) requires regeneration via `pnpm --filter @workspace/api-client-react run codegen` after any backend schema or route changes.
-- Accounting system includes an idempotent boot seeder that creates default Indonesian Chart of Accounts and standard taxes if they don't exist; be aware of this on initial setup or resets.
-- Admin routes are protected by `requireAdmin` middleware, and customer portal admin access is granted via a `PORTAL_ADMIN_KEY`.
-- Email functionality is dependent on `SMTP_HOST/USER/PASS` environment variables; if not configured, emails will not be sent.
-- Document numbering follows `PREFIX/YYYY/NNNNNN` format.
+## ⚠️ Aturan Wajib: Aset Gambar & File Biner
 
-## Pointers
+### DILARANG keras: menyimpan gambar/biner di git
 
-- **Drizzle ORM Documentation**: For database schema definition and migrations.
-- **Orval Documentation**: For API client generation.
-- **TanStack Query Documentation**: For data fetching and state management in React.
-- **Express.js Documentation**: For backend API development.
-- **Replit Object Storage Documentation**: For file storage integration.
-- **OpenAI GPT-4 Vision API Documentation**: For AI-powered document scanning.
+Semua gambar, foto produk, foto menu, ilustrasi, dan file biner **WAJIB** disimpan di **Supabase Storage**, bukan di dalam repository git. Ini aturan permanen yang tidak boleh dilanggar oleh agen maupun developer.
+
+**Yang DILARANG di-commit ke git:**
+- File `*.png`, `*.jpg`, `*.jpeg`, `*.webp`, `*.gif` di dalam folder `public/` atau `assets/` manapun (kecuali yang dikecualikan di bawah)
+- File upload hasil user (`pos-images/`, `portal/images/`, dsb.)
+- Foto menu, foto produk, foto marketing, foto testimonial
+- Screenshot atau gambar dokumentasi besar (>100KB)
+- File biner apapun yang bisa berubah-ubah
+
+**Yang BOLEH tetap di git (bawaan framework/build tool):**
+| File | Alasan |
+|------|--------|
+| `favicon.svg` | Icon kecil, bagian dari build |
+| `*/public/opengraph.jpg` | OG image statis untuk SEO — boleh di git jika <200KB |
+| Logo vector (`*.svg`) | Ukuran kecil, bukan foto |
+
+### Cara benar menyimpan gambar
+
+```
+1. Upload ke Supabase Storage via API:
+   PUT /api/storage/upload  (bucket: portal/images/, pos-images/, menu/, dll.)
+
+2. Simpan URL Supabase ke database (tabel products, menu_items, dst.)
+
+3. Di frontend: gunakan URL Supabase langsung (bukan path lokal /public/...)
+   Contoh: https://<project>.supabase.co/storage/v1/object/public/portal/images/hero.webp
+```
+
+### Status migrasi (per Agustus 2026)
+
+| Folder | Status | Jumlah file | Prioritas |
+|--------|--------|-------------|-----------|
+| `customer-portal/public/images/` | ❌ Belum | ~150 file, 152MB | 🔴 Tinggi |
+| `customer-portal/public/menu/` | ❌ Belum | ~20 file | 🔴 Tinggi |
+| `bizportal/public/menu/` | ❌ Belum | ~10 file | 🟡 Sedang |
+| `api-server/public/pos-images/` | ❌ Belum | 2 file | 🟡 Sedang |
+| `bizportal/public/Screenshot_*.jpg` | ❌ Hapus | 4 file | 🟡 Sedang |
+| `logistic-order/public/logocst*.jpg` | ❌ Belum | 2 file | 🟢 Rendah |
+
+**Total gambar yang harus dimigrasikan: ±223 file**
+
+### Untuk agen AI: instruksi wajib
+
+Jika kamu (agen AI) perlu menambah gambar ke project ini:
+1. **JANGAN** copy file ke folder `public/` atau `assets/`
+2. **JANGAN** commit file gambar ke git
+3. **WAJIB** gunakan Supabase Storage: upload via `uploadToSupabase()` di `artifacts/api-server/src/lib/supabaseStorage.ts`
+4. Simpan URL hasil upload ke database, bukan path lokal
+5. Jika ragu, tanya dulu sebelum menyimpan file biner apapun

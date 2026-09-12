@@ -5,15 +5,15 @@ version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
 
 [[services]]
-localPort = 8080
+localPort = 18444
 name = "API Server"
 paths = ["/api"]
 
 [services.development]
-run = "PORT=8080 NODE_ENV=development node --enable-source-maps /home/runner/workspace/artifacts/api-server/dist/index.mjs"
+run = "bash start-dev.sh"
 
 [services.development.env]
-PORT = "8080"
+PORT = "18444"
 NODE_ENV = "development"
 
 [services.production]
@@ -25,11 +25,18 @@ args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
 NODE_ENV = "production"
 
 [services.production.run]
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+args = [
+  "node",
+  "artifacts/api-server/load-secrets.mjs",
+  "node",
+  "--enable-source-maps",
+  "artifacts/api-server/dist/index.mjs",
+]
 
 [services.production.run.env]
 PORT = "8080"
 NODE_ENV = "production"
+APP_ENV = "production"
 
 [services.production.health.startup]
 path = "/api/healthz"

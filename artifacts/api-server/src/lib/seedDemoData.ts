@@ -518,6 +518,160 @@ const DEMO_DRIVERS = [
   },
 ];
 
+const AIR_FREIGHT_SEEDS = [
+  {
+    rate_source_type: "airline",
+    rate_source_name: "Singapore Airlines",
+    airline: "Singapore Airlines",
+    origin_city: "Jakarta",
+    origin_airport: "CGK",
+    destination_city: "Singapore",
+    destination_airport: "SIN",
+    trade_type: "export",
+    service_mode: "airport_to_airport",
+    service_level: "standard",
+    currency: "IDR",
+    exchange_rate_to_idr: 1,
+    rate_minimum: 850000,
+    rate_45: 37000,
+    rate_100: 22000,
+    rate_250: 18500,
+    rate_300: 18000,
+    rate_500: 16500,
+    rate_1000: 15000,
+    fuel_surcharge_per_kg: 3500,
+    security_surcharge_per_kg: 1400,
+    awb_fee: 88000,
+    xray_fee: 100000,
+    handling_fee: 430000,
+    doc_fee: 180000,
+    edi_fee: 300000,
+    customs_clearance_fee: 1500000,
+    pickup_trucking_estimate: 800000,
+    delivery_trucking_estimate: 0,
+    transit_days: 2,
+    routing_type: "direct",
+    price_status: "active",
+    is_active: true,
+  },
+  {
+    rate_source_type: "airline",
+    rate_source_name: "Vietnam Airlines",
+    airline: "Vietnam Airlines",
+    origin_city: "Jakarta",
+    origin_airport: "CGK",
+    destination_city: "Hanoi",
+    destination_airport: "HAN",
+    trade_type: "export",
+    service_mode: "airport_to_airport",
+    service_level: "standard",
+    currency: "IDR",
+    exchange_rate_to_idr: 1,
+    rate_minimum: null,
+    rate_45: 37700,
+    rate_100: 21800,
+    rate_250: 18200,
+    rate_300: null,
+    rate_500: 16700,
+    rate_1000: 16700,
+    fuel_surcharge_per_kg: 900,
+    security_surcharge_per_kg: 1400,
+    awb_fee: 150000,
+    xray_fee: 0,
+    handling_fee: 0,
+    doc_fee: 0,
+    edi_fee: 0,
+    customs_clearance_fee: 0,
+    pickup_trucking_estimate: 0,
+    delivery_trucking_estimate: 0,
+    transit_days: 3,
+    routing_type: "direct",
+    price_status: "active",
+    is_active: true,
+  },
+  {
+    rate_source_type: "airline",
+    rate_source_name: "Singapore Airlines",
+    airline: "Singapore Airlines",
+    origin_city: "Jakarta",
+    origin_airport: "CGK",
+    destination_city: "Guangzhou",
+    destination_airport: "CAN",
+    trade_type: "export",
+    service_mode: "airport_to_airport",
+    service_level: "standard",
+    currency: "IDR",
+    exchange_rate_to_idr: 1,
+    rate_minimum: null,
+    rate_45: null,
+    rate_100: 16000,
+    rate_250: null,
+    rate_300: null,
+    rate_500: null,
+    rate_1000: null,
+    fuel_surcharge_per_kg: 0,
+    security_surcharge_per_kg: 0,
+    awb_fee: 20000,
+    xray_fee: 0,
+    handling_fee: 430000,
+    doc_fee: 0,
+    edi_fee: 360000,
+    customs_clearance_fee: 1500000,
+    pickup_trucking_estimate: 800000,
+    delivery_trucking_estimate: 0,
+    transit_days: 3,
+    routing_type: "direct",
+    price_status: "active",
+    is_active: true,
+  },
+];
+
+export async function seedAirFreightRates(): Promise<void> {
+  try {
+    for (const r of AIR_FREIGHT_SEEDS) {
+      const existing = await db.execute(sql`
+        SELECT id FROM air_freight_rates
+        WHERE origin_airport = ${r.origin_airport}
+          AND destination_airport = ${r.destination_airport}
+          AND rate_source_name = ${r.rate_source_name}
+        LIMIT 1
+      `);
+      if (existing.rows.length > 0) continue;
+      await db.execute(sql`
+        INSERT INTO air_freight_rates (
+          rate_source_type, rate_source_name, airline,
+          origin_city, origin_airport, destination_city, destination_airport,
+          trade_type, service_mode, service_level,
+          currency, exchange_rate_to_idr,
+          rate_minimum, rate_45, rate_100, rate_250, rate_300, rate_500, rate_1000,
+          fuel_surcharge_per_kg, security_surcharge_per_kg,
+          awb_fee, xray_fee, handling_fee, doc_fee, edi_fee,
+          customs_clearance_fee, pickup_trucking_estimate, delivery_trucking_estimate,
+          transit_days, routing_type,
+          valid_from, valid_until,
+          price_status, is_active
+        ) VALUES (
+          ${r.rate_source_type}, ${r.rate_source_name}, ${r.airline},
+          ${r.origin_city}, ${r.origin_airport}, ${r.destination_city}, ${r.destination_airport},
+          ${r.trade_type}, ${r.service_mode}, ${r.service_level},
+          ${r.currency}, ${r.exchange_rate_to_idr},
+          ${r.rate_minimum ?? null}, ${r.rate_45 ?? null}, ${r.rate_100 ?? null},
+          ${r.rate_250 ?? null}, ${r.rate_300 ?? null}, ${r.rate_500 ?? null}, ${r.rate_1000 ?? null},
+          ${r.fuel_surcharge_per_kg}, ${r.security_surcharge_per_kg},
+          ${r.awb_fee}, ${r.xray_fee}, ${r.handling_fee}, ${r.doc_fee}, ${r.edi_fee},
+          ${r.customs_clearance_fee}, ${r.pickup_trucking_estimate}, ${r.delivery_trucking_estimate},
+          ${r.transit_days}, ${r.routing_type},
+          CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days',
+          ${r.price_status}, ${r.is_active}
+        )
+      `);
+    }
+    logger.info("Air freight rates: 3 seed rows ensured (CGK→SIN, CGK→HAN, CGK→CAN)");
+  } catch (err) {
+    logger.warn({ err }, "seedAirFreightRates failed (non-fatal)");
+  }
+}
+
 export async function seedDemoDrivers() {
   try {
     for (const d of DEMO_DRIVERS) {

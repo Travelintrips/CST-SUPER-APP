@@ -1,6 +1,6 @@
 /**
- * Restore backup dari Google Drive ke Replit:
- *   1. Database (.sql.gz) → PostgreSQL (DATABASE_URL)
+ * Restore backup dari Google Drive ke Supabase:
+ *   1. Database (.sql.gz) → active Supabase PostgreSQL target
  *   2. Gambar (.jpg/.png/dll) → Object Storage (path semula)
  *
  * Cara jalankan:
@@ -18,9 +18,11 @@ import { join } from "path";
 import { gunzipSync } from "zlib";
 import { createInterface } from "readline";
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 const PARENT_FOLDER_NAME = "BizPortal Backup";
+const { url: databaseUrl } = resolveSupabaseDatabaseUrl();
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -163,7 +165,7 @@ async function main() {
 
       console.log("Menjalankan psql restore ...");
       try {
-        execSync(`psql "${process.env.DATABASE_URL}" -f "${tmpSql}"`, { stdio: "pipe" });
+        execSync(`psql "${databaseUrl}" -f "${tmpSql}"`, { stdio: "pipe" });
         console.log("✓ Database berhasil di-restore!\n");
       } catch (err) {
         console.error("✗ psql gagal:", err);
@@ -180,7 +182,7 @@ async function main() {
     const confirmImg = await ask(`Restore ${imageFiles.length} gambar ke Object Storage? (ya/tidak): `);
     if (confirmImg.toLowerCase() === "ya") {
       // Ambil mapping SKU → objectPath dari database
-      const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      const pool = new Pool({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
       const result = await pool.query<{ sku: string; image_url: string | null }>(
         `SELECT sku, image_url FROM products WHERE image_url IS NOT NULL`
       );

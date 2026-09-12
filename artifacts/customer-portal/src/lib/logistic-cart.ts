@@ -8,6 +8,18 @@ export interface CartItem {
   inputData: Record<string, unknown>;
   calculationResult: Record<string, unknown>;
   subtotal: number;
+  // vendor catalog item fields
+  itemSource?: "vendor_catalog_item" | "manual";
+  vendorCatalogItemId?: number | null;
+  vendorId?: number | null;
+  vendorName?: string | null;
+  serviceType?: string | null;
+  templateKind?: string | null;
+  priceSnapshot?: { priceSell: number; currency: string; unit: string; vendorName?: string | null; subtotal?: number; tax?: number; total?: number } | null;
+  calculationInput?: Record<string, unknown> | null;
+  templateSnapshot?: Record<string, unknown> | null;
+  tax?: number;
+  total?: number;
 }
 
 export const CART_KEY = "logistic_cart";
@@ -51,6 +63,14 @@ export function useCart() {
     setItems((prev) => [...prev, { ...item, cartId: crypto.randomUUID() }]);
   }
 
+  /** Ganti item yang sudah ada dengan calculatorType yang sama, atau tambah baru jika belum ada. */
+  function replaceItemByType(item: Omit<CartItem, "cartId">) {
+    setItems((prev) => {
+      const filtered = prev.filter((i) => i.calculatorType !== item.calculatorType);
+      return [...filtered, { ...item, cartId: crypto.randomUUID() }];
+    });
+  }
+
   function removeItem(cartId: string) {
     setItems((prev) => prev.filter((i) => i.cartId !== cartId));
   }
@@ -68,10 +88,10 @@ export function useCart() {
   const hasFreightService = items.some((i) =>
     ["air_freight", "sea_fcl", "sea_lcl", "trucking"].includes(i.calculatorType)
   );
-  const taxRate = hasFreightService ? 0.011 : 0.11;
+  const taxRate = 0.11;
   const subtotal = items.reduce((s, i) => s + i.subtotal, 0);
-  const tax = subtotal * taxRate;
+  const tax = Math.round(subtotal * taxRate * 100) / 100;
   const grandTotal = subtotal + tax;
 
-  return { items, addItem, removeItem, updateItem, clearCart, subtotal, tax, grandTotal, taxRate, hasFreightService };
+  return { items, addItem, replaceItemByType, removeItem, updateItem, clearCart, subtotal, tax, grandTotal, taxRate, hasFreightService };
 }

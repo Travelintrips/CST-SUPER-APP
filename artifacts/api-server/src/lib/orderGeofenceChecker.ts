@@ -2,7 +2,7 @@ import { checkGeofenceWithThreshold } from "./geofence.js";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { getAdminWa } from "./adminWa.js";
-import { sendWhatsApp } from "./fonnte.js";
+import { sendViaService as sendWhatsApp } from "./waTransport.js";
 import { logger } from "./logger.js";
 import { getPreferredDomain } from "./domain.js";
 

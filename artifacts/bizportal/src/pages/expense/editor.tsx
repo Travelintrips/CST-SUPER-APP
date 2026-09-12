@@ -1,6 +1,9 @@
+import { DatePicker } from "@/components/ui/date-picker";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useParams } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
+import { AccountCombobox } from "@/components/accounting/AccountCombobox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +22,7 @@ import {
   useAddExpenseAttachment, useDeleteExpenseAttachment,
   useListExpenseCategories, useListAccounts, useListTaxes,
   useListSalesDocuments, useListFreightShipments,
-  useListSuppliers, useListCustomers,
+  useListCustomers,
   getListExpensesQueryKey, getGetExpenseQueryKey,
   type ExpenseAttachment,
 } from "@workspace/api-client-react";
@@ -27,11 +30,14 @@ import { useUpload } from "@workspace/object-storage-web";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useVendors } from "@/hooks/useVendors";
 import {
   ArrowLeft, Save, Send, CheckCircle, XCircle, FileText, Banknote,
   RotateCcw, Info, Paperclip, Upload, Trash2, Loader2, AlertTriangle, X,
-  ChevronsUpDown, Check, ExternalLink, MessageSquare,
+  ChevronsUpDown, Check, ExternalLink, MessageSquare, TrendingDown, TrendingUp,
+  ScanLine,
 } from "lucide-react";
+import { ScanDocumentDialog } from "@/components/ScanDocumentDialog";
 import { CorrespondenceTab } from "@/components/CorrespondenceTab";
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -40,6 +46,13 @@ import {
   Command, CommandEmpty, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
 import { Link } from "wouter";
+
+async function apiFetch(url: string, opts?: RequestInit) {
+  const r = await fetch(url, { credentials: "include", ...opts });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.message ?? "Terjadi kesalahan.");
+  return d;
+}
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -334,6 +347,7 @@ const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
   submitted: "Diajukan",
   approved: "Disetujui",
+  pending_approval: "Menunggu Approval",
   posted: "Diposting",
   paid: "Lunas",
   rejected: "Ditolak",
@@ -342,6 +356,7 @@ const STATUS_COLORS: Record<string, string> = {
   draft: "bg-slate-800 text-slate-300 border-slate-600",
   submitted: "bg-sky-900/40 text-sky-300 border-sky-600",
   approved: "bg-indigo-900/40 text-indigo-300 border-indigo-600",
+  pending_approval: "bg-amber-900/40 text-amber-300 border-amber-600",
   posted: "bg-emerald-900/40 text-emerald-300 border-emerald-600",
   paid: "bg-green-900/50 text-green-300 border-green-600",
   rejected: "bg-red-900/40 text-red-300 border-red-600",
@@ -350,7 +365,9 @@ const STATUS_COLORS: Record<string, string> = {
 const EMPTY_FORM = {
   date: new Date().toISOString().slice(0, 10),
   vendorEmployee: "",
+  vendorId: null as number | null,
   expenseType: "vendor_bill" as "vendor_bill" | "reimbursement" | "internal",
+  transactionType: "expense" as "expense" | "income",
   categoryId: null as number | null,
   description: "",
   qty: 1,
@@ -361,9 +378,26 @@ const EMPTY_FORM = {
   notes: "",
   expenseAccountId: null as number | null,
   payableAccountId: null as number | null,
+  sourceAccountId: null as number | null,
   salesDocId: null as number | null,
   shipmentId: null as number | null,
 };
+
+type ExpenseLineDraft = {
+  description: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  coaAccountId: number | null;
+};
+
+const newExpenseLine = (
+  description = "",
+  qty = 1,
+  unit = "",
+  unitPrice = 0,
+  coaAccountId: number | null = null,
+): ExpenseLineDraft => ({ description, qty, unit, unitPrice, coaAccountId });
 
 export default function ExpenseEditorPage() {
   const { id } = useParams<{ id?: string }>();
@@ -381,18 +415,37 @@ export default function ExpenseEditorPage() {
   const { data: cats = [] } = useListExpenseCategories();
   const { data: accounts = [] } = useListAccounts();
   const { data: taxes = [] } = useListTaxes();
-  const { data: suppliers = [] } = useListSuppliers();
+  const { data: suppliers = [] } = useVendors();
   const { data: customers = [] } = useListCustomers();
+  const { data: userList = [] } = useQuery({
+    queryKey: ["users-list"],
+    queryFn: () => apiFetch("/api/users"),
+  });
 
-  const createMut = useCreateExpense();
+  const createIdempotencyKey = useRef(
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `expense-create-${Date.now()}`,
+  );
+  const createMut = useCreateExpense({
+    request: { headers: { "x-idempotency-key": createIdempotencyKey.current } },
+  });
   const updateMut = useUpdateExpense();
   const actionMut = useExpenseAction();
   const addAttachmentMut = useAddExpenseAttachment();
   const deleteAttachmentMut = useDeleteExpenseAttachment();
 
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [sourceAccountId, setSourceAccountId] = useState<number | null>(null);
+  const [lines, setLines] = useState<ExpenseLineDraft[]>([newExpenseLine()]);
+  const [vendorId, setVendorId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [payOpen, setPayOpen] = useState(false);
+  const [payMethod, setPayMethod] = useState<"bank" | "cash">("bank");
+  const [autoFilled, setAutoFilled] = useState<Set<string>>(new Set());
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [deletingAttId, setDeletingAttId] = useState<number | null>(null);
@@ -447,10 +500,13 @@ export default function ExpenseEditorPage() {
 
   useEffect(() => {
     if (expense && !isNew) {
+      const expAny = expense as any;
       setForm({
         date: expense.date,
         vendorEmployee: expense.vendorEmployee ?? "",
+        vendorId: expense.vendorId ?? null,
         expenseType: expense.expenseType as any,
+        transactionType: (expAny.transactionType ?? "expense") as "expense" | "income",
         categoryId: expense.categoryId ?? null,
         description: expense.description ?? "",
         qty: expense.qty,
@@ -461,40 +517,88 @@ export default function ExpenseEditorPage() {
         notes: expense.notes ?? "",
         expenseAccountId: expense.expenseAccountId ?? null,
         payableAccountId: expense.payableAccountId ?? null,
+        sourceAccountId: expense.sourceAccountId ?? null,
         salesDocId: expense.salesDocId ?? null,
         shipmentId: expense.shipmentId ?? null,
       });
+      setSourceAccountId(expAny.sourceAccountId ?? null);
+      setVendorId(expAny.vendorId ?? null);
+      setUserId(expAny.userId ?? null);
+      const persistedLines = Array.isArray(expAny.lines) ? expAny.lines : [];
+      setLines(
+        persistedLines.length > 0
+          ? persistedLines.map((line: any) =>
+              newExpenseLine(
+                line.description ?? "",
+                Number(line.qty ?? 1),
+                line.unit ?? "",
+                Number(line.unitPrice ?? line.unit_price ?? 0),
+                Number(line.coaAccountId ?? line.coa_account_id) || null,
+              ),
+            )
+          : [
+              newExpenseLine(
+                expense.description ?? "",
+                Number(expense.qty ?? 1),
+                expense.unit ?? "",
+                Number(expense.unitPrice ?? 0),
+                expense.expenseAccountId ?? null,
+              ),
+            ],
+      );
     }
-  }, [expense]);
+  }, [expense, isNew]);
 
   const purchaseTaxes = taxes.filter((t) => t.kind === "purchase" && t.isActive);
   const selectedTax = taxes.find((t) => t.id === form.taxRateId);
-  const subtotal = Math.round(form.qty * form.unitPrice * 100) / 100;
+  const subtotal = Math.round(lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0) * 100) / 100;
   const taxAmount = selectedTax ? Math.round(subtotal * selectedTax.rate / 100 * 100) / 100 : 0;
-  const total = subtotal + taxAmount;
+  const isWithholdingTax = selectedTax?.kind === "withholding";
+  const total = isWithholdingTax ? subtotal - taxAmount : subtotal + taxAmount;
 
   const canEdit = isNew || (expense?.status === "draft") || (expense?.status === "rejected");
   const locked = !canEdit;
 
   const onCategoryChange = (catId: number | null) => {
     const cat = cats.find((c) => c.id === catId);
+    const filled = new Set<string>();
+    if (cat) {
+      if (cat.expenseAccountId) filled.add("expenseAccountId");
+      if ((cat as any).defaultTaxId) filled.add("taxRateId");
+    }
+    setAutoFilled(filled);
     setForm((f) => ({
       ...f,
       categoryId: catId,
-      expenseAccountId: cat?.expenseAccountId ?? f.expenseAccountId,
-      payableAccountId: cat?.payableAccountId ?? f.payableAccountId,
+      expenseAccountId: cat ? (cat.expenseAccountId ?? null) : f.expenseAccountId,
+      payableAccountId: null,
+      taxRateId: cat ? ((cat as any).defaultTaxId ?? null) : f.taxRateId,
     }));
+    if (cat?.expenseAccountId) {
+      setLines((current) => current.map((line, index) => index === 0 && !line.coaAccountId
+        ? { ...line, coaAccountId: cat.expenseAccountId! }
+        : line));
+    }
   };
 
-  const { data: salesDocs = [] } = useListSalesDocuments({ kind: "order" });
+  const { data: _salesDocsPaginated } = useListSalesDocuments({ kind: "order", limit: 500 });
+  const salesDocs = _salesDocsPaginated?.data ?? [];
   const { data: shipments = [] } = useListFreightShipments();
 
   const save = async () => {
     if (!form.date) { toast({ title: t.common.error, variant: "destructive" }); return; }
-    const body = {
+    if (
+      lines.length === 0 ||
+      lines.some((line) => !line.description.trim() || !(line.qty > 0) || line.unitPrice < 0 || !line.coaAccountId)
+    ) {
+      toast({ title: "Lengkapi deskripsi, nominal, dan COA existing untuk setiap line.", variant: "destructive" });
+      return;
+    }
+    const body: any = {
       date: form.date,
       vendorEmployee: form.vendorEmployee || undefined,
       expenseType: form.expenseType,
+      transactionType: form.transactionType,
       categoryId: form.categoryId || undefined,
       description: form.description || undefined,
       qty: form.qty,
@@ -504,9 +608,19 @@ export default function ExpenseEditorPage() {
       currency: form.currency,
       notes: form.notes || undefined,
       expenseAccountId: form.expenseAccountId || undefined,
-      payableAccountId: form.payableAccountId || undefined,
+      payableAccountId: undefined,
       salesDocId: form.salesDocId || undefined,
       shipmentId: form.shipmentId || undefined,
+      sourceAccountId: sourceAccountId ?? undefined,
+      vendorId: vendorId ?? undefined,
+      userId: userId ?? undefined,
+      lines: lines.map((line) => ({
+        description: line.description,
+        qty: line.qty,
+        unit: line.unit || undefined,
+        unitPrice: line.unitPrice,
+        coaAccountId: line.coaAccountId,
+      })),
     };
     try {
       if (isNew) {
@@ -657,7 +771,7 @@ export default function ExpenseEditorPage() {
               </Button>
             )}
             {!isNew && status === "posted" && (
-              <Button className="bg-green-700 hover:bg-green-600" onClick={() => doAction("pay")} disabled={actionMut.isPending}>
+              <Button className="bg-green-700 hover:bg-green-600" onClick={() => setPayOpen(true)} disabled={actionMut.isPending}>
                 <Banknote size={14} className="mr-1" />
                 Tandai Lunas
               </Button>
@@ -679,6 +793,75 @@ export default function ExpenseEditorPage() {
           </div>
         )}
 
+        {/* Transaction Type Toggle */}
+        <div className="flex items-center gap-2 rounded-lg border bg-card p-1">
+          <button
+            type="button"
+            onClick={() => !locked && setForm((f) => ({ ...f, transactionType: "expense", categoryId: null }))}
+            disabled={locked}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md py-2 px-4 text-sm font-medium transition-colors
+              ${form.transactionType === "expense"
+                ? "bg-red-900/60 text-red-200 border border-red-700 shadow-sm"
+                : "text-muted-foreground hover:bg-muted/60"}`}
+          >
+            <TrendingDown size={15} />
+            Pengeluaran
+          </button>
+          <button
+            type="button"
+            onClick={() => !locked && setForm((f) => ({ ...f, transactionType: "income", categoryId: null }))}
+            disabled={locked}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md py-2 px-4 text-sm font-medium transition-colors
+              ${form.transactionType === "income"
+                ? "bg-emerald-900/60 text-emerald-200 border border-emerald-700 shadow-sm"
+                : "text-muted-foreground hover:bg-muted/60"}`}
+          >
+            <TrendingUp size={15} />
+            Penerimaan
+          </button>
+        </div>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span>Rincian Pengeluaran</span>
+              <Button type="button" variant="outline" size="sm" disabled={locked}
+                onClick={() => setLines((current) => [...current, newExpenseLine()])}>
+                Tambah line
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {lines.map((line, index) => (
+              <div key={index} className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 md:grid-cols-[1.6fr_0.55fr_0.7fr_1.2fr_auto]">
+                <Input placeholder={`Deskripsi line ${index + 1}`} value={line.description} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} />
+                <Input type="number" min="0.0001" step="0.0001" placeholder="Qty" value={line.qty} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, qty: Number(event.target.value) } : item))} />
+                <Input placeholder="Satuan" value={line.unit} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, unit: event.target.value } : item))} />
+                <Input type="number" min="0" step="0.01" placeholder="Harga" value={line.unitPrice} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, unitPrice: Number(event.target.value) } : item))} />
+                <Button type="button" variant="ghost" size="icon" disabled={locked || lines.length === 1}
+                  onClick={() => setLines((current) => current.filter((_, i) => i !== index))} aria-label={`Hapus line ${index + 1}`}>
+                  <X size={15} />
+                </Button>
+                <div className="md:col-span-4">
+                  <AccountCombobox
+                    accounts={accounts.filter((account) => account.type === "expense" || account.type === "asset")}
+                    value={line.coaAccountId}
+                    disabled={locked}
+                    onChange={(id) => setLines((current) => current.map((item, i) => i === index ? { ...item, coaAccountId: id } : item))}
+                    placeholder="Pilih COA existing untuk line ini"
+                  />
+                  {!line.coaAccountId && <p className="mt-1 text-xs text-amber-400">COA belum dikonfirmasi; line ini belum dapat diposting.</p>}
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-end border-t pt-3 text-sm font-medium">Total sebelum pajak: {idr(subtotal)}</div>
+          </CardContent>
+        </Card>
+
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           {/* Left column */}
           <Card>
@@ -688,8 +871,7 @@ export default function ExpenseEditorPage() {
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
                 <Label>Tanggal <span className="text-destructive">*</span></Label>
-                <Input type="date" value={form.date} disabled={locked}
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+                <DatePicker value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} disabled={locked} />
               </div>
               <div className="space-y-1.5">
                 <Label>Tipe Expense</Label>
@@ -704,14 +886,102 @@ export default function ExpenseEditorPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
+                <Label>Vendor Master (Link)</Label>
+                <Select
+                  value={form.vendorId?.toString() ?? "none"}
+                  disabled={locked}
+                  onValueChange={(v) => {
+                    if (v === "none") {
+                      setForm((f) => ({ ...f, vendorId: null }));
+                    } else {
+                      const sup = suppliers.find((s) => s.id.toString() === v);
+                      setForm((f) => ({
+                        ...f,
+                        vendorId: Number(v),
+                        vendorEmployee: sup?.name ?? f.vendorEmployee,
+                      }));
+                    }
+                  }}
+                >
+                  <SelectTrigger><SelectValue placeholder="Pilih vendor dari master…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Tidak dipilih —</SelectItem>
+                    {suppliers.map((s) => (
+                      <SelectItem key={s.id} value={s.id.toString()}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
                 <Label>Vendor / Karyawan</Label>
                 <VendorEmployeeCombobox
                   value={form.vendorEmployee}
-                  onChange={(v) => setForm((f) => ({ ...f, vendorEmployee: v }))}
+                  onChange={(v) => setForm((f) => ({ ...f, vendorEmployee: v, vendorId: v ? f.vendorId : null }))}
                   suppliers={suppliers}
                   customers={customers}
                   disabled={locked}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Vendor (Master)</Label>
+                <Select
+                  value={vendorId ? String(vendorId) : "__none__"}
+                  onValueChange={(v) => {
+                    if (v === "__none__") { setVendorId(null); return; }
+                    const id = Number(v);
+                    setVendorId(id);
+                    const s = (suppliers as any[]).find((s: any) => s.id === id);
+                    if (s && !form.vendorEmployee.trim()) setForm((f) => ({ ...f, vendorEmployee: s.name ?? "" }));
+                  }}
+                  disabled={locked}
+                >
+                  <SelectTrigger><SelectValue placeholder="Pilih vendor master..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Tidak dipilih —</SelectItem>
+                    {(suppliers as any[]).map((s: any) => (
+                      <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Karyawan (User Master)</Label>
+                <Select
+                  value={userId ?? "__none__"}
+                  onValueChange={(v) => {
+                    if (v === "__none__") { setUserId(null); return; }
+                    setUserId(v);
+                    const u = (userList as any[]).find((u: any) => u.id === v);
+                    if (u && !form.vendorEmployee.trim()) setForm((f) => ({ ...f, vendorEmployee: u.name ?? "" }));
+                  }}
+                  disabled={locked}
+                >
+                  <SelectTrigger><SelectValue placeholder="Pilih karyawan..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Tidak dipilih —</SelectItem>
+                    {(userList as any[]).map((u: any) => (
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Sumber Dana (Akun)</Label>
+                <Select
+                  value={sourceAccountId ? String(sourceAccountId) : "__none__"}
+                  onValueChange={(v) => setSourceAccountId(v === "__none__" ? null : Number(v))}
+                  disabled={locked}
+                >
+                  <SelectTrigger><SelectValue placeholder="Pilih akun kas/bank..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— Tidak dipilih —</SelectItem>
+                    {accounts
+                      .filter((account) => ["asset", "bank", "cash"].includes(String(account.type)))
+                      .map((account) => (
+                        <SelectItem key={account.id} value={String(account.id)}>{account.code} – {account.name}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label>Kategori</Label>
@@ -723,7 +993,7 @@ export default function ExpenseEditorPage() {
                   <SelectTrigger><SelectValue placeholder="Pilih kategori..." /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">— Tidak dipilih —</SelectItem>
-                    {cats.filter((c) => c.isActive).map((c) => (
+                    {cats.filter((c) => c.isActive && ((c as any).categoryType === form.transactionType || (c as any).categoryType === "both" || !(c as any).categoryType)).map((c) => (
                       <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
                     ))}
                   </SelectContent>
@@ -772,11 +1042,19 @@ export default function ExpenseEditorPage() {
                     onChange={(e) => setForm((f) => ({ ...f, unitPrice: Number(e.target.value) }))} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Pajak</Label>
+                  <Label className="flex items-center gap-1.5">
+                    Pajak
+                    {autoFilled.has("taxRateId") && (
+                      <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-1.5 py-0.5 rounded">auto</span>
+                    )}
+                  </Label>
                   <Select
                     value={form.taxRateId?.toString() ?? "none"}
                     disabled={locked}
-                    onValueChange={(v) => setForm((f) => ({ ...f, taxRateId: v === "none" ? null : Number(v) }))}
+                    onValueChange={(v) => {
+                      setAutoFilled((s) => { const n = new Set(s); n.delete("taxRateId"); return n; });
+                      setForm((f) => ({ ...f, taxRateId: v === "none" ? null : Number(v) }));
+                    }}
                   >
                     <SelectTrigger><SelectValue placeholder="Tidak ada pajak" /></SelectTrigger>
                     <SelectContent>
@@ -812,43 +1090,38 @@ export default function ExpenseEditorPage() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Override Akun (Opsional)</CardTitle>
+                <CardTitle className="text-sm">Akun Biaya & Hutang</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-xs text-muted-foreground">
-                  Jika kosong, akan menggunakan akun dari kategori atau pengaturan akuntansi.
+                  Terisi otomatis dari kategori. Bisa diubah manual jika perlu.
                 </p>
                 <div className="space-y-1.5">
-                  <Label>Akun Biaya (Debit)</Label>
-                  <Select
-                    value={form.expenseAccountId?.toString() ?? "none"}
+                  <Label className="flex items-center gap-1.5">
+                    Akun Biaya (Debit)
+                    {autoFilled.has("expenseAccountId") && (
+                      <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-1.5 py-0.5 rounded">auto</span>
+                    )}
+                  </Label>
+                  <AccountCombobox
+                    accounts={accounts.filter((a) => a.type === "expense" || a.type === "asset")}
+                    value={form.expenseAccountId ?? null}
                     disabled={locked}
-                    onValueChange={(v) => setForm((f) => ({ ...f, expenseAccountId: v === "none" ? null : Number(v) }))}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Dari kategori / default" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">— Dari kategori / default —</SelectItem>
-                      {accounts.filter((a) => a.type === "expense" || a.type === "asset").map((a) => (
-                        <SelectItem key={a.id} value={a.id.toString()}>{a.code} — {a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(id) => {
+                      setAutoFilled((s) => { const n = new Set(s); n.delete("expenseAccountId"); return n; });
+                      setForm((f) => ({ ...f, expenseAccountId: id }));
+                      setLines((current) => current.map((line, index) => index === 0 && !line.coaAccountId
+                        ? { ...line, coaAccountId: id }
+                        : line));
+                    }}
+                    placeholder="Dari kategori / default"
+                  />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Akun Hutang (Kredit)</Label>
-                  <Select
-                    value={form.payableAccountId?.toString() ?? "none"}
-                    disabled={locked}
-                    onValueChange={(v) => setForm((f) => ({ ...f, payableAccountId: v === "none" ? null : Number(v) }))}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Dari kategori / default" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">— Dari kategori / default —</SelectItem>
-                      {accounts.filter((a) => a.type === "liability").map((a) => (
-                        <SelectItem key={a.id} value={a.id.toString()}>{a.code} — {a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Direct expense selalu dicatat sebagai Dr COA line/PPN Masukan → Cr Bank/Kas.
+                    Untuk transaksi hutang, gunakan modul Vendor Invoice/AP.
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -860,7 +1133,9 @@ export default function ExpenseEditorPage() {
                   <Info size={15} className="text-emerald-400 mt-0.5 shrink-0" />
                   <div>
                     <p className="text-emerald-300 font-medium">Jurnal telah dibuat</p>
-                    <p className="text-muted-foreground text-xs">Entry ID #{expense.entryId}</p>
+                    <Link href={`/accounting/entries/${expense.entryId}`} className="text-xs text-primary hover:underline flex items-center gap-1 mt-0.5">
+                      <ExternalLink size={11} /> Lihat Jurnal Entry #{expense.entryId}
+                    </Link>
                   </div>
                 </CardContent>
               </Card>
@@ -936,6 +1211,16 @@ export default function ExpenseEditorPage() {
                     )}
                   </CardTitle>
                   <span className="ml-auto text-xs text-muted-foreground">{attachments.length} file</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    onClick={() => setScanOpen(true)}
+                  >
+                    <ScanLine size={12} />
+                    Scan OCR
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1014,6 +1299,36 @@ export default function ExpenseEditorPage() {
         )}
       </div>
 
+      {/* OCR Scan dialog */}
+      <ScanDocumentDialog
+        open={scanOpen}
+        onOpenChange={setScanOpen}
+        title="Scan Bukti Pengeluaran (OCR)"
+        onDataExtracted={(data) => {
+          if (data.lines?.length) {
+            setLines(
+              data.lines.map((line: any) =>
+                newExpenseLine(
+                  line.description ?? line.name ?? "",
+                  Number(line.quantity ?? line.qty ?? 1),
+                  line.unit ?? "",
+                  Number(line.unitPrice ?? 0),
+                ),
+              ),
+            );
+          }
+          setForm((f) => {
+            const next = { ...f };
+            if (data.docDate) next.date = data.docDate.slice(0, 10);
+            const cost = data.estimatedCost ?? data.lines?.[0]?.unitPrice ?? null;
+            if (cost != null && cost > 0 && !data.lines?.length) next.unitPrice = cost;
+            if (data.partyName) next.vendorEmployee = data.partyName;
+            if (data.notes) next.description = data.notes;
+            return next;
+          });
+        }}
+      />
+
       {/* Reject dialog */}
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
         <DialogContent>
@@ -1032,6 +1347,53 @@ export default function ExpenseEditorPage() {
               setRejectOpen(false);
               setRejectReason("");
             }}>Tolak</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pay dialog */}
+      <Dialog open={payOpen} onOpenChange={setPayOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Konfirmasi Pembayaran</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              Jurnal pembayaran akan dibuat: <span className="font-medium text-foreground">DR Hutang Usaha / CR Kas atau Bank</span>
+            </p>
+            <div className="space-y-1.5">
+              <Label>Metode Pembayaran</Label>
+              <Select value={payMethod} onValueChange={(v) => setPayMethod(v as "bank" | "cash")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="bank">Transfer Bank</SelectItem>
+                  <SelectItem value="cash">Tunai / Kas</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {expense && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <span className="text-muted-foreground">Total dibayar: </span>
+                <span className="font-semibold">{idr(expense.total)}</span>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPayOpen(false)}>Batal</Button>
+            <Button className="bg-green-700 hover:bg-green-600" onClick={async () => {
+              await actionMut.mutateAsync({
+                id: Number(id),
+                data: { action: "pay" as any, paymentMethod: payMethod },
+              });
+              setPayOpen(false);
+              qc.invalidateQueries({ queryKey: getListExpensesQueryKey() });
+              toast({ title: t.common.success });
+            }} disabled={actionMut.isPending}>
+              <Banknote size={14} className="mr-1" />
+              Konfirmasi Lunas
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

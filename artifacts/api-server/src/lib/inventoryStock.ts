@@ -66,7 +66,7 @@ export async function postStockIn(opts: StockInOptions) {
     FROM inventory_stock
     WHERE product_id = ${productId}
       AND warehouse_id = ${warehouseId}
-      AND (rack_id = ${rackId} OR (rack_id IS NULL AND ${rackId} IS NULL))
+      AND (rack_id = ${rackId}::int OR (rack_id IS NULL AND ${rackId}::int IS NULL))
     LIMIT 1
   `);
 
@@ -136,7 +136,7 @@ export async function postStockOut(opts: StockOutOptions) {
     FROM inventory_stock
     WHERE product_id = ${productId}
       AND warehouse_id = ${warehouseId}
-      AND (rack_id = ${rackId} OR (rack_id IS NULL AND ${rackId} IS NULL))
+      AND (rack_id = ${rackId}::int OR (rack_id IS NULL AND ${rackId}::int IS NULL))
     LIMIT 1
   `);
 

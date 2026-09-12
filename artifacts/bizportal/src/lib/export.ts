@@ -1,7 +1,6 @@
-import ExcelJS from "exceljs";
-
 export async function exportXlsx(filename: string, headers: string[], rows: (string | number | null | undefined)[][]) {
   try {
+    const { default: ExcelJS } = await import("exceljs");
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Data");
 

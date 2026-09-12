@@ -1,0 +1,546 @@
+/**
+ * mktPoGoodsReceiptService.ts — Phase 2G: Goods receipt
+ *
+ * - createGoodsReceipt(): header + item lines in one transaction.
+ *   App-layer validation: accepted_qty + rejected_qty = received_qty per
+ *   item (not a DB CHECK constraint, per schema comment). There is no client
+ *   override: a receipt with unbalanced quantities is always rejected.
+ * - After insert, recomputes the PO's aggregate fulfillment status by
+ *   comparing SUM(accepted_qty) across ALL goods receipts for the PO against
+ *   SUM(qty) across all PO lines:
+ *     - fully accepted (received >= ordered on every line, 0 rejected)   → delivered
+ *     - some accepted, some still outstanding                            → partially_delivered
+ *     - all rejected (accepted_qty sums to 0 across a full/rejected type) → rejected_goods
+ *   Only applied when the PO is currently in_transit | ready_to_ship |
+ *   partially_delivered — never overrides a manually-completed/closed PO.
+ */
+
+import { db, mktPurchaseOrdersTable, mktPoGoodsReceiptsTable, mktPoGoodsReceiptItemsTable, mktPoShipmentItemsTable, mktPoShipmentsTable, mktPoShipmentEventsTable, mktPurchaseOrderLinesTable } from "@workspace/db";
+import { eq, and, inArray, sql, desc, isNotNull } from "drizzle-orm";
+import { logActivity } from "../activityLog.js";
+import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
+import { logger } from "../logger.js";
+import type { ActorInfo } from "./mktPoLifecycleService.js";
+
+type GoodsReceiptRow = typeof mktPoGoodsReceiptsTable.$inferSelect;
+type GoodsReceiptItemRow = typeof mktPoGoodsReceiptItemsTable.$inferSelect;
+
+export interface CreateGoodsReceiptItemInput {
+  shipmentItemId: number;
+  receivedQty: string | number;
+  acceptedQty: string | number;
+  rejectedQty: string | number;
+  condition?: string | null;
+  notes?: string | null;
+}
+
+export interface CreateGoodsReceiptInput {
+  shipmentId: number;
+  receiptType: "full" | "partial" | "rejected";
+  inspectionStatus?: "pending" | "passed" | "failed";
+  receivedBy?: string | null;
+  receivedAt?: Date | null;
+  notes?: string | null;
+  idempotencyKey?: string | null;
+  items: CreateGoodsReceiptItemInput[];
+}
+
+export type CreateGoodsReceiptResult =
+  | { ok: true; receipt: GoodsReceiptRow; items: GoodsReceiptItemRow[]; poStatusUpdatedTo: string | null; alreadyExists?: boolean }
+  | {
+      ok: false;
+      code:
+        | "PO_NOT_FOUND"
+        | "PO_CANCELLED"
+        | "SHIPMENT_NOT_FOUND"
+        | "SHIPMENT_CANCELLED"
+        | "SHIPMENT_NOT_DELIVERED"
+        | "POD_REQUIRED"
+        | "NO_ITEMS"
+        | "INVALID_SHIPMENT_ITEM"
+        | "DUPLICATE_SHIPMENT_ITEM"
+        | "QTY_MISMATCH"
+        | "QTY_INVALID"
+        | "QTY_EXCEEDS_SHIPMENT"
+        | "IDEMPOTENCY_KEY_REUSE";
+      message?: string;
+      details?: unknown;
+    };
+
+function toNum(v: string | number): number {
+  return typeof v === "number" ? v : parseFloat(v);
+}
+
+export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: ActorInfo): Promise<CreateGoodsReceiptResult> {
+  if (!input.items || input.items.length === 0) {
+    return { ok: false, code: "NO_ITEMS", message: "Goods receipt harus punya minimal 1 item" };
+  }
+
+  const mismatches = input.items
+    .map((item) => {
+      const received = toNum(item.receivedQty);
+      const accepted = toNum(item.acceptedQty);
+      const rejected = toNum(item.rejectedQty);
+      const diff = Math.abs(received - (accepted + rejected));
+      return diff > 0.005 ? { shipmentItemId: item.shipmentItemId, received, accepted, rejected } : null;
+    })
+    .filter(Boolean);
+  if (mismatches.length > 0) {
+    return { ok: false, code: "QTY_MISMATCH", message: "accepted_qty + rejected_qty harus sama dengan received_qty", details: mismatches };
+  }
+  const duplicateItemIds = input.items
+    .map((item) => item.shipmentItemId)
+    .filter((id, index, ids) => ids.indexOf(id) !== index);
+  if (duplicateItemIds.length > 0) {
+    return {
+      ok: false,
+      code: "DUPLICATE_SHIPMENT_ITEM",
+      message: "Satu shipment item hanya boleh muncul sekali dalam goods receipt",
+      details: [...new Set(duplicateItemIds)],
+    };
+  }
+  const invalidQty = input.items.find((item) => {
+    const received = toNum(item.receivedQty);
+    const accepted = toNum(item.acceptedQty);
+    const rejected = toNum(item.rejectedQty);
+    return ![received, accepted, rejected].every(Number.isFinite)
+      || received < 0
+      || accepted < 0
+      || rejected < 0;
+  });
+  if (invalidQty) {
+    return { ok: false, code: "QTY_INVALID", message: "Qty goods receipt harus berupa angka non-negatif" };
+  }
+
+  const now = new Date();
+  const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  const result = await db.transaction(async (tx) => {
+    const [shipment] = await tx
+      .select()
+      .from(mktPoShipmentsTable)
+      .where(eq(mktPoShipmentsTable.id, input.shipmentId))
+      .for("update")
+      .limit(1);
+    if (!shipment) return { kind: "failure" as const, result: { ok: false as const, code: "SHIPMENT_NOT_FOUND" as const } };
+
+    // Lock the PO as well as the shipment. This serializes aggregate status
+    // recalculation across split shipments belonging to the same PO.
+    const [po] = await tx
+      .select()
+      .from(mktPurchaseOrdersTable)
+      .where(eq(mktPurchaseOrdersTable.id, shipment.poId))
+      .for("update")
+      .limit(1);
+    if (!po) {
+      return { kind: "failure" as const, result: { ok: false as const, code: "PO_NOT_FOUND" as const } };
+    }
+    const idempotencyKey = input.idempotencyKey?.trim() || null;
+    if (idempotencyKey) {
+      const [existingReceipt] = await tx
+        .select()
+        .from(mktPoGoodsReceiptsTable)
+        .where(and(
+          eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId),
+          eq(mktPoGoodsReceiptsTable.idempotencyKey, idempotencyKey),
+        ))
+        .limit(1);
+      if (existingReceipt) {
+        const existingItems = await tx
+          .select()
+          .from(mktPoGoodsReceiptItemsTable)
+          .where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, existingReceipt.id));
+        const sameRequest =
+          existingReceipt.receiptType === input.receiptType
+          && existingReceipt.inspectionStatus === (input.inspectionStatus ?? "pending")
+          && existingReceipt.notes === (input.notes ?? null)
+          && existingItems.length === input.items.length
+          && input.items.every((item) => {
+            const found = existingItems.find((row) => row.shipmentItemId === item.shipmentItemId);
+            return found
+              && Number(found.receivedQty) === toNum(item.receivedQty)
+              && Number(found.acceptedQty) === toNum(item.acceptedQty)
+              && Number(found.rejectedQty) === toNum(item.rejectedQty)
+              && found.condition === (item.condition ?? "GOOD")
+              && found.notes === (item.notes ?? null);
+          });
+        if (!sameRequest) {
+          return {
+            kind: "failure" as const,
+            result: {
+              ok: false as const,
+              code: "IDEMPOTENCY_KEY_REUSE" as const,
+              message: "Idempotency-Key sudah digunakan untuk payload goods receipt yang berbeda",
+            },
+          };
+        }
+        return {
+          kind: "success" as const,
+          receipt: existingReceipt,
+          items: existingItems,
+          alreadyExists: true,
+          shipment,
+          poStatusUpdatedTo: null,
+        };
+      }
+    }
+    if (po.status === "cancelled") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "PO_CANCELLED" as const, message: "Goods receipt tidak boleh dibuat untuk PO yang dibatalkan" },
+      };
+    }
+    if (shipment.shipmentStatus === "cancelled") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "SHIPMENT_CANCELLED" as const, message: "Goods receipt tidak boleh dibuat untuk shipment yang dibatalkan" },
+      };
+    }
+
+    if (shipment.shipmentStatus !== "delivered") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "SHIPMENT_NOT_DELIVERED" as const, message: "Goods receipt hanya boleh setelah shipment delivered" },
+      };
+    }
+
+    const [pod] = await tx
+      .select({ id: mktPoShipmentEventsTable.id })
+      .from(mktPoShipmentEventsTable)
+      .where(and(
+        eq(mktPoShipmentEventsTable.shipmentId, input.shipmentId),
+        eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+        isNotNull(mktPoShipmentEventsTable.attachmentObjectPath),
+      ))
+      .orderBy(desc(mktPoShipmentEventsTable.eventSequence))
+      .limit(1);
+    if (!pod) {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "POD_REQUIRED" as const, message: "POD wajib diunggah sebelum goods receipt" },
+      };
+    }
+
+    const shipmentItemIds = input.items.map((i) => i.shipmentItemId);
+    const validShipmentItems = await tx
+      .select({
+        id: mktPoShipmentItemsTable.id,
+        poLineId: mktPoShipmentItemsTable.poLineId,
+        qty: mktPoShipmentItemsTable.qty,
+      })
+      .from(mktPoShipmentItemsTable)
+      .where(and(eq(mktPoShipmentItemsTable.shipmentId, input.shipmentId), inArray(mktPoShipmentItemsTable.id, shipmentItemIds)));
+    const validIdSet = new Set(validShipmentItems.map((i) => i.id));
+    const invalid = shipmentItemIds.find((id) => !validIdSet.has(id));
+    if (invalid !== undefined) {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "INVALID_SHIPMENT_ITEM" as const, message: `shipment_item_id ${invalid} tidak ditemukan pada shipment ini` },
+      };
+    }
+
+    const priorReceiptItems = await tx
+      .select({
+        shipmentItemId: mktPoGoodsReceiptItemsTable.shipmentItemId,
+        receivedQty: mktPoGoodsReceiptItemsTable.receivedQty,
+      })
+      .from(mktPoGoodsReceiptItemsTable)
+      .innerJoin(
+        mktPoGoodsReceiptsTable,
+        eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id),
+      )
+      .where(and(
+        eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId),
+        inArray(mktPoGoodsReceiptItemsTable.shipmentItemId, shipmentItemIds),
+      ));
+    const alreadyReceivedByItem = new Map<number, number>();
+    for (const item of priorReceiptItems) {
+      alreadyReceivedByItem.set(
+        item.shipmentItemId,
+        (alreadyReceivedByItem.get(item.shipmentItemId) ?? 0) + Number(item.receivedQty),
+      );
+    }
+    const shipmentItemById = new Map(validShipmentItems.map((item) => [item.id, item]));
+    const overage = input.items.find((item) => {
+      const received = toNum(item.receivedQty);
+      const shipmentItem = shipmentItemById.get(item.shipmentItemId);
+      return shipmentItem
+        && (alreadyReceivedByItem.get(item.shipmentItemId) ?? 0) + received > Number(shipmentItem.qty) + 0.005;
+    });
+    if (overage) {
+      const shipmentItem = shipmentItemById.get(overage.shipmentItemId)!;
+      return {
+        kind: "failure" as const,
+        result: {
+          ok: false as const,
+          code: "QTY_EXCEEDS_SHIPMENT" as const,
+          message: `Qty diterima melebihi qty shipment item ${overage.shipmentItemId}`,
+          details: {
+            shipmentItemId: overage.shipmentItemId,
+            shipmentQty: Number(shipmentItem.qty),
+            alreadyReceived: alreadyReceivedByItem.get(overage.shipmentItemId) ?? 0,
+            requested: toNum(overage.receivedQty),
+          },
+        },
+      };
+    }
+
+    // The shipment row lock serializes retries/concurrent receives. A matching
+    // receipt fingerprint is returned instead of creating a duplicate header.
+    const existingReceipts = await tx
+      .select()
+      .from(mktPoGoodsReceiptsTable)
+      .where(eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId));
+    for (const existingReceipt of existingReceipts) {
+      if (existingReceipt.receiptType !== input.receiptType || existingReceipt.notes !== (input.notes ?? null)) continue;
+      const existingItems = await tx
+        .select()
+        .from(mktPoGoodsReceiptItemsTable)
+        .where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, existingReceipt.id));
+      const same = existingItems.length === input.items.length
+        && input.items.every((item) => {
+          const found = existingItems.find((row) => row.shipmentItemId === item.shipmentItemId);
+          return found
+            && Number(found.receivedQty) === toNum(item.receivedQty)
+            && Number(found.acceptedQty) === toNum(item.acceptedQty)
+            && Number(found.rejectedQty) === toNum(item.rejectedQty)
+            && found.condition === (item.condition ?? "GOOD")
+            && found.notes === (item.notes ?? null);
+        });
+      if (same) {
+        return {
+          kind: "success" as const,
+          receipt: existingReceipt,
+          items: existingItems,
+          alreadyExists: true,
+          shipment,
+          poStatusUpdatedTo: null,
+        };
+      }
+    }
+
+    const [inserted] = await tx
+      .insert(mktPoGoodsReceiptsTable)
+      .values({
+        shipmentId: input.shipmentId,
+        receiptNumber: `MKT-GR-${yyyymm}-PENDING`,
+        receiptType: input.receiptType,
+        inspectionStatus: input.inspectionStatus ?? "pending",
+        receivedBy: actor.actorId ?? null,
+        receivedAt: input.receivedAt ?? now,
+        notes: input.notes ?? null,
+         idempotencyKey,
+      })
+      .returning({ id: mktPoGoodsReceiptsTable.id });
+
+    const receiptSeq = String(inserted.id).padStart(4, "0");
+    const receiptNumber = `MKT-GR-${yyyymm}-${receiptSeq}`;
+
+    const [receipt] = await tx
+      .update(mktPoGoodsReceiptsTable)
+      .set({ receiptNumber })
+      .where(eq(mktPoGoodsReceiptsTable.id, inserted.id))
+      .returning();
+
+    const items = await tx
+      .insert(mktPoGoodsReceiptItemsTable)
+      .values(
+        input.items.map((item) => ({
+          goodsReceiptId: inserted.id,
+          shipmentItemId: item.shipmentItemId,
+          receivedQty: String(item.receivedQty),
+          acceptedQty: String(item.acceptedQty),
+          rejectedQty: String(item.rejectedQty),
+          condition: item.condition ?? "GOOD",
+          notes: item.notes ?? null,
+        })),
+      )
+      .returning();
+
+    // Recompute the PO aggregate while the PO lock is still held. Keeping this
+    // mutation in the same transaction prevents a committed GR with a stale
+    // PO status when concurrent receipts target split shipments.
+    const ELIGIBLE: string[] = ["ready_to_ship", "in_transit", "partially_delivered"];
+    let poStatusUpdatedTo: string | null = null;
+    if (ELIGIBLE.includes(po.status)) {
+      const [{ orderedTotal }] = await tx
+        .select({ orderedTotal: sql<string>`COALESCE(SUM(${mktPurchaseOrderLinesTable.qty}), 0)` })
+        .from(mktPurchaseOrderLinesTable)
+        .where(eq(mktPurchaseOrderLinesTable.poId, po.id));
+      const [{ acceptedTotal, rejectedTotal }] = await tx
+        .select({
+          acceptedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.acceptedQty}), 0)`,
+          rejectedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.rejectedQty}), 0)`,
+        })
+        .from(mktPoGoodsReceiptItemsTable)
+        .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+        .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+        .where(eq(mktPoShipmentsTable.poId, po.id));
+      const [{ acceptedNotPassed }] = await tx
+        .select({
+          acceptedNotPassed: sql<string>`COALESCE(SUM(CASE WHEN ${mktPoGoodsReceiptItemsTable.acceptedQty} > 0 AND ${mktPoGoodsReceiptsTable.inspectionStatus} <> 'passed' THEN ${mktPoGoodsReceiptItemsTable.acceptedQty} ELSE 0 END), 0)`,
+        })
+        .from(mktPoGoodsReceiptItemsTable)
+        .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+        .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+        .where(eq(mktPoShipmentsTable.poId, po.id));
+
+      const ordered = parseFloat(orderedTotal) || 0;
+      const accepted = parseFloat(acceptedTotal) || 0;
+      const rejected = parseFloat(rejectedTotal) || 0;
+      const nextStatus = ordered > 0 && accepted <= 0 && rejected > 0
+        ? "rejected_goods"
+        : ordered > 0 && accepted >= ordered && Number(acceptedNotPassed) <= 0
+          ? "delivered"
+          : accepted > 0 || rejected > 0
+            ? "partially_delivered"
+            : null;
+
+      if (nextStatus && nextStatus !== po.status) {
+        const [updatedPo] = await tx
+          .update(mktPurchaseOrdersTable)
+          .set({ status: nextStatus as typeof po.status, updatedAt: new Date() })
+          .where(and(eq(mktPurchaseOrdersTable.id, po.id), eq(mktPurchaseOrdersTable.status, po.status)))
+          .returning({ id: mktPurchaseOrdersTable.id });
+        if (updatedPo) poStatusUpdatedTo = nextStatus;
+      }
+    }
+
+    return { receipt, items, shipment, po, poStatusUpdatedTo, alreadyExists: false };
+  });
+
+  if (result.kind === "failure") return result.result;
+  const { shipment } = result;
+
+  if (!result.alreadyExists) {
+    logActivity({
+      mktPurchaseOrderId: shipment.poId,
+      actorType: actor.actorType,
+      actorId: actor.actorId ?? null,
+      actorName: actor.actorName ?? null,
+      action: "mkt_po_goods_received",
+      description: `Goods receipt ${result.receipt.receiptNumber} dibuat untuk shipment ${shipment.shipmentNumber}`,
+      newValue: { goodsReceiptId: result.receipt.id, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType, itemCount: result.items.length },
+    }).catch(() => {});
+
+    void enqueueNotification({
+      eventType: "mkt_po_goods_received_notification",
+      recipientType: "admin",
+      purchaseOrderId: shipment.poId,
+      payloadJson: { poId: shipment.poId, shipmentNumber: shipment.shipmentNumber, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType },
+      deduplicationKey: `mkt_po_goods_received:${result.receipt.id}`,
+    }).catch(() => {});
+
+    if (result.poStatusUpdatedTo) {
+      void logActivity({
+        mktPurchaseOrderId: shipment.poId,
+        actorType: actor.actorType,
+        actorId: actor.actorId ?? null,
+        actorName: actor.actorName ?? null,
+        action: "mkt_po_status_auto_updated",
+        description: `Status PO diperbarui otomatis setelah goods receipt ${result.receipt.receiptNumber}`,
+        newValue: { status: result.poStatusUpdatedTo, goodsReceiptId: result.receipt.id },
+      });
+    }
+    if (input.inspectionStatus === "passed") {
+      void logActivity({
+        mktPurchaseOrderId: shipment.poId,
+        actorType: actor.actorType,
+        actorId: actor.actorId ?? null,
+        actorName: actor.actorName ?? null,
+        action: "mkt_po_receipt_completed",
+        description: `Goods receipt ${result.receipt.receiptNumber} selesai diperiksa`,
+        newValue: { goodsReceiptId: result.receipt.id, inspectionStatus: input.inspectionStatus },
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    receipt: result.receipt,
+    items: result.items,
+    poStatusUpdatedTo: result.alreadyExists ? null : result.poStatusUpdatedTo,
+    alreadyExists: result.alreadyExists,
+  };
+}
+
+/**
+ * updatePoAggregateStatusFromReceipts — recompute and (if eligible) apply
+ * the PO's aggregate fulfillment status from the sum of all goods receipt
+ * items across all shipments belonging to the PO.
+ *
+ * Only auto-transitions a PO currently in ready_to_ship | in_transit |
+ * partially_delivered — never overrides completed/closed/cancelled POs.
+ */
+export async function updatePoAggregateStatusFromReceipts(poId: number, actor: ActorInfo): Promise<string | null> {
+  const poRows = await db.select().from(mktPurchaseOrdersTable).where(eq(mktPurchaseOrdersTable.id, poId)).limit(1);
+  const po = poRows[0];
+  if (!po) return null;
+
+  const ELIGIBLE: (typeof po.status)[] = ["ready_to_ship", "in_transit", "partially_delivered"];
+  if (!ELIGIBLE.includes(po.status)) return null;
+
+  const [{ orderedTotal }] = await db
+    .select({ orderedTotal: sql<string>`COALESCE(SUM(${mktPurchaseOrderLinesTable.qty}), 0)` })
+    .from(mktPurchaseOrderLinesTable)
+    .where(eq(mktPurchaseOrderLinesTable.poId, poId));
+
+  const [{ acceptedTotal, rejectedTotal }] = await db
+    .select({
+      acceptedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.acceptedQty}), 0)`,
+      rejectedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.rejectedQty}), 0)`,
+    })
+    .from(mktPoGoodsReceiptItemsTable)
+    .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+    .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+    .where(eq(mktPoShipmentsTable.poId, poId));
+
+  const ordered = parseFloat(orderedTotal) || 0;
+  const accepted = parseFloat(acceptedTotal) || 0;
+  const rejected = parseFloat(rejectedTotal) || 0;
+
+  let nextStatus: string | null = null;
+  if (ordered > 0 && accepted <= 0 && rejected > 0) {
+    nextStatus = "rejected_goods";
+  } else if (ordered > 0 && accepted >= ordered) {
+    nextStatus = "delivered";
+  } else if (accepted > 0 || rejected > 0) {
+    nextStatus = "partially_delivered";
+  }
+
+  if (!nextStatus || nextStatus === po.status) return null;
+
+  const [updated] = await db
+    .update(mktPurchaseOrdersTable)
+    .set({ status: nextStatus as typeof po.status, updatedAt: new Date() })
+    .where(and(eq(mktPurchaseOrdersTable.id, poId), eq(mktPurchaseOrdersTable.status, po.status)))
+    .returning({ id: mktPurchaseOrdersTable.id });
+
+  if (!updated) return null;
+
+  logActivity({
+    mktPurchaseOrderId: poId,
+    actorType: actor.actorType,
+    actorId: actor.actorId ?? null,
+    actorName: actor.actorName ?? null,
+    action: "mkt_po_status_auto_updated",
+    description: `Status PO ${po.poNumber} diperbarui otomatis dari agregat goods receipt`,
+    oldValue: { status: po.status },
+    newValue: { status: nextStatus, orderedQty: ordered, acceptedQty: accepted, rejectedQty: rejected },
+  }).catch(() => {});
+
+  return nextStatus;
+}
+
+export async function getGoodsReceiptById(id: number): Promise<GoodsReceiptRow | undefined> {
+  const rows = await db.select().from(mktPoGoodsReceiptsTable).where(eq(mktPoGoodsReceiptsTable.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function listGoodsReceiptItems(goodsReceiptId: number): Promise<GoodsReceiptItemRow[]> {
+  return db.select().from(mktPoGoodsReceiptItemsTable).where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, goodsReceiptId));
+}
+
+export async function listGoodsReceiptsForShipment(shipmentId: number): Promise<GoodsReceiptRow[]> {
+  return db.select().from(mktPoGoodsReceiptsTable).where(eq(mktPoGoodsReceiptsTable.shipmentId, shipmentId));
+}

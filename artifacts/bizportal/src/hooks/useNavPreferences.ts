@@ -3,17 +3,21 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 interface NavPrefs {
   hiddenItems: string[];
   itemOrder: string[];
+  childOrder: Record<string, string[]>;
 }
 
 const QUERY_KEY = ["nav-preferences"] as const;
 
+const DEFAULT_PREFS: NavPrefs = { hiddenItems: [], itemOrder: [], childOrder: {} };
+
 async function fetchNavPrefs(): Promise<NavPrefs> {
   const r = await fetch("/api/nav-preferences", { credentials: "include" });
-  if (!r.ok) return { hiddenItems: [], itemOrder: [] };
+  if (!r.ok) return DEFAULT_PREFS;
   const data = (await r.json()) as Partial<NavPrefs>;
   return {
     hiddenItems: data.hiddenItems ?? [],
     itemOrder: data.itemOrder ?? [],
+    childOrder: data.childOrder ?? {},
   };
 }
 
@@ -29,7 +33,7 @@ async function saveNavPrefs(prefs: NavPrefs): Promise<void> {
 export function useNavPreferences() {
   const qc = useQueryClient();
 
-  const { data = { hiddenItems: [], itemOrder: [] } } = useQuery({
+  const { data = DEFAULT_PREFS } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: fetchNavPrefs,
     staleTime: 5 * 60_000,
@@ -60,13 +64,18 @@ export function useNavPreferences() {
 
   const reorder = (itemOrder: string[]) => save({ itemOrder });
 
-  const reset = () => save({ hiddenItems: [], itemOrder: [] });
+  const reorderChildren = (basePath: string, order: string[]) =>
+    save({ childOrder: { ...data.childOrder, [basePath]: order } });
+
+  const reset = () => save({ hiddenItems: [], itemOrder: [], childOrder: {} });
 
   return {
     hiddenItems: data.hiddenItems,
     itemOrder: data.itemOrder,
+    childOrder: data.childOrder,
     toggle,
     reorder,
+    reorderChildren,
     reset,
   };
 }

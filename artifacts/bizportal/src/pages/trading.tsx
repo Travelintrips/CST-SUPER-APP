@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/layout/AppShell";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,9 +19,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useVendors } from "@/hooks/useVendors";
 import {
   useListStocks,
-  useListSuppliers,
   useCreateStockItem,
   useUpdateStockItem,
   useDeleteStockItem,
@@ -28,7 +29,6 @@ import {
   useUpdateSupplier,
   useDeleteSupplier,
   getListStocksQueryKey,
-  getListSuppliersQueryKey,
   type StockItem,
   type Supplier,
 } from "@workspace/api-client-react";
@@ -39,7 +39,7 @@ export default function TradingPage() {
   const { toast } = useToast();
 
   const { data: stocks, isLoading: isLoadingStocks } = useListStocks();
-  const { data: suppliers, isLoading: isLoadingSuppliers } = useListSuppliers({ query: { queryKey: getListSuppliersQueryKey() } });
+  const { data: suppliers, isLoading: isLoadingSuppliers } = useVendors();
 
   const createStock = useCreateStockItem();
   const updateStock = useUpdateStockItem();
@@ -58,7 +58,7 @@ export default function TradingPage() {
   const formatIDR = (value: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(value);
 
   const refetchStocks = () => queryClient.invalidateQueries({ queryKey: getListStocksQueryKey() });
-  const refetchSuppliers = () => queryClient.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
+  const refetchSuppliers = () => queryClient.invalidateQueries({ queryKey: ["vendors-filtered"] });
 
   const handleCreateStock = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -155,10 +155,11 @@ export default function TradingPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{t.trading.title}</h1>
-          <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">{t.trading.subtitle}</p>
-        </div>
+        <PageHeader
+          title={t.trading.title}
+          description={t.trading.subtitle}
+          favoriteEnabled
+        />
 
         <Tabs defaultValue="inventory" className="space-y-4">
           <TabsList className="w-full sm:w-auto">
@@ -220,7 +221,7 @@ export default function TradingPage() {
                       <TableRow>
                         <TableCell colSpan={6} className="h-24 text-center">
                           <div className="flex flex-col items-center justify-center text-muted-foreground">
-                            <img src="/images/logo.png" alt="CST Logistics" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                            <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                             <p>{t.trading.noStock}</p>
                           </div>
                         </TableCell>
@@ -260,7 +261,7 @@ export default function TradingPage() {
                 ))
               ) : !stocks || stocks.length === 0 ? (
                 <Card><CardContent className="p-8 text-center">
-                  <img src="/images/logo.png" alt="CST Logistics" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                  <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                   <p className="text-sm text-muted-foreground">{t.trading.noStock}</p>
                 </CardContent></Card>
               ) : (

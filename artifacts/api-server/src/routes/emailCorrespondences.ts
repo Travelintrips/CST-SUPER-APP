@@ -7,8 +7,10 @@ import {
 } from "@workspace/db";
 import { eq, desc, ilike, or, and, inArray, gte, lte } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
+import { ObjectStorageService } from "../lib/objectStorage.js";
 
 const router = Router();
+const _emailObjectStorage = new ObjectStorageService();
 
 router.use(async (req, res, next) => {
   if (!(await requireClerkUser(req, res))) return;
@@ -310,11 +312,19 @@ router.delete("/:id", async (req, res) => {
     .limit(1);
   if (!row) return res.status(404).json({ message: "Email tidak ditemukan" });
 
+  // Ambil fileUrl semua attachment sebelum dihapus dari DB
+  const attachments = await db
+    .select({ fileUrl: emailAttachmentsTable.fileUrl })
+    .from(emailAttachmentsTable)
+    .where(eq(emailAttachmentsTable.emailCorrespondenceId, id));
   // Cascade: delete links and attachments first
   await db.delete(emailLinksTable).where(eq(emailLinksTable.emailCorrespondenceId, id));
   await db.delete(emailAttachmentsTable).where(eq(emailAttachmentsTable.emailCorrespondenceId, id));
   await db.delete(emailCorrespondencesTable).where(eq(emailCorrespondencesTable.id, id));
-
+  // Cascade storage cleanup — hapus file fisik (non-fatal)
+  for (const a of attachments) {
+    if (a.fileUrl) _emailObjectStorage.tryDeletePrivateEntity(a.fileUrl).catch(() => {});
+  }
   return res.json({ message: "Email berhasil dihapus" });
 });
 

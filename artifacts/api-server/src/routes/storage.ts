@@ -1,5 +1,6 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, raw, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
+import { extname } from "path";
 import multer from "multer";
 import {
   RequestUploadUrlBody,
@@ -8,25 +9,56 @@ import {
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
 import { ObjectPermission } from "../lib/objectAcl.js";
 import { requireAdmin, requireClerkUser } from "../lib/requireAdmin.js";
+import { logStorageEvent, getRequestIp, getActor } from "../lib/storageAuditLog.js";
+import { createRateLimiter } from "../lib/userRateLimiter.js";
+import { getSetting } from "../lib/appSecrets.js";
 
-// Per-user rate limit for presigned URL generation: 50 per user per hour.
-// Keyed by authenticated user ID (Clerk session) so it cannot be bypassed by
-// rotating IPs or forging x-forwarded-for headers.
-interface RateEntry { count: number; resetAt: number }
-const UPLOAD_URL_USER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const UPLOAD_URL_USER_LIMIT = 50;
-const uploadUrlUserRateMap = new Map<string, RateEntry>();
+// ── C2 FIX: MIME allowlist for multipart server-side uploads (portal customers) ─
+// Stricter than presigned (staff) allowlist — only images and PDF.
+// Extension check is a second layer defense against spoofed MIME headers.
+const MULTIPART_UPLOAD_ALLOWED_MIME = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+]);
+
+const MULTIPART_UPLOAD_ALLOWED_EXT = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".pdf",
+]);
+
+// Allowed MIME types for presigned URL uploads (staff BizPortal).
+// Excludes executables, scripts, and server-side code formats.
+const PRESIGNED_ALLOWED_MIME_TYPES = new Set([
+  // Images
+  "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+  "image/tiff", "image/bmp", "image/heic", "image/heif", "image/svg+xml",
+  // Documents
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // Text
+  "text/plain", "text/csv",
+  // Archives
+  "application/zip", "application/x-zip-compressed",
+]);
+
+// Per-user rate limits — keyed by authenticated user ID (Clerk session)
+// so they cannot be bypassed by rotating IPs or forging x-forwarded-for.
+const uploadUrlLimiter = createRateLimiter({ windowMs: 60 * 60_000, limit: 50 }); // 50/hour
+const uploadFileLimiter = createRateLimiter({ windowMs: 60 * 60_000, limit: 50 }); // 50/hour
 
 function checkUploadUrlUserLimit(userId: string): boolean {
-  const now = Date.now();
-  let entry = uploadUrlUserRateMap.get(userId);
-  if (!entry || now > entry.resetAt) {
-    entry = { count: 0, resetAt: now + UPLOAD_URL_USER_WINDOW_MS };
-  }
-  if (entry.count >= UPLOAD_URL_USER_LIMIT) return false;
-  entry.count += 1;
-  uploadUrlUserRateMap.set(userId, entry);
-  return true;
+  return uploadUrlLimiter.check(userId);
 }
 
 const router: IRouter = Router();
@@ -47,10 +79,72 @@ router.post("/storage/uploads/file", upload.single("file"), async (req: Request,
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+  // Per-user upload rate limit: 50 file uploads per hour
+  const userId = (req.user as { id: string }).id;
+  if (!uploadFileLimiter.check(userId)) {
+    res.status(429).json({ error: "Terlalu banyak upload file. Batas: 50/jam per akun." });
+    return;
+  }
   if (!req.file) {
     res.status(400).json({ error: "No file uploaded" });
     return;
   }
+
+  // ── C2 FIX: Server-side MIME + extension validation ──────────────────────────
+  const mimeType = (req.file.mimetype ?? "").toLowerCase();
+  if (!MULTIPART_UPLOAD_ALLOWED_MIME.has(mimeType)) {
+    res.status(400).json({
+      error: "Tipe file tidak diizinkan. Hanya JPEG, PNG, WebP, dan PDF yang diterima.",
+      receivedMime: mimeType,
+    });
+    return;
+  }
+  const fileExt = extname(req.file.originalname ?? "").toLowerCase();
+  if (!MULTIPART_UPLOAD_ALLOWED_EXT.has(fileExt)) {
+    res.status(400).json({
+      error: "Ekstensi file tidak diizinkan.",
+      receivedExtension: fileExt,
+    });
+    return;
+  }
+  // ── C2 FIX: reject empty file ────────────────────────────────────────────────
+  if (req.file.size === 0) {
+    res.status(400).json({ error: "File kosong tidak diizinkan." });
+    return;
+  }
+  // ── C2 FIX: magic-byte signature checks ──────────────────────────────────────
+  // JPEG: FF D8 FF
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
+    if (req.file.buffer[0] !== 0xFF || req.file.buffer[1] !== 0xD8 || req.file.buffer[2] !== 0xFF) {
+      res.status(400).json({ error: "File tidak valid: magic byte tidak sesuai JPEG." });
+      return;
+    }
+  }
+  // PNG: 89 50 4E 47
+  if (mimeType === "image/png") {
+    if (req.file.buffer[0] !== 0x89 || req.file.buffer[1] !== 0x50 || req.file.buffer[2] !== 0x4E || req.file.buffer[3] !== 0x47) {
+      res.status(400).json({ error: "File tidak valid: magic byte tidak sesuai PNG." });
+      return;
+    }
+  }
+  // WebP: RIFF (52 49 46 46) at [0..3] + WEBP (57 45 42 50) at [8..11]
+  if (mimeType === "image/webp") {
+    if (
+      req.file.buffer[0] !== 0x52 || req.file.buffer[1] !== 0x49 || req.file.buffer[2] !== 0x46 || req.file.buffer[3] !== 0x46 ||
+      req.file.buffer[8] !== 0x57 || req.file.buffer[9] !== 0x45 || req.file.buffer[10] !== 0x42 || req.file.buffer[11] !== 0x50
+    ) {
+      res.status(400).json({ error: "File tidak valid: magic byte tidak sesuai WebP." });
+      return;
+    }
+  }
+  // PDF: %PDF (25 50 44 46)
+  if (mimeType === "application/pdf") {
+    if (req.file.buffer[0] !== 0x25 || req.file.buffer[1] !== 0x50 || req.file.buffer[2] !== 0x44 || req.file.buffer[3] !== 0x46) {
+      res.status(400).json({ error: "File tidak valid: magic byte tidak sesuai PDF." });
+      return;
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   try {
     const objectPath = await objectStorageService.uploadPrivateEntity(req.file.buffer, req.file.mimetype);
@@ -67,6 +161,20 @@ router.post("/storage/uploads/file", upload.single("file"), async (req: Request,
       req.log.warn({ err: aclErr }, "Could not set ACL on uploaded object; admin-only fallback applies");
     }
 
+    const { actorId, actorType } = getActor(req);
+    logStorageEvent({
+      action: "upload",
+      entityType: "presigned_upload",
+      objectPath,
+      fileName: req.file.originalname,
+      contentType: req.file.mimetype,
+      fileSizeBytes: req.file.size,
+      actorId,
+      actorType,
+      ipAddress: getRequestIp(req),
+      details: "server-side multipart upload",
+    });
+
     res.json({ objectPath, url: `/api/storage${objectPath}` });
   } catch (error) {
     req.log.error({ err: error }, "Error uploading file");
@@ -82,7 +190,7 @@ router.post("/storage/uploads/file", upload.single("file"), async (req: Request,
 //
 // Enforcement timeline:
 //   t=0        : URL issued, session recorded with checkAfter = t + ttl + 60s
-//   t=15m      : presigned URL expires (GCS rejects any PUT after this)
+//   t=15m      : the server-proxied upload window expires
 //   t=16m      : background interval may fire and check the object
 //   t≤16m+5min : background interval fires; oversized object deleted if present
 //
@@ -96,6 +204,7 @@ const PRESIGNED_URL_TTL_SEC = 900;              // must match signObjectURL ttlS
 interface UploadGuardSession {
   objectPath: string;
   userId: string;
+  contentType: string;
   checkAfter: number; // ms — check once URL has expired + 60s grace
 }
 const pendingUploadGuards = new Map<string, UploadGuardSession>();
@@ -107,11 +216,9 @@ const _uploadGuardInterval = setInterval(async () => {
     if (now < session.checkAfter) continue;
     pendingUploadGuards.delete(key);
     try {
-      const objectFile = await objectStorageService.getObjectEntityFile(session.objectPath);
-      const [metadata] = await objectFile.getMetadata();
-      const sizeBytes = Number(metadata.size ?? 0);
+      const sizeBytes = await objectStorageService.getObjectEntitySize(session.objectPath);
       if (sizeBytes > PRESIGNED_MAX_BYTES) {
-        await objectFile.delete();
+        await objectStorageService.tryDeletePrivateEntity(session.objectPath);
         console.warn(
           `[upload-guard] Deleted oversized presigned upload: ${session.objectPath}` +
           ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB, user: ${session.userId})`,
@@ -128,18 +235,18 @@ if (typeof _uploadGuardInterval.unref === "function") _uploadGuardInterval.unref
 /**
  * POST /storage/uploads/request-url
  *
- * Request a presigned GCS URL for file upload.
+ * Request a server-proxied Supabase Storage upload path.
  * Restricted to internal BizPortal staff (Clerk/session auth).
  *
- * Size enforcement: every issued URL is registered with the upload-guard
+ * Size enforcement: every issued path is registered with the upload-guard
  * background job.  After the URL's TTL expires the guard automatically checks
  * the uploaded object's size and deletes it if it exceeds PRESIGNED_MAX_BYTES
- * (100 MB).  This is a server-side, non-optional enforcement that does not
+ * (100 MB). This is a server-side, non-optional enforcement that does not
  * depend on the client calling a separate validate endpoint.
  *
- * ACL metadata: cannot be set here because the GCS object does not yet exist.
- * The business route that ultimately saves objectPath is responsible for calling
- * trySetObjectEntityAclPolicy.  Until then the download endpoint applies
+ * ACL metadata: cannot be set here because the Supabase object does not yet exist.
+ * The PUT handler stamps ownership after the bytes arrive. Until then the
+ * download endpoint applies
  * admin-only fallback.
  */
 router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
@@ -164,15 +271,38 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
 
   try {
     const { name, size, contentType } = parsed.data;
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+
+    // MIME type whitelist — reject executable/script types before issuing a presigned URL.
+    if (contentType && !PRESIGNED_ALLOWED_MIME_TYPES.has(contentType.toLowerCase())) {
+      res.status(415).json({ error: `Tipe file tidak didukung: ${contentType}. Hanya dokumen, gambar, dan arsip yang diperbolehkan.` });
+      return;
+    }
+
+    const uploadPath = await objectStorageService.getObjectEntityUploadURL(contentType);
+    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadPath);
+    const uploadURL = `/api/storage${objectPath}`;
 
     // Register size-guard session: background job will delete this object after
     // the presigned URL expires if its size exceeds PRESIGNED_MAX_BYTES.
     pendingUploadGuards.set(objectPath, {
       objectPath,
       userId,
+      contentType,
       checkAfter: Date.now() + (PRESIGNED_URL_TTL_SEC + 60) * 1000,
+    });
+
+    const { actorId, actorType } = getActor(req);
+    logStorageEvent({
+      action: "upload_presigned_issued",
+      entityType: "presigned_upload",
+      objectPath,
+      fileName: name,
+      contentType,
+      fileSizeBytes: size ?? null,
+      actorId,
+      actorType,
+      ipAddress: getRequestIp(req),
+      details: "presigned PUT URL issued",
     });
 
     res.json(
@@ -189,6 +319,55 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
 });
 
 /**
+ * PUT /storage/objects/uploads/*
+ *
+ * Completes the server-proxied upload path returned by request-url. Bytes are
+ * written only to the exact path issued for the authenticated Clerk user.
+ */
+router.put(
+  "/storage/objects/{*path}",
+  raw({ type: "*/*", limit: `${PRESIGNED_MAX_BYTES}b` }),
+  async (req: Request, res: Response) => {
+    if (!(await requireClerkUser(req, res))) return;
+    const rawParam = req.params.path as unknown;
+    const wildcardPath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
+    const objectPath = `/objects/${wildcardPath}`;
+    const session = pendingUploadGuards.get(objectPath);
+    if (!session) {
+      res.status(404).json({ error: "Upload path tidak ditemukan atau sudah kedaluwarsa." });
+      return;
+    }
+    if (session.userId !== req.user?.id) {
+      res.status(403).json({ error: "Upload path bukan milik akun ini." });
+      return;
+    }
+
+    const contentType = String(req.headers["content-type"] ?? "").split(";")[0].toLowerCase();
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (contentType !== session.contentType.toLowerCase()) {
+      res.status(415).json({ error: "Content-Type upload tidak sesuai dengan URL yang diterbitkan." });
+      return;
+    }
+    if (body.length === 0) {
+      res.status(400).json({ error: "File kosong tidak diizinkan." });
+      return;
+    }
+
+    try {
+      await objectStorageService.uploadPrivateEntityAtPath(objectPath, body, contentType);
+      await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
+        owner: req.user.id,
+        visibility: "private",
+      });
+      res.status(201).json({ ok: true, objectPath, url: `/api/storage${objectPath}` });
+    } catch (error) {
+      req.log.error({ err: error }, "Error storing server-proxied upload");
+      res.status(500).json({ error: "Failed to upload file" });
+    }
+  },
+);
+
+/**
  * GET /storage/public-objects/*
  *
  * Serve public assets from PUBLIC_OBJECT_SEARCH_PATHS.
@@ -196,17 +375,66 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
  */
 router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Response) => {
   try {
-    const raw = req.params.filePath;
-    const filePath = Array.isArray(raw) ? raw.join("/") : raw;
+    const rawParam = req.params.filePath as unknown;
+    const requestedPath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
+    const filePath = requestedPath.replace(/^\/+/, "");
+    if (
+      filePath.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+      filePath.includes("\\") ||
+      filePath.includes("\0")
+    ) {
+      res.status(400).json({ error: "Invalid public object path" });
+      return;
+    }
+
+    // All historical portal image URLs resolve to the one canonical storage
+    // prefix. Redirect rather than maintaining duplicate storage trees.
+    const legacyImagePath = filePath.startsWith("portal/images/")
+      ? filePath.slice("portal/images/".length)
+      : filePath.startsWith("images/")
+        ? filePath.slice("images/".length)
+        : null;
+    if (legacyImagePath !== null) {
+      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath}`;
+      const encoded = canonical.split("/").map(encodeURIComponent).join("/");
+      return res.redirect(308, `${req.baseUrl}/storage/public-objects/${encoded}`);
+    }
+
     const file = await objectStorageService.searchPublicObject(filePath);
     if (!file) {
+      if (filePath.startsWith("portal-assets/static/customer-portal/")) {
+        console.warn("[storage] Customer Portal static asset not found", {
+          environment: process.env.APP_ENV ?? "unknown",
+          bucket: "public-assets",
+          objectKey: filePath,
+        });
+      }
+      // Fallback: try redirecting to PROD Supabase CDN so that content uploaded
+      // before this environment was set up (pointing to the prod bucket) still works.
+      try {
+        const prodUrl = await getSetting("supabase_url", "");
+        if (prodUrl) {
+          const normalized = filePath.replace(/^\/+/, "");
+          const cdnUrl = `${prodUrl.replace(/\/+$/, "")}/storage/v1/object/public/public-assets/${normalized}`;
+          // Verify the file actually exists on PROD before redirecting (HEAD request)
+          const check = await fetch(cdnUrl, { method: "HEAD" });
+          if (check.ok) {
+            res.redirect(302, cdnUrl);
+            return;
+          }
+        }
+      } catch {
+        // PROD fallback failed — fall through to 404
+      }
       res.status(404).json({ error: "File not found" });
       return;
     }
 
-    const response = await objectStorageService.downloadObject(file);
+    const response = await objectStorageService.downloadObject(file) as any;
     res.status(response.status);
-    response.headers.forEach((value, key) => res.setHeader(key, value));
+    response.headers.forEach((value: string, key: string) => res.setHeader(key, value));
+    // Cache public assets in browser for 24 hours, CDN for 1 hour
+    res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=3600");
 
     if (response.body) {
       const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
@@ -223,7 +451,7 @@ router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Resp
 /**
  * GET /storage/objects/*
  *
- * Serve private object entities from PRIVATE_OBJECT_DIR.
+ * Serve private object entities from the Supabase private-uploads bucket.
  *
  * Authorization (two layers, evaluated in order):
  *
@@ -247,8 +475,8 @@ router.get("/storage/objects/{*path}", async (req: Request, res: Response) => {
   if (!(await requireClerkUser(req, res))) return;
 
   try {
-    const raw = req.params.path;
-    const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
+    const rawParam = req.params.path as unknown;
+    const wildcardPath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
 
     // Reject path traversal attempts before they reach the storage layer.
     if (wildcardPath.split("/").some((segment) => segment === ".." || segment === ".")) {
@@ -278,12 +506,12 @@ router.get("/storage/objects/{*path}", async (req: Request, res: Response) => {
       if (!(await requireAdmin(req, res))) return;
     }
 
-    const response = await objectStorageService.downloadObject(objectFile);
+    const response = await objectStorageService.downloadObject(objectFile) as any;
     res.status(response.status);
-    response.headers.forEach((value, key) => res.setHeader(key, value));
+    response.headers.forEach((value: string, key: string) => res.setHeader(key, value));
 
-    if (response.body) {
-      const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+    if ((response as any).body) {
+      const nodeStream = Readable.fromWeb((response as any).body as ReadableStream<Uint8Array>);
       nodeStream.pipe(res);
     } else {
       res.end();

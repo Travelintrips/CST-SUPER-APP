@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, pgEnum, index } from "drizzle-orm/pg-core";
 import { driversTable } from "./drivers";
 import { freightShipmentsTable } from "./freightShipments";
 import { logisticOrdersTable } from "./logisticOrders";
@@ -18,9 +18,10 @@ export const driverJobStatusEnum = pgEnum("driver_job_status", [
 
 export const driverJobsTable = pgTable("driver_jobs", {
   id: serial("id").primaryKey(),
+  // Phase 1 isolation — nullable; backfill from logistic_orders.company_id via logistic_order_id
+  companyId: integer("company_id"),
   driverId: integer("driver_id")
-    .notNull()
-    .references(() => driversTable.id, { onDelete: "cascade" }),
+    .references(() => driversTable.id, { onDelete: "set null" }),
   freightShipmentId: integer("freight_shipment_id").references(
     () => freightShipmentsTable.id,
     { onDelete: "set null" }
@@ -44,10 +45,31 @@ export const driverJobsTable = pgTable("driver_jobs", {
   status: driverJobStatusEnum("status").default("ASSIGNED").notNull(),
   notes: text("notes"),
   podReceiverName: text("pod_receiver_name"),
+  podReceiverPosition: text("pod_receiver_position"),
+  podNotes: text("pod_notes"),
+  podPhotos: text("pod_photos"),
+  podSubmittedAt: timestamp("pod_submitted_at"),
+  podGeoLat: text("pod_geo_lat"),
+  podGeoLng: text("pod_geo_lng"),
+  podDeviceTimestamp: timestamp("pod_device_timestamp"),
+  podMapUrl: text("pod_map_url"),
+  podStreetViewUrl: text("pod_street_view_url"),
+  podSignatureDataUrl: text("pod_signature_data_url"),
   assignedAt: timestamp("assigned_at").defaultNow().notNull(),
   completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+  driverType: text("driver_type").default("EXTERNAL"),
+  executionMode: text("execution_mode").default("DRIVER_APP"),
+  waProgressToken: text("wa_progress_token"),
+  driverNameOverride: text("driver_name_override"),
+  driverPhoneOverride: text("driver_phone_override"),
+  vehiclePlateOverride: text("vehicle_plate_override"),
+  legacySource: text("legacy_source"),
+}, (t) => [
+  index("driver_jobs_company_idx").on(t.companyId),
+  index("driver_jobs_driver_idx").on(t.driverId),
+  index("driver_jobs_logistic_order_idx").on(t.logisticOrderId),
+]);
 
 export const driverJobLogsTable = pgTable("driver_job_logs", {
   id: serial("id").primaryKey(),

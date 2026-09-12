@@ -1,11 +1,10 @@
-import { useState, useEffect, useRef } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect, useRef, Fragment } from "react";
+import { useLocation, useSearch } from "wouter";
 import {
   useListLogisticOrders,
   useUpdateLogisticOrderStatus,
   useUpdateLogisticOrderType,
   useCreateSalesDocument,
-  useCreateLogisticOrderRfq,
   getListLogisticOrdersQueryKey,
   getGetLogisticOrderQueryOptions,
   useGetLogisticOrder,
@@ -31,7 +30,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { PackageOpen, Search, RefreshCw, FilePlus, X, Eye, Zap, Send, ExternalLink, Ship } from "lucide-react";
+import { PackageOpen, Search, RefreshCw, FilePlus, X, Eye, Zap, Send, ExternalLink, Ship, ClipboardCheck, Trash2 } from "lucide-react";
+import { OrderProgressBar, PROGRESS_STEPS, deriveCompletedSteps } from "@/components/logistics/OrderProgressBar";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import { useOrderNotificationsContext } from "@/contexts/OrderNotificationsContext";
@@ -74,6 +74,7 @@ const SHIPMENT_TYPE_OPTIONS = [
   "Container Trucking",
   "Cargo Trucking",
   "Customs Clearance",
+  "FOB",
 ];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -84,11 +85,29 @@ const STATUS_COLORS: Record<string, string> = {
   "Cancelled":   "bg-red-100 text-red-800 border-red-200",
 };
 
+const STATUS_DOT_COLOR: Record<string, string> = {
+  "New Order":   "bg-yellow-400",
+  "Confirmed":   "bg-blue-400",
+  "In Progress": "bg-orange-400",
+  "Completed":   "bg-green-400",
+  "Cancelled":   "bg-red-400",
+};
+
+const STATUS_LABEL_ID: Record<string, string> = {
+  "New Order":   "Pesanan Baru",
+  "Confirmed":   "Dikonfirmasi",
+  "In Progress": "Dalam Proses",
+  "Completed":   "Selesai",
+  "Cancelled":   "Dibatalkan",
+};
+
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
 const RFQ_STATUS_LABELS: Record<string, string> = {
+  open: "Terkirim",
   admin_review: "Review",
+  vendor_blasted: "Blast Terkirim",
   rfq_sent: "Terkirim",
   vendor_selected: "Vendor Dipilih",
   customer_quoted: "Quoted",
@@ -99,7 +118,9 @@ const RFQ_STATUS_LABELS: Record<string, string> = {
 };
 
 const RFQ_STATUS_COLORS: Record<string, string> = {
+  open:                        "bg-blue-100 text-blue-700 border-blue-200",
   admin_review:                "bg-slate-100 text-slate-600 border-slate-200",
+  vendor_blasted:              "bg-blue-100 text-blue-700 border-blue-200",
   rfq_sent:                    "bg-blue-100 text-blue-700 border-blue-200",
   vendor_selected:             "bg-violet-100 text-violet-700 border-violet-200",
   customer_quoted:             "bg-amber-100 text-amber-700 border-amber-200",
@@ -167,14 +188,27 @@ export default function LogisticsPortalOrdersPage() {
   const { toast } = useToast();
   const { t } = useLanguage();
   const [, navigate] = useLocation();
+  const searchString = useSearch();
+
+  const initialStatus = new URLSearchParams(searchString).get("status") ?? "all";
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [fulfillmentFilter, setFulfillmentFilter] = useState("all");
+  const [koliFilter, setKoliFilter] = useState("all");
+  const [shipmentTypeFilter, setShipmentTypeFilter] = useState("all");
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [updatingTypeId, setUpdatingTypeId] = useState<number | null>(null);
   const [soDialog, setSoDialog] = useState<LogisticOrder | null>(null);
   const [viewPhoto, setViewPhoto] = useState<string | null>(null);
   const [detailDialog, setDetailDialog] = useState<LogisticOrder | null>(null);
+
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteDialog, setBulkDeleteDialog] = useState(false);
+  const [progressStepFilter, setProgressStepFilter] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkStatusValue, setBulkStatusValue] = useState("");
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
 
   const [newOrderCount, setNewOrderCount] = useState(0);
   const [lastAutoRefresh, setLastAutoRefresh] = useState<Date | null>(null);
@@ -185,6 +219,7 @@ export default function LogisticsPortalOrdersPage() {
   const [rfqSelectedVendors, setRfqSelectedVendors] = useState<number[]>([]);
   const [rfqNotes, setRfqNotes] = useState("");
   const [rfqShipmentType, setRfqShipmentType] = useState("");
+  const [sendingRfq, setSendingRfq] = useState(false);
 
   const { setOnNewOrder } = useOrderNotificationsContext();
 
@@ -225,14 +260,13 @@ export default function LogisticsPortalOrdersPage() {
 
   const { activeCompanyId } = useCompany();
   const { data: orders = [], isLoading, refetch } = useListLogisticOrders(
-    { ...(statusFilter !== "all" ? { status: statusFilter } : {}), company: activeCompanyId },
+    { ...(statusFilter !== "all" ? { status: statusFilter } : {}), company: activeCompanyId } as any,
     { query: { queryKey: [...getListLogisticOrdersQueryKey(), statusFilter, activeCompanyId] } },
   );
 
   const updateStatus = useUpdateLogisticOrderStatus();
   const updateType = useUpdateLogisticOrderType();
   const createSalesDoc = useCreateSalesDocument();
-  const createRfq = useCreateLogisticOrderRfq();
 
   const { data: vendors = [] } = useQuery<VendorRow[]>({
     queryKey: ["logistic-vendors"],
@@ -241,6 +275,7 @@ export default function LogisticsPortalOrdersPage() {
       if (!res.ok) throw new Error("Failed");
       return res.json() as Promise<VendorRow[]>;
     },
+    staleTime: 5 * 60 * 1000,
   });
   const activeVendors = vendors.filter((v) => v.isActive !== false);
 
@@ -251,41 +286,49 @@ export default function LogisticsPortalOrdersPage() {
     setRfqShipmentType(o.shipmentType ?? "");
   }
 
-  function handleSendRfq() {
+  async function handleSendRfq() {
     if (!rfqTargetOrder || rfqSelectedVendors.length === 0) return;
-    createRfq.mutate(
-      {
-        id: rfqTargetOrder.id,
-        data: {
+    setSendingRfq(true);
+    try {
+      const res = await fetch(`/api/logistic/orders/${rfqTargetOrder.id}/rfq-blast`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
           vendorIds: rfqSelectedVendors,
           notes: rfqNotes || undefined,
-          shipmentType: rfqShipmentType || undefined,
-        } as Parameters<typeof createRfq.mutate>[0]["data"],
-      },
-      {
-        onSuccess: () => {
-          toast({ title: "RFQ berhasil dikirim ke vendor" });
-          setRfqTargetOrder(null);
-          queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
-        },
-        onError: (err: unknown) => {
-          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-          toast({ title: msg ?? "Gagal mengirim RFQ", variant: "destructive" });
-        },
-      },
-    );
+          deadlineHours: 48,
+        }),
+      });
+      const data = await res.json() as { ok?: boolean; rfqId?: number; rfqNumber?: string; sentCount?: number; message?: string };
+      if (!res.ok) throw new Error(data.message ?? "Gagal mengirim RFQ");
+      toast({
+        title: `RFQ berhasil dikirim ke ${data.sentCount ?? 0} vendor`,
+        description: `No. RFQ: ${data.rfqNumber ?? ""}`,
+      });
+      setRfqTargetOrder(null);
+      queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
+    } catch (e: unknown) {
+      toast({ title: (e as Error).message ?? "Gagal mengirim RFQ", variant: "destructive" });
+    } finally {
+      setSendingRfq(false);
+    }
   }
 
   function handleStatusChange(id: number, status: string) {
     setUpdatingId(id);
+    const order = orders.find((o) => o.id === id);
     updateStatus.mutate(
-      { id, data: { status } },
+      { id, data: { status, clientUpdatedAt: order?.updatedAt } },
       {
         onSuccess: () => {
           toast({ title: t.common.success, description: status });
           queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
         },
-        onError: () => toast({ title: t.common.error, variant: "destructive" }),
+        onError: (err: any) => {
+          const msg = err?.response?.data?.message ?? err?.response?.data?.error ?? t.common.error;
+          toast({ title: msg, variant: "destructive" });
+        },
         onSettled: () => setUpdatingId(null),
       },
     );
@@ -357,22 +400,133 @@ export default function LogisticsPortalOrdersPage() {
     );
   }
 
+  const fulfillmentOf = (o: typeof orders[number]) =>
+    (o as unknown as { fulfillmentStatus: string | null }).fulfillmentStatus;
+
   const filtered = orders.filter((o) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      o.orderNumber.toLowerCase().includes(q) ||
-      o.customerName.toLowerCase().includes(q) ||
-      o.companyName.toLowerCase().includes(q) ||
-      o.email.toLowerCase().includes(q)
-    );
+    if (search) {
+      const q = search.toLowerCase();
+      const matchSearch =
+        o.orderNumber.toLowerCase().includes(q) ||
+        o.customerName.toLowerCase().includes(q) ||
+        o.companyName.toLowerCase().includes(q) ||
+        o.email.toLowerCase().includes(q);
+      if (!matchSearch) return false;
+    }
+    if (fulfillmentFilter !== "all") {
+      const fs = fulfillmentOf(o);
+      if (fulfillmentFilter === "not_sent" && fs !== null) return false;
+      if (fulfillmentFilter === "pending" && fs !== "pending") return false;
+      if (fulfillmentFilter === "submitted" && fs !== "submitted") return false;
+    }
+    if (koliFilter !== "all") {
+      const k = o.jumlahKoli ?? null;
+      if (koliFilter === "has_koli" && k == null) return false;
+      if (koliFilter === "lt5" && (k == null || k >= 5)) return false;
+      if (koliFilter === "5to10" && (k == null || k < 5 || k > 10)) return false;
+      if (koliFilter === "gt10" && (k == null || k <= 10)) return false;
+    }
+    if (shipmentTypeFilter !== "all") {
+      const st = (o.shipmentType ?? "").toLowerCase();
+      if (!st.includes(shipmentTypeFilter.toLowerCase())) return false;
+    }
+    if (progressStepFilter) {
+      if (getActiveStepKey(o) !== progressStepFilter) return false;
+    }
+    return true;
   });
+
+  const allFilteredIds = filtered.map((o) => o.id);
+  const allSelected = allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedIds.has(id));
+  const someSelected = allFilteredIds.some((id) => selectedIds.has(id)) && !allSelected;
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        allFilteredIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => new Set([...prev, ...allFilteredIds]));
+    }
+  }
+
+  function toggleOne(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBulkStatusUpdate(status: string) {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || !status) return;
+    setIsBulkUpdating(true);
+    try {
+      const res = await fetch("/api/logistic/orders/bulk-status", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, status }),
+      });
+      if (!res.ok) throw new Error("Gagal update");
+      const data = await res.json();
+      toast({ title: `${data.count} transaksi diubah ke "${status}"` });
+      setSelectedIds(new Set());
+      setBulkStatusValue("");
+      queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
+    } catch {
+      toast({ title: "Gagal mengubah status", variant: "destructive" });
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const res = await fetch("/api/logistic/orders/bulk", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error("Gagal menghapus");
+      const data = await res.json();
+      toast({ title: `${data.count} transaksi berhasil dihapus` });
+      setSelectedIds(new Set());
+      setBulkDeleteDialog(false);
+      queryClient.invalidateQueries({ queryKey: getListLogisticOrdersQueryKey() });
+    } catch {
+      toast({ title: "Gagal menghapus transaksi", variant: "destructive" });
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
+  function getActiveStepKey(o: typeof orders[number]): string | null {
+    const done = deriveCompletedSteps(o as any);
+    const doneIdx = PROGRESS_STEPS.map((s, i) => done.has(s.key) ? i : -1).filter(i => i >= 0);
+    if (doneIdx.length === 0) return null;
+    return PROGRESS_STEPS[Math.max(...doneIdx)].key;
+  }
+
+  const stepCounts: Record<string, number> = {};
+  for (const step of PROGRESS_STEPS) stepCounts[step.key] = 0;
+  for (const o of orders) {
+    const key = getActiveStepKey(o);
+    if (key) stepCounts[key] = (stepCounts[key] ?? 0) + 1;
+  }
 
   const counts = {
     total: orders.length,
     newOrder: orders.filter((o) => o.status === "New Order").length,
     inProgress: orders.filter((o) => o.status === "In Progress").length,
     completed: orders.filter((o) => o.status === "Completed").length,
+    fulfillmentPending: orders.filter((o) => fulfillmentOf(o) === "pending").length,
   };
 
   return (
@@ -411,28 +565,64 @@ export default function LogisticsPortalOrdersPage() {
           </div>
         </div>
 
-        {/* Stat Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* Summary Stat Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
-            { label: "Total", value: counts.total, color: "text-foreground" },
-            { label: "New Order", value: counts.newOrder, color: "text-yellow-700" },
-            { label: "In Progress", value: counts.inProgress, color: "text-orange-700" },
-            { label: "Completed", value: counts.completed, color: "text-green-700" },
+            { label: "Total", value: counts.total, color: "text-foreground", onClick: () => { setProgressStepFilter(null); setFulfillmentFilter("all"); setStatusFilter("all"); }, active: !progressStepFilter && fulfillmentFilter === "all" && statusFilter === "all" },
+            { label: "New Order", value: counts.newOrder, color: "text-yellow-700", onClick: () => { setProgressStepFilter(null); setStatusFilter(statusFilter === "New Order" ? "all" : "New Order"); setFulfillmentFilter("all"); }, active: statusFilter === "New Order" },
+            { label: "In Progress", value: counts.inProgress, color: "text-orange-700", onClick: () => { setProgressStepFilter(null); setStatusFilter(statusFilter === "In Progress" ? "all" : "In Progress"); setFulfillmentFilter("all"); }, active: statusFilter === "In Progress" },
+            { label: "Completed", value: counts.completed, color: "text-green-700", onClick: () => { setProgressStepFilter(null); setStatusFilter(statusFilter === "Completed" ? "all" : "Completed"); setFulfillmentFilter("all"); }, active: statusFilter === "Completed" },
+            { label: "Vendor Pending", value: counts.fulfillmentPending, color: "text-emerald-700", onClick: () => { setProgressStepFilter(null); setFulfillmentFilter(fulfillmentFilter === "pending" ? "all" : "pending"); setStatusFilter("all"); }, active: fulfillmentFilter === "pending", icon: <ClipboardCheck className="h-3 w-3 text-emerald-600" /> },
           ].map((s) => (
-            <Card key={s.label}>
-              <CardHeader className="pb-1 pt-4 px-4">
-                <CardTitle className="text-xs text-muted-foreground">{s.label}</CardTitle>
+            <Card
+              key={s.label}
+              className={`cursor-pointer transition-all hover:shadow-md ${s.active ? "ring-2 ring-primary" : ""}`}
+              onClick={s.onClick}
+            >
+              <CardHeader className="pb-1 pt-3 px-3">
+                <CardTitle className="text-xs text-muted-foreground flex items-center gap-1">
+                  {s.icon ?? null}{s.label}
+                </CardTitle>
               </CardHeader>
-              <CardContent className="px-4 pb-4">
-                <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+              <CardContent className="px-3 pb-3">
+                <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
               </CardContent>
             </Card>
           ))}
         </div>
 
+        {/* Progress Step Cards — scrollable row */}
+        <div className="overflow-x-auto pb-1">
+          <div className="flex gap-2 min-w-max">
+            {PROGRESS_STEPS.map((step) => {
+              const count = stepCounts[step.key] ?? 0;
+              const isActive = progressStepFilter === step.key;
+              return (
+                <button
+                  key={step.key}
+                  onClick={() => setProgressStepFilter(isActive ? null : step.key)}
+                  className={`flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 min-w-[108px] transition-all hover:shadow-sm ${
+                    isActive
+                      ? "ring-2 ring-offset-1 ring-current border-transparent bg-white dark:bg-slate-900 shadow"
+                      : "border-border bg-card hover:bg-accent/50"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 w-full">
+                    <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${step.color}`} />
+                    <span className={`text-[10px] font-medium leading-tight truncate max-w-[80px] ${step.text}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                  <span className={`text-lg font-bold leading-none mt-0.5 ${step.text}`}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Filters */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
+        <div className="flex flex-col sm:flex-row gap-3 flex-wrap">
+          <div className="relative flex-1 min-w-48">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Cari nomor order, nama, perusahaan, email..."
@@ -461,7 +651,109 @@ export default function LogisticsPortalOrdersPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select value={fulfillmentFilter} onValueChange={setFulfillmentFilter}>
+            <SelectTrigger className="w-52">
+              <ClipboardCheck className="h-4 w-4 text-emerald-600 mr-1 shrink-0" />
+              <SelectValue placeholder="Semua fulfillment" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Fulfillment</SelectItem>
+              <SelectItem value="not_sent">Belum Dikirim ke Vendor</SelectItem>
+              <SelectItem value="pending">Menunggu Konfirmasi</SelectItem>
+              <SelectItem value="submitted">Sudah Dikonfirmasi</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={koliFilter} onValueChange={setKoliFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Semua koli" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Koli</SelectItem>
+              <SelectItem value="has_koli">Ada Koli</SelectItem>
+              <SelectItem value="lt5">&lt; 5 koli</SelectItem>
+              <SelectItem value="5to10">5 – 10 koli</SelectItem>
+              <SelectItem value="gt10">&gt; 10 koli</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={shipmentTypeFilter} onValueChange={setShipmentTypeFilter}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Semua tipe" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Semua Tipe</SelectItem>
+              <SelectItem value="fcl">FCL</SelectItem>
+              <SelectItem value="lcl">LCL</SelectItem>
+              <SelectItem value="trucking">Trucking</SelectItem>
+              <SelectItem value="air">Air Freight</SelectItem>
+            </SelectContent>
+          </Select>
+          {(fulfillmentFilter !== "all" || koliFilter !== "all" || shipmentTypeFilter !== "all") && (
+            <Button variant="ghost" size="sm" className="text-muted-foreground gap-1" onClick={() => { setFulfillmentFilter("all"); setKoliFilter("all"); setShipmentTypeFilter("all"); }}>
+              <X className="h-3.5 w-3.5" /> Reset
+            </Button>
+          )}
         </div>
+
+        {/* Bulk Action Toolbar */}
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 animate-in fade-in slide-in-from-top-2 duration-200">
+            <span className="text-sm font-semibold">
+              {selectedIds.size} transaksi dipilih
+            </span>
+            <div className="w-px h-4 bg-border" />
+            {/* Bulk Status Update */}
+            <div className="flex items-center gap-2">
+              <Select
+                value={bulkStatusValue}
+                onValueChange={(v) => {
+                  setBulkStatusValue(v);
+                  handleBulkStatusUpdate(v);
+                }}
+                disabled={isBulkUpdating}
+              >
+                <SelectTrigger className="h-7 w-44 text-xs">
+                  <SelectValue placeholder={isBulkUpdating ? "Memperbarui..." : "Ubah status ke..."} />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((s) => (
+                    <SelectItem key={s} value={s} className="text-xs">
+                      <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
+                        s === "New Order" ? "bg-yellow-500" :
+                        s === "Confirmed" ? "bg-blue-500" :
+                        s === "In Progress" ? "bg-orange-500" :
+                        s === "Completed" ? "bg-green-500" :
+                        "bg-red-500"
+                      }`} />
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="w-px h-4 bg-border" />
+            {/* Bulk Delete */}
+            <Button
+              size="sm"
+              variant="destructive"
+              className="gap-1.5 h-7"
+              onClick={() => setBulkDeleteDialog(true)}
+              disabled={isBulkDeleting || isBulkUpdating}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Hapus
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-muted-foreground"
+              onClick={() => { setSelectedIds(new Set()); setBulkStatusValue(""); }}
+              disabled={isBulkUpdating}
+            >
+              <X className="h-3.5 w-3.5 mr-1" />
+              Batal
+            </Button>
+          </div>
+        )}
 
         {/* Table */}
         <Card>
@@ -469,37 +761,58 @@ export default function LogisticsPortalOrdersPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10 pl-4">
+                    <Checkbox
+                      checked={allSelected}
+                      data-state={someSelected ? "indeterminate" : allSelected ? "checked" : "unchecked"}
+                      onCheckedChange={toggleAll}
+                      aria-label="Pilih semua"
+                    />
+                  </TableHead>
                   <TableHead>No. Order</TableHead>
                   <TableHead>Pelanggan</TableHead>
                   <TableHead>Rute</TableHead>
                   <TableHead>Tipe</TableHead>
+                  <TableHead className="text-center">Koli</TableHead>
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Tanggal</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>RFQ</TableHead>
+                  <TableHead>Fulfillment</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
                       Memuat...
                     </TableCell>
                   </TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                      Tidak ada pesanan
+                    <TableCell colSpan={12} className="text-center py-10 text-muted-foreground">
+                      <div className="flex flex-col items-center gap-1.5">
+                        <span className="text-2xl">📭</span>
+                        <span className="text-sm font-medium">Tidak ada pesanan ditemukan</span>
+                        <span className="text-xs">Coba ubah filter atau kata kunci pencarian</span>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : filtered.map((o) => (
+                  <Fragment key={o.id}>
                   <TableRow
-                    key={o.id}
-                    className="cursor-pointer hover:bg-muted/40 transition-colors"
+                    className={`cursor-pointer hover:bg-muted/40 transition-colors ${selectedIds.has(o.id) ? "bg-destructive/5" : ""}`}
                     onClick={() => setDetailDialog(o)}
                     {...prefetchHover(getGetLogisticOrderQueryOptions(o.id))}
                   >
+                    <TableCell className="pl-4" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.has(o.id)}
+                        onCheckedChange={() => toggleOne(o.id)}
+                        aria-label={`Pilih order ${o.orderNumber}`}
+                      />
+                    </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
@@ -513,6 +826,27 @@ export default function LogisticsPortalOrdersPage() {
                             🤖 Via AI
                           </span>
                         )}
+                        {(o as { orderType?: string }).orderType === "product" && (
+                          <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">Produk</span>
+                        )}
+                        {(o as { orderType?: string }).orderType === "service" && (
+                          <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-200">Jasa</span>
+                        )}
+                        {(() => {
+                          const fsId = (o as any).directFreightShipmentId ?? (o as any).latestRfq?.freightShipmentId;
+                          const fsNum = (o as any).directFreightShipmentNumber ?? (o as any).latestRfq?.freightShipmentNumber;
+                          if (!fsId) return null;
+                          return (
+                            <button
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-700 border border-teal-200 hover:bg-teal-200 transition-colors"
+                              onClick={(e) => { e.stopPropagation(); navigate(`/logistics/freight/${fsId}`); }}
+                              title={`Freight Shipment: ${fsNum ?? fsId}`}
+                            >
+                              <Ship className="h-2.5 w-2.5 shrink-0" />
+                              {fsNum ?? `FS#${fsId}`}
+                            </button>
+                          );
+                        })()}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -547,6 +881,9 @@ export default function LogisticsPortalOrdersPage() {
                           ))}
                         </SelectContent>
                       </Select>
+                    </TableCell>
+                    <TableCell className="text-center text-sm text-muted-foreground">
+                      {o.jumlahKoli != null ? <span className="font-medium text-foreground">{o.jumlahKoli}</span> : <span className="text-xs">—</span>}
                     </TableCell>
                     <TableCell className="text-right font-medium text-sm">
                       {idr(o.grandTotal)}
@@ -583,6 +920,25 @@ export default function LogisticsPortalOrdersPage() {
                         latestRfq={(o as any).latestRfq ?? null}
                         onCreateRfq={() => openRfqDialog(o)}
                       />
+                    </TableCell>
+                    {/* Fulfillment status column */}
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      {(() => {
+                        const fs = fulfillmentOf(o);
+                        if (fs === "submitted") return (
+                          <Badge className="bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] px-1.5 py-0.5 gap-1 whitespace-nowrap">
+                            <ClipboardCheck className="h-2.5 w-2.5" /> Dikonfirmasi
+                          </Badge>
+                        );
+                        if (fs === "pending") return (
+                          <Badge className="bg-amber-100 text-amber-800 border border-amber-200 text-[10px] px-1.5 py-0.5 whitespace-nowrap">
+                            ⏳ Menunggu
+                          </Badge>
+                        );
+                        return (
+                          <span className="text-[10px] text-slate-400">—</span>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">
@@ -636,6 +992,12 @@ export default function LogisticsPortalOrdersPage() {
                       </div>
                     </TableCell>
                   </TableRow>
+                  <TableRow className="border-b hover:bg-transparent">
+                    <TableCell colSpan={12} className="py-1 px-4 pb-2 pt-0">
+                      <OrderProgressBar status={o.status} />
+                    </TableCell>
+                  </TableRow>
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>
@@ -739,7 +1101,10 @@ export default function LogisticsPortalOrdersPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {STATUS_OPTIONS.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                    <SelectItem key={s} value={s}>
+                      <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${STATUS_DOT_COLOR[s] ?? "bg-gray-400"}`} />
+                      {STATUS_LABEL_ID[s] ?? s}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -857,14 +1222,14 @@ export default function LogisticsPortalOrdersPage() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setSoDialog(null)}>Batal</Button>
-            {soDialog?.linkedSalesDocId ? (
+            {(soDialog as any)?.linkedSalesDocId ? (
               <Button
                 variant="secondary"
                 className="gap-2"
                 onClick={() => { setSoDialog(null); navigate("/sales/orders"); }}
               >
                 <ExternalLink className="h-4 w-4" />
-                Lihat SO: {soDialog.linkedSalesDocNumber}
+                Lihat SO: {(soDialog as any).linkedSalesDocNumber}
               </Button>
             ) : (
               <Button
@@ -876,6 +1241,29 @@ export default function LogisticsPortalOrdersPage() {
                 {createSalesDoc.isPending ? "Membuat..." : "Buat Sales Order"}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={bulkDeleteDialog} onOpenChange={(open) => { if (!open) setBulkDeleteDialog(false); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" /> Hapus Transaksi
+            </DialogTitle>
+            <DialogDescription>
+              Anda akan menghapus <strong>{selectedIds.size} transaksi</strong> secara permanen. Tindakan ini tidak dapat dibatalkan.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteDialog(false)} disabled={isBulkDeleting}>
+              Batal
+            </Button>
+            <Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting} className="gap-2">
+              <Trash2 className="h-4 w-4" />
+              {isBulkDeleting ? "Menghapus..." : `Hapus ${selectedIds.size} transaksi`}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -973,14 +1361,14 @@ export default function LogisticsPortalOrdersPage() {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRfqTargetOrder(null)}>Batal</Button>
+            <Button variant="outline" onClick={() => setRfqTargetOrder(null)} disabled={sendingRfq}>Batal</Button>
             <Button
-              onClick={handleSendRfq}
-              disabled={createRfq.isPending || rfqSelectedVendors.length === 0}
+              onClick={() => void handleSendRfq()}
+              disabled={sendingRfq || rfqSelectedVendors.length === 0}
               className="gap-2"
             >
               <Send className="h-4 w-4" />
-              {createRfq.isPending ? "Mengirim..." : `Kirim ke ${rfqSelectedVendors.length} Vendor`}
+              {sendingRfq ? "Mengirim..." : `Kirim ke ${rfqSelectedVendors.length} Vendor`}
             </Button>
           </DialogFooter>
         </DialogContent>

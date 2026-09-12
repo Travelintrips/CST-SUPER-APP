@@ -1,13 +1,24 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { GooglePlacesAutocomplete } from "@/components/ui/google-places-autocomplete";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -40,13 +51,15 @@ import {
   useDeleteSupplier,
   useListTaxes,
   getListSuppliersQueryKey,
+  getSupplierDeleteImpact,
 } from "@workspace/api-client-react";
-import type { Supplier } from "@workspace/api-client-react";
+import type { Supplier, SupplierDeleteImpact } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Pencil, Plus, Store, Trash2, Upload, X } from "lucide-react";
+import { Building2, Globe, Pencil, Plus, Store, Trash2, Upload, X } from "lucide-react";
 import { useUpload } from "@workspace/object-storage-web";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { BackButton } from "@/components/ui/back-button";
 
 const SERVICE_TYPES = [
   "Import", "Export", "Domestic", "Door to Door",
@@ -58,6 +71,14 @@ const ETA_OPTIONS = [
   "1-2 hari", "2-3 hari", "3-5 hari", "5-7 hari",
   "1-2 minggu", "2-4 minggu", "1 bulan+",
 ];
+
+type Company = {
+  id: number;
+  companyName: string;
+  companyCode: string;
+  isActive: boolean;
+  isHolding: boolean;
+};
 
 function getLogoServeUrl(path: string) {
   if (path.startsWith("/objects/")) return `/api/storage${path}`;
@@ -76,10 +97,44 @@ function LogoDisplay({ logo }: { logo: string | null | undefined }) {
   return <span className="text-base">{logo}</span>;
 }
 
+function CompanyAssignmentBadges({
+  assignedIds,
+  companies,
+}: {
+  assignedIds: number[];
+  companies: Company[];
+}) {
+  if (!assignedIds || assignedIds.length === 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <Globe className="h-3 w-3" /> Global
+      </span>
+    );
+  }
+  const names = assignedIds
+    .map((id) => companies.find((c) => c.id === id)?.companyCode ?? `#${id}`)
+    .slice(0, 3);
+  return (
+    <div className="flex flex-wrap gap-1">
+      {names.map((n) => (
+        <Badge key={n} variant="outline" className="text-xs px-1.5 py-0">
+          {n}
+        </Badge>
+      ))}
+      {assignedIds.length > 3 && (
+        <Badge variant="outline" className="text-xs px-1.5 py-0 text-muted-foreground">
+          +{assignedIds.length - 3}
+        </Badge>
+      )}
+    </div>
+  );
+}
+
 type FormState = {
   name: string;
   country: string;
   contactEmail: string;
+  contactPerson: string;
   phone: string;
   address: string;
   taxId: string;
@@ -89,15 +144,17 @@ type FormState = {
   logo: string;
   eta: string;
   fee: string;
-  markup: string;
   note: string;
   sortOrder: string;
+  hasInternalTruck: boolean;
+  internalTruckPrice: string;
 };
 
 const emptyForm = (): FormState => ({
   name: "",
   country: "",
   contactEmail: "",
+  contactPerson: "",
   phone: "",
   address: "",
   taxId: "",
@@ -107,24 +164,59 @@ const emptyForm = (): FormState => ({
   logo: "📦",
   eta: "",
   fee: "0",
-  markup: "0",
   note: "",
   sortOrder: "0",
+  hasInternalTruck: false,
+  internalTruckPrice: "",
 });
 
 export default function VendorsPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { t } = useLanguage();
-  const { data: vendors } = useListSuppliers({ query: { queryKey: getListSuppliersQueryKey() } });
+  const [, navigate] = useLocation();
+
+  // ── Filter state ────────────────────────────────────────────────────────────
+  const [filterCompanyId, setFilterCompanyId] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
+
+  // Debounce search input (400ms) so we don't refetch on every keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Reset to page 1 whenever a filter changes.
+  useEffect(() => {
+    setPage(1);
+  }, [filterCompanyId, statusFilter, debouncedSearch]);
+
+  // Server-side pagination + search + status filter (FASE 4). The endpoint
+  // now returns { success, data, pagination } instead of a bare array.
+  const supplierParams = {
+    page,
+    limit: PAGE_SIZE,
+    ...(filterCompanyId !== "all" ? { filterCompanyId } : {}),
+    ...(statusFilter !== "all" ? { status: statusFilter } : {}),
+    ...(debouncedSearch ? { search: debouncedSearch } : {}),
+  };
+  const { data: suppliersResponse, isLoading, isFetching } = useListSuppliers(supplierParams, {
+    query: { queryKey: getListSuppliersQueryKey(supplierParams) },
+  });
+  const vendors = suppliersResponse?.data;
+  const pagination = suppliersResponse?.pagination;
+
   const { data: taxes } = useListTaxes();
   const createMut = useCreateSupplier();
   const updateMut = useUpdateSupplier();
   const deleteMut = useDeleteSupplier();
 
-  const purchaseTaxes = (taxes ?? []).filter((t) => t.kind === "purchase" && t.isActive);
+  const purchaseTaxes = (taxes ?? []).filter((tx) => tx.kind === "purchase" && tx.isActive);
 
-  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
@@ -132,6 +224,98 @@ export default function VendorsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Fix 3: AlertDialog state — replaces native confirm()
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  // FASE 3: dependency check fetched right before showing the delete dialog,
+  // so we can warn the user the vendor will be archived (not deleted) when it
+  // still has transaction history, instead of surprising them with a 409.
+  const [deleteImpact, setDeleteImpact] = useState<SupplierDeleteImpact | null>(null);
+  const [deleteImpactLoading, setDeleteImpactLoading] = useState(false);
+
+  const openDeleteConfirm = async (id: number) => {
+    setDeleteConfirmId(id);
+    setDeleteImpact(null);
+    setDeleteImpactLoading(true);
+    try {
+      const res = await getSupplierDeleteImpact(id);
+      setDeleteImpact(res.data ?? null);
+    } catch {
+      setDeleteImpact(null);
+    } finally {
+      setDeleteImpactLoading(false);
+    }
+  };
+
+  // Company assignment state
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [assignedCompanyIds, setAssignedCompanyIds] = useState<number[]>([]);
+  const [savingAssignments, setSavingAssignments] = useState(false);
+
+  // Bulk assign state
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const [bulkAssignCompanyId, setBulkAssignCompanyId] = useState<string>("");
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+
+  // Fetch companies list
+  useEffect(() => {
+    fetch("/api/companies")
+      .then((r) => r.json())
+      .then((data: Company[]) => {
+        setCompanies((data ?? []).filter((c) => !c.isHolding && c.isActive));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fix 4: AbortController ref to cancel stale /companies fetch when editing
+  // changes quickly. Without this, a slower previous response could overwrite
+  // the assignment state for the vendor currently being edited.
+  const assignmentFetchAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!editing?.id) {
+      setAssignedCompanyIds([]);
+      return;
+    }
+    // Cancel any in-flight fetch for a previous vendor
+    assignmentFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    assignmentFetchAbortRef.current = controller;
+
+    fetch(`/api/trading/suppliers/${editing.id}/companies`, { signal: controller.signal })
+      .then((r) => r.json())
+      .then((data: { companyIds: number[] }) => {
+        setAssignedCompanyIds(data.companyIds ?? []);
+      })
+      .catch((err) => {
+        // Ignore abort errors — they are expected when editing changes quickly
+        if (err?.name !== "AbortError") setAssignedCompanyIds([]);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [editing?.id]); // depend on ID only, not the full object
+
+  const toggleAssignedCompany = (companyId: number) => {
+    setAssignedCompanyIds((prev) =>
+      prev.includes(companyId) ? prev.filter((id) => id !== companyId) : [...prev, companyId]
+    );
+  };
+
+  const saveAssignments = async (vendorId: number) => {
+    setSavingAssignments(true);
+    try {
+      await fetch(`/api/trading/suppliers/${vendorId}/companies`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyIds: assignedCompanyIds }),
+      });
+    } finally {
+      setSavingAssignments(false);
+    }
+  };
 
   const { uploadFile } = useUpload({
     onError: () => {
@@ -173,14 +357,19 @@ export default function VendorsPage() {
   const reset = () => {
     setEditing(null);
     setForm(emptyForm());
+    setAssignedCompanyIds([]);
   };
 
   const startEdit = (v: Supplier) => {
     setEditing(v);
     setForm({
+      // Fix 5: use proper typed fields from Supplier (no more `as any`)
+      hasInternalTruck: v.hasInternalTruck ?? false,
+      internalTruckPrice: v.internalTruckPrice != null ? String(v.internalTruckPrice) : "",
       name: v.name,
       country: v.country ?? "",
       contactEmail: v.contactEmail ?? "",
+      contactPerson: v.contactPerson ?? "",
       phone: v.phone ?? "",
       address: v.address ?? "",
       taxId: v.taxId ?? "",
@@ -190,7 +379,6 @@ export default function VendorsPage() {
       logo: v.logo ?? "📦",
       eta: v.eta ?? "",
       fee: String(v.fee ?? 0),
-      markup: String(v.markup ?? 0),
       note: v.note ?? "",
       sortOrder: String(v.sortOrder ?? 0),
     });
@@ -206,6 +394,7 @@ export default function VendorsPage() {
       name: form.name.trim(),
       country: form.country || null,
       contactEmail: form.contactEmail || null,
+      contactPerson: form.contactPerson || null,
       phone: form.phone || null,
       address: form.address || null,
       taxId: form.taxId || null,
@@ -215,21 +404,26 @@ export default function VendorsPage() {
       logo: form.logo || "📦",
       eta: form.eta || null,
       fee: parseFloat(form.fee) || 0,
-      markup: parseFloat(form.markup) || 0,
       note: form.note || null,
       sortOrder: parseInt(form.sortOrder) || 0,
+      hasInternalTruck: form.hasInternalTruck,
+      internalTruckPrice: form.hasInternalTruck && form.internalTruckPrice
+        ? parseFloat(form.internalTruckPrice) || null
+        : null,
     };
     try {
       if (editing) {
         const updated = await updateMut.mutateAsync({ id: editing.id, data: body });
-        qc.setQueryData<Supplier[]>(getListSuppliersQueryKey(), (old) =>
+        await saveAssignments(editing.id);
+        qc.setQueryData<Supplier[]>(getListSuppliersQueryKey(supplierParams), (old) =>
           old ? old.map((s) => (s.id === updated.id ? updated : s)) : [updated]
         );
         qc.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
         toast({ title: t.common.success });
       } else {
         const created = await createMut.mutateAsync({ data: body });
-        qc.setQueryData<Supplier[]>(getListSuppliersQueryKey(), (old) =>
+        await saveAssignments(created.id);
+        qc.setQueryData<Supplier[]>(getListSuppliersQueryKey(supplierParams), (old) =>
           old ? [...old, created] : [created]
         );
         qc.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
@@ -242,19 +436,30 @@ export default function VendorsPage() {
     }
   };
 
-  const remove = async (id: number) => {
-    if (!confirm("Hapus vendor ini?")) return;
+  // Fix 3 / FASE 3: single delete — triggered after AlertDialog confirmation.
+  // deleteImpact (fetched when the dialog opens) determines whether this call
+  // hard-deletes or the server auto-archives due to transaction history.
+  const confirmDelete = async () => {
+    if (deleteConfirmId == null) return;
     try {
-      await deleteMut.mutateAsync({ id });
+      const result = await deleteMut.mutateAsync({ id: deleteConfirmId });
       qc.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
-      toast({ title: t.common.success });
+      if ((result as { code?: string } | undefined)?.code === "SUPPLIER_ARCHIVED") {
+        toast({ title: "Vendor dinonaktifkan", description: "Vendor memiliki riwayat transaksi sehingga diarsipkan, bukan dihapus." });
+      } else {
+        toast({ title: t.common.success });
+      }
     } catch (e) {
       toast({ title: t.common.error, description: String(e), variant: "destructive" });
+    } finally {
+      setDeleteConfirmId(null);
+      setDeleteImpact(null);
     }
   };
 
-  const allList = vendors ?? [];
-  const allSelected = allList.length > 0 && allList.every((v) => selectedIds.has(v.id));
+  const rawList = vendors ?? [];
+  const visibleList = rawList;
+  const allSelected = visibleList.length > 0 && visibleList.every((v) => selectedIds.has(v.id));
 
   const toggleSelect = (id: number) => {
     setSelectedIds((prev) => {
@@ -268,42 +473,135 @@ export default function VendorsPage() {
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(allList.map((v) => v.id)));
+      setSelectedIds(new Set(visibleList.map((v) => v.id)));
     }
   };
 
+  // Fix 2 / FASE 3: bulk delete in parallel with Promise.allSettled(), now
+  // distinguishing hard-deleted vs. auto-archived (transaction history) vs. failed.
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Hapus ${selectedIds.size} vendor terpilih? Tindakan ini tidak bisa dibatalkan.`)) return;
     setBulkDeleting(true);
-    let success = 0;
-    let failed = 0;
-    for (const id of selectedIds) {
-      try {
-        await deleteMut.mutateAsync({ id });
-        success++;
-      } catch {
-        failed++;
-      }
-    }
+    const results = await Promise.allSettled(
+      Array.from(selectedIds).map((id) => deleteMut.mutateAsync({ id }))
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    const archived = results.filter(
+      (r) => r.status === "fulfilled" && (r.value as { code?: string })?.code === "SUPPLIER_ARCHIVED"
+    ).length;
+    const deleted = results.length - failed - archived;
     setBulkDeleting(false);
     setSelectedIds(new Set());
     qc.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
-    if (failed === 0) {
-      toast({ title: `${success} vendor berhasil dihapus` });
-    } else {
-      toast({ title: `${success} berhasil, ${failed} gagal`, variant: "destructive" });
+    const parts = [
+      deleted ? `${deleted} dihapus` : null,
+      archived ? `${archived} dinonaktifkan (punya riwayat transaksi)` : null,
+      failed ? `${failed} gagal` : null,
+    ].filter(Boolean).join(", ");
+    toast({ title: parts, variant: failed > 0 ? "destructive" : undefined });
+  };
+
+  const handleBulkAssignCompany = async () => {
+    if (selectedIds.size === 0 || !bulkAssignCompanyId) return;
+    setBulkAssigning(true);
+    try {
+      const res = await fetch("/api/trading/suppliers/bulk-assign-company", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendorIds: Array.from(selectedIds),
+          companyId: bulkAssignCompanyId === "__unassign__" ? null : Number(bulkAssignCompanyId),
+        }),
+      });
+      if (!res.ok) throw new Error("Gagal assign company");
+      const cName = bulkAssignCompanyId === "__unassign__"
+        ? "Global (tidak di-assign)"
+        : companies.find(c => String(c.id) === bulkAssignCompanyId)?.companyName ?? bulkAssignCompanyId;
+      toast({ title: `${selectedIds.size} vendor di-assign ke ${cName}` });
+      setSelectedIds(new Set());
+      setBulkAssignOpen(false);
+      setBulkAssignCompanyId("");
+      qc.invalidateQueries({ queryKey: getListSuppliersQueryKey() });
+    } catch (e) {
+      toast({ title: "Gagal", description: String(e), variant: "destructive" });
+    } finally {
+      setBulkAssigning(false);
     }
   };
 
   const taxLabel = (id: number | null | undefined) => {
     if (!id) return "-";
-    const t = (taxes ?? []).find((x) => x.id === id);
-    return t ? `${t.name} (${t.rate}%)` : "-";
+    const tx = (taxes ?? []).find((x) => x.id === id);
+    return tx ? `${tx.name} (${tx.rate}%)` : "-";
   };
+
+  const deleteTargetName = rawList.find((v) => v.id === deleteConfirmId)?.name;
 
   return (
     <AppShell>
+      <BackButton href="/purchase" />
+
+      {/* Fix 3 / FASE 3: single delete confirm dialog — branches based on
+          the delete-impact check (archive warning vs. permanent-delete). */}
+      <AlertDialog open={deleteConfirmId != null} onOpenChange={(open) => { if (!open) { setDeleteConfirmId(null); setDeleteImpact(null); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteImpactLoading ? "Memeriksa vendor..." : deleteImpact?.hasTransactionHistory ? "Nonaktifkan Vendor?" : "Hapus Vendor?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteImpactLoading ? (
+                "Mengecek riwayat transaksi vendor ini…"
+              ) : deleteImpact?.hasTransactionHistory ? (
+                <>
+                  Vendor <strong>{deleteTargetName}</strong> masih memiliki riwayat transaksi
+                  ({[
+                    deleteImpact.dependencies?.logisticQuotes ? `${deleteImpact.dependencies.logisticQuotes} quote` : null,
+                    deleteImpact.dependencies?.purchaseOrders ? `${deleteImpact.dependencies.purchaseOrders} PO` : null,
+                    deleteImpact.dependencies?.fulfillments ? `${deleteImpact.dependencies.fulfillments} fulfillment` : null,
+                  ].filter(Boolean).join(", ")}) sehingga tidak bisa dihapus permanen — vendor akan
+                  <strong> dinonaktifkan</strong> agar riwayat transaksi tetap utuh.
+                </>
+              ) : (
+                <>Vendor <strong>{deleteTargetName}</strong> akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.</>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDelete}
+              disabled={deleteImpactLoading}
+            >
+              {deleteImpact?.hasTransactionHistory ? "Nonaktifkan" : "Hapus"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Fix 3: bulk delete confirm dialog */}
+      <AlertDialog open={showBulkDeleteConfirm} onOpenChange={setShowBulkDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus {selectedIds.size} Vendor?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Semua vendor yang dipilih akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { setShowBulkDeleteConfirm(false); handleBulkDelete(); }}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? "Menghapus..." : "Hapus Semua"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <div>
@@ -316,14 +614,23 @@ export default function VendorsPage() {
                 <Plus className="mr-2 h-4 w-4" /> New Vendor
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit Vendor" : "Vendor Baru"}</DialogTitle>
               </DialogHeader>
               <Tabs defaultValue="bisnis">
                 <TabsList className="w-full">
                   <TabsTrigger value="bisnis" className="flex-1">Informasi Bisnis</TabsTrigger>
-                  <TabsTrigger value="layanan" className="flex-1">Layanan Pengiriman</TabsTrigger>
+                  <TabsTrigger value="layanan" className="flex-1">Layanan</TabsTrigger>
+                  <TabsTrigger value="akses" className="flex-1">
+                    <Building2 className="h-3.5 w-3.5 mr-1" />
+                    Akses Company
+                    {assignedCompanyIds.length > 0 && (
+                      <Badge className="ml-1.5 h-4 w-4 p-0 flex items-center justify-center text-[10px]">
+                        {assignedCompanyIds.length}
+                      </Badge>
+                    )}
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="bisnis" className="mt-3 grid gap-3">
@@ -342,6 +649,10 @@ export default function VendorsPage() {
                     </div>
                   </div>
                   <div className="grid gap-1.5">
+                    <Label htmlFor="contactPerson">PIC / Contact Person</Label>
+                    <Input id="contactPerson" value={form.contactPerson} onChange={(e) => set("contactPerson", e.target.value)} placeholder="Nama penghubung" />
+                  </div>
+                  <div className="grid gap-1.5">
                     <Label htmlFor="email">Email Kontak</Label>
                     <Input id="email" type="email" value={form.contactEmail} onChange={(e) => set("contactEmail", e.target.value)} />
                   </div>
@@ -351,7 +662,11 @@ export default function VendorsPage() {
                   </div>
                   <div className="grid gap-1.5">
                     <Label htmlFor="address">Alamat</Label>
-                    <Textarea id="address" value={form.address} onChange={(e) => set("address", e.target.value)} rows={2} />
+                    <GooglePlacesAutocomplete
+                      value={form.address}
+                      onChange={(v) => set("address", v)}
+                      placeholder="Ketik alamat vendor..."
+                    />
                   </div>
                   <div className="grid gap-1.5">
                     <Label>Tarif Pajak Default (PPN Pembelian)</Label>
@@ -364,8 +679,8 @@ export default function VendorsPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">— Gunakan default global —</SelectItem>
-                        {purchaseTaxes.map((t) => (
-                          <SelectItem key={t.id} value={String(t.id)}>{t.name} ({t.rate}%)</SelectItem>
+                        {purchaseTaxes.map((tx) => (
+                          <SelectItem key={tx.id} value={String(tx.id)}>{tx.name} ({tx.rate}%)</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -464,22 +779,7 @@ export default function VendorsPage() {
                       <Label htmlFor="fee">Tarif Dasar (Rp)</Label>
                       <Input id="fee" type="number" min="0" value={form.fee} onChange={(e) => set("fee", e.target.value)} />
                     </div>
-                    <div className="grid gap-1.5">
-                      <Label htmlFor="markup">Markup (%)</Label>
-                      <Input id="markup" type="number" min="0" step="0.01" value={form.markup} onChange={(e) => set("markup", e.target.value)} placeholder="cth. 20" />
-                    </div>
                   </div>
-                  {(() => {
-                    const base = parseFloat(form.fee) || 0;
-                    const pct = parseFloat(form.markup) || 0;
-                    if (base <= 0) return null;
-                    const after = Math.round(base * (1 + pct / 100));
-                    return (
-                      <p className="text-xs text-muted-foreground -mt-1">
-                        Setelah markup: <span className="font-semibold text-foreground">Rp {after.toLocaleString("id-ID")}</span>
-                      </p>
-                    );
-                  })()}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="grid gap-1.5">
                       <Label htmlFor="sortOrder">Urutan Tampil</Label>
@@ -494,12 +794,112 @@ export default function VendorsPage() {
                     <Switch id="isActive" checked={form.isActive} onCheckedChange={(v) => set("isActive", v)} />
                     <Label htmlFor="isActive">Aktif (tampil di portal & notifikasi)</Label>
                   </div>
+                  <div className="border-t pt-3 mt-1 space-y-3">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Truk</p>
+                    <div className="flex items-center gap-3">
+                      <Switch
+                        id="hasInternalTruck"
+                        checked={form.hasInternalTruck}
+                        onCheckedChange={(v) => set("hasInternalTruck", v)}
+                      />
+                      <Label htmlFor="hasInternalTruck">Punya Truk Internal</Label>
+                    </div>
+                    {form.hasInternalTruck && (
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="internalTruckPrice">Harga Truk Internal (Rp)</Label>
+                        <Input
+                          id="internalTruckPrice"
+                          type="number"
+                          min="0"
+                          value={form.internalTruckPrice}
+                          onChange={(e) => set("internalTruckPrice", e.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+
+                {/* ── Tab Akses Company ──────────────────────────────────── */}
+                <TabsContent value="akses" className="mt-3">
+                  <div className="rounded-lg border p-3 mb-3 bg-muted/40">
+                    <div className="flex items-start gap-2">
+                      <Globe className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium">Visibilitas Vendor</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Jika tidak ada company yang dipilih, vendor ini akan terlihat oleh <strong>semua divisi/company</strong> (global).
+                          Pilih company tertentu untuk membatasi visibilitas hanya ke divisi tersebut.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {companies.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6">Memuat daftar company…</p>
+                  ) : (
+                    <div className="grid gap-2">
+                      <div className="flex items-center justify-between pb-1 border-b">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          {assignedCompanyIds.length === 0
+                            ? "Semua company (global)"
+                            : `${assignedCompanyIds.length} company dipilih`}
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAssignedCompanyIds(companies.map((c) => c.id))}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            Pilih Semua
+                          </button>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <button
+                            type="button"
+                            onClick={() => setAssignedCompanyIds([])}
+                            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          >
+                            Reset (Global)
+                          </button>
+                        </div>
+                      </div>
+                      {companies.map((company) => {
+                        const checked = assignedCompanyIds.includes(company.id);
+                        return (
+                          <label
+                            key={company.id}
+                            className={`flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                              checked
+                                ? "border-primary/50 bg-primary/5"
+                                : "border-border hover:border-primary/30 hover:bg-muted/50"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => toggleAssignedCompany(company.id)}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium leading-tight">{company.companyName}</p>
+                              <p className="text-xs text-muted-foreground">{company.companyCode}</p>
+                            </div>
+                            {checked && (
+                              <Badge className="bg-primary/10 text-primary border-0 text-xs shrink-0">Aktif</Badge>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
               <DialogFooter>
                 <Button variant="outline" onClick={() => { setOpen(false); reset(); }}>Batal</Button>
-                <Button onClick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="button-save-vendor">
-                  {editing ? "Simpan" : "Buat"}
+                <Button
+                  onClick={submit}
+                  disabled={createMut.isPending || updateMut.isPending || savingAssignments}
+                  data-testid="button-save-vendor"
+                >
+                  {(createMut.isPending || updateMut.isPending || savingAssignments) ? "Menyimpan..." : (editing ? "Simpan" : "Buat")}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -508,9 +908,47 @@ export default function VendorsPage() {
 
         {/* Bulk action bar */}
         {selectedIds.size > 0 && (
-          <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/10 border border-primary/20 rounded-lg">
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/10 border border-primary/20 rounded-lg flex-wrap">
             <span className="text-sm font-medium">{selectedIds.size} dipilih</span>
-            <Button size="sm" variant="destructive" onClick={handleBulkDelete} disabled={bulkDeleting}>
+            <Dialog open={bulkAssignOpen} onOpenChange={setBulkAssignOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="gap-1.5">
+                  <Building2 className="h-3.5 w-3.5" />
+                  Assign ke Company
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-sm">
+                <DialogHeader>
+                  <DialogTitle>Assign {selectedIds.size} Vendor ke Company</DialogTitle>
+                </DialogHeader>
+                <div className="grid gap-3 py-2">
+                  <Select value={bulkAssignCompanyId} onValueChange={setBulkAssignCompanyId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Pilih company..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {companies.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>{c.companyName} ({c.companyCode})</SelectItem>
+                      ))}
+                      <SelectItem value="__unassign__">— Lepas (Global / tidak di-assign) —</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => { setBulkAssignOpen(false); setBulkAssignCompanyId(""); }}>Batal</Button>
+                  <Button onClick={handleBulkAssignCompany} disabled={!bulkAssignCompanyId || bulkAssigning}>
+                    {bulkAssigning ? "Menyimpan..." : "Simpan"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            {/* Fix 3: opens AlertDialog instead of confirm() */}
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => setShowBulkDeleteConfirm(true)}
+              disabled={bulkDeleting}
+            >
               <Trash2 className="h-3.5 w-3.5 mr-1.5" />
               {bulkDeleting ? "Menghapus..." : "Hapus Terpilih"}
             </Button>
@@ -520,93 +958,205 @@ export default function VendorsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Vendor</CardTitle>
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <CardTitle>Daftar Vendor</CardTitle>
+              {/* Fix 1 / FASE 4: filter + search + status trigger server-side refetch via hook params */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Input
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setSelectedIds(new Set()); }}
+                  placeholder="Cari nama, PIC, email, NPWP, atau telepon..."
+                  className="w-[240px] h-8 text-sm"
+                  data-testid="input-vendor-search"
+                />
+                <Select
+                  value={statusFilter}
+                  onValueChange={(v) => { setStatusFilter(v as "all" | "active" | "inactive"); setSelectedIds(new Set()); }}
+                >
+                  <SelectTrigger className="w-[140px] h-8 text-sm" data-testid="select-vendor-status">
+                    <SelectValue placeholder="Status..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Nonaktif</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterCompanyId}
+                  onValueChange={(v) => { setFilterCompanyId(v); setSelectedIds(new Set()); }}
+                >
+                  <SelectTrigger className="w-[200px] h-8 text-sm">
+                    <SelectValue placeholder="Filter company..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Company</SelectItem>
+                    {companies.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>{c.companyName} ({c.companyCode})</SelectItem>
+                    ))}
+                    <SelectItem value="__unassigned__">— Belum di-assign —</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {isLoading
+                ? "Memuat vendor…"
+                : pagination
+                  ? `Menampilkan ${visibleList.length === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}–${(pagination.page - 1) * pagination.limit + visibleList.length} dari ${pagination.total} vendor`
+                  : `Menampilkan ${visibleList.length} vendor`}
+              {isFetching && !isLoading ? " · memperbarui…" : ""}
+            </p>
           </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">
-                    {allList.length > 0 && (
-                      <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Pilih semua" />
-                    )}
-                  </TableHead>
-                  <TableHead>Nama</TableHead>
-                  <TableHead>Tipe Layanan</TableHead>
-                  <TableHead>Negara</TableHead>
-                  <TableHead>Telepon</TableHead>
-                  <TableHead>ETA</TableHead>
-                  <TableHead className="text-right">Tarif Dasar</TableHead>
-                  <TableHead className="text-right">Markup (%)</TableHead>
-                  <TableHead className="text-right">Setelah Markup</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-[100px] text-right">Aksi</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {allList.map((v) => {
-                  const baseFee = Number(v.fee ?? 0);
-                  const markupPct = Number(v.markup ?? 0);
-                  const afterMarkup = baseFee * (1 + markupPct / 100);
-                  return (
-                    <TableRow key={v.id} data-testid={`row-vendor-${v.id}`}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedIds.has(v.id)}
-                          onCheckedChange={() => toggleSelect(v.id)}
-                          aria-label={`Pilih ${v.name}`}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <span className="mr-1.5 inline-flex items-center"><LogoDisplay logo={v.logo} /></span>
-                        <span className="font-medium">{v.name}</span>
-                      </TableCell>
-                      <TableCell>
-                        {v.serviceType
-                          ? <Badge variant="secondary" className="text-xs">{v.serviceType}</Badge>
-                          : <span className="text-muted-foreground text-xs">Semua</span>}
-                      </TableCell>
-                      <TableCell>{v.country ?? "-"}</TableCell>
-                      <TableCell>{v.phone ?? "-"}</TableCell>
-                      <TableCell>{v.eta ?? "-"}</TableCell>
-                      <TableCell className="text-right font-mono text-sm">
-                        {baseFee > 0 ? `Rp ${baseFee.toLocaleString("id-ID")}` : "-"}
-                      </TableCell>
-                      <TableCell className="text-right text-sm">
-                        {markupPct > 0 ? `${markupPct}%` : "-"}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm font-medium text-primary">
-                        {baseFee > 0 ? `Rp ${Math.round(afterMarkup).toLocaleString("id-ID")}` : "-"}
-                      </TableCell>
-                      <TableCell>
-                        {v.isActive
-                          ? <Badge className="bg-green-100 text-green-800 hover:bg-green-100 text-xs">Aktif</Badge>
-                          : <Badge variant="outline" className="text-xs text-muted-foreground">Nonaktif</Badge>}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button size="icon" variant="ghost" title="Etalase" onClick={() => navigate(`/purchase/vendors/${v.id}`)}>
-                          <Store className="h-4 w-4 text-primary" />
-                        </Button>
-                        <Button size="icon" variant="ghost" onClick={() => startEdit(v)} data-testid={`button-edit-vendor-${v.id}`}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button size="icon" variant="ghost" onClick={() => remove(v.id)} data-testid={`button-delete-vendor-${v.id}`}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10">
+                      {visibleList.length > 0 && (
+                        <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Pilih semua" />
+                      )}
+                    </TableHead>
+                    <TableHead>Nama</TableHead>
+                    <TableHead>Tipe Layanan</TableHead>
+                    <TableHead>Negara</TableHead>
+                    <TableHead>Telepon</TableHead>
+                    <TableHead>PIC</TableHead>
+                    <TableHead>ETA</TableHead>
+                    <TableHead className="text-right">Tarif Dasar</TableHead>
+                    <TableHead>Akses Company</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[100px] text-right sticky right-0 bg-card z-10">Aksi</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {visibleList.map((v) => {
+                    const baseFee = Number(v.fee ?? 0);
+                    // Fix 5: use proper typed field (no more `as any`)
+                    const assignedIds = v.assignedCompanyIds ?? [];
+                    return (
+                      <TableRow key={v.id} data-testid={`row-vendor-${v.id}`}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedIds.has(v.id)}
+                            onCheckedChange={() => toggleSelect(v.id)}
+                            aria-label={`Pilih ${v.name}`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-flex items-center"><LogoDisplay logo={v.logo} /></span>
+                              <span className="font-medium">{v.name}</span>
+                            </div>
+                            {v.companyId != null && (() => {
+                              const co = companies.find(c => c.id === v.companyId);
+                              return co ? (
+                                <Badge className="text-[10px] px-1.5 py-0 w-fit bg-indigo-100 text-indigo-800 hover:bg-indigo-100 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300">
+                                  {co.companyCode}
+                                </Badge>
+                              ) : null;
+                            })()}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {v.serviceType
+                            ? <Badge variant="secondary" className="text-xs">{v.serviceType}</Badge>
+                            : <span className="text-muted-foreground text-xs">Semua</span>}
+                        </TableCell>
+                        <TableCell>{v.country ?? "-"}</TableCell>
+                        <TableCell>{v.phone ?? "-"}</TableCell>
+                        {/* Fix 5: use proper typed field */}
+                        <TableCell className="text-sm text-muted-foreground">{v.contactPerson ?? "-"}</TableCell>
+                        <TableCell>{v.eta ?? "-"}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          {baseFee > 0 ? `Rp ${baseFee.toLocaleString("id-ID")}` : "-"}
+                        </TableCell>
+                        <TableCell>
+                          <CompanyAssignmentBadges assignedIds={assignedIds} companies={companies} />
+                        </TableCell>
+                        <TableCell>
+                          {v.isActive
+                            ? <Badge className="bg-green-100 text-green-800 hover:bg-green-100 text-xs">Aktif</Badge>
+                            : <Badge variant="secondary" className="text-xs">Nonaktif</Badge>}
+                        </TableCell>
+                        <TableCell className="text-right sticky right-0 bg-card z-10">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              onClick={() => navigate(`/purchase/vendors/${v.id}`)}
+                              title="Lihat Etalase"
+                            >
+                              <Store className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              onClick={() => startEdit(v)}
+                              data-testid={`button-edit-vendor-${v.id}`}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            {/* Fix 3: opens AlertDialog instead of confirm() */}
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              onClick={() => openDeleteConfirm(v.id)}
+                              data-testid={`button-delete-vendor-${v.id}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {visibleList.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
+                        {isLoading
+                          ? "Memuat vendor…"
+                          : debouncedSearch || statusFilter !== "all" || filterCompanyId !== "all"
+                            ? "Tidak ada vendor yang cocok dengan filter."
+                            : "Belum ada vendor."}
                       </TableCell>
                     </TableRow>
-                  );
-                })}
-                {allList.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
-                      Belum ada vendor.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
+          {/* FASE 4: pagination controls */}
+          {pagination && pagination.totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t">
+              <p className="text-xs text-muted-foreground">
+                Halaman {pagination.page} dari {pagination.totalPages}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Sebelumnya
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={page >= pagination.totalPages}
+                  onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       </div>
     </AppShell>

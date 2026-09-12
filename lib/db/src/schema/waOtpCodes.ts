@@ -10,12 +10,15 @@ export const waOtpCodesTable = pgTable(
     attempts: integer("attempts").notNull().default(0),
     verified: boolean("verified").notNull().default(false),
     verifyToken: text("verify_token"),
+    // Phase 1B: HMAC-SHA256 hash for secure lookup; raw token kept for backward compat
+    verifyTokenHash: text("verify_token_hash"),
     expiresAt: timestamp("expires_at").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({
     phoneIdx: index("wa_otp_phone_idx").on(t.phone),
     tokenIdx: index("wa_otp_token_idx").on(t.verifyToken),
+    verifyTokenHashIdx: index("wa_otp_verify_token_hash_idx").on(t.verifyTokenHash),
   })
 );
 
