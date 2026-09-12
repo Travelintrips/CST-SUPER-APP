@@ -101,7 +101,7 @@
 - [Atomic Rule AI approval](atomic-rule-ai-approval.md) — manual COA approval must persist Rule AI, its runtime mirror, and the draft journal in one idempotent transaction.
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
 - [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
-- [Vendor invoice payment correction](vendor-invoice-payment-correction.md) — reset amount paid only for exact orphaned settlements with no payment journal; reverse bank posting first otherwise.
+- [Vendor invoice payment correction](vendor-invoice-payment-correction.md) — net-withholding gross settlement needs approved reconciliation evidence; orphan resets require reversal first.
 - [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
 - [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.

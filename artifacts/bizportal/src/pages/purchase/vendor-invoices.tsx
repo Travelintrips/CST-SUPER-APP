@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Eye, ChevronLeft, Send, CheckCircle, FileText, Bot, Banknote, RotateCcw, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const idr = (n: number | string | null | undefined) => {
@@ -516,6 +516,34 @@ export function VendorInvoiceEditorPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal mereset status pembayaran"),
   });
 
+  const syncPaymentStatusMut = useMutation({
+    mutationFn: async () => {
+      const r = await apiFetch(`/purchase-workflow/vendor-invoices/${vi?.id}/recalculate-payment-status?company=${activeCompanyId}`, {
+        method: "POST",
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(formatPostingError(body, "Gagal menyinkronkan status pembayaran"));
+      return body;
+    },
+    onSuccess: async (body) => {
+      const paymentStatus = body?.paymentStatus;
+      if (paymentStatus?.status === "paid") {
+        toast.success("Invoice ditandai paid dari rekonsiliasi yang sudah cocok");
+      } else if (paymentStatus?.amountPaid != null) {
+        toast.success(
+          paymentStatus.withholdingComplete === false
+            ? "Pembayaran bruto tersinkron; lengkapi bukti potong PPh untuk status paid"
+            : "Status pembayaran invoice berhasil disinkronkan",
+        );
+      } else {
+        toast.success("Status pembayaran invoice berhasil disinkronkan");
+      }
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", id, activeCompanyId] });
+      await qcClient.invalidateQueries({ queryKey: ["/api/purchase-workflow/vendor-invoices", activeCompanyId] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Gagal menyinkronkan status pembayaran"),
+  });
+
   const handleResetPayment = () => {
     if (!vi || Number(vi.amountPaid) <= 0) return;
     const reason = window.prompt(
@@ -601,6 +629,17 @@ export function VendorInvoiceEditorPage() {
               >
                 <RotateCcw className="mr-1 h-4 w-4" />
                 {resetPaymentMut.isPending ? "Mengoreksi..." : "Reset Pembayaran"}
+              </Button>
+            )}
+            {!isNew && vi && vi.status !== "paid" && Number(vi.amountPaid) > 0 && Number(vi.grandTotal) > Number(vi.amountPaid) && (
+              <Button
+                variant="outline"
+                className="text-blue-700 border-blue-300 hover:bg-blue-50"
+                onClick={() => syncPaymentStatusMut.mutate()}
+                disabled={syncPaymentStatusMut.isPending}
+              >
+                <RefreshCw className={`mr-1 h-4 w-4 ${syncPaymentStatusMut.isPending ? "animate-spin" : ""}`} />
+                {syncPaymentStatusMut.isPending ? "Menyinkronkan..." : "Sinkronkan Rekonsiliasi"}
               </Button>
             )}
           </div>

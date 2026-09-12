@@ -247,9 +247,52 @@ export async function recalculateVendorInvoicePaymentStatus(
     ));
   const amountPaid = money(numberValue(invoice.amount_paid));
   const grandTotal = money(numberValue(invoice.grand_total));
-  const fullyPaid = grandTotal > 0 && amountPaid >= grandTotal - 0.01;
+  let effectiveAmountPaid = amountPaid;
+
+  // Legacy reconciliation records can contain only the cash transferred to
+  // the supplier. Promote that amount to gross only when the exact gap is the
+  // persisted withholding amount and an approved OUT mutation has accounting
+  // evidence. This repairs the payment projection without creating another
+  // journal or bank transaction.
+  if (amountPaid > 0 && amountPaid < grandTotal - 0.01 && linkage.withholdingAmount > 0) {
+    const evidenceRows = rows<{ mutation_id: number; candidate_source: string | null }>(
+      await executor.execute(sql`
+        SELECT brm.mutation_id, brm.candidate_source::text AS candidate_source
+        FROM public.bank_reconciliation_matches brm
+        INNER JOIN public.bank_mutations bm ON bm.id = brm.mutation_id
+        WHERE brm.candidate_type::text = 'vendor_invoice'
+          AND brm.candidate_id::text = ${String(vendorInvoiceId)}
+          AND brm.status::text = 'approved'
+          AND bm.direction::text = 'OUT'
+          AND bm.status::text IN ('approved_pending_posting', 'approved', 'posted', 'reconciled', 'matched')
+          AND (
+            bm.journal_entry_id IS NOT NULL
+            OR brm.candidate_source::text = 'bank_disbursement'
+          )
+        ORDER BY brm.id DESC
+        LIMIT 1
+      `),
+    );
+    const inferredSettlement = inferVendorInvoiceGrossSettlement({
+      paymentAmount: amountPaid,
+      outstanding: grandTotal - amountPaid,
+      withholdingAmount: linkage.withholdingAmount,
+    });
+    if (evidenceRows.length > 0 && inferredSettlement.grossAmount >= grandTotal - 0.01) {
+      effectiveAmountPaid = grandTotal;
+      await executor.execute(sql`
+        UPDATE vendor_invoices
+        SET amount_paid = ${String(grandTotal)},
+            updated_at = NOW()
+        WHERE id = ${vendorInvoiceId}
+          AND company_id = ${companyId}
+          AND amount_paid = ${String(amountPaid)}
+      `);
+    }
+  }
+
   const nextStatus = deriveVendorInvoicePaymentStatus({
-    amountPaid,
+    amountPaid: effectiveAmountPaid,
     grandTotal,
     currentStatus: String(invoice.status),
     hasWithholding,
@@ -270,5 +313,5 @@ export async function recalculateVendorInvoicePaymentStatus(
         updated_at = NOW()
     WHERE id = ${vendorInvoiceId} AND company_id = ${companyId}
   `);
-  return { status: nextStatus, amountPaid, withholdingComplete };
+  return { status: nextStatus, amountPaid: effectiveAmountPaid, withholdingComplete };
 }

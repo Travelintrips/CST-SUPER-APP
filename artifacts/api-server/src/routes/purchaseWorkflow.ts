@@ -1476,6 +1476,32 @@ router.put("/vendor-invoices/:id/withholding-review", async (req, res) => {
   }
 });
 
+// Re-read an already approved bank-reconciliation payment. This is intentionally
+// a status synchronization endpoint, not a payment endpoint: it never creates
+// a journal or bank movement. It repairs legacy net-transfer records when the
+// approved reconciliation proves that the remaining balance is withholding tax.
+router.post("/vendor-invoices/:id/recalculate-payment-status", async (req, res) => {
+  const id = Number(req.params.id);
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "ID vendor invoice tidak valid." });
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => (
+      recalculateVendorInvoicePaymentStatus(
+        tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+        companyId,
+        id,
+      )
+    ));
+    return res.json({ ok: true, invoiceId: id, paymentStatus: result });
+  } catch (error) {
+    console.error("[vendor-invoices] payment status recalculation failed", { id, companyId, error });
+    return res.status(500).json({ error: "Gagal menyinkronkan status pembayaran dari rekonsiliasi." });
+  }
+});
+
 router.put("/vendor-invoices/:id", async (req, res) => {
   const id = Number(req.params.id);
   const body = req.body as Record<string, unknown>;
