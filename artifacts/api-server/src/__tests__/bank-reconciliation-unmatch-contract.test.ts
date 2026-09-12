@@ -15,12 +15,20 @@ function reopenRoute(): string {
   return routeSource.slice(start, end);
 }
 
+function unmatchRoute(): string {
+  const start = routeSource.indexOf('router.post("/:mutationId/unmatch"');
+  const end = routeSource.indexOf('router.post("/:mutationId/reject"', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return routeSource.slice(start, end);
+}
+
 describe("posted bank unmatch lifecycle contract", () => {
-  it("releases the old approved match and clears legacy mutation ownership atomically", () => {
+  it("retires the old approved match and clears legacy mutation ownership atomically", () => {
     const route = reopenRoute();
 
     expect(route).toContain("await db.transaction(async (tx) =>");
-    expect(route).toContain("SET status = 'candidate'");
+    expect(route).toContain("SET status = 'superseded'");
     expect(route).toContain("WHERE mutation_id = ${mutId} AND status = 'approved'");
     expect(route).toContain("matched_payment_id = NULL");
     expect(route).toContain("matched_order_id = NULL");
@@ -28,6 +36,15 @@ describe("posted bank unmatch lifecycle contract", () => {
     expect(route).toContain("linked_transaction_id = NULL");
     expect(route).toContain("reconciliation_status = 'unmatched'");
     expect(route).toContain("'REOPENED'");
+  });
+
+  it("does not restore an unmatched approval as an active settlement candidate", () => {
+    const route = unmatchRoute();
+
+    expect(route).toContain("SET status = 'superseded'");
+    expect(route).toContain("WHERE mutation_id = ${mutId} AND status = 'approved'");
+    expect(route).not.toContain("SET status = 'candidate'");
+    expect(route).toContain("'UNMATCHED'");
   });
 
   it("returns the released match IDs so the caller can verify the old approval was reopened", () => {

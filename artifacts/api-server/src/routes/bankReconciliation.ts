@@ -8284,15 +8284,16 @@ router.post("/:mutationId/unmatch", async (req, res) => {
         }
       }
 
-      // Fresh matching will rebuild candidate rows. Approved rows are released
-      // rather than deleted so the old ownership remains auditable.
+      // Fresh matching will rebuild candidate rows. Approved rows are retired
+      // as superseded rather than restored as active candidates, so the old
+      // ownership remains auditable without blocking a new allocation.
       await tx.execute(sql.raw(`
         DELETE FROM bank_reconciliation_matches
         WHERE mutation_id = ${mutId} AND status IN ('candidate', 'rejected')
       `));
       const releasedMatches = await tx.execute(sql.raw(`
         UPDATE bank_reconciliation_matches
-        SET status = 'candidate'
+        SET status = 'superseded'
         WHERE mutation_id = ${mutId} AND status = 'approved'
         RETURNING id
       `));
@@ -8826,11 +8827,12 @@ router.post("/:mutationId/reopen", async (req, res) => {
       ));
 
       // A posted mutation may still have an approved match. Reopening must
-      // release that approval; otherwise the mutation can appear unmatched
-      // while the posting guard still sees an approved reconciliation owner.
+      // retire that approval rather than restoring an active candidate;
+      // otherwise the mutation appears unmatched while allocation guards still
+      // see an active reconciliation owner.
       const releasedMatches = await tx.execute(sql.raw(`
         UPDATE bank_reconciliation_matches
-        SET status = 'candidate'
+        SET status = 'superseded'
         WHERE mutation_id = ${mutId} AND status = 'approved'
         RETURNING id
       `));
