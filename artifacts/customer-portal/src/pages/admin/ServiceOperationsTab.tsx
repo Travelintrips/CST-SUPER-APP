@@ -4,7 +4,6 @@ import {
   Check,
   ChevronRight,
   Clock3,
-  ExternalLink,
   Filter,
   Inbox,
   Loader2,
@@ -480,11 +479,11 @@ export function ServiceOperationsTab() {
               </div>
                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t pt-4">
                  <p className="text-xs text-slate-500">Action lifecycle memakai state machine atau update conditional canonical.</p>
-                 {selected.service !== "marketplace" && (
-                   <a href={String((rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.management_path) ?? "/bizportal/dashboard")} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
-                     <ExternalLink className="h-4 w-4" /> Buka modul BizPortal
-                   </a>
-                 )}
+                  {selected.service === "marketplace-po" && (
+                    <a href="/admin?tab=marketplace-operations" className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
+                      Buka Marketplace Operations
+                    </a>
+                  )}
                </div>
             </div>
           </div>

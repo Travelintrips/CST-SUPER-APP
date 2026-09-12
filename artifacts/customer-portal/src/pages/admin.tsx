@@ -48,7 +48,7 @@ type ErpStats = {
 // ── AdminPage ─────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { toast } = useToast();
   const { t } = useLanguage();
   const [erpStats, setErpStats] = useState<ErpStats | null>(null);
@@ -60,7 +60,10 @@ export default function AdminPage() {
   const [pendingVendorApprovals, setPendingVendorApprovals] = useState(0);
   const [pendingPortalWorkload, setPendingPortalWorkload] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>(isPortalAdmin() ? "service-operations" : "claim");
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const query = new URLSearchParams(location.split("?")[1] ?? "");
+    return isPortalAdmin() ? (query.get("tab") ?? "service-operations") : "claim";
+  });
 
   useEffect(() => {
     if (!isPortalAdmin()) return;

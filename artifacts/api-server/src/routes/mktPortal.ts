@@ -530,6 +530,73 @@ router.get("/purchase-orders/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/mkt/portal/purchase-orders/:id/activity-log ─────────────────────
+// Buyer-safe activity timeline for the canonical marketplace PO.
+// The ownership check is intentionally repeated here instead of relying on the
+// PO detail request so the endpoint cannot be used to probe another buyer's PO.
+router.get("/purchase-orders/:id/activity-log", async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const poId = Number(req.params["id"]);
+  if (!Number.isInteger(poId) || poId <= 0) {
+    return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+  }
+
+  try {
+    const { db, mktPurchaseOrdersTable, mktRfqsTable } = await import("@workspace/db");
+    const { and, eq, sql } = await import("drizzle-orm");
+
+    const [ownedPo] = await db
+      .select({ id: mktPurchaseOrdersTable.id })
+      .from(mktPurchaseOrdersTable)
+      .innerJoin(mktRfqsTable, and(
+        eq(mktPurchaseOrdersTable.rfqId, mktRfqsTable.id),
+        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+      ))
+      .where(eq(mktPurchaseOrdersTable.id, poId))
+      .limit(1);
+
+    if (!ownedPo) {
+      return res.status(404).json({ ok: false, error: "Purchase order tidak ditemukan" });
+    }
+
+    const result = await db.execute(sql`
+      SELECT
+        id,
+        action,
+        old_value AS "statusFrom",
+        new_value AS "statusTo",
+        description AS message,
+        actor_type AS "actorRole",
+        actor_name AS "actorName",
+        created_at AS "createdAt"
+      FROM activity_logs
+      WHERE mkt_purchase_order_id = ${poId}
+      ORDER BY created_at DESC, id DESC
+      LIMIT 200
+    `);
+
+    const data = (result.rows as Record<string, unknown>[]).map((row) => ({
+      id: row.id,
+      action: row.action,
+      statusFrom: row.statusFrom && typeof row.statusFrom === "object"
+        ? (row.statusFrom as { status?: string }).status ?? null
+        : null,
+      statusTo: row.statusTo && typeof row.statusTo === "object"
+        ? (row.statusTo as { status?: string }).status ?? null
+        : null,
+      message: row.message ?? null,
+      actorRole: row.actorRole ?? null,
+      actorName: row.actorName ?? null,
+      createdAt: row.createdAt,
+    }));
+
+    return res.json({ ok: true, count: data.length, data });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, poId }, "[mktPortal] getBuyerPoActivityLog error");
+    return res.status(500).json({ ok: false, error: "Gagal memuat activity log" });
+  }
+});
+
 // ── GET /api/mkt/portal/purchase-orders/:id/items ────────────────────────────
 router.get("/purchase-orders/:id/items", async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;

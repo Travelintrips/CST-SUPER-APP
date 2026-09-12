@@ -111,6 +111,17 @@ interface GoodsReceipt {
   createdAt: string;
 }
 
+interface ActivityEvent {
+  id: number;
+  action: string;
+  statusFrom: string | null;
+  statusTo: string | null;
+  message: string | null;
+  actorRole: string | null;
+  actorName: string | null;
+  createdAt: string;
+}
+
 type Tab = "overview" | "items" | "shipment" | "goods-receipt" | "timeline" | "activity";
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -187,23 +198,6 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-sm text-gray-500 sm:w-44 shrink-0">{label}</span>
       <span className="text-sm text-gray-800 font-medium">{value ?? "—"}</span>
     </div>
-  );
-}
-
-function GapBanner({ feature }: { feature: string }) {
-  return (
-    <Card className="border-amber-200 bg-amber-50">
-      <CardContent className="p-5 flex gap-3">
-        <Info className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-semibold text-amber-800">Backend GAP</p>
-          <p className="text-sm text-amber-700 mt-0.5">
-            Endpoint <strong>{feature}</strong> untuk buyer portal belum tersedia.
-            Fitur ini memerlukan pengembangan backend tambahan.
-          </p>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -804,6 +798,80 @@ function TimelineTab({ shipmentId }: { shipmentId: number | null }) {
   );
 }
 
+function ActivityTab({ poId }: { poId: number }) {
+  const { data, isLoading, isError, refetch } = useQuery<{ ok: boolean; data: ActivityEvent[] }>({
+    queryKey: ["mkt-po-activity", poId],
+    queryFn: async () => {
+      const res = await fetch(`/api/mkt/portal/purchase-orders/${poId}/activity-log`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Gagal memuat activity log");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return <div className="space-y-3">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>;
+  }
+
+  if (isError) {
+    return (
+      <Card className="border-red-200 bg-red-50">
+        <CardContent className="p-5 text-center space-y-2">
+          <p className="text-red-600 text-sm">Gagal memuat activity log.</p>
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            <RefreshCw className="w-4 h-4 mr-1.5" /> Coba Lagi
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const events = data?.data ?? [];
+  if (events.length === 0) {
+    return (
+      <Card className="border-dashed">
+        <CardContent className="p-10 text-center">
+          <Clock className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <p className="text-gray-500 text-sm">Belum ada activity log untuk PO ini.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-gray-400">{events.length} event — riwayat canonical PO.</p>
+      {events.map((event) => (
+        <Card key={event.id}>
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-1.5 h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-gray-800">{event.action.replace(/_/g, " ")}</p>
+                  <span className="text-xs text-gray-400">{fmtDateTime(event.createdAt)}</span>
+                </div>
+                {(event.statusFrom || event.statusTo) && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    {event.statusFrom ?? "—"} → {event.statusTo ?? "—"}
+                  </p>
+                )}
+                {event.message && <p className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">{event.message}</p>}
+                {(event.actorRole || event.actorName) && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    {event.actorName ?? event.actorRole}
+                  </p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MktPoDetailPage({ params }: { params: { poId: string } }) {
@@ -940,9 +1008,7 @@ export default function MktPoDetailPage({ params }: { params: { poId: string } }
               <TimelineTab shipmentId={selectedShipmentId} />
             </div>
           )}
-          {activeTab === "activity"      && (
-            <GapBanner feature="GET /api/mkt/portal/purchase-orders/:id/activity-log" />
-          )}
+          {activeTab === "activity"      && <ActivityTab poId={po.id} />}
         </div>
       </div>
     </div>
