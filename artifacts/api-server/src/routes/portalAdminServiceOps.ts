@@ -492,6 +492,59 @@ router.post("/notifications/:id/read", async (req: Request, res: Response) => {
   return res.json({ ok: true });
 });
 
+// GET /invoices/:id/download — admin-scoped private PDF access.
+// Reuse the private object-storage path contract used by the customer invoice
+// route; public/legacy URLs fail closed.
+router.get("/invoices/:id/download", async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "id invoice tidak valid" });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT sd.invoice_pdf_url AS "invoicePdfUrl"
+      FROM sales_documents sd
+      WHERE sd.id = ${id}
+        AND sd.status NOT IN ('cancelled', 'draft')
+        AND sd.invoice_status <> 'none'
+        AND (
+          sd.created_by_id LIKE 'portal:%'
+          OR EXISTS (
+            SELECT 1
+            FROM logistic_orders lo
+            WHERE lo.id = sd.logistic_order_id
+              AND lo.source IN ('customer_portal', 'portal')
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM portal_product_orders po
+            WHERE po.sales_doc_id = sd.id
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM mkt_purchase_orders mpo
+            WHERE mpo.sales_document_id = sd.id
+          )
+        )
+      LIMIT 1
+    `);
+    const storedPath = (result.rows[0] as { invoicePdfUrl?: unknown } | undefined)?.invoicePdfUrl;
+    if (typeof storedPath !== "string" || !storedPath.trim()) {
+      return res.status(404).json({ error: "PDF invoice belum tersedia" });
+    }
+    if (/^https?:\/\//i.test(storedPath) || !storedPath.startsWith("/")) {
+      return res.status(409).json({ error: "PDF invoice legacy belum tersedia melalui kanal privat" });
+    }
+
+    const signedUrl = await new ObjectStorageService().getSignedUrl(storedPath, 300);
+    return res.redirect(302, signedUrl);
+  } catch (error) {
+    logger.error({ err: error, invoiceId: id }, "portal admin invoice download error");
+    return res.status(500).json({ error: "Gagal mengakses PDF invoice" });
+  }
+});
+
 type DirectSource = {
   table: string;
   referenceColumn: string;
@@ -593,6 +646,11 @@ type AdminServiceProjection = {
     receipts: {
       status: "available" | "not_applicable";
       count: number;
+    };
+    completion: {
+      status: "completed" | "in_progress" | "cancelled" | "not_applicable";
+      currentStatus: string | null;
+      source: string;
     };
   };
 };
@@ -764,7 +822,33 @@ async function loadAdminServiceProjection(
       status: "not_applicable",
       count: 0,
     },
+    completion: {
+      status: "not_applicable",
+      currentStatus: String(record.status ?? "") || null,
+      source: "canonical_status",
+    },
   };
+
+  const normalizedRecordStatus = String(record.status ?? "").trim().toLowerCase();
+  if (normalizedRecordStatus === "cancelled" || normalizedRecordStatus === "canceled" || normalizedRecordStatus === "rejected") {
+    operations.completion = {
+      status: "cancelled",
+      currentStatus: String(record.status ?? "") || null,
+      source: "canonical_status",
+    };
+  } else if (["completed", "closed", "done", "released", "paid"].includes(normalizedRecordStatus)) {
+    operations.completion = {
+      status: "completed",
+      currentStatus: String(record.status ?? "") || null,
+      source: "canonical_status",
+    };
+  } else if (record.status != null) {
+    operations.completion = {
+      status: "in_progress",
+      currentStatus: String(record.status),
+      source: "canonical_status",
+    };
+  }
 
   if (service === "logistic-order") {
     const [fulfillment, pods] = await Promise.all([

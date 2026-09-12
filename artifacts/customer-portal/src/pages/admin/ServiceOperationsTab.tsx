@@ -94,6 +94,34 @@ type Detail = {
       currentStatus: string | null;
       events: Array<Record<string, unknown>>;
     };
+    operations?: {
+      fulfillment: {
+        status: "available" | "not_applicable";
+        links: number;
+        submissions: number;
+        latestSubmissionAt: string | null;
+      };
+      tracking: {
+        status: "available" | "not_applicable";
+        source: string | null;
+        currentStatus: string | null;
+        events: Array<Record<string, unknown>>;
+      };
+      pod: {
+        status: "available" | "not_applicable";
+        available: boolean;
+        items: Array<Record<string, unknown>>;
+      };
+      receipts: {
+        status: "available" | "not_applicable";
+        count: number;
+      };
+      completion: {
+        status: "completed" | "in_progress" | "cancelled" | "not_applicable";
+        currentStatus: string | null;
+        source: string;
+      };
+    };
   };
 };
 
@@ -534,6 +562,46 @@ export function ServiceOperationsTab() {
                         </div>
                       ))}
                     </div>
+                  )}
+                </div>
+              )}
+              {selected.projection?.operations && (
+                <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <h4 className="text-sm font-semibold text-slate-800">Fulfillment & delivery operations</h4>
+                    <span className="text-[11px] text-slate-500">Data canonical</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    {[
+                      ["Fulfillment", selected.projection.operations.fulfillment.status === "available"
+                        ? `${selected.projection.operations.fulfillment.submissions}/${selected.projection.operations.fulfillment.links} submission`
+                        : "N/A"],
+                      ["Tracking", selected.projection.operations.tracking.status === "available"
+                        ? statusLabel(selected.projection.operations.tracking.currentStatus ?? "available")
+                        : "N/A"],
+                      ["POD", selected.projection.operations.pod.status === "available"
+                        ? (selected.projection.operations.pod.available ? "Tersedia" : "Belum ada")
+                        : "N/A"],
+                      ["Goods receipt", selected.projection.operations.receipts.status === "available"
+                        ? `${selected.projection.operations.receipts.count} receipt`
+                        : "N/A"],
+                      ["Completion", statusLabel(selected.projection.operations.completion.status)],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="rounded-lg bg-white/80 p-3">
+                        <p className="text-[11px] uppercase tracking-wide text-slate-400">{String(label)}</p>
+                        <p className="mt-1 text-sm font-medium text-slate-800 break-words">{String(value)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {selected.projection.operations.tracking.events.length > 0 && (
+                    <p className="mt-3 text-xs text-slate-500">
+                      {selected.projection.operations.tracking.events.length} event tracking tersedia dari {selected.projection.operations.tracking.source ?? "sumber canonical"}.
+                    </p>
+                  )}
+                  {selected.projection.operations.fulfillment.latestSubmissionAt && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      Submission terakhir: {formatDate(selected.projection.operations.fulfillment.latestSubmissionAt)}
+                    </p>
                   )}
                 </div>
               )}
