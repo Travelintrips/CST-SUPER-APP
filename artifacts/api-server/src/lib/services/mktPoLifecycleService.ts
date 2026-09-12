@@ -38,7 +38,7 @@ type PoRow = typeof mktPurchaseOrdersTable.$inferSelect;
 type PoStatus = PoRow["status"];
 
 export interface ActorInfo {
-  actorType: "admin" | "vendor" | "system";
+  actorType: "admin" | "vendor" | "customer" | "system";
   actorId?: string | null;
   actorName?: string | null;
 }

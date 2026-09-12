@@ -117,6 +117,7 @@
 - [QRIS snapshot publish boundary](qris-snapshot-publish-boundary.md) — a corrected production snapshot can be superseded by an older deployed generator until the matching code is published.
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
 - [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
+- [Development workflow secret loader](development-workflow-secret-loader.md) — API readiness stops before binding when the managed GCP bootstrap JSON is malformed; repair the secret, never bypass the loader.
 - [Rule AI tax classification](rule-ai-tax-classification.md) — primary Rule AI COA follows expense/income flow; tax treatment is derived from OCR/context and mapped separately.
 - [Rule AI document and tax gate](rule-ai-document-tax-gate.md) — required proof blocks posting; PPN routing follows configured company tax accounts before standard-code fallback.
 - [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.
