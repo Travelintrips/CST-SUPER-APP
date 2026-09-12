@@ -42,6 +42,7 @@ import { sendMail, isSmtpConfigured } from "../lib/mailer";
 import { logger } from "../lib/logger";
 import { saveAndBroadcast } from "../lib/notificationStore";
 import { broadcastToAdmins, broadcastToPortal } from "../lib/sseManager";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import {
   hashVendorResponseToken,
   constantTimeTokenHashEqual,
@@ -2206,8 +2207,8 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
   if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "action harus approve atau reject" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, status, customer_name, phone, order_type,
-           product_approve_token, shipment_selection_token
+    SELECT id, order_number, status, customer_name, phone, portal_customer_id,
+           tracking_token, order_type, product_approve_token, shipment_selection_token
     FROM portal_product_orders
     WHERE product_approve_token = ${token}
     LIMIT 1
@@ -2272,6 +2273,29 @@ portalProductOrdersRouter.post("/orders/:token/customer-product-approve", async 
     }
   }
 
+  const domain = getPreferredDomain();
+  const trackingUrl = domain && row.tracking_token
+    ? `https://${domain}/track-produk/${row.tracking_token}`
+    : null;
+  const selectionUrl = domain && selectionToken
+    ? `https://${domain}/shipment-selection/${selectionToken}`
+    : trackingUrl;
+  await notifyCustomerPortal({
+    portalCustomerId: row.portal_customer_id,
+    eventKey: `product-status:${row.id}:${newStatus}`,
+    type: "product_status_changed",
+    title: action === "approve" ? "Produk disetujui" : "Produk perlu direvisi",
+    message: action === "approve"
+      ? `Produk untuk order ${row.order_number} disetujui. Silakan pilih mode pengiriman.`
+      : `Produk untuk order ${row.order_number} ditolak dan akan ditinjau ulang oleh admin.`,
+    payload: {
+      orderId: row.id,
+      orderNumber: row.order_number,
+      status: newStatus,
+      url: action === "approve" ? selectionUrl : trackingUrl,
+    },
+  });
+
   logger.info({ orderId: row.id, action, newStatus }, "customer-product-approve");
   return res.json({ success: true, status: newStatus });
 });
@@ -2328,7 +2352,8 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
   }
 
   const result = await db.execute(sql`
-    SELECT id, order_number, status, customer_name, phone
+    SELECT id, order_number, status, customer_name, phone,
+           portal_customer_id, tracking_token
     FROM portal_product_orders
     WHERE shipment_selection_token = ${token}
     LIMIT 1
@@ -2387,6 +2412,27 @@ portalProductOrdersRouter.post("/orders/:token/select-shipment-mode", async (req
       });
     }
   }
+
+  const domain = getPreferredDomain();
+  const trackingUrl = domain && row.tracking_token
+    ? `https://${domain}/track-produk/${row.tracking_token}`
+    : null;
+  await notifyCustomerPortal({
+    portalCustomerId: row.portal_customer_id,
+    eventKey: `product-status:${row.id}:${newStatus}`,
+    type: "shipment_mode_selected",
+    title: shipmentMode === "pickup_self" ? "Pesanan siap diambil" : "Pengiriman sedang diproses",
+    message: shipmentMode === "pickup_self"
+      ? `Order ${row.order_number} sudah siap diambil.`
+      : `Pilihan pengiriman untuk order ${row.order_number} sudah diterima dan sedang diproses oleh tim.`,
+    payload: {
+      orderId: row.id,
+      orderNumber: row.order_number,
+      status: newStatus,
+      shipmentMode,
+      url: trackingUrl,
+    },
+  });
 
   logger.info({ orderId: row.id, shipmentMode, newStatus }, "select-shipment-mode");
   return res.json({ success: true, status: newStatus, shipmentMode });
@@ -2456,10 +2502,7 @@ portalProductOrdersRouter.post("/admin/orders/:id/update-product-phase", async (
     WHERE id = ${id}
       AND status IN (
         'Product RFQ Sent',
-        'Product Quote Received',
-        'Submitted',
-        'submitted',
-        'Quote Request'
+        'Product Quote Received'
       )
     RETURNING id, status
   `);
@@ -2492,7 +2535,8 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
 
   const result = await db.execute(sql`
-    SELECT id, order_number, customer_name, phone, status, product_approve_token,
+    SELECT id, order_number, customer_name, phone, status, portal_customer_id,
+           tracking_token, product_approve_token,
            shipment_selection_token,
            vendor_name_selected, vendor_quoted_price, ready_date
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
@@ -2529,6 +2573,24 @@ portalProductOrdersRouter.post("/admin/orders/:id/send-product-approval", async 
       refId: String(id),
     }).catch(() => undefined);
   }
+
+  const trackingUrl = domain && row.tracking_token
+    ? `https://${domain}/track-produk/${row.tracking_token}`
+    : null;
+  await notifyCustomerPortal({
+    portalCustomerId: row.portal_customer_id,
+    eventKey: `product-approval-ready:${id}`,
+    type: "product_price_ready",
+    title: "Harga produk sudah tersedia",
+    message: `Harga produk untuk order ${row.order_number} sudah diisi oleh admin. Silakan review dan setujui sebelum proses pengiriman dilanjutkan.`,
+    payload: {
+      orderId: id,
+      orderNumber: row.order_number,
+      vendorName: row.vendor_name_selected,
+      quotedPrice: row.vendor_quoted_price ? Number(row.vendor_quoted_price) : null,
+      url: approveUrl ?? trackingUrl,
+    },
+  });
 
   broadcastToAdmins("order_status_update", { orderNumber: row.order_number, status: "Customer Product Approval", source: "admin_approval" });
   return res.json({ success: true, status: "Customer Product Approval", approveUrl });
@@ -2619,6 +2681,22 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-ready-pickup", async (req
     });
   }
 
+  const domain = getPreferredDomain();
+  const trackingToken = (order as any).trackingToken ?? null;
+  await notifyCustomerPortal({
+    portalCustomerId: (order as any).portalCustomerId ?? null,
+    eventKey: `product-status:${id}:Ready for Pickup`,
+    type: "product_ready_for_pickup",
+    title: "Pesanan siap diambil",
+    message: `Order ${order.orderNumber} sudah siap diambil di lokasi pickup.`,
+    payload: {
+      orderId: id,
+      orderNumber: order.orderNumber,
+      status: "Ready for Pickup",
+      url: domain && trackingToken ? `https://${domain}/track-produk/${trackingToken}` : null,
+    },
+  });
+
   broadcastToAdmins("order_status_update", { orderNumber: order.orderNumber, status: "Ready for Pickup", source: "admin_mark_pickup" });
   return res.json({ success: true, status: "Ready for Pickup" });
 });
@@ -2636,7 +2714,8 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed
   };
 
   const result = await db.execute(sql`
-    SELECT id, order_number, customer_name, phone, shipment_mode
+    SELECT id, order_number, customer_name, phone, portal_customer_id,
+           tracking_token, shipment_mode
     FROM portal_product_orders WHERE id = ${id} LIMIT 1
   `);
   const row = result.rows[0] as any;
@@ -2660,6 +2739,23 @@ portalProductOrdersRouter.post("/admin/orders/:id/mark-shipment-vendor-confirmed
     vendorName: vendorName?.trim() || "Vendor Pengiriman",
     shipmentMode: shipmentMode ?? row.shipment_mode ?? null,
     eta: eta?.trim() ?? null,
+  });
+
+  const domain = getPreferredDomain();
+  await notifyCustomerPortal({
+    portalCustomerId: row.portal_customer_id,
+    eventKey: `product-status:${row.id}:Vendor Confirmed`,
+    type: "shipment_vendor_confirmed",
+    title: "Vendor pengiriman dikonfirmasi",
+    message: `Vendor pengiriman untuk order ${row.order_number} sudah dikonfirmasi. Pesanan akan segera diproses.`,
+    payload: {
+      orderId: row.id,
+      orderNumber: row.order_number,
+      status: "Vendor Confirmed",
+      vendorName: vendorName?.trim() || "Vendor Pengiriman",
+      eta: eta?.trim() ?? null,
+      url: domain && row.tracking_token ? `https://${domain}/track-produk/${row.tracking_token}` : null,
+    },
   });
 
   broadcastToAdmins("order_status_update", { orderNumber: row.order_number, status: "Vendor Confirmed", source: "admin_vendor_confirmed" });

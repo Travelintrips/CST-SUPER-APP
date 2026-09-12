@@ -117,6 +117,12 @@ function CustomerNotificationBell() {
     setUnreadCount(0);
   }
 
+  async function openNotification(item: CustomerNotification) {
+    if (!item.isRead) await markRead(item.id);
+    const target = typeof item.payload?.url === "string" ? item.payload.url : "";
+    if (target) window.location.assign(target);
+  }
+
   return (
     <div className="relative">
       <button
@@ -151,7 +157,7 @@ function CustomerNotificationBell() {
             ) : items.map((item) => (
               <button
                 key={item.id}
-                onClick={() => !item.isRead && void markRead(item.id)}
+                onClick={() => void openNotification(item)}
                 className={`block w-full border-b border-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${item.isRead ? "bg-white" : "bg-sky-50/60"}`}
               >
                 <div className="flex gap-3">

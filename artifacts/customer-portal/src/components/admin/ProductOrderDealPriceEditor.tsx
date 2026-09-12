@@ -24,6 +24,7 @@ const LOCKED_STATUSES = new Set([
   "Completed",
   "Cancelled",
 ]);
+const EDITABLE_STATUSES = new Set(["Product RFQ Sent", "Product Quote Received"]);
 
 const idr = (value: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -46,6 +47,7 @@ export function ProductOrderDealPriceEditor({
   const [notice, setNotice] = useState("");
 
   const locked = LOCKED_STATUSES.has(status);
+  const canEdit = EDITABLE_STATUSES.has(status) && !locked;
 
   useEffect(() => {
     if (!open) return;
@@ -93,12 +95,12 @@ export function ProductOrderDealPriceEditor({
         type="button"
         size="sm"
         variant="outline"
-        disabled={locked}
+        disabled={!canEdit}
         onClick={() => setOpen(true)}
         className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
       >
         <DollarSign className="h-3.5 w-3.5" />
-        Masukkan Harga
+        {canEdit ? "Masukkan Harga" : "Setujui dulu untuk input harga"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-md">
@@ -143,7 +145,7 @@ export function ProductOrderDealPriceEditor({
             <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={saving}>
               Batal
             </Button>
-            <Button type="button" onClick={() => void save()} disabled={saving || locked}>
+            <Button type="button" onClick={() => void save()} disabled={saving || !canEdit}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Simpan Harga
             </Button>
