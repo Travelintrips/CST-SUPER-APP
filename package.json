@@ -32,7 +32,7 @@
     "assets:customer:promote": "node artifacts/api-server/scripts/customer-portal-assets.mjs promote --dry-run",
     "test:customer-assets": "node --test artifacts/api-server/scripts/customer-portal-assets.test.mjs",
     "audit:secret-rotation-status": "node scripts/secret-rotation-status.mjs",
-    "deployment:preflight": "node scripts/preflight-deployment.mjs",
+    "deployment:preflight": "APP_ENV=production REPLIT_DEPLOYMENT=1 node artifacts/api-server/load-secrets.mjs node scripts/preflight-deployment.mjs",
     "deployment:dry-run": "node scripts/preflight-deployment.mjs --dry-run",
     "validate:production-go": "node scripts/validate-production-go.mjs",
     "smoke:prod": "bash scripts/smoke-test-prod.sh \"${PROD_URL:-}\""

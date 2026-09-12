@@ -92,8 +92,13 @@ function record(category, item, status, notes = "") {
 const testDbUrl     = envPresent("TEST_DATABASE_URL",    { minLength: 20 });
 const stagingDbUrl  = envPresent("STAGING_DATABASE_URL", { minLength: 20 });
 const hasDedicatedStaging = testDbUrl === "PRESENT" || stagingDbUrl === "PRESENT";
-
-const EXEC_MODE = hasDedicatedStaging ? "MODE A — Dedicated Staging" : "MODE B — SAFE DEV";
+const isProductionRuntime =
+  process.env.APP_ENV === "production" || process.env.REPLIT_DEPLOYMENT === "1";
+const EXEC_MODE = isProductionRuntime
+  ? "MODE P — Production Bundle"
+  : hasDedicatedStaging
+    ? "MODE A — Dedicated Staging"
+    : "MODE B — SAFE DEV";
 
 // ── 1. Environment Variables ──────────────────────────────────────────────────
 
@@ -140,7 +145,7 @@ record("Env", "ADMIN_EMAIL", adminEmail === "PRESENT" ? "PASS" : "WARNING",
 // Rationale: missing secrets are a "prerequisite not yet available" (BLOCKED), not a
 // configuration error. Configuration errors require an actively invalid value.
 
-const requiredSecrets = [
+const commonRequiredSecrets = [
   { name: "SESSION_SECRET",               minLength: 32 },
   { name: "PORTAL_JWT_SECRET",            minLength: 32 },
   { name: "DRIVER_JWT_SECRET",            minLength: 32 },
@@ -152,9 +157,21 @@ const requiredSecrets = [
   { name: "PAYLABS_PRIVATE_KEY",          minLength: 100 },
   { name: "VAPID_PRIVATE_KEY",            minLength: 40 },
   { name: "VAPID_PUBLIC_KEY",             minLength: 40 },
-  { name: "SUPABASE_DATABASE_URL_DEV",    minLength: 20 },
-  { name: "SUPABASE_SERVICE_ROLE_KEY_DEV",minLength: 20 },
-  { name: "SUPABASE_ANON_KEY_DEV",        minLength: 20 },
+];
+
+const requiredSecrets = [
+  ...commonRequiredSecrets,
+  ...(isProductionRuntime
+    ? [
+        { name: "SUPABASE_DATABASE_URL",     minLength: 20 },
+        { name: "SUPABASE_SERVICE_ROLE_KEY", minLength: 20 },
+        { name: "SUPABASE_ANON_KEY",         minLength: 20 },
+      ]
+    : [
+        { name: "SUPABASE_DATABASE_URL_DEV",     minLength: 20 },
+        { name: "SUPABASE_SERVICE_ROLE_KEY_DEV", minLength: 20 },
+        { name: "SUPABASE_ANON_KEY_DEV",         minLength: 20 },
+      ]),
 ];
 
 for (const { name, minLength } of requiredSecrets) {
