@@ -27,6 +27,8 @@
  * 15.  Closing balance matches Trial Balance for the same period
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 
 // ── Helpers — mirror the SQL CTE arithmetic ───────────────────────────────────
@@ -361,5 +363,111 @@ describe("15. Closing balance matches Trial Balance", () => {
 
     expect(closingBalance).toBe(trialBalance);
     expect(closingBalance).toBe(3_300_000);
+  });
+});
+
+type BankReconciliationPaymentEntry = {
+  sourceModule: string;
+  source: string;
+  accountingPaymentMethod: string | null;
+  bankMutationId: number | null;
+  journalId: number;
+  lines: Array<{
+    accountCode: string;
+    debit: number;
+    credit: number;
+    runningBalance: number;
+  }>;
+};
+
+function generalLedgerPaymentMeta(entry: BankReconciliationPaymentEntry) {
+  const sourceModule =
+    entry.sourceModule.toLowerCase() === "vendor_invoice_payment" &&
+    entry.source.toLowerCase() === "bank_reconciliation"
+      ? "bank_reconciliation"
+      : entry.sourceModule;
+
+  return {
+    sourceModule,
+    paymentMethod:
+      entry.accountingPaymentMethod ??
+      (entry.bankMutationId !== null && sourceModule === "bank_reconciliation"
+        ? "bank"
+        : null),
+  };
+}
+
+describe("16. Bank-reconciliation vendor payment filter semantics", () => {
+  const entry: BankReconciliationPaymentEntry = {
+    sourceModule: "vendor_invoice_payment",
+    source: "bank_reconciliation",
+    accountingPaymentMethod: null,
+    bankMutationId: 9042,
+    journalId: 712,
+    lines: [
+      {
+        accountCode: "2-1101",
+        debit: 1_011_000,
+        credit: 0,
+        runningBalance: 8_989_000,
+      },
+      {
+        accountCode: "1-1101",
+        debit: 0,
+        credit: 1_000_000,
+        runningBalance: 14_000_000,
+      },
+    ],
+  };
+
+  it("returns the complete journal under the bank-reconciliation module filter", () => {
+    const before = structuredClone(entry);
+    const meta = generalLedgerPaymentMeta(entry);
+    const visibleLines = meta.sourceModule === "bank_reconciliation" ? entry.lines : [];
+
+    expect(visibleLines).toHaveLength(2);
+    expect(visibleLines.map((line) => line.accountCode)).toEqual(["2-1101", "1-1101"]);
+    expect(entry).toEqual(before);
+  });
+
+  it("returns the complete journal as bank under the payment-method filter", () => {
+    const before = structuredClone(entry);
+    const meta = generalLedgerPaymentMeta(entry);
+    const visibleLines = meta.paymentMethod === "bank" ? entry.lines : [];
+
+    expect(meta.paymentMethod).toBe("bank");
+    expect(visibleLines).toHaveLength(2);
+    expect(entry).toEqual(before);
+  });
+
+  it("preserves gross vendor-liability debit, net bank credit, journal identity, and balances", () => {
+    const routeSource = readFileSync(
+      resolve(process.cwd(), "src/routes/accountingHub.ts"),
+      "utf8",
+    );
+
+    expect(entry.lines).toEqual([
+      {
+        accountCode: "2-1101",
+        debit: 1_011_000,
+        credit: 0,
+        runningBalance: 8_989_000,
+      },
+      {
+        accountCode: "1-1101",
+        debit: 0,
+        credit: 1_000_000,
+        runningBalance: 14_000_000,
+      },
+    ]);
+    expect(entry.journalId).toBe(712);
+
+    expect(routeSource).toContain("WHEN LOWER(${p}source_module) = 'vendor_invoice_payment'");
+    expect(routeSource).toContain("AND LOWER(${p}source::text) = 'bank_reconciliation'");
+    expect(routeSource).toContain("THEN 'bank_reconciliation'");
+    expect(routeSource).toContain("WHEN bm.id IS NOT NULL");
+    expect(routeSource).toContain("THEN 'bank'");
+    expect(routeSource).toContain("WHERE journal_entry_id = e.id");
+    expect(routeSource).toContain("sql`${glPaymentMethodExpr()} = ${f.paymentMethod}`");
   });
 });
