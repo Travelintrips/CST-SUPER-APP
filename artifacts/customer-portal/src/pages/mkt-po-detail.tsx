@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import { isAuthenticated, removeAuthToken } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -145,6 +145,14 @@ const SHIPMENT_STATUS: Record<string, { label: string; color: string }> = {
   delivered:     { label: "Terkirim",       color: "bg-green-100 text-green-700" },
   cancelled:     { label: "Dibatalkan",     color: "bg-red-100 text-red-700" },
 };
+
+const SHIPMENT_OPTIONS = [
+  { value: "pickup_self", label: "Ambil sendiri", description: "Ambil produk langsung dari lokasi vendor." },
+  { value: "trucking", label: "Trucking", description: "Pengiriman darat antarkota." },
+  { value: "air_freight", label: "Kargo udara", description: "Pengiriman cepat melalui udara." },
+  { value: "sea_freight", label: "Kargo laut", description: "FCL/LCL untuk pengiriman laut." },
+  { value: "door_to_door", label: "Door to door", description: "Pengiriman langsung ke alamat tujuan." },
+] as const;
 
 const RECEIPT_TYPE: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
   full:     { label: "Diterima Penuh",    color: "bg-green-100 text-green-700",  icon: <CheckCircle2 className="w-4 h-4" /> },
@@ -428,6 +436,8 @@ function ShipmentTab({
   selectedId: number | null;
   onSelect: (id: number) => void;
 }) {
+  const queryClient = useQueryClient();
+  const [selectedType, setSelectedType] = useState<string>("trucking");
   const { data, isLoading, isError, refetch } = useQuery<{ ok: boolean; data: Shipment[] }>({
     queryKey: ["mkt-po-shipments", poId],
     queryFn: async () => {
@@ -436,6 +446,23 @@ function ShipmentTab({
       });
       if (!res.ok) throw new Error("Gagal memuat shipments");
       return res.json();
+    },
+  });
+
+  const selectShipment = useMutation({
+    mutationFn: async (shipmentType: string) => {
+      const res = await fetch(`/api/mkt/portal/purchase-orders/${poId}/shipment-selection`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shipmentType }),
+      });
+      const body = await res.json() as { ok?: boolean; error?: string; message?: string };
+      if (!res.ok) throw new Error(body.message ?? body.error ?? "Gagal menyimpan pilihan pengiriman");
+      return body;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["mkt-po-shipments", poId] });
     },
   });
 
@@ -456,9 +483,44 @@ function ShipmentTab({
 
   if (shipments.length === 0) return (
     <Card className="border-dashed">
-      <CardContent className="p-10 text-center">
-        <Truck className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-        <p className="text-gray-500 text-sm">Belum ada shipment untuk PO ini.</p>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Truck className="w-5 h-5 text-orange-500" />
+          Pilih mode pengiriman
+        </CardTitle>
+        <p className="text-sm text-gray-500">
+          Pilihan ini membuat shipment canonical untuk PO ini. Setelah disimpan, mode tidak dapat diganti dari portal.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          {SHIPMENT_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setSelectedType(option.value)}
+              className={[
+                "rounded-lg border p-3 text-left transition-colors",
+                selectedType === option.value
+                  ? "border-orange-500 bg-orange-50 ring-1 ring-orange-500"
+                  : "border-gray-200 hover:border-orange-300 hover:bg-orange-50/40",
+              ].join(" ")}
+            >
+              <span className="block text-sm font-semibold text-gray-800">{option.label}</span>
+              <span className="mt-1 block text-xs text-gray-500">{option.description}</span>
+            </button>
+          ))}
+        </div>
+        {selectShipment.isError && (
+          <p className="text-sm text-red-600">{(selectShipment.error as Error).message}</p>
+        )}
+        <Button
+          className="bg-orange-500 hover:bg-orange-600"
+          disabled={selectShipment.isPending}
+          onClick={() => selectShipment.mutate(selectedType)}
+        >
+          {selectShipment.isPending ? "Menyimpan…" : "Simpan pilihan pengiriman"}
+        </Button>
       </CardContent>
     </Card>
   );

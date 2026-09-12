@@ -27,13 +27,24 @@
  * Semua fungsi menggunakan typed result union — tidak pernah throw ke caller.
  */
 
-import { db, mktRfqsTable, mktRfqApprovalsTable, portalCompanyMembersTable, portalCustomersTable } from "@workspace/db";
-import { eq, and, inArray, desc } from "drizzle-orm";
+import { randomBytes } from "crypto";
+import {
+  db,
+  mktRfqsTable,
+  mktRfqApprovalsTable,
+  mktVendorQuotesTable,
+  suppliersTable,
+  vendorProfilesTable,
+  vendorNotificationsTable,
+  portalCompanyMembersTable,
+  portalCustomersTable,
+} from "@workspace/db";
+import { eq, and, inArray, desc, sql } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
-import { inviteVendorToRfq } from "./vendorInvitationService.js";
+import { createOrderLink } from "./orderLinkService.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -374,43 +385,160 @@ export async function approveRfqForAdmin(opts: {
     return { ok: false, code: "NO_VENDORS", message: "Pilih minimal satu vendor sebelum RFQ disetujui" };
   }
 
-  let rfq: { id: number; rfqNumber: string; status: string; approvalStatus: string };
+  type CreatedInvite = {
+    vendorId: number;
+    quoteId: number;
+    alreadyInvited: boolean;
+    token: string | null;
+    validUntil: Date | null;
+    vendorName: string;
+    vendorPhone: string | null;
+    vendorEmail: string | null;
+  };
+
+  let rfq: { rfqNumber: string; buyerName: string; buyerCompany: string | null; notes: string | null };
   let alreadyApproved = false;
+  const createdInvites: CreatedInvite[] = [];
+  let invited: Array<{ vendorId: number; quoteId: number; alreadyInvited: boolean }> = [];
 
   try {
-    const [row] = await db
-      .select({
-        id: mktRfqsTable.id,
-        rfqNumber: mktRfqsTable.rfqNumber,
-        status: mktRfqsTable.status,
-        approvalStatus: mktRfqsTable.approvalStatus,
-      })
-      .from(mktRfqsTable)
-      .where(eq(mktRfqsTable.id, opts.rfqId))
-      .limit(1);
+    // The RFQ row is the serialization point for this operation. Approval and
+    // every missing vendor quote are committed or rolled back together.
+    const transactionResult = await db.transaction(async (tx) => {
+      const lockedRows = await tx.execute(sql`
+        SELECT id, rfq_number, status, approval_status, buyer_name, buyer_company, notes
+        FROM mkt_rfqs
+        WHERE id = ${opts.rfqId}
+        FOR UPDATE
+      `);
+      const row = ((lockedRows as any).rows ?? lockedRows)[0] as {
+        id: number;
+        rfq_number: string;
+        status: string;
+        approval_status: string | null;
+        buyer_name: string;
+        buyer_company: string | null;
+        notes: string | null;
+      } | undefined;
 
-    if (!row) return { ok: false, code: "RFQ_NOT_FOUND", message: "RFQ tidak ditemukan" };
-    if (row.status === "cancelled" || row.status === "expired" || row.status === "awarded") {
-      return { ok: false, code: "WRONG_STATUS", message: `RFQ tidak dapat disetujui pada status ${row.status}` };
-    }
+      if (!row) throw Object.assign(new Error("RFQ tidak ditemukan"), { code: "RFQ_NOT_FOUND" });
+      if (["cancelled", "expired", "awarded"].includes(row.status)) {
+        throw Object.assign(new Error(`RFQ tidak dapat disetujui pada status ${row.status}`), { code: "WRONG_STATUS" });
+      }
 
-    alreadyApproved = row.approvalStatus === "approved" && row.status !== "draft";
-    if (!alreadyApproved && !(row.status === "draft" && ["pending", "rejected", "none"].includes(row.approvalStatus))) {
-      return {
-        ok: false,
-        code: "WRONG_STATUS",
-        message: `RFQ tidak menunggu approval (status=${row.status}, approval=${row.approvalStatus})`,
-      };
-    }
-    rfq = row;
-  } catch (err) {
-    logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin RFQ lookup failed");
-    return { ok: false, code: "DB_ERROR", message: "Gagal memuat RFQ" };
-  }
+      const isAlreadyApproved = row.approval_status === "approved" && row.status !== "draft";
+      if (!isAlreadyApproved && !(row.status === "draft" && ["pending", "rejected", "none", null, ""].includes(row.approval_status))) {
+        throw Object.assign(
+          new Error(`RFQ tidak menunggu approval (status=${row.status}, approval=${row.approval_status})`),
+          { code: "WRONG_STATUS" },
+        );
+      }
 
-  if (!alreadyApproved) {
-    try {
-      await db.transaction(async (tx) => {
+      const vendors = await tx
+        .select({
+          id: suppliersTable.id,
+          name: suppliersTable.name,
+          phone: suppliersTable.phone,
+          contactEmail: suppliersTable.contactEmail,
+          isActive: suppliersTable.isActive,
+        })
+        .from(suppliersTable)
+        .where(inArray(suppliersTable.id, vendorIds));
+
+      const vendorById = new Map(vendors.map((vendor) => [vendor.id, vendor]));
+      const missingVendor = vendorIds.find((vendorId) => !vendorById.has(vendorId));
+      if (missingVendor) {
+        throw Object.assign(new Error(`Vendor id=${missingVendor} tidak ditemukan`), { code: "VENDOR_NOT_FOUND" });
+      }
+      const inactiveVendor = vendors.find((vendor) => !vendor.isActive);
+      if (inactiveVendor) {
+        throw Object.assign(
+          new Error(`Vendor "${inactiveVendor.name}" (id=${inactiveVendor.id}) tidak aktif — aktifkan vendor terlebih dahulu`),
+          { code: "VENDOR_INACTIVE" },
+        );
+      }
+
+      const existingQuotes = await tx
+        .select({
+          id: mktVendorQuotesTable.id,
+          vendorId: mktVendorQuotesTable.vendorId,
+          status: mktVendorQuotesTable.status,
+        })
+        .from(mktVendorQuotesTable)
+        .where(and(eq(mktVendorQuotesTable.rfqId, opts.rfqId), inArray(mktVendorQuotesTable.vendorId, vendorIds)));
+      const existingByVendor = new Map(existingQuotes.map((quote) => [quote.vendorId, quote]));
+      let insertedCount = 0;
+
+      for (const vendorId of vendorIds) {
+        const existing = existingByVendor.get(vendorId);
+        const vendor = vendorById.get(vendorId)!;
+        if (existing) {
+          createdInvites.push({
+            vendorId,
+            quoteId: existing.id,
+            alreadyInvited: true,
+            token: null,
+            validUntil: null,
+            vendorName: vendor.name,
+            vendorPhone: vendor.phone,
+            vendorEmail: vendor.contactEmail,
+          });
+          continue;
+        }
+
+        const token = randomBytes(32).toString("hex");
+        const validUntil = new Date();
+        validUntil.setDate(validUntil.getDate() + 30);
+        const [quote] = await tx
+          .insert(mktVendorQuotesTable)
+          .values({ rfqId: opts.rfqId, vendorId, token, status: "invited", validUntil })
+          .onConflictDoNothing({ target: [mktVendorQuotesTable.rfqId, mktVendorQuotesTable.vendorId] })
+          .returning({ id: mktVendorQuotesTable.id });
+
+        if (!quote) {
+          // A standalone invite may have won the unique-key race. Reusing it
+          // keeps retries idempotent without turning the whole request into a
+          // false failure.
+          const [raced] = await tx
+            .select({ id: mktVendorQuotesTable.id, status: mktVendorQuotesTable.status })
+            .from(mktVendorQuotesTable)
+            .where(and(eq(mktVendorQuotesTable.rfqId, opts.rfqId), eq(mktVendorQuotesTable.vendorId, vendorId)))
+            .limit(1);
+          if (!raced) throw new Error("Vendor quote tidak dapat dibuat");
+          createdInvites.push({
+            vendorId,
+            quoteId: raced.id,
+            alreadyInvited: true,
+            token: null,
+            validUntil: null,
+            vendorName: vendor.name,
+            vendorPhone: vendor.phone,
+            vendorEmail: vendor.contactEmail,
+          });
+          continue;
+        }
+
+        insertedCount += 1;
+        createdInvites.push({
+          vendorId,
+          quoteId: quote.id,
+          alreadyInvited: false,
+          token,
+          validUntil,
+          vendorName: vendor.name,
+          vendorPhone: vendor.phone,
+          vendorEmail: vendor.contactEmail,
+        });
+      }
+
+      if (insertedCount > 0) {
+        await tx
+          .update(mktRfqsTable)
+          .set({ quoteCount: sql`${mktRfqsTable.quoteCount} + ${insertedCount}`, updatedAt: new Date() })
+          .where(eq(mktRfqsTable.id, opts.rfqId));
+      }
+
+      if (!isAlreadyApproved) {
         const [updated] = await tx
           .update(mktRfqsTable)
           .set({
@@ -421,10 +549,7 @@ export async function approveRfqForAdmin(opts: {
           })
           .where(and(eq(mktRfqsTable.id, opts.rfqId), eq(mktRfqsTable.status, "draft")))
           .returning({ id: mktRfqsTable.id });
-
-        if (!updated) {
-          throw Object.assign(new Error("RFQ approval race"), { code: "WRONG_STATUS" });
-        }
+        if (!updated) throw Object.assign(new Error("RFQ approval race"), { code: "WRONG_STATUS" });
 
         await tx
           .update(mktRfqApprovalsTable)
@@ -434,39 +559,99 @@ export async function approveRfqForAdmin(opts: {
             responseNotes: opts.notes?.trim() || `Disetujui admin ${opts.adminName}`,
           })
           .where(and(eq(mktRfqApprovalsTable.rfqId, opts.rfqId), eq(mktRfqApprovalsTable.status, "pending")));
-      });
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === "WRONG_STATUS") {
-        return { ok: false, code: "WRONG_STATUS", message: "RFQ sudah berubah status oleh proses lain" };
       }
-      logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin approval failed");
-      return { ok: false, code: "DB_ERROR", message: "Gagal menyimpan approval RFQ" };
-    }
-  }
 
-  const invited: Array<{ vendorId: number; quoteId: number; alreadyInvited: boolean }> = [];
-  for (const vendorId of vendorIds) {
-    const result = await inviteVendorToRfq({
-      rfqId: opts.rfqId,
-      vendorId,
-      adminId: opts.adminId,
-      adminName: opts.adminName,
+      return {
+        rfqNumber: row.rfq_number,
+        buyerName: row.buyer_name,
+        buyerCompany: row.buyer_company,
+        notes: row.notes,
+        alreadyApproved: isAlreadyApproved,
+      };
     });
 
-    if (result.ok) {
-      invited.push({ vendorId, quoteId: result.quoteId, alreadyInvited: false });
-      continue;
-    }
-    if (result.code === "DUPLICATE_INVITE") {
-      invited.push({ vendorId, quoteId: result.existingQuoteId, alreadyInvited: true });
-      continue;
-    }
-    if (result.code === "VENDOR_NOT_FOUND" || result.code === "VENDOR_INACTIVE") {
-      return { ok: false, code: result.code, message: result.message };
-    }
-    logger.warn({ rfqId: opts.rfqId, vendorId, code: result.code }, "[rfqApproval] admin invite failed");
-    return { ok: false, code: "INVITE_FAILED", message: result.message };
+    rfq = transactionResult;
+    alreadyApproved = transactionResult.alreadyApproved;
+    invited = createdInvites.map(({ vendorId, quoteId, alreadyInvited }) => ({ vendorId, quoteId, alreadyInvited }));
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "RFQ_NOT_FOUND") return { ok: false, code: "RFQ_NOT_FOUND", message: "RFQ tidak ditemukan" };
+    if (code === "VENDOR_NOT_FOUND") return { ok: false, code: "VENDOR_NOT_FOUND", message: (err as Error).message };
+    if (code === "VENDOR_INACTIVE") return { ok: false, code: "VENDOR_INACTIVE", message: (err as Error).message };
+    if (code === "WRONG_STATUS") return { ok: false, code: "WRONG_STATUS", message: (err as Error).message };
+    logger.warn({ err, rfqId: opts.rfqId }, "[rfqApproval] admin approval and invite transaction failed");
+    return { ok: false, code: "DB_ERROR", message: "Approval dan undangan vendor dibatalkan karena transaksi gagal" };
+  }
+
+  // These are deliberately after commit. They are operational side effects,
+  // not part of the financial/workflow state, and must never create a partial
+  // approval if a queue or audit sink is unavailable.
+  for (const invite of createdInvites.filter((item) => !item.alreadyInvited && item.token && item.validUntil)) {
+    const base =
+      process.env["PORTAL_BASE_URL"] ??
+      (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : null);
+    const validUntil = invite.validUntil!;
+    const payload = {
+      vendorPhone: invite.vendorPhone,
+      vendorEmail: invite.vendorEmail,
+      vendorName: invite.vendorName,
+      rfqId: opts.rfqId,
+      rfqNumber: rfq.rfqNumber,
+      rfqBuyerName: rfq.buyerName,
+      rfqBuyerCompany: rfq.buyerCompany,
+      rfqNotes: rfq.notes,
+      quoteId: invite.quoteId,
+      token: invite.token!,
+      validUntil: validUntil.toISOString(),
+      deepLinkUrl: base ? `${base}/mkt-vendor-quote/${invite.token!}` : null,
+    };
+
+    void createOrderLink({
+      sourceTable: "mkt_rfqs",
+      sourceId: opts.rfqId,
+      targetTable: "mkt_vendor_quotes",
+      targetId: invite.quoteId,
+      linkType: "rfq_to_vendor_quote",
+      createdBy: opts.adminId,
+    }).catch(() => {});
+    void logActivity({
+      mktRfqId: opts.rfqId,
+      mktVendorQuoteId: invite.quoteId,
+      actorType: "admin",
+      actorId: opts.adminId,
+      actorName: opts.adminName,
+      action: "mkt_vendor_invited",
+      description: `Vendor "${invite.vendorName}" diundang ke RFQ ${rfq.rfqNumber} (quote_id=${invite.quoteId}, valid 30 hari)`,
+      newValue: { rfqId: opts.rfqId, rfqNumber: rfq.rfqNumber, vendorId: invite.vendorId, quoteId: invite.quoteId },
+    }).catch(() => {});
+    void enqueueNotification({
+      eventType: "mkt_vendor_invitation_notification",
+      recipientType: "vendor",
+      recipientId: invite.vendorId,
+      recipientPhone: invite.vendorPhone,
+      rfqId: opts.rfqId,
+      vendorQuoteId: invite.quoteId,
+      payloadJson: payload,
+    }).catch(() => {});
+    void (async () => {
+      try {
+        const [profile] = await db
+          .select({ customerId: vendorProfilesTable.customerId })
+          .from(vendorProfilesTable)
+          .where(eq(vendorProfilesTable.supplierId, invite.vendorId))
+          .limit(1);
+        if (!profile?.customerId) return;
+        await db.insert(vendorNotificationsTable).values({
+          vendorId: profile.customerId,
+          type: "marketplace_rfq_invitation",
+          title: "RFQ Marketplace baru",
+          message: `Anda menerima undangan penawaran ${rfq.rfqNumber}. Isi harga per item sebelum batas waktu.`,
+          payload: { rfqId: opts.rfqId, quoteId: invite.quoteId, rfqNumber: rfq.rfqNumber, quoteUrl: `/mkt-vendor-quote/${invite.token!}`, validUntil: validUntil.toISOString() },
+        });
+      } catch (notificationError) {
+        logger.warn({ notificationError, vendorId: invite.vendorId }, "[rfqApproval] vendor in-app notification failed");
+      }
+    })();
   }
 
   await logActivity({
