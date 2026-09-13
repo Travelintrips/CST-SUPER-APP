@@ -377,15 +377,13 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
                   <div>
                     <Label className="text-xs">Plat Kendaraan</Label>
                     <Input className="mt-1" value={internalForm.vehiclePlateOverride} onChange={(e) => setInternalForm(f => ({ ...f, vehiclePlateOverride: e.target.value }))} />
-                  </div>
-                </div>
+               </div>
                 <div><Label className="text-xs">Alamat Pickup</Label><Input className="mt-1" value={internalForm.pickupAddress} onChange={(e) => setInternalForm(f => ({ ...f, pickupAddress: e.target.value }))} /></div>
                 <div><Label className="text-xs">Alamat Tujuan</Label><Input className="mt-1" value={internalForm.deliveryAddress} onChange={(e) => setInternalForm(f => ({ ...f, deliveryAddress: e.target.value }))} /></div>
                 <div><Label className="text-xs">Deskripsi Muatan</Label><Input className="mt-1" value={internalForm.cargoDescription} onChange={(e) => setInternalForm(f => ({ ...f, cargoDescription: e.target.value }))} /></div>
                 <div><Label className="text-xs">Catatan Khusus</Label><Textarea className="mt-1 text-sm" rows={2} value={internalForm.specialInstruction} onChange={(e) => setInternalForm(f => ({ ...f, specialInstruction: e.target.value }))} /></div>
-              </div>
-              </div>
-          </div>
+               </div>
+           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Batal</Button>
             <Button
