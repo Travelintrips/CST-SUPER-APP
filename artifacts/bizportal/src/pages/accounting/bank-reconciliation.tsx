@@ -996,7 +996,7 @@ type QrisAmountComparison = NonNullable<
 function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountComparison }) {
   const difference = Number(comparison.difference) || 0;
   return (
-    <div className="mt-2 rounded border border-red-200 bg-white/70 p-2 dark:border-red-800 dark:bg-red-950/40">
+    <div className="mt-2 rounded border border-red-200 bg-white/70 p-2 text-black dark:border-red-800 dark:bg-red-950/40 dark:text-black">
       <p className="font-semibold">Rincian nominal yang dibandingkan:</p>
       <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
         <span>Total bruto payment ({comparison.paymentCount} payment)</span>
@@ -1008,7 +1008,7 @@ function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountCom
         <span>Nominal mutasi bank</span>
         <strong className="sm:text-right">{idr(comparison.mutationAmount)}</strong>
         <span>Selisih (netto − mutasi)</span>
-        <strong className={`sm:text-right ${difference === 0 ? "text-green-700" : "text-red-700 dark:text-red-300"}`}>
+        <strong className="sm:text-right text-black">
           {idr(difference)}
         </strong>
       </div>
@@ -4634,9 +4634,9 @@ function QrisMutationCard({
               <div
                 className={`mt-3 rounded-md border px-3 py-2.5 text-xs ${
                   liveAmountMatchesBank && amountComparisonIsStale
-                    ? "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
-                    : "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
-                }`}
+                    ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
+                    : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950"
+                } text-black dark:text-black`}
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-start gap-2">
