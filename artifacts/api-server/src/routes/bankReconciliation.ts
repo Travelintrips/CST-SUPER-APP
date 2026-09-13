@@ -5998,8 +5998,19 @@ router.get("/mutations", async (req, res) => {
          END
        ) AS sport_payment_type,
        'bank_mutations' AS _source_table,
-       (SELECT json_agg(
-          to_jsonb(m) || jsonb_build_object('details', ${candidateDetailsSql})
+        (SELECT json_agg(
+           to_jsonb(m) || jsonb_build_object(
+             'details', ${candidateDetailsSql},
+             'duplicate_count', (
+               SELECT COUNT(*)::int
+               FROM bank_reconciliation_matches duplicate_match
+               WHERE duplicate_match.mutation_id = m.mutation_id
+                 AND duplicate_match.candidate_type = m.candidate_type
+                 AND duplicate_match.candidate_id = m.candidate_id
+                 AND duplicate_match.candidate_source IS NOT DISTINCT FROM m.candidate_source
+                 AND duplicate_match.status = 'candidate'
+             )
+           )
           ORDER BY m.match_score DESC
         )
        FROM bank_reconciliation_matches m
@@ -10088,6 +10099,151 @@ router.delete("/purge-mutations", async (req, res) => {
     return res.status(500).json({
       error: e?.message ?? "Hapus permanen mutasi DEV gagal.",
     });
+  }
+});
+
+// ─── DELETE /api/bank-reconciliation/:mutationId/candidates/:candidateId ─────
+// Hanya menghapus row kandidat yang benar-benar duplikat. Kandidat pertama
+// (MIN(id)) dipertahankan sebagai identity stabil; kandidat approved/posted,
+// kandidat tunggal, dan mutasi lintas company tidak boleh disentuh.
+router.delete("/:mutationId/candidates/:candidateId", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  await runBankReconciliationCoreMigration();
+
+  const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+  const candidateId = Number.parseInt(String(req.params.candidateId ?? ""), 10);
+  if (!Number.isSafeInteger(mutationId) || mutationId <= 0 || !Number.isSafeInteger(candidateId) || candidateId <= 0) {
+    return res.status(400).json({ error: "ID mutasi dan kandidat tidak valid." });
+  }
+
+  const companyId = resolveCompanyId(req);
+  const actor = String((req as any).user?.email ?? "admin").trim() || "admin";
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const mutationResult = await tx.execute(sql`
+        SELECT id, status, journal_entry_id, company_id
+        FROM bank_mutations
+        WHERE id = ${mutationId}
+          AND company_id = ${companyId}
+        FOR UPDATE
+      `);
+      const mutation = mutationResult.rows[0] as Record<string, unknown> | undefined;
+      if (!mutation) {
+        throw Object.assign(new Error("Mutasi tidak ditemukan dalam company scope aktif."), { code: "NOT_FOUND" });
+      }
+
+      const mutationStatus = String(mutation.status ?? "").toLowerCase();
+      if (
+        ["approved_pending_posting", "approved", "posted", "void"].includes(mutationStatus)
+        || mutation.journal_entry_id != null
+      ) {
+        throw Object.assign(
+          new Error("Kandidat tidak dapat dihapus setelah mutasi memiliki approval atau jurnal. Gunakan alur unmatch/reversal."),
+          { code: "FINAL_MUTATION" },
+        );
+      }
+
+      const candidateResult = await tx.execute(sql`
+        SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+        FROM bank_reconciliation_matches
+        WHERE id = ${candidateId}
+          AND mutation_id = ${mutationId}
+        FOR UPDATE
+      `);
+      const candidate = candidateResult.rows[0] as Record<string, unknown> | undefined;
+      if (!candidate) {
+        throw Object.assign(new Error("Kandidat tidak ditemukan untuk mutasi ini."), { code: "NOT_FOUND" });
+      }
+      if (String(candidate.status ?? "").toLowerCase() !== "candidate") {
+        throw Object.assign(
+          new Error("Hanya kandidat aktif yang dapat dihapus. Kandidat approved/rejected tetap menjadi bagian dari audit."),
+          { code: "NOT_ACTIVE_CANDIDATE" },
+        );
+      }
+
+      const duplicateCountResult = await tx.execute(sql`
+        SELECT COUNT(*)::int AS count
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutationId}
+          AND candidate_type = ${String(candidate.candidate_type)}
+          AND candidate_id = ${Number(candidate.candidate_id)}
+          AND candidate_source IS NOT DISTINCT FROM ${candidate.candidate_source == null ? null : String(candidate.candidate_source)}
+          AND status = 'candidate'
+      `);
+      const duplicateCount = Number(
+        (duplicateCountResult.rows[0] as { count?: number | string } | undefined)?.count ?? 0,
+      );
+      if (duplicateCount < 2) {
+        throw Object.assign(
+          new Error("Kandidat ini bukan duplikat aktif, sehingga tidak dihapus."),
+          { code: "NOT_DUPLICATE" },
+        );
+      }
+
+      const keeperResult = await tx.execute(sql`
+        SELECT MIN(id)::int AS keeper_id
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutationId}
+          AND candidate_type = ${String(candidate.candidate_type)}
+          AND candidate_id = ${Number(candidate.candidate_id)}
+          AND candidate_source IS NOT DISTINCT FROM ${candidate.candidate_source == null ? null : String(candidate.candidate_source)}
+          AND status = 'candidate'
+      `);
+      const keeperId = Number(
+        (keeperResult.rows[0] as { keeper_id?: number | string } | undefined)?.keeper_id ?? 0,
+      );
+      if (candidateId === keeperId) {
+        throw Object.assign(
+          new Error(`Kandidat utama #${keeperId} dipertahankan. Hapus row duplikat lainnya.`),
+          { code: "KEEPER_CANDIDATE" },
+        );
+      }
+
+      const deletedResult = await tx.execute(sql`
+        DELETE FROM bank_reconciliation_matches
+        WHERE id = ${candidateId}
+          AND mutation_id = ${mutationId}
+          AND status = 'candidate'
+        RETURNING id
+      `);
+      if (deletedResult.rows.length !== 1) {
+        throw Object.assign(new Error("Kandidat berubah bersamaan; muat ulang data dan coba lagi."), {
+          code: "CONCURRENT_CHANGE",
+        });
+      }
+
+      const meta = {
+        candidate_id: candidateId,
+        candidate_type: String(candidate.candidate_type),
+        candidate_source: candidate.candidate_source ?? null,
+        duplicate_count_before: duplicateCount,
+        keeper_id: keeperId,
+        reason: "duplicate_candidate_removed",
+      };
+      await tx.execute(sql`
+        INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+        VALUES (${mutationId}, 'CANDIDATE_DUPLICATE_DELETED', ${actor}, ${JSON.stringify(meta)}::jsonb)
+      `);
+
+      return {
+        deleted_candidate_id: candidateId,
+        keeper_candidate_id: keeperId,
+        duplicate_count_remaining: duplicateCount - 1,
+      };
+    });
+
+    audit(req, {
+      action: "delete-duplicate-reconciliation-candidate",
+      module: "bank-reconciliation",
+      resourceId: `bank-mutation-${mutationId}`,
+      after: result,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error: any) {
+    const code = String(error?.code ?? "");
+    const status = code === "NOT_FOUND" ? 404 : code === "CONCURRENT_CHANGE" ? 409 : 400;
+    return res.status(status).json({ error: error?.message ?? "Kandidat duplikat gagal dihapus." });
   }
 });
 

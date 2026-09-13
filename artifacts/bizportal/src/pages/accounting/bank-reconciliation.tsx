@@ -597,6 +597,7 @@ interface Candidate {
   order_id_match: boolean;
   proof_match: boolean;
   status: string;
+  duplicate_count?: number;
   customer_name?: string | null;
   details?: CandidateDetails | null;
 }
@@ -1879,8 +1880,19 @@ function visibleCandidates(m: BankMutation): Candidate[] {
   // guard already rejects a second link; the read-side must not invite it.
   if (hasApprovedReconciliationMatch(m)) return [];
 
+  const rawCandidates = m.candidates ?? [];
+  const duplicateCounts = new Map<string, number>();
+  for (const candidate of rawCandidates) {
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
+  }
+
   const seen = new Set<string>();
-  const eligible = (m.candidates ?? [])
+  const eligible = rawCandidates
     .filter(candidate => {
       const requiresQrisEvidence = isQrisCandidate(candidate, m);
       const candidateDate = candidate.details?.settlementDate ?? candidate.details?.date;
@@ -1894,7 +1906,13 @@ function visibleCandidates(m: BankMutation): Candidate[] {
         candidate.candidate_id,
         candidate.candidate_source ?? "<historical-null>",
       ].join(":");
-      if (!dateEligible || seen.has(identity)) return false;
+      const duplicateCount = Math.max(
+        Number(candidate.duplicate_count ?? 0),
+        duplicateCounts.get(identity) ?? 0,
+      );
+      // Keep exact duplicates visible so an admin can remove the redundant
+      // row. Non-duplicate candidates retain the existing read-side dedupe.
+      if (!dateEligible || (seen.has(identity) && duplicateCount < 2)) return false;
       seen.add(identity);
       return true;
     });
@@ -1903,6 +1921,12 @@ function visibleCandidates(m: BankMutation): Candidate[] {
   for (const candidate of eligible) {
     const businessIdentity = candidateBusinessIdentity(candidate);
     if (!businessIdentity) continue;
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    if ((duplicateCounts.get(identity) ?? 0) > 1) continue;
     const existing = seenBusiness.get(businessIdentity);
     if (!existing || candidateBusinessPriority(candidate) > candidateBusinessPriority(existing)) {
       seenBusiness.set(businessIdentity, candidate);
@@ -1911,7 +1935,14 @@ function visibleCandidates(m: BankMutation): Candidate[] {
 
   return eligible.filter(candidate => {
     const businessIdentity = candidateBusinessIdentity(candidate);
-    return !businessIdentity || seenBusiness.get(businessIdentity) === candidate;
+    if (!businessIdentity) return true;
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    return (duplicateCounts.get(identity) ?? 0) > 1
+      || seenBusiness.get(businessIdentity) === candidate;
   });
 }
 
@@ -6449,6 +6480,7 @@ function MutationDetailPanel({
   onApproveQris,
   onApproveCandidate,
   onManualOverrideCandidate,
+  onDeleteDuplicateCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
   onRepairQrisCandidate,
@@ -6477,6 +6509,7 @@ function MutationDetailPanel({
   onApproveQris: (m: BankMutation) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  onDeleteDuplicateCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   onRepairQrisCandidate?: (candidateId: number) => void;
@@ -6727,6 +6760,23 @@ function MutationDetailPanel({
                         {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Order ID</span>}
                         {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
+                       {Number(c.duplicate_count ?? 0) > 1 && c.status === "candidate" && onDeleteDuplicateCandidate && (
+                         <div className="flex items-center justify-between gap-2 pt-1">
+                           <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                             Duplikat aktif ({c.duplicate_count} kandidat)
+                           </span>
+                           <Button
+                             type="button"
+                             size="sm"
+                             variant="outline"
+                             className="h-7 gap-1 border-red-300 px-2 text-[11px] text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
+                             onClick={() => onDeleteDuplicateCandidate(m, c)}
+                           >
+                             <Trash2 className="h-3 w-3" />
+                             Hapus duplikat
+                           </Button>
+                         </div>
+                       )}
                        <CandidateDetailsBlock candidate={c} />
                     </div>
                   ))}
@@ -9319,6 +9369,32 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal hapus semua", description: e.message, variant: "destructive" }),
   });
 
+  const deleteDuplicateCandidateMut = useMutation({
+    mutationFn: async ({ mutationId, candidateId }: { mutationId: number; candidateId: number }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/candidates/${candidateId}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      const body = await response.json().catch(() => ({ error: response.statusText }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    onSuccess: async (data, variables) => {
+      toast({
+        title: "Kandidat duplikat dihapus",
+        description: `Kandidat #${variables.candidateId} dihapus. Kandidat utama #${data.keeper_candidate_id} tetap dipertahankan.`,
+      });
+      await refreshMutationDetail(variables.mutationId);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal menghapus kandidat duplikat",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const purgeMutations = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/purge-mutations", {
@@ -9367,6 +9443,14 @@ export default function BankReconciliationPage() {
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
   const handleOpenUnapprove = (m: BankMutation) => setActionDialog({ mutation: m, mode: "unapprove" });
   const handleOpenUnmatch = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "unmatch" }); };
+  const handleDeleteDuplicateCandidate = (m: BankMutation, candidate: Candidate) => {
+    if (candidate.status !== "candidate" || Number(candidate.duplicate_count ?? 0) < 2) return;
+    const confirmed = window.confirm(
+      `Hapus kandidat duplikat #${candidate.id}?\n\nKandidat utama dengan transaksi yang sama akan tetap dipertahankan.`,
+    );
+    if (!confirmed) return;
+    deleteDuplicateCandidateMut.mutate({ mutationId: m.id, candidateId: candidate.id });
+  };
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
   const handleApproveQris = (m: BankMutation) => {
@@ -10856,6 +10940,7 @@ export default function BankReconciliationPage() {
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
         onApproveCandidate={handleDirectApproveCandidate}
+         onDeleteDuplicateCandidate={handleDeleteDuplicateCandidate}
         onRepairQrisCandidate={
           qrisCompanyId != null && workflowStage !== "matching"
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
