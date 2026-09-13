@@ -334,7 +334,7 @@ export function parseCSVText(content: string): ParsedBankRow[] {
     if (!amount) amount = parseNum(rawAmt);
     if (!amount) continue;
 
-    const direction: "IN" | "OUT" = credit > 0 ? "IN" : "OUT";
+    const direction = directionFromBankColumns(debit, credit);
     const balance = rawBal ? parseNum(rawBal) : undefined;
 
     results.push({
@@ -373,8 +373,8 @@ export function buildMutationKeyFromParsed(
 ): string {
   return canonicalMutationKey({
     transaction_date: row.date,
-    debit:  row.direction === "IN"  ? row.amount : 0,
-    credit: row.direction === "OUT" ? row.amount : 0,
+    debit:  row.direction === "OUT" ? row.amount : 0,
+    credit: row.direction === "IN"  ? row.amount : 0,
     description:      row.description,
     bank_reference:   row.reference ?? null,
     company_id:       opts?.company_id      ?? null,

@@ -81,6 +81,7 @@ import {
   parseCSVText,
   buildMutationKeyFromParsed,
   normalizeForMatching,
+  directionFromBankColumns,
   type ParsedBankRow,
 } from "../lib/reconciliation/bankFormatParsers.js";
 import { runReconBatch3Migration } from "../lib/reconciliation/reconBatch3Migration.js";
@@ -1892,9 +1893,9 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
 
     const credit = parseAmount(rawCredit);
     const debit  = parseAmount(rawDebit);
-    let amount = credit || debit;
+    const direction = directionFromBankColumns(debit, credit);
+    let amount = direction === "IN" ? credit : debit;
     if (!amount) amount = parseAmount(rawAmt);
-    const direction: "IN" | "OUT" = credit > 0 ? "IN" : "OUT";
 
     return {
       transaction_date: parsedDate,
@@ -1905,8 +1906,8 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
       direction,
       mutation_key: canonicalMutationKey({
         transaction_date: parsedDate,
-        debit:  direction === "IN"  ? amount : 0,
-        credit: direction === "OUT" ? amount : 0,
+        debit:  direction === "OUT" ? amount : 0,
+        credit: direction === "IN"  ? amount : 0,
         description: rawDesc,
       }),
       normalized_description: normalizeForMatching(rawDesc),
@@ -7983,7 +7984,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     const credit  = Number(bmi.credit ?? 0);
     const debit   = Number(bmi.debit  ?? 0);
     const amount  = Math.max(credit, debit);
-    const direction = credit > 0 ? "IN" : "OUT";
+    const direction = directionFromBankColumns(debit, credit);
     const mKey    = String(bmi.mutation_key ?? bmi.id).replace(/'/g, "''");
     const desc    = String(bmi.description ?? "").replace(/'/g, "''");
     const txDate  = String(bmi.transaction_date ?? "").split("T")[0];
