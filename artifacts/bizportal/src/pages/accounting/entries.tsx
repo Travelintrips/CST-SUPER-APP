@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
 import { AppShell } from "@/components/layout/AppShell";
@@ -27,7 +28,7 @@ import {
   useListAccountingEntries, useCreateAccountingEntry, useListJournals, useListAccounts,
   getListAccountingEntriesQueryKey,
   getGetAccountingEntryQueryOptions,
-  useGetAccountingEntry, type AccountingEntry, type AccountingEntryDetail,
+  customFetch, type AccountingEntry, type AccountingEntryDetail,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch-on-hover";
@@ -149,6 +150,8 @@ function EntryEditorDialog({
   open,
   accounts,
   journals,
+  detailLoading,
+  error,
   onOpenChange,
   onDone,
 }: {
@@ -157,6 +160,8 @@ function EntryEditorDialog({
   open: boolean;
   accounts: { id: number; code: string; name: string }[] | undefined;
   journals: { id: number; code: string; name: string }[] | undefined;
+  detailLoading: boolean;
+  error: unknown;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
@@ -284,7 +289,16 @@ function EntryEditorDialog({
           <DialogTitle>{mode === "edit" ? "Edit Jurnal Draft" : "Koreksi COA Jurnal Posted"}</DialogTitle>
         </DialogHeader>
         {!entry ? (
-          <div className="py-8 text-center text-muted-foreground">Memuat detail jurnal...</div>
+          <div className="py-8 text-center text-muted-foreground">
+            {detailLoading ? "Memuat detail jurnal..." : (
+              <div className="space-y-2 text-red-400">
+                <p>Detail jurnal gagal dimuat.</p>
+                <p className="text-xs text-muted-foreground">
+                  {error instanceof Error ? error.message : "Periksa koneksi API dan company context, lalu coba lagi."}
+                </p>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="rounded-md border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-sm">
@@ -505,10 +519,33 @@ export default function EntriesPage() {
   const correctionEntryId = Number(actionParams.get("correctId") ?? 0);
   const actionEntryId = editEntryId || correctionEntryId;
   const actionMode: "edit" | "correction" = editEntryId ? "edit" : "correction";
-  const { data: actionEntry } = useGetAccountingEntry(actionEntryId, {
-    query: {
-      queryKey: [`/api/accounting/entries/${actionEntryId}`],
-      enabled: actionEntryId > 0,
+  const {
+    data: actionEntry,
+    error: actionEntryError,
+    isLoading: actionEntryLoading,
+  } = useQuery<AccountingEntryDetail>({
+    queryKey: ["/api/accounting/entries", actionEntryId],
+    enabled: actionEntryId > 0,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 15_000);
+      const forwardAbort = () => controller.abort();
+      signal.addEventListener("abort", forwardAbort, { once: true });
+      try {
+        return await customFetch<AccountingEntryDetail>(
+          `/api/accounting/entries/${actionEntryId}`,
+          { credentials: "include", signal: controller.signal },
+        );
+      } catch (error) {
+        if (controller.signal.aborted && !signal.aborted) {
+          throw new Error("Request detail jurnal timeout setelah 15 detik.");
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+        signal.removeEventListener("abort", forwardAbort);
+      }
     },
   });
   const createMut = useCreateAccountingEntry();
@@ -651,6 +688,8 @@ export default function EntriesPage() {
         open={actionEntryId > 0}
         accounts={accounts}
         journals={journals}
+        detailLoading={actionEntryLoading}
+        error={actionEntryError}
         onOpenChange={(open) => {
           if (!open) closeEntryAction();
         }}
