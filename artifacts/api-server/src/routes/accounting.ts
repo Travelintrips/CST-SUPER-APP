@@ -2743,6 +2743,48 @@ router.post("/entries/:id/reverse", async (req, res) => {
       .status(400)
       .json({ message: "Entri pembalik tidak bisa dibalik lagi" });
 
+  // A reversal may have been committed just before a client timeout or a
+  // retry. Reuse the one canonical posted reversal instead of creating a
+  // second ledger entry. The unique source/source_id index remains the final
+  // concurrent-write guard, but this path gives retries a successful response.
+  const existingReversals = await db
+    .select()
+    .from(accountingEntriesTable)
+    .where(
+      and(
+        eq(accountingEntriesTable.source, "reversal"),
+        eq(accountingEntriesTable.sourceId, id),
+        eq(accountingEntriesTable.companyId, companyId),
+      ),
+    )
+    .limit(2);
+  if (existingReversals.length > 0) {
+    if (existingReversals.length > 1) {
+      return res.status(409).json({
+        message: "Entri memiliki lebih dari satu reversal; retry dihentikan untuk mencegah duplikasi.",
+        code: "MULTIPLE_REVERSALS_FOUND",
+      });
+    }
+
+    const existingReversal = existingReversals[0]!;
+    if (existingReversal.status !== "posted") {
+      return res.status(409).json({
+        message: "Reversal untuk entri ini sudah ada tetapi belum berstatus posted.",
+        code: "REVERSAL_NOT_POSTED",
+      });
+    }
+
+    const existingLines = await db
+      .select()
+      .from(accountingEntryLinesTable)
+      .where(eq(accountingEntryLinesTable.entryId, existingReversal.id));
+    return res.status(200).json({
+      ...serializeEntry(existingReversal),
+      lines: existingLines.map(serializeEntryLine),
+      reused: true,
+    });
+  }
+
   const origLines = await db
     .select()
     .from(accountingEntryLinesTable)

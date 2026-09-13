@@ -31,4 +31,31 @@ describe("journal reversal callers preserve company context", () => {
     const page = source("pages/accounting/closing-wizard.tsx");
     expect(reversalRequest(page)).toContain("companyId: activeCompanyId");
   });
+
+  it("COA correction creates the draft before reversal and keeps it when reversal fails", () => {
+    const page = source("pages/accounting/entries.tsx");
+    const draft = page.indexOf('fetch("/api/accounting/entries"');
+    const reverse = page.indexOf("/reverse", draft);
+
+    expect(draft).toBeGreaterThanOrEqual(0);
+    expect(reverse).toBeGreaterThan(draft);
+    expect(page.slice(draft, reverse)).toContain("draftResponse");
+    expect(page.slice(draft, reverse)).toContain("companyId");
+    expect(page.slice(reverse)).toContain("Draft koreksi sudah dibuat, tetapi reversal gagal");
+    expect(page.slice(draft, reverse + 2000)).not.toContain("deleteEntry");
+    expect(page.slice(reverse, reverse + 900)).toContain("companyId");
+  });
+
+  it("COA correction reports a successful reversal while leaving the correction draft for review", () => {
+    const page = source("pages/accounting/entries.tsx");
+    const correction = page.slice(
+      page.indexOf("if (mode === \"edit\")"),
+      page.indexOf("onOpenChange(false)"),
+    );
+
+    expect(correction).toContain("draftResponse.ok");
+    expect(correction).toContain("reversalResponse.ok");
+    expect(correction).toContain("Reversal dibuat dan draft koreksi siap");
+    expect(correction).toContain("Periksa kembali COA lalu klik Post");
+  });
 });

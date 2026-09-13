@@ -148,6 +148,7 @@ function EntryEditorDialog({
   entry,
   mode,
   open,
+  companyId,
   accounts,
   journals,
   detailLoading,
@@ -158,6 +159,7 @@ function EntryEditorDialog({
   entry: AccountingEntryDetail | undefined;
   mode: "edit" | "correction";
   open: boolean;
+  companyId: number | null | undefined;
   accounts: { id: number; code: string; name: string }[] | undefined;
   journals: { id: number; code: string; name: string }[] | undefined;
   detailLoading: boolean;
@@ -246,7 +248,10 @@ function EntryEditorDialog({
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            ...payload,
+            ...(Number.isInteger(companyId) && (companyId as number) > 0 ? { companyId } : {}),
+          }),
         });
         const draftBody = await draftResponse.json().catch(() => ({}));
         if (!draftResponse.ok) throw new Error(draftBody.message ?? `Gagal membuat draft koreksi (HTTP ${draftResponse.status})`);
@@ -257,6 +262,7 @@ function EntryEditorDialog({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             reason: `Koreksi COA melalui jurnal ${draftBody.entryNumber ?? "draft baru"}`,
+            ...(Number.isInteger(companyId) && (companyId as number) > 0 ? { companyId } : {}),
             date: new Date().toISOString().slice(0, 10),
           }),
         });
@@ -686,6 +692,7 @@ export default function EntriesPage() {
         entry={actionEntry}
         mode={actionMode}
         open={actionEntryId > 0}
+        companyId={isConsolidated ? null : activeCompanyId}
         accounts={accounts}
         journals={journals}
         detailLoading={actionEntryLoading}
