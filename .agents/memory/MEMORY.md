@@ -149,3 +149,4 @@
 - [Sheet sync runtime gates](sheet-sync-runtime-gates.md) — Sheet sync needs Service Account credentials and an active account binding; zero parsed rows can falsely leave status as ok.
 - [Production candidate-only rerun](production-candidate-only-rerun.md) — no-approval reruns must use an explicit candidate-only path; never substitute the general matcher.
 - [General Ledger pool failures](general-ledger-pool-failures.md) — PROD GL checkout timeouts are transient pool contention; retry narrowly and never expose raw SQL errors to the browser.
+- [Portal blank-screen diagnosis](portal-blank-screen-diagnosis.md) — a malformed JSX tag in any eagerly scanned BizPortal module can blank the whole portal; inspect Vite transform errors before API debugging.

@@ -313,7 +313,8 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
                   <Plus className="w-3.5 h-3.5" /> Assign
                 </Button>
               )}
-               </div>
+            </div>
+          </div>
         </CardHeader>
 
         <CardContent>
@@ -384,6 +385,7 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
                 <div><Label className="text-xs">Catatan Khusus</Label><Textarea className="mt-1 text-sm" rows={2} value={internalForm.specialInstruction} onChange={(e) => setInternalForm(f => ({ ...f, specialInstruction: e.target.value }))} /></div>
                </div>
            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Batal</Button>
             <Button
