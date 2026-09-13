@@ -197,6 +197,15 @@ async function dbFixture() {
     fixture.mutationId = Number(mutation.rows[0]?.id ?? 0);
     if (!fixture.mutationId) throw new Error("Failed to create bank mutation fixture.");
 
+    const mutationPreflight = await client.query(`
+      SELECT id, company_id, transaction_date::text AS transaction_date,
+             description, normalized_description, amount, direction,
+             provider_order_id, uploaded_proof_url, status
+      FROM bank_mutations
+      WHERE id = $1
+    `, [fixture.mutationId]);
+    console.log("[proof] mutation preflight:", JSON.stringify(mutationPreflight.rows));
+
     const candidatePreflight = await client.query(`
       SELECT e.id, e.company_id, e.date::text AS date, e.total,
              e.expense_number, e.description
@@ -207,6 +216,16 @@ async function dbFixture() {
         AND ABS(e.total::numeric - $3::numeric) <= 0.01
     `, [fixture.expenseId, fixture.companyId, amount]);
     console.log("[proof] expense candidate preflight:", JSON.stringify(candidatePreflight.rows));
+
+    const engineCandidatePreflight = await client.query(`
+      SELECT e.id, e.company_id, e.date::text AS date, e.total,
+             e.expense_number, e.description
+      FROM expenses e
+      WHERE ABS(e.total::numeric - $1::numeric) <= 0.01
+        AND e.date BETWEEN $2::date AND $2::date
+        AND e.company_id = $3
+    `, [amount, new Date().toISOString().slice(0, 10), fixture.companyId]);
+    console.log("[proof] engine expense candidate preflight:", JSON.stringify(engineCandidatePreflight.rows));
 
     await client.query("COMMIT");
   } catch (error) {

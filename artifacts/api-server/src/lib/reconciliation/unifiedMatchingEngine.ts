@@ -1480,7 +1480,8 @@ export async function fetchCandidates(
         SELECT ap.id, ap.amount,
                ap.date::text AS date,
                COALESCE(ap.partner_name, ap.memo, '') AS name,
-               ap.ref AS ref
+               ap.ref AS ref,
+               ap.company_id
         FROM accounting_payments ap
         WHERE ${amtFilter.replace("##AMT##", "ap.amount")}
           AND ap.date BETWEEN ${dateFrom} AND ${dateTo}
@@ -1502,7 +1503,8 @@ export async function fetchCandidates(
         SELECT lo.id, lo.grand_total AS amount,
                lo.created_at::date::text AS date,
                COALESCE(lo.sender_name, '') AS name,
-               lo.order_number AS ref
+               lo.order_number AS ref,
+               lo.company_id
         FROM logistic_orders lo
         WHERE ${amtFilter.replace("##AMT##", "lo.grand_total")}
           AND '${direction}' = 'OUT'
@@ -1517,7 +1519,8 @@ export async function fetchCandidates(
                COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) AS amount,
                COALESCE(sd.invoice_date, sd.created_at::date)::text AS date,
                COALESCE(c.name, '') AS name,
-               sd.doc_number AS ref
+               sd.doc_number AS ref,
+               sd.company_id
         FROM sales_documents sd
         LEFT JOIN customers c ON c.id = sd.customer_id
         WHERE sd.invoice_number IS NOT NULL
@@ -1535,7 +1538,8 @@ export async function fetchCandidates(
         SELECT e.id, e.total AS amount,
                e.date::text AS date,
                COALESCE(e.description, '') AS name,
-               e.expense_number AS ref
+               e.expense_number AS ref,
+               e.company_id
         FROM expenses e
         WHERE ${amtFilter.replace("##AMT##", "e.total")}
           AND '${direction}' = 'OUT'
@@ -1639,6 +1643,7 @@ export async function fetchCandidates(
                qs.settlement_date::text AS date,
                COALESCE(qs.settlement_reference, 'QRIS settlement') AS name,
                qs.settlement_reference AS ref,
+               qs.company_id,
                qs.gross_amount,
                qs.mdr_amount,
                qs.tax_withheld_amount,
@@ -1662,10 +1667,11 @@ export async function fetchCandidates(
     {
       type: "tenant_invoice" as CandidateType,
       q: `
-        SELECT ti.id, ti.total_amount AS amount,
+         SELECT ti.id, ti.total_amount AS amount,
                ti.created_at::date::text AS date,
                COALESCE(t.business_name, '') AS name,
-               ti.invoice_number AS ref
+                ti.invoice_number AS ref,
+                ti.company_id
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
         WHERE ${amtFilter.replace("##AMT##", "ti.total_amount")}

@@ -9338,6 +9338,17 @@ router.post("/run-matching", async (req, res) => {
   const { rows: mutations } = await db.execute(sql.raw(
     `SELECT * FROM bank_mutations WHERE ${whereClause} ORDER BY transaction_date DESC LIMIT 500`
   ));
+  if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true" && requestedIds.length) {
+    logger.info(
+      {
+        requestedIds,
+        matchingMode: matching_mode,
+        selectedIds: mutations.map((mutation: any) => Number(mutation.id)),
+        selectedStatuses: mutations.map((mutation: any) => String(mutation.status)),
+      },
+      "[bankRecon] development matching selection",
+    );
+  }
 
   let processed = 0;
   let auto_matched = 0;
@@ -9394,6 +9405,17 @@ router.post("/run-matching", async (req, res) => {
 
       if (!decision.eligible) {
         // Status guard blocked — skip, do not count as processed
+        if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true") {
+          logger.info(
+            {
+              mutationId: Number(m.id),
+              status: String(m.status),
+              blockedReason: decision.blockedReason,
+              decisionSource: decision.decisionSource,
+            },
+            "[bankRecon] development matching eligibility blocked",
+          );
+        }
         logger.debug({ mutationId: m.id, reason: decision.blockedReason }, "[run-matching] blocked by status guard");
         return;
       }
