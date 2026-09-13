@@ -9,6 +9,14 @@ const reconciliationSource = readFileSync(
   new URL("../routes/bankReconciliation.ts", import.meta.url),
   "utf8",
 );
+const purchaseWorkflowSource = readFileSync(
+  new URL("../routes/purchaseWorkflow.ts", import.meta.url),
+  "utf8",
+);
+const accountingSource = readFileSync(
+  new URL("../lib/accounting.ts", import.meta.url),
+  "utf8",
+);
 
 describe("vendor invoice payment posting contract", () => {
   it("only treats a posted accounting journal as gross-settlement evidence", () => {
@@ -34,5 +42,15 @@ describe("vendor invoice payment posting contract", () => {
     expect(reconciliationSource).toContain("const nextAmountPaid = Math.max(currentAmountPaid, targetAmountPaid);");
     expect(reconciliationSource).toContain("WHERE id = ${invoiceId}");
     expect(reconciliationSource).toContain("AND company_id = ${companyId}");
+  });
+
+  it("routes Finance confirmation for a posted invoice through immutable reclassification", () => {
+    expect(purchaseWorkflowSource).toContain("reclassifyPostedPurchaseInvoice(");
+    expect(purchaseWorkflowSource).toContain("evaluateVendorInvoiceCoaGate");
+    expect(accountingSource).toContain("FOR UPDATE");
+    expect(accountingSource).toContain("source: \"reversal\"");
+    expect(accountingSource).toContain("SET previous_entry_id = ${input.originalEntryId}");
+    expect(accountingSource).toContain("VENDOR_INVOICE_JOURNAL_RECLASSIFIED");
+    expect(accountingSource).toContain("CORRECTION_ALREADY_EXISTS");
   });
 });

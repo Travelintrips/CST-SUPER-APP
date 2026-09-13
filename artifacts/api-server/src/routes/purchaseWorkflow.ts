@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
-import { postEntry, postPurchaseReturn } from "../lib/accounting.js";
+import {
+  postEntry,
+  postPurchaseReturn,
+  reclassifyPostedPurchaseInvoice,
+} from "../lib/accounting.js";
 import {
   db,
   purchaseRequestsTable,
@@ -38,7 +42,10 @@ import {
   whMovementsTable,
 } from "@workspace/db";
 import { eq, desc, and, sql, inArray, isNull } from "drizzle-orm";
-import { normalizeVendorLineMappingKey } from "../lib/vendorPaymentHardening.js";
+import {
+  evaluateVendorInvoiceCoaGate,
+  normalizeVendorLineMappingKey,
+} from "../lib/vendorPaymentHardening.js";
 import {
   ensureVendorWithholdingRecords,
   recalculateVendorInvoicePaymentStatus,
@@ -1233,7 +1240,13 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
         : await tx
           .select({ id: chartOfAccountsTable.id })
           .from(chartOfAccountsTable)
-          .where(inArray(chartOfAccountsTable.id, accountIds));
+          .where(and(
+            eq(chartOfAccountsTable.companyId, companyId),
+            eq(chartOfAccountsTable.isActive, true),
+            eq(chartOfAccountsTable.isPostable, true),
+            eq(chartOfAccountsTable.status, "ACTIVE"),
+            inArray(chartOfAccountsTable.id, accountIds),
+          ));
       if (accounts.length !== accountIds.length) {
         return { kind: "error" as const, error: "ACCOUNT_NOT_FOUND" as const };
       }
@@ -1356,8 +1369,54 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
            eq(vendorInvoicesTable.companyId, companyId),
          ));
        }
-       const paymentStatus = await recalculateVendorInvoicePaymentStatus(tx as unknown as { execute: (query: unknown) => Promise<unknown> }, companyId, id);
-       return { kind: "success" as const, invoice, paymentStatus };
+        let correction: Awaited<ReturnType<typeof reclassifyPostedPurchaseInvoice>> | null = null;
+        if (["posted", "matched", "paid"].includes(String(invoice.status)) && invoice.journalEntryId != null && reviewLines.length > 0) {
+          const allInvoiceLines = await tx
+            .select()
+            .from(vendorInvoiceLinesTable)
+            .where(eq(vendorInvoiceLinesTable.invoiceId, id));
+          const coaGate = evaluateVendorInvoiceCoaGate(allInvoiceLines.map((line) => ({
+            id: line.id,
+            subtotal: line.subtotal,
+            coaAccountId: line.coaAccountId,
+            coaResolutionStatus: line.coaResolutionStatus,
+            coaHint: line.coaHint,
+          })));
+          if (!coaGate.ok) {
+            throw Object.assign(
+              new Error("Semua line Vendor Invoice posted harus memiliki COA yang dikonfirmasi Finance sebelum koreksi jurnal."),
+              { httpStatus: 409, reasons: coaGate.reasons },
+            );
+          }
+          correction = await reclassifyPostedPurchaseInvoice(
+            tx as unknown as Parameters<typeof reclassifyPostedPurchaseInvoice>[0],
+            {
+              invoiceId: id,
+              originalEntryId: invoice.journalEntryId,
+              companyId,
+              journalId: Number((await ensureAccountingSettings(companyId)).purchaseJournalId),
+              journalCode: "PUR",
+              ref: invoice.invoiceNumber,
+              actor,
+              reason: String(body.reason ?? "Koreksi COA Vendor Invoice setelah konfirmasi Finance."),
+              lines: allInvoiceLines.map((line) => ({
+                lineId: line.id,
+                accountId: Number(line.coaAccountId),
+                amount: num(line.subtotal),
+                description: line.name,
+              })),
+            },
+          );
+          if (!correction.ok) {
+            throw Object.assign(
+              new Error(correction.error ?? "Koreksi jurnal Vendor Invoice gagal."),
+              { httpStatus: 409, correctionCode: correction.code },
+            );
+          }
+        }
+
+        const paymentStatus = await recalculateVendorInvoicePaymentStatus(tx as unknown as { execute: (query: unknown) => Promise<unknown> }, companyId, id);
+        return { kind: "success" as const, invoice, paymentStatus, correction };
     });
 
     if (result.kind === "error") {
@@ -1370,10 +1429,27 @@ router.put("/vendor-invoices/:id/finance-review", async (req, res) => {
       const [status, error] = responses[result.error];
       return res.status(status).json({ error });
     }
-     return res.json({ ok: true, invoiceId: result.invoice.id, paymentStatus: result.paymentStatus });
+    return res.json({
+        ok: true,
+        invoiceId: result.invoice.id,
+        paymentStatus: result.paymentStatus,
+        correction: result.correction
+          ? {
+              entryId: result.correction.correctionEntryId ?? null,
+              alreadyCorrected: result.correction.alreadyCorrected ?? false,
+              changedLineCount: result.correction.changedLineCount ?? 0,
+            }
+          : null,
+      });
   } catch (error) {
     console.error("[vendor-invoices] finance review failed", error);
-    return res.status(500).json({ error: "Gagal menyimpan Finance Review Vendor Invoice." });
+    const status = Number((error as { httpStatus?: unknown })?.httpStatus) || 500;
+    return res.status(status).json({
+      error: status === 409
+        ? (error as Error).message
+        : "Gagal menyimpan Finance Review Vendor Invoice.",
+      code: (error as { correctionCode?: unknown })?.correctionCode,
+    });
   }
 });
 

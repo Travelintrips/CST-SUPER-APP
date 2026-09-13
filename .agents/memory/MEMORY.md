@@ -130,6 +130,7 @@
 - [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
+- [Vendor invoice reclassification net boundary](vendor-invoice-reclassification-net-boundary.md) — posted invoice COA corrections reclassify net expense/GRIR debits only; preserve separate PPN and AP lines.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
 - [Production accounting orphan audit](production-accounting-orphan-audit.md) — final status must prove a transaction entry and canonical source; master journals and legacy source tags are insufficient.
 - [Posted bank unmatch lifecycle](posted-bank-unmatch-lifecycle.md) — posted bank mutations need reversal first, then reopen while releasing approved matches back to candidates.
