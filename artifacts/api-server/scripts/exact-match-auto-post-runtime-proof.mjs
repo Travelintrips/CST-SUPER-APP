@@ -359,6 +359,21 @@ async function main() {
     FROM bank_mutations
     WHERE id = $1
   `, [fixture.mutationId]);
+  console.log("[proof] persisted matching state:", JSON.stringify({
+    mutation,
+    matches: await query(`
+      SELECT id, candidate_type, candidate_id, candidate_source, match_score, match_reason, status
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = $1
+      ORDER BY id
+    `, [fixture.mutationId]),
+    audit: await query(`
+      SELECT action, meta
+      FROM bank_reconciliation_audit
+      WHERE mutation_id = $1
+      ORDER BY id
+    `, [fixture.mutationId]),
+  }));
   check(
     "exact match posts the bank mutation",
     mutation?.status === "posted" && Number(mutation?.journal_entry_id) > 0,

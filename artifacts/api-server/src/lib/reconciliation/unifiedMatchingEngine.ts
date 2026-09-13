@@ -2082,12 +2082,13 @@ export async function runUnifiedMatching(
       const candidateSourceSql = best.candidate.candidateSource
         ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'`
         : "NULL";
+      const candidateIdSql = `'${String(best.candidate.id).replace(/'/g, "''")}'`;
       const { rows: matchRows } = await db.execute(sql.raw(`
         SELECT id
         FROM bank_reconciliation_matches
         WHERE mutation_id = ${mutation.id}
           AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
-          AND candidate_id = ${best.candidate.id}
+           AND candidate_id = ${candidateIdSql}
           AND candidate_source IS NOT DISTINCT FROM ${candidateSourceSql}
           AND status = 'candidate'
         ORDER BY id DESC
@@ -2187,7 +2188,7 @@ export async function runUnifiedMatching(
       SET status = 'approved'
       WHERE mutation_id = ${mutation.id}
         AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
-        AND candidate_id = ${best.candidate.id}
+        AND candidate_id = '${String(best.candidate.id).replace(/'/g, "''")}'
         AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
     `)).catch(() => {});
     await db.execute(sql.raw(

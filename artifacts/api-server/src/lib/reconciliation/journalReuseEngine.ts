@@ -233,7 +233,9 @@ async function resolveInvoiceEntry(
 
 // ─── Source adapter: expense ──────────────────────────────────────────────────
 // candidateId = expenses.id
-// Relationship: accounting_entries.source = 'expense', source_id = expenses.id
+// Relationship: the current direct-expense poster stores the journal as
+// source='manual_payment', source_id=-expenses.id. Keep the older
+// operational_expense shape readable for historical rows.
 
 async function resolveExpenseEntry(
   client: DbClient,
@@ -255,8 +257,10 @@ async function resolveExpenseEntry(
     LEFT JOIN bank_mutations bm_linked
       ON bm_linked.journal_entry_id = ae.id
      AND bm_linked.status IN ('approved', 'posted')
-    WHERE ae.source = 'expense'
-      AND ae.source_id = ${candidateId}
+    WHERE (
+      (ae.source = 'manual_payment' AND ae.source_id = -${candidateId})
+      OR (ae.source = 'operational_expense' AND ae.source_id = ${candidateId})
+    )
       ${companyFilter}
     ORDER BY ae.id DESC
     LIMIT 1
@@ -1043,7 +1047,11 @@ export async function resolveJournalForEconomicEvent(
       sourceDocumentId: candidateId,
       matchedCandidateType: candidateType,
       confidence: 0,
-      reasons: ["Journal lookup failed — cannot verify existing journal; manual review required"],
+      reasons: [
+        process.env.APP_ENV === "development"
+          ? `Journal lookup failed in development: ${msg.slice(0, 300)}`
+          : "Journal lookup failed — cannot verify existing journal; manual review required",
+      ],
       evidence: { ...evidence, lookupError: "DB_ERROR" }, // no raw SQL/stack to client
       duplicateRisk: "high",
       requiresHumanReview: true,

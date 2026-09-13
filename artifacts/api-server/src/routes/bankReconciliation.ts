@@ -9633,6 +9633,19 @@ router.post("/run-matching", async (req, res) => {
         bank_account_id: m.bank_account_id ?? null,
         direction: m.direction,
       }, actor);
+      if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true") {
+        logger.info(
+          {
+            mutationId: Number(m.id),
+            resultStatus: result.status,
+            bestScore: result.best?.score ?? null,
+            bestCandidateType: result.best?.candidate?.type ?? null,
+            bestCandidateId: result.best?.candidate?.id ?? null,
+            bestCandidateSource: result.best?.candidate?.candidateSource ?? null,
+          },
+          "[bankRecon] development unified matching result",
+        );
+      }
 
       processed++;
       if (result.status === "auto_matched") auto_matched++;
