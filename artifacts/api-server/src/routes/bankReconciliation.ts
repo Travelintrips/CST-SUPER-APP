@@ -9986,9 +9986,39 @@ router.delete("/purge-mutations", async (req, res) => {
   await runBankReconciliationCoreMigration();
   const actor = (req as any).user?.email ?? (req as any).user?.id ?? "authenticated-admin";
 
-  if (process.env.APP_ENV !== "development") {
+  const requestedScope = String(req.body?.scope ?? "").trim();
+  const scopedSheetPurge = requestedScope === "unprocessed_google_sheet";
+  const productionScopedPurge = process.env.APP_ENV === "production" && scopedSheetPurge;
+  const requestedCompanyId = scopedSheetPurge ? Number(req.body?.company_id) : null;
+  const requestedCreatedAfter = scopedSheetPurge
+    ? new Date(String(req.body?.created_after ?? ""))
+    : null;
+
+  if (
+    process.env.APP_ENV !== "development"
+    && process.env.APP_ENV !== "production"
+  ) {
     return res.status(403).json({
-      error: "Hapus permanen mutasi hanya tersedia di environment development.",
+      error: "Environment aplikasi tidak mengizinkan purge mutasi.",
+    });
+  }
+  if (
+    scopedSheetPurge
+    && (
+      !Number.isSafeInteger(requestedCompanyId)
+      || requestedCompanyId <= 0
+      || !requestedCreatedAfter
+      || Number.isNaN(requestedCreatedAfter.getTime())
+      || String(req.body?.confirmation ?? "") !== "HAPUS MUTASI SYNC PROD"
+    )
+  ) {
+    return res.status(400).json({
+      error: "Untuk purge scoped wajib memilih company, mengisi waktu mulai sync yang valid, dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
+    });
+  }
+  if (process.env.APP_ENV === "production" && !scopedSheetPurge) {
+    return res.status(403).json({
+      error: "Purge PROD hanya boleh untuk mutasi Google Sheet belum diproses dengan scope perusahaan.",
     });
   }
   if (unifiedMatchingJobActive) {
@@ -10022,9 +10052,21 @@ router.delete("/purge-mutations", async (req, res) => {
         CREATE TEMP TABLE _dev_purge_mutation_ids ON COMMIT DROP AS
         SELECT bm.id
         FROM bank_mutations bm
-        WHERE bm.journal_entry_id IS NULL
+        WHERE 1 = 1
+          ${scopedSheetPurge ? sql`
+            AND bm.source = 'google_sheet'
+            AND bm.company_id = ${requestedCompanyId}
+            AND bm.created_at >= ${requestedCreatedAfter?.toISOString() ?? null}::timestamptz
+          ` : sql``}
+          AND bm.journal_entry_id IS NULL
           AND COALESCE(bm.accounting_posted, false) = false
-          AND LOWER(COALESCE(bm.status::text, 'unmatched')) NOT IN ('approved', 'posted')
+          AND LOWER(COALESCE(bm.status::text, 'unmatched')) NOT IN (
+            'approved_pending_posting', 'approved', 'posted', 'void'
+          )
+          ${scopedSheetPurge ? sql`
+            AND bm.matched_payment_id IS NULL
+            AND bm.matched_order_id IS NULL
+          ` : sql``}
           AND NOT EXISTS (
             SELECT 1
             FROM customer_portal_settlement_batches cpsb
@@ -10046,8 +10088,9 @@ router.delete("/purge-mutations", async (req, res) => {
         CREATE TEMP TABLE _dev_purge_import_ids ON COMMIT DROP AS
         SELECT bmi.id
         FROM bank_mutation_imports bmi
-        WHERE bmi.journal_entry_id IS NULL
+        WHERE ${scopedSheetPurge ? sql`FALSE` : sql`bmi.journal_entry_id IS NULL
           AND UPPER(COALESCE(bmi.status::text, 'DRAFT')) NOT IN ('APPROVED', 'POSTED')
+        `}
       `);
 
       const sourceCounts = await tx.execute(sql`
@@ -10085,11 +10128,26 @@ router.delete("/purge-mutations", async (req, res) => {
       };
     });
 
-    logger.warn({ actor, ...result }, "[bankRecon] DEV source mutations purged");
+    logger.warn(
+      { actor, productionScopedPurge, companyId: requestedCompanyId, ...result },
+      productionScopedPurge
+        ? "[bankRecon] PROD unprocessed Google Sheet mutations purged"
+        : "[bankRecon] DEV source mutations purged",
+    );
+    if (productionScopedPurge) {
+      audit(req, {
+        action: "purge-unprocessed-google-sheet-mutations",
+        module: "bank-reconciliation",
+        resourceId: `company-${requestedCompanyId}`,
+        after: result,
+      });
+    }
     return res.json({
       ok: true,
       ...result,
-      message: "Mutasi development yang tidak memiliki posting atau settlement telah dihapus permanen.",
+      message: productionScopedPurge
+        ? "Mutasi Google Sheet PROD yang belum diproses telah dihapus. Data Google Sheet sumber tetap utuh dan siap di-sync ulang."
+        : "Mutasi development yang tidak memiliki posting atau settlement telah dihapus permanen.",
     });
   } catch (e: any) {
     logger.error({ actor, err: e }, "[bankRecon] DEV source mutation purge failed");
@@ -10097,7 +10155,9 @@ router.delete("/purge-mutations", async (req, res) => {
       return res.status(409).json({ error: e.message });
     }
     return res.status(500).json({
-      error: e?.message ?? "Hapus permanen mutasi DEV gagal.",
+      error: e?.message ?? (productionScopedPurge
+        ? "Hapus mutasi sync PROD belum diproses gagal."
+        : "Hapus permanen mutasi DEV gagal."),
     });
   }
 });

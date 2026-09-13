@@ -7930,6 +7930,8 @@ export default function BankReconciliationPage() {
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
   const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
+  const [showPurgeSyncedProd, setShowPurgeSyncedProd] = useState(false);
+  const [purgeCreatedAfter, setPurgeCreatedAfter] = useState("");
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
     error: string;
@@ -9420,6 +9422,41 @@ export default function BankReconciliationPage() {
     },
   });
 
+  const purgeSyncedProdMutations = useMutation({
+    mutationFn: async () => {
+      if (activeCompanyId == null || activeCompanyId <= 0) {
+        throw new Error("Pilih satu perusahaan terlebih dahulu. Purge PROD tidak boleh dijalankan dalam mode konsolidasi.");
+      }
+      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "unprocessed_google_sheet",
+          company_id: activeCompanyId,
+          created_after: purgeCreatedAfter,
+          confirmation: "HAPUS MUTASI SYNC PROD",
+        }),
+      });
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      return body;
+    },
+    onSuccess: (d) => {
+      toast({
+        title: "Mutasi sync PROD dihapus",
+        description:
+          `${d.mutations_deleted ?? 0} mutasi hasil Google Sheet dihapus. ` +
+          `${d.mutations_preserved ?? 0} mutasi yang memiliki posting/settlement tetap dipertahankan.`,
+      });
+      setPage(0);
+      invalidate();
+    },
+    onError: (e: Error) => {
+      toast({ title: "Gagal menghapus mutasi sync PROD", description: e.message, variant: "destructive" });
+    },
+  });
+
   const deleteMut = useMutation({
     mutationFn: async (mutId: number) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}`, { method: "DELETE", credentials: "include" });
@@ -9713,6 +9750,16 @@ export default function BankReconciliationPage() {
               title="Hapus permanen mutasi development yang tidak terhubung ke posting atau settlement"
             >
               <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi DEV
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-700 hover:text-red-800 h-8 text-xs"
+              onClick={() => setShowPurgeSyncedProd(true)}
+              disabled={activeCompanyId == null || activeCompanyId <= 0}
+              title="Hapus hanya mutasi Google Sheet perusahaan aktif yang belum memiliki jurnal atau settlement"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi Sync
             </Button>
           </div>
         </div>
@@ -11542,6 +11589,49 @@ export default function BankReconciliationPage() {
               disabled={purgeMutations.isPending}
             >
               {purgeMutations.isPending ? "Menghapus..." : "Ya, Hapus Permanen"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showPurgeSyncedProd} onOpenChange={setShowPurgeSyncedProd}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Mutasi Sync Perusahaan Aktif?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hanya mutasi dari Google Sheet pada perusahaan yang sedang dipilih yang akan dihapus.
+              Waktu mulai sync di bawah menjadi batas bawah <code>created_at</code>, sehingga mutasi lama tidak ikut terhapus.
+              Mutasi yang sudah memiliki jurnal, posting, atau settlement tidak akan disentuh.
+              Data di Google Sheet tetap utuh sehingga dapat di-sync ulang setelah proses ini selesai.
+              Jangan jalankan jika matching atau posting sedang berlangsung.
+            </AlertDialogDescription>
+            <div className="space-y-1.5">
+              <Label htmlFor="purge-created-after">Hapus hanya baris yang dibuat setelah</Label>
+              <Input
+                id="purge-created-after"
+                value={purgeCreatedAfter}
+                onChange={(event) => setPurgeCreatedAfter(event.target.value)}
+                placeholder="2026-09-13T15:00:00+07:00"
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Gunakan waktu mulai sync terakhir dengan zona waktu, misalnya Asia/Jakarta (+07:00).
+              </p>
+            </div>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { setShowPurgeSyncedProd(false); purgeSyncedProdMutations.mutate(); }}
+              disabled={
+                purgeSyncedProdMutations.isPending
+                || activeCompanyId == null
+                || activeCompanyId <= 0
+                || !purgeCreatedAfter.trim()
+              }
+            >
+              {purgeSyncedProdMutations.isPending ? "Menghapus..." : "Ya, Hapus Mutasi Sync"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
