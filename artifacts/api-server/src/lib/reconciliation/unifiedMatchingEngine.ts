@@ -1186,6 +1186,17 @@ export function classifyMatch(s: UnifiedScoredMatch): "auto_matched" | "manual_r
   return "unmatched";
 }
 
+/**
+ * Only an exact score-100 match may enter the generic auto-post path.
+ * Canonical Sport Center settlements have a separate settlement owner.
+ */
+export function isExactMatchEligibleForAutoPost(
+  match: Pick<UnifiedScoredMatch, "score" | "amount_match">,
+  isCanonicalCandidate = false,
+): boolean {
+  return !isCanonicalCandidate && match.score >= 100 && match.amount_match;
+}
+
 export function confidenceLabel(score: number): "high" | "medium" | "low" | "none" {
   if (score >= 95) return "high";
   if (score >= 90) return "high";
@@ -1854,8 +1865,8 @@ async function writeReconAudit(
 /**
  * runUnifiedMatching — fetch candidates, score, save to bank_reconciliation_matches.
  * Updates bank_mutations.status to 'matched' or 'unmatched'.
- * For auto_matched: also marks the best match as 'approved' in bank_reconciliation_matches.
- * Journal creation is NOT done here — always deferred to approveAndCreateJournal().
+ * An exact score-100 auto-match also runs through approveAndCreateJournal()
+ * with the auto-post guard enabled. Lower scores remain matched-only.
  */
 export async function runUnifiedMatching(
   mutation: MutationInput,
@@ -2060,16 +2071,119 @@ export async function runUnifiedMatching(
   });
 
   if (classification === "auto_matched") {
-    // Mark best candidate as approved in matches table
+    const exactAutoPost = isExactMatchEligibleForAutoPost(best, isCanonicalBest);
+    if (exactAutoPost) {
+      const candidateSourceSql = best.candidate.candidateSource
+        ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'`
+        : "NULL";
+      const { rows: matchRows } = await db.execute(sql.raw(`
+        SELECT id
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutation.id}
+          AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
+          AND candidate_id = ${best.candidate.id}
+          AND candidate_source IS NOT DISTINCT FROM ${candidateSourceSql}
+          AND status = 'candidate'
+        ORDER BY id DESC
+        LIMIT 1
+      `));
+      const exactMatchId = Number((matchRows[0] as Record<string, unknown> | undefined)?.id);
+
+      if (Number.isSafeInteger(exactMatchId) && exactMatchId > 0) {
+        await writeReconAudit(mutation.id, "AUTO_POST_ATTEMPTED", actor, {
+          match_id: exactMatchId,
+          candidate_type: best.candidate.type,
+          candidate_id: best.candidate.id,
+          candidate_source: best.candidate.candidateSource ?? null,
+          score: best.score,
+          amount_match: best.amount_match,
+          reason: "Exact match score 100 dengan nominal mutasi cocok.",
+        });
+
+        const approval = await approveAndCreateJournal(
+          mutation.id,
+          exactMatchId,
+          best.candidate.type,
+          best.candidate.id,
+          actor,
+          "Auto-post berdasarkan exact match 100%",
+          null,
+          best.candidate.candidateSource ?? null,
+          true,
+        );
+
+        if (approval.ok) {
+          logger.info(
+            {
+              mutationId: mutation.id,
+              score: best.score,
+              journalEntryId: approval.journalEntryId,
+            },
+            "[unifiedMatchingEngine] exact match auto-posted",
+          );
+          return { status: "auto_matched", best, all: scored };
+        }
+
+        const blockedReason = approval.error ?? "Auto-post ditahan oleh safeguard jurnal.";
+        await db.execute(sql.raw(`
+          UPDATE bank_mutations
+          SET status = 'manual_review',
+              review_reason = '${blockedReason.replace(/'/g, "''").slice(0, 500)}',
+              review_code = '${(approval.code ?? "AUTO_POST_GUARD").replace(/'/g, "''")}',
+              updated_at = NOW()
+          WHERE id = ${mutation.id}
+            AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+        `)).catch(() => {});
+        await writeReconAudit(mutation.id, "AUTO_POST_BLOCKED", actor, {
+          match_id: exactMatchId,
+          candidate_type: best.candidate.type,
+          candidate_id: best.candidate.id,
+          candidate_source: best.candidate.candidateSource ?? null,
+          score: best.score,
+          code: approval.code ?? "AUTO_POST_GUARD",
+          reason: blockedReason,
+        });
+        logger.warn(
+          { mutationId: mutation.id, score: best.score, error: blockedReason },
+          "[unifiedMatchingEngine] exact match auto-post blocked; leaving for manual review",
+        );
+        return { status: "manual_review", best, all: scored };
+      }
+
+      await writeReconAudit(mutation.id, "AUTO_POST_BLOCKED", actor, {
+        candidate_type: best.candidate.type,
+        candidate_id: best.candidate.id,
+        candidate_source: best.candidate.candidateSource ?? null,
+        score: best.score,
+        code: "MATCH_ROW_NOT_FOUND",
+        reason: "Exact match tersimpan tanpa row kandidat aktif yang dapat di-approve.",
+      });
+      await db.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status = 'manual_review',
+            review_reason = 'Exact match 100% tidak memiliki row kandidat aktif untuk approval.',
+            review_code = 'MATCH_ROW_NOT_FOUND',
+            updated_at = NOW()
+        WHERE id = ${mutation.id}
+          AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+      `)).catch(() => {});
+      logger.warn(
+        { mutationId: mutation.id, score: best.score },
+        "[unifiedMatchingEngine] exact match auto-post skipped: match row not found",
+      );
+      return { status: "manual_review", best, all: scored };
+    }
+
+    // Lower-confidence auto-match and canonical QRIS settlement candidates
+    // remain matched-only. Canonical QRIS is approved by its dedicated flow.
     await db.execute(sql.raw(`
       UPDATE bank_reconciliation_matches
       SET status = 'approved'
       WHERE mutation_id = ${mutation.id}
-        AND candidate_type = '${best.candidate.type}'
+        AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
         AND candidate_id = ${best.candidate.id}
-        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource}'` : "NULL"}
+        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
     `)).catch(() => {});
-    // Set mutation status to 'matched' — journal will be created by approval gate
     await db.execute(sql.raw(
       `UPDATE bank_mutations SET status = 'matched', updated_at = NOW() WHERE id = ${mutation.id}`,
     )).catch(() => {});
@@ -2109,8 +2223,9 @@ export async function runUnifiedMatching(
  *   → COMMIT or full ROLLBACK if any step throws
  *
  * Period lock: enforced by _postEntryCore — throws PERIOD_CLOSED for closed periods.
- * Auto-post is opt-in for a fully matched, explicit COA reference rule. Normal
- * human approval still creates a draft and requires the separate post action.
+ * Auto-post is enabled only when the caller has already established an exact
+ * score-100 match. Normal human approval still creates a draft and requires
+ * the separate post action.
  */
 
 /**

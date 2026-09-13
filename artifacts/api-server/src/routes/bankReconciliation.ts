@@ -10005,7 +10005,8 @@ router.delete("/purge-mutations", async (req, res) => {
   if (
     scopedSheetPurge
     && (
-      !Number.isSafeInteger(requestedCompanyId)
+      requestedCompanyId == null
+      || !Number.isSafeInteger(requestedCompanyId)
       || requestedCompanyId <= 0
       || !requestedCreatedAfter
       || Number.isNaN(requestedCreatedAfter.getTime())
