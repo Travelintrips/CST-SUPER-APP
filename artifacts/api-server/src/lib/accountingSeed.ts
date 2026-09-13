@@ -42,8 +42,9 @@ const ALL_COMPANY_IDS: number[] = [1, 2, 3, 4];
 // the gross payment clearing account used by the canonical payment adapter.
 const SPORT_CENTER_QRIS_CLEARING_BASE_CODE = "1-1024";
 const SPORT_CENTER_QRIS_CLEARING_CODE = "1-1024-CST";
-const CST_BANK_PARENT_CODE = "1-1020-CST";
-const CST_BANK_CHILD_CODE = "1-1023-CST";
+const CST_BANK_GROUP_CODE = "1-1000";
+const CST_BANK_LEGACY_CODE = "1-1020-CST";
+const CST_BANK_CANONICAL_CODE = "1-1023-CST";
 
 /**
  * Populate ALL_COMPANY_IDS dan COMPANY_ABBR secara dinamis dari tabel companies.
@@ -380,8 +381,12 @@ export async function ensureDefaultCompany(): Promise<number> {
 }
 
 /**
- * Make the CST Mandiri account a real header and keep the postable Ciputat
- * child as the destination for all new bank activity.
+ * Keep the two CST Mandiri accounts as postable siblings under Aset Lancar.
+ *
+ * 1-1020-CST is a legacy/physical-bank identity and 1-1023-CST is the
+ * canonical Ciputat account used by new bank activity. They must not be
+ * nested, because that would make Bank Mandiri CST a header and hide it from
+ * postable account selectors.
  *
  * This is deliberately idempotent and runs before the seed fast-path, because
  * existing installations can already have a complete COA and therefore skip
@@ -389,50 +394,63 @@ export async function ensureDefaultCompany(): Promise<number> {
  */
 export async function repairMandiriCiputatHierarchy(): Promise<void> {
   try {
-    const parentRows = await db.execute(sql`
+    const groupRows = await db.execute(sql`
       SELECT id
       FROM chart_of_accounts
-      WHERE company_id = 1 AND code = ${CST_BANK_PARENT_CODE}
+      WHERE company_id IS NULL AND code = ${CST_BANK_GROUP_CODE}
       LIMIT 1
     `);
-    const childRows = await db.execute(sql`
+    const legacyRows = await db.execute(sql`
       SELECT id
       FROM chart_of_accounts
-      WHERE company_id = 1 AND code = ${CST_BANK_CHILD_CODE}
+      WHERE company_id = 1 AND code = ${CST_BANK_LEGACY_CODE}
       LIMIT 1
     `);
-    const parentId = Number((parentRows.rows[0] as { id?: number } | undefined)?.id);
-    const childId = Number((childRows.rows[0] as { id?: number } | undefined)?.id);
-    if (!parentId || !childId) return;
+    const canonicalRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = ${CST_BANK_CANONICAL_CODE}
+      LIMIT 1
+    `);
+    const groupId = Number((groupRows.rows[0] as { id?: number } | undefined)?.id);
+    const legacyId = Number((legacyRows.rows[0] as { id?: number } | undefined)?.id);
+    const canonicalId = Number((canonicalRows.rows[0] as { id?: number } | undefined)?.id);
+    if (!groupId || !legacyId || !canonicalId) return;
 
     await db.execute(sql`
       UPDATE chart_of_accounts
-      SET name = 'Bank Mandiri CST',
-          is_header = TRUE,
-          is_postable = FALSE,
+      SET parent_id = ${groupId},
+          is_header = FALSE,
+          is_postable = TRUE,
           updated_at = NOW()
-      WHERE id = ${parentId}
+      WHERE id = ${legacyId}
+    `);
+    await db.execute(sql`
+      UPDATE chart_of_accounts
+      SET parent_id = ${groupId},
+          is_header = FALSE,
+          is_postable = TRUE,
+          updated_at = NOW()
+      WHERE id = ${canonicalId}
     `);
     await db.execute(sql`
       UPDATE chart_of_accounts
       SET name = 'Bank Mandiri Ciputat',
-          parent_id = ${parentId},
-          is_header = FALSE,
-          is_postable = TRUE,
           updated_at = NOW()
-      WHERE id = ${childId}
+      WHERE id = ${canonicalId}
     `);
 
-    // BNK-CST and CST accounting settings must never point to the header.
+    // BNK-CST and CST accounting settings must continue to point to the
+    // canonical postable bank account, never the legacy sibling.
     await db.execute(sql`
       UPDATE accounting_journals
-      SET default_debit_account_id = ${childId},
-          default_credit_account_id = ${childId}
+      SET default_debit_account_id = ${canonicalId},
+          default_credit_account_id = ${canonicalId}
       WHERE company_id = 1 AND code = 'BNK-CST'
     `);
     await db.execute(sql`
       UPDATE accounting_settings
-      SET default_bank_account_id = ${childId}
+      SET default_bank_account_id = ${canonicalId}
       WHERE company_id = 1
     `);
     await db.execute(sql`
@@ -441,11 +459,11 @@ export async function repairMandiriCiputatHierarchy(): Promise<void> {
             WHEN name ILIKE '%Bank Mandiri%Sport Center%' THEN 'Bank Mandiri Ciputat'
             ELSE name
           END,
-          coa_id = ${childId},
+          coa_id = ${canonicalId},
           updated_at = NOW()
       WHERE company_id = 1
         AND (
-          coa_id IN (${parentId}, ${childId})
+          coa_id IN (${legacyId}, ${canonicalId})
           OR name ILIKE '%Bank Mandiri%Sport Center%'
           OR name ILIKE '%Bank Mandiri CST%'
         )
@@ -459,35 +477,35 @@ export async function repairMandiriCiputatHierarchy(): Promise<void> {
       SET is_active = FALSE,
           updated_at = NOW()
       WHERE company_id = 1
-        AND coa_code = '1-1020-CST'
+        AND coa_code = ${CST_BANK_LEGACY_CODE}
         AND EXISTS (
           SELECT 1
           FROM master_bank_accounts
-          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+          WHERE company_id = 1 AND coa_code = ${CST_BANK_CANONICAL_CODE}
         )
     `);
     await db.execute(sql`
       UPDATE master_bank_accounts
       SET account_name = 'Mandiri Ciputat',
-          coa_code = '1-1023-CST',
+          coa_code = ${CST_BANK_CANONICAL_CODE},
           updated_at = NOW()
       WHERE company_id = 1
         AND is_active = TRUE
-        AND coa_code = '1-1020-CST'
+        AND coa_code = ${CST_BANK_LEGACY_CODE}
         AND NOT EXISTS (
           SELECT 1
           FROM master_bank_accounts
-          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+          WHERE company_id = 1 AND coa_code = ${CST_BANK_CANONICAL_CODE}
         )
     `);
     await db.execute(sql`
       UPDATE master_bank_accounts
       SET account_name = 'Mandiri Ciputat',
-          coa_code = '1-1023-CST',
+          coa_code = ${CST_BANK_CANONICAL_CODE},
           updated_at = NOW()
       WHERE company_id = 1
         AND is_active = TRUE
-        AND coa_code = '1-1023-CST'
+        AND coa_code = ${CST_BANK_CANONICAL_CODE}
     `);
   } catch (err) {
     // Startup migrations can run before optional bank-master tables exist.
@@ -610,8 +628,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   await populateDynamicCompanies();
 
   // Keep the CST bank hierarchy and all bank-facing defaults aligned even
-  // when the general seed takes its fast path.  The parent is a header only;
-  // all new CST bank postings must use the Ciputat child account.
+  // when the general seed takes its fast path. Both CST bank accounts are
+  // postable siblings; new bank postings use the canonical Ciputat account.
   await repairMandiriCiputatHierarchy();
   await repairCstSalaryHierarchy();
 
@@ -846,10 +864,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         // governed. Do not create, rename, or repair them from startup seed.
         continue;
       }
-      const parentId =
-        companyId === 1 && leaf.code === "1-1023"
-          ? (byCode.get(CST_BANK_PARENT_CODE)?.id ?? null)
-          : (leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null);
+      const parentId = leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null;
       const companyCode = `${leaf.code}-${abbr}`;
       const companyName =
         companyId === 1 && leaf.code === "1-1023"

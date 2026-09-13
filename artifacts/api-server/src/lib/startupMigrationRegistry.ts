@@ -143,6 +143,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["driver_module_load", "Driver migration module load", "runtime"],
   ["supabase_realtime", "Supabase realtime enable", "runtime"],
   ["accounting_defaults_seed", "Accounting defaults seed", "seed"],
+  ["cst_bank_sibling_hierarchy", "CST bank sibling hierarchy repair", "repair"],
   ["development_coa_sync", "Development COA sync", "reconciliation"],
   ["additional_tax_seed", "Additional tax seed", "seed"],
   ["pph15_tax_account_repair", "PPh 15 tax account repair", "repair"],
@@ -158,6 +159,8 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
     name,
     version: name === "portal_payment_company_scope"
       ? 3
+       : name === "cst_bank_sibling_hierarchy"
+        ? 2
        : name === "admin_notifications"
         ? 2
         : name === "sport_center_canonical_finance_config"

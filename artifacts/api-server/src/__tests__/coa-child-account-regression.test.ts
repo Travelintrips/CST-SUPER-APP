@@ -19,6 +19,18 @@ const accountingRoute = readFileSync(
   resolve(process.cwd(), "src/routes/accounting.ts"),
   "utf8",
 );
+const accountingSeed = readFileSync(
+  resolve(process.cwd(), "src/lib/accountingSeed.ts"),
+  "utf8",
+);
+const startupRegistry = readFileSync(
+  resolve(process.cwd(), "src/lib/startupMigrationRegistry.ts"),
+  "utf8",
+);
+const startupIndex = readFileSync(
+  resolve(process.cwd(), "src/index.ts"),
+  "utf8",
+);
 const childRouteStart = accountingRoute.indexOf('router.post("/accounts/:id/child"');
 const childRouteEnd = accountingRoute.indexOf('router.patch("/accounts/:id"', childRouteStart);
 const childRoute = accountingRoute.slice(childRouteStart, childRouteEnd);
@@ -114,5 +126,36 @@ describe("COA schema uniqueness contract", () => {
     expect(accountingSchema).toContain(
       'uniqueIndex("coa_company_code_uniq").on(t.companyId, t.code)',
     );
+  });
+});
+
+describe("CST Mandiri hierarchy contract", () => {
+  it("keeps Bank Mandiri CST and Ciputat as postable siblings under Aset Lancar", () => {
+    expect(accountingSeed).toContain('const CST_BANK_GROUP_CODE = "1-1000";');
+    expect(accountingSeed).toContain('const CST_BANK_LEGACY_CODE = "1-1020-CST";');
+    expect(accountingSeed).toContain('const CST_BANK_CANONICAL_CODE = "1-1023-CST";');
+    expect(accountingSeed).toContain("WHERE company_id IS NULL AND code = ${CST_BANK_GROUP_CODE}");
+    expect(accountingSeed).toContain("SET parent_id = ${groupId}");
+    expect(accountingSeed).toContain("is_header = FALSE");
+    expect(accountingSeed).toContain("is_postable = TRUE");
+    expect(accountingSeed).toContain(
+      'const parentId = leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null;',
+    );
+    expect(accountingSeed).not.toContain(
+      'const parentId =\n        companyId === 1 && leaf.code === "1-1023"',
+    );
+  });
+
+  it("runs the sibling repair as an additive startup stage for existing databases", () => {
+    expect(startupRegistry).toContain(
+      '["cst_bank_sibling_hierarchy", "CST bank sibling hierarchy repair", "repair"]',
+    );
+    expect(startupRegistry).toContain(
+      'name === "cst_bank_sibling_hierarchy"',
+    );
+    expect(startupIndex).toContain(
+      'timeStartupStage("CST bank sibling hierarchy repair"',
+    );
+    expect(startupIndex).toContain("await repairMandiriCiputatHierarchy();");
   });
 });

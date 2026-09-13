@@ -3,7 +3,7 @@ import pg from "pg";
 import { logger } from "./lib/logger";
 import { bootstrapConfigFromSupabase } from "./lib/configBootstrap";
 import { runTranslationsMigration } from "./lib/translationsMigration";
-import { seedAccountingDefaults, seedAdditionalTaxes, repairPph15TaxAccounts, backfillExpenseCategoryAccounts, backfillMdrExpenseCategory } from "./lib/accountingSeed";
+import { seedAccountingDefaults, seedAdditionalTaxes, repairMandiriCiputatHierarchy, repairPph15TaxAccounts, backfillExpenseCategoryAccounts, backfillMdrExpenseCategory } from "./lib/accountingSeed";
 import { syncDevCoaToFixture } from "./lib/coaDevSync";
 import { seedLogisticsServiceItems } from "./lib/seedLogisticsItems";
 import { seedCatalogProducts } from "./lib/seedCatalogProducts";
@@ -2274,6 +2274,11 @@ async function startServer() {
         markStartupSeedPhaseFailed("accounting_defaults");
         throw error;
       }
+    }))
+    // Additive repair: older installations may already have completed the
+    // accounting_defaults_seed marker before the CST bank hierarchy changed.
+    .then(() => timeStartupStage("CST bank sibling hierarchy repair", async () => {
+      await repairMandiriCiputatHierarchy();
     }))
     .then(() => timeStartupStage("Development COA sync", async () => {
       markStartupSeedPhaseStarting("development_coa_sync");
