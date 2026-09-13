@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCompany } from "@/contexts/CompanyContext";
@@ -329,13 +330,22 @@ export default function AccountingSettingsPage() {
     return (
       <div>
         <Label>{label}</Label>
-        <Select value={form[key] ? String(form[key]) : "none"} onValueChange={(v) => setForm({ ...form, [key]: v === "none" ? null : parseInt(v) })}>
-          <SelectTrigger data-testid={`select-${String(key)}`}><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">— Tidak ada —</SelectItem>
-            {list.map((a) => (<SelectItem key={a.id} value={String(a.id)}>{a.code} {a.name}</SelectItem>))}
-          </SelectContent>
-        </Select>
+        <SearchableSelect
+          value={form[key] ? String(form[key]) : "none"}
+          onValueChange={(v) => setForm({ ...form, [key]: v === "none" ? null : parseInt(v) })}
+          placeholder="Pilih akun"
+          searchPlaceholder="Cari kode atau nama akun..."
+          emptyText="Akun tidak ditemukan."
+          triggerClassName="h-9"
+          options={[
+            { value: "none", label: "— Tidak ada —" },
+            ...list.map((a) => ({
+              value: String(a.id),
+              label: a.name,
+              sublabel: a.code,
+            })),
+          ]}
+        />
       </div>
     );
   };
@@ -534,18 +544,24 @@ export default function AccountingSettingsPage() {
               </div>
               <div>
                 <Label>Akun Pendapatan</Label>
-                <Select
+                <SearchableSelect
                   value={mappingForm.revenueAccountId ? String(mappingForm.revenueAccountId) : "none"}
                   onValueChange={(value) => setMappingForm({ ...mappingForm, revenueAccountId: value === "none" ? null : Number(value) })}
-                >
-                  <SelectTrigger data-testid="select-revenue-mapping-account"><SelectValue placeholder="Pilih akun" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">— Pilih akun —</SelectItem>
-                    {(accounts ?? []).filter((a) => a.isActive && a.type === "revenue").map((a) => (
-                      <SelectItem key={a.id} value={String(a.id)}>{a.code} {a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  placeholder="Pilih akun"
+                  searchPlaceholder="Cari kode atau nama akun..."
+                  emptyText="Akun pendapatan tidak ditemukan."
+                  triggerClassName="h-9"
+                  options={[
+                    { value: "none", label: "— Pilih akun —" },
+                    ...(accounts ?? [])
+                      .filter((a) => a.isActive && a.type === "revenue")
+                      .map((a) => ({
+                        value: String(a.id),
+                        label: a.name,
+                        sublabel: a.code,
+                      })),
+                  ]}
+                />
               </div>
               <div className="flex items-end gap-2">
                 <Button onClick={saveRevenueMapping} disabled={mappingBusy} className="flex-1" data-testid="button-save-revenue-mapping">
