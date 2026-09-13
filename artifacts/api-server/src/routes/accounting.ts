@@ -2734,14 +2734,43 @@ router.post("/entries/:id/reverse", async (req, res) => {
   if (!entry) return res.status(404).json({ message: "Entri tidak ditemukan" });
   // IDOR guard
   if (!await assertCompanyAccess(entry.companyId, companyId, req, res, { resourceType: "accounting_entry", resourceId: id })) return;
+
+  // The correction flow creates the draft before asking for the reversal. If
+  // the reversal fails, return a server-verified draft identity so the UI can
+  // offer a direct recovery link instead of making the user search by number.
+  const requestedDraftId = Number(req.body?.draftEntryId);
+  const [requestedDraft] = Number.isInteger(requestedDraftId) && requestedDraftId > 0
+    ? await db
+      .select({
+        id: accountingEntriesTable.id,
+        entryNumber: accountingEntriesTable.entryNumber,
+        status: accountingEntriesTable.status,
+        source: accountingEntriesTable.source,
+        companyId: accountingEntriesTable.companyId,
+      })
+      .from(accountingEntriesTable)
+      .where(and(
+        eq(accountingEntriesTable.id, requestedDraftId),
+        eq(accountingEntriesTable.companyId, companyId),
+      ))
+    : [];
+  const draftRecovery = requestedDraft?.source === "manual" && requestedDraft.status === "draft"
+    ? {
+      draftEntryId: requestedDraft.id,
+      draftEntryNumber: requestedDraft.entryNumber ?? null,
+    }
+    : null;
+  const reversalFailure = (status: number, message: string, code?: string) =>
+    res.status(status).json({
+      message,
+      ...(code ? { code } : {}),
+      ...(draftRecovery ?? {}),
+    });
+
   if (entry.status !== "posted")
-    return res
-      .status(400)
-      .json({ message: "Hanya entri berstatus 'posted' yang bisa dibalik" });
+    return reversalFailure(400, "Hanya entri berstatus 'posted' yang bisa dibalik");
   if (entry.source === "reversal")
-    return res
-      .status(400)
-      .json({ message: "Entri pembalik tidak bisa dibalik lagi" });
+    return reversalFailure(400, "Entri pembalik tidak bisa dibalik lagi");
 
   // A reversal may have been committed just before a client timeout or a
   // retry. Reuse the one canonical posted reversal instead of creating a
@@ -2760,18 +2789,20 @@ router.post("/entries/:id/reverse", async (req, res) => {
     .limit(2);
   if (existingReversals.length > 0) {
     if (existingReversals.length > 1) {
-      return res.status(409).json({
-        message: "Entri memiliki lebih dari satu reversal; retry dihentikan untuk mencegah duplikasi.",
-        code: "MULTIPLE_REVERSALS_FOUND",
-      });
+      return reversalFailure(
+        409,
+        "Entri memiliki lebih dari satu reversal; retry dihentikan untuk mencegah duplikasi.",
+        "MULTIPLE_REVERSALS_FOUND",
+      );
     }
 
     const existingReversal = existingReversals[0]!;
     if (existingReversal.status !== "posted") {
-      return res.status(409).json({
-        message: "Reversal untuk entri ini sudah ada tetapi belum berstatus posted.",
-        code: "REVERSAL_NOT_POSTED",
-      });
+      return reversalFailure(
+        409,
+        "Reversal untuk entri ini sudah ada tetapi belum berstatus posted.",
+        "REVERSAL_NOT_POSTED",
+      );
     }
 
     const existingLines = await db
@@ -2790,20 +2821,19 @@ router.post("/entries/:id/reverse", async (req, res) => {
     .from(accountingEntryLinesTable)
     .where(eq(accountingEntryLinesTable.entryId, id));
   if (origLines.length === 0)
-    return res
-      .status(400)
-      .json({
-        message: "Entri tidak memiliki baris jurnal",
-        detail: "Entri ini kemungkinan dibuat sebelum perbaikan sistem (bug draft-first). Muat ulang halaman — sistem sedang memperbaiki entri ini secara otomatis saat startup. Jika masalah berlanjut setelah muat ulang, hubungi administrator.",
-        code: "NO_LINES_ORPHAN_ENTRY",
-      });
+    return res.status(400).json({
+      message: "Entri tidak memiliki baris jurnal",
+      detail: "Entri ini kemungkinan dibuat sebelum perbaikan sistem (bug draft-first). Muat ulang halaman — sistem sedang memperbaiki entri ini secara otomatis saat startup. Jika masalah berlanjut setelah muat ulang, hubungi administrator.",
+      code: "NO_LINES_ORPHAN_ENTRY",
+      ...(draftRecovery ?? {}),
+    });
 
   const [journal] = await db
     .select()
     .from(accountingJournalsTable)
     .where(eq(accountingJournalsTable.id, entry.journalId));
   if (!journal)
-    return res.status(400).json({ message: "Jurnal tidak ditemukan" });
+    return reversalFailure(400, "Jurnal tidak ditemukan");
 
   const reversalLines: PostingLine[] = origLines.map((l) => ({
     accountId: l.accountId,
@@ -2896,9 +2926,7 @@ router.post("/entries/:id/reverse", async (req, res) => {
         lines: fullLines.map(serializeEntryLine),
       });
   } catch (err) {
-    return res
-      .status(400)
-      .json({ message: String((err as Error)?.message ?? err) });
+    return reversalFailure(400, String((err as Error)?.message ?? err), "REVERSAL_FAILED");
   }
 });
 

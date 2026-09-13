@@ -16,6 +16,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { ToastAction } from "@/components/ui/toast";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -217,6 +218,7 @@ function EntryEditorDialog({
     }
 
     setLoading(true);
+    let draftRecovery: { id: number; entryNumber: string | null } | null = null;
     try {
       const payload = {
         journalId: form.journalId,
@@ -255,6 +257,13 @@ function EntryEditorDialog({
         });
         const draftBody = await draftResponse.json().catch(() => ({}));
         if (!draftResponse.ok) throw new Error(draftBody.message ?? `Gagal membuat draft koreksi (HTTP ${draftResponse.status})`);
+        const draftId = Number(draftBody.id);
+        if (Number.isInteger(draftId) && draftId > 0) {
+          draftRecovery = {
+            id: draftId,
+            entryNumber: typeof draftBody.entryNumber === "string" ? draftBody.entryNumber : null,
+          };
+        }
 
         const reversalResponse = await fetch(`/api/accounting/entries/${entry.id}/reverse`, {
           method: "POST",
@@ -262,13 +271,25 @@ function EntryEditorDialog({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             reason: `Koreksi COA melalui jurnal ${draftBody.entryNumber ?? "draft baru"}`,
+            ...(draftRecovery ? { draftEntryId: draftRecovery.id } : {}),
             ...(Number.isInteger(companyId) && (companyId as number) > 0 ? { companyId } : {}),
             date: new Date().toISOString().slice(0, 10),
           }),
         });
         const reversalBody = await reversalResponse.json().catch(() => ({}));
         if (!reversalResponse.ok) {
-          throw new Error(`Draft koreksi sudah dibuat, tetapi reversal gagal: ${reversalBody.message ?? `HTTP ${reversalResponse.status}`}`);
+          const responseDraftId = Number(reversalBody.draftEntryId);
+          if (Number.isInteger(responseDraftId) && responseDraftId > 0) {
+            draftRecovery = {
+              id: responseDraftId,
+              entryNumber: typeof reversalBody.draftEntryNumber === "string"
+                ? reversalBody.draftEntryNumber
+                : draftRecovery?.entryNumber ?? null,
+            };
+          }
+          const failure = new Error(`Draft koreksi sudah dibuat, tetapi reversal gagal: ${reversalBody.message ?? `HTTP ${reversalResponse.status}`}`);
+          Object.assign(failure, { draftRecovery });
+          throw failure;
         }
         toast({
           title: "Reversal dibuat dan draft koreksi siap",
@@ -278,10 +299,26 @@ function EntryEditorDialog({
       onOpenChange(false);
       onDone();
     } catch (error: unknown) {
+      const recoveryDraft = draftRecovery;
+      if (recoveryDraft?.id) {
+        onDone();
+      }
       toast({
         title: mode === "edit" ? "Gagal mengedit draft" : "Gagal membuat koreksi COA",
-        description: error instanceof Error ? error.message : String(error),
+        description: recoveryDraft
+          ? `${error instanceof Error ? error.message : String(error)} Draft ${recoveryDraft.entryNumber ?? `#${recoveryDraft.id}`} tetap tersimpan.`
+          : error instanceof Error ? error.message : String(error),
         variant: "destructive",
+        ...(recoveryDraft ? {
+          action: (
+            <ToastAction
+              altText="Buka draft koreksi"
+              onClick={() => window.location.assign(`/accounting/entries?editId=${recoveryDraft.id}`)}
+            >
+              Buka Draft
+            </ToastAction>
+          ),
+        } : {}),
       });
     } finally {
       setLoading(false);
@@ -930,7 +967,7 @@ export default function EntriesPage() {
                         {e.source === "manual" && e.status === "draft" && (
                           <Link href={`/accounting/entries?editId=${e.id}`}>
                             <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-blue-400 hover:text-blue-300 hover:bg-blue-900/20 px-2">
-                              <Pencil className="h-3 w-3" /> Edit
+                              <Pencil className="h-3 w-3" /> Buka Draft
                             </Button>
                           </Link>
                         )}
