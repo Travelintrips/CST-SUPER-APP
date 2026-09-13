@@ -311,6 +311,18 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
     expect(key).toBe(outKey);
   });
 
+  it("CSV parser recognizes the Indonesian Debet header for OUT rows", () => {
+    const csvContent = [
+      "tanggal,keterangan,kredit,Debet",
+      `${TX_DATE},${TX_DESC},,${TX_AMOUNT}`,
+    ].join("\n");
+
+    const rows = parseCSVText(csvContent);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].amount).toBe(TX_AMOUNT);
+    expect(rows[0].direction).toBe("OUT");
+  });
+
   it("Sheet parser representation matches canonical key", () => {
     // sheetSyncService calls canonicalMutationKey with:
     //   debit = debitAmt (IN amount), credit = kreditAmt (OUT amount)

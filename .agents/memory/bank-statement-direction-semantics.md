@@ -7,4 +7,4 @@ Bank statement columns are interpreted from the bank-account perspective: Debit/
 
 **Why:** One import path previously applied the accounting convention in reverse, causing vendor payments to be stored as incoming transactions and sending matching toward inbound/Sport Center sources.
 
-**How to apply:** Use one shared direction helper for Sheet, CSV, Excel, and any future bank import path. Protect posted/approved historical rows from automatic correction; repair legacy misclassified rows through an audited, guarded flow.
+**How to apply:** Use one shared direction helper for Sheet, CSV, Excel, and any future bank import path; accept localized header spelling `Debet` as an alias for `Debit`. Protect posted/approved historical rows from automatic correction; repair legacy misclassified rows through an audited, guarded flow.

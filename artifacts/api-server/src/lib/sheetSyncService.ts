@@ -266,7 +266,7 @@ function parseSheetRows(rows: string[][], logLabel = ""): { headers: string[]; p
   let dateCol   = findDateColSmart();
   let descCol   = findDescColSmart(dateCol);
   let kreditCol = colIdx(["kredit", "credit", "masuk", "cr", "jumlah masuk"]);
-  let debitCol  = colIdx(["debit", "keluar", "db", "out", "jumlah keluar"]);
+  let debitCol  = colIdx(["debit", "debet", "keluar", "db", "out", "jumlah keluar"]);
   let bankCol   = colIdx(["bank", "rekening", "akun"]);
   let dataStartIndex = 1;
 

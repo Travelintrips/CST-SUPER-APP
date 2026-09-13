@@ -1872,7 +1872,7 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
     const rawDate   = get(["tanggal", "date", "tgl"]);
     const rawDesc   = get(["keterangan", "description", "desc", "ket", "narasi"]);
     const rawCredit = get(["kredit", "credit", "masuk", "cr", "in"]);
-    const rawDebit  = get(["debit", "keluar", "db", "out"]);
+    const rawDebit  = get(["debit", "debet", "keluar", "db", "out"]);
     const rawAmt    = get(["nominal", "amount", "jumlah"]);
     const rawBank   = get(["source account", "bank name", "bank", "rekening", "account"]);
 

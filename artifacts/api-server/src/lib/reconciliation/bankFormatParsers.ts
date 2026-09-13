@@ -286,7 +286,7 @@ export function parseCSVText(content: string): ParsedBankRow[] {
   const dateIdx   = findCol(["tanggal", "date", "tgl"]);
   const descIdx   = findCol(["keterangan", "description", "desc", "narasi", "ket"]);
   const creditIdx = findCol(["kredit", "credit", "masuk", "cr"]);
-  const debitIdx  = findCol(["debit", "keluar", "db"]);
+  const debitIdx  = findCol(["debit", "debet", "keluar", "db"]);
   const amtIdx    = findCol(["nominal", "amount", "jumlah"]);
   const refIdx    = findCol(["referensi", "reference", "ref", "no transaksi"]);
   const vendorIdx = findCol(["vendor", "nama", "name", "counterparty", "pihak"]);
