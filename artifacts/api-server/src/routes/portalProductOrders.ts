@@ -2118,7 +2118,7 @@ portalProductOrdersRouter.post("/orders/:id/assign-driver", requirePortalProduct
       ${driverPhoneOverride ?? null},
       ${vehiclePlateOverride ?? null},
       'EXTERNAL',
-      'DRIVER_APP',
+       'WA_MINI_FORM',
       'ASSIGNED',
       NOW(),
       NOW()

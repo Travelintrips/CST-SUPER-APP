@@ -277,7 +277,7 @@ export async function runDriverAssignmentMigration(): Promise<void> {
     await db.execute(sql`
       ALTER TABLE driver_jobs ALTER COLUMN driver_id DROP NOT NULL;
       ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS driver_type TEXT DEFAULT 'EXTERNAL';
-      ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'DRIVER_APP';
+      ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS execution_mode TEXT DEFAULT 'WA_MINI_FORM';
       ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS wa_progress_token TEXT;
       ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS driver_name_override TEXT;
       ALTER TABLE driver_jobs ADD COLUMN IF NOT EXISTS driver_phone_override TEXT;
@@ -1421,7 +1421,7 @@ adminRouter.post("/jobs", async (req, res) => {
   } = req.body ?? {};
 
   const resolvedDriverType: string = driverType === "INTERNAL" ? "INTERNAL" : "EXTERNAL";
-  const resolvedExecutionMode: string = executionMode === "WA_MINI_FORM" ? "WA_MINI_FORM" : "DRIVER_APP";
+  const resolvedExecutionMode: string = executionMode === "DRIVER_APP" ? "DRIVER_APP" : "WA_MINI_FORM";
 
   // INTERNAL mode: driverId not required
   if (resolvedDriverType === "EXTERNAL" && !driverId) {

@@ -3765,7 +3765,7 @@ export default function LogisticOrderDetailPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
 
-                  {/* ── Driver POD Cards (dari Driver App) ── */}
+                  {/* ── Driver POD Cards ── */}
                   {(fulfillmentData?.driverPods ?? []).map(dpod => {
                     const statusNorm = (dpod.status ?? "").toUpperCase();
                     const isComplete = statusNorm === "COMPLETED";
