@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
 import { AppShell } from "@/components/layout/AppShell";
@@ -27,11 +27,11 @@ import {
   useListAccountingEntries, useCreateAccountingEntry, useListJournals, useListAccounts,
   getListAccountingEntriesQueryKey,
   getGetAccountingEntryQueryOptions,
-  type AccountingEntry,
+  useGetAccountingEntry, type AccountingEntry, type AccountingEntryDetail,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePrefetchOnHover } from "@/hooks/use-prefetch-on-hover";
-import { Plus, FileText, Trash2, Printer, Download, RotateCcw, RefreshCw, ArrowLeft } from "lucide-react";
+import { Plus, FileText, Trash2, Printer, Download, RotateCcw, RefreshCw, ArrowLeft, Pencil, FilePenLine } from "lucide-react";
 import { exportXlsx, printWindow } from "@/lib/export";
 
 const idr = (n: number) => new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
@@ -136,6 +136,210 @@ function ReverseDialog({ entry, companyId, onDone }: {
           <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>Batal</Button>
           <Button onClick={handleReverse} disabled={loading} className="bg-amber-600 hover:bg-amber-700">
             {loading ? "Memproses..." : "Ya, Buat Pembalik"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EntryEditorDialog({
+  entry,
+  mode,
+  open,
+  accounts,
+  journals,
+  onOpenChange,
+  onDone,
+}: {
+  entry: AccountingEntryDetail | undefined;
+  mode: "edit" | "correction";
+  open: boolean;
+  accounts: { id: number; code: string; name: string }[] | undefined;
+  journals: { id: number; code: string; name: string }[] | undefined;
+  onOpenChange: (open: boolean) => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [form, setForm] = useState<{
+    journalId: number;
+    date: string;
+    ref: string;
+    description: string;
+    lines: LineForm[];
+  }>({ journalId: 0, date: "", ref: "", description: "", lines: [] });
+
+  useEffect(() => {
+    if (!entry) return;
+    setForm({
+      journalId: entry.journalId,
+      date: String(entry.date).slice(0, 10),
+      ref: entry.ref ?? "",
+      description: mode === "correction"
+        ? `[KOREKSI COA] ${entry.description ?? entry.entryNumber}`
+        : entry.description ?? "",
+      lines: entry.lines.map((line) => ({
+        accountId: line.accountId,
+        debit: Number(line.debit) || 0,
+        credit: Number(line.credit) || 0,
+        description: line.description ?? "",
+      })),
+    });
+  }, [entry, mode]);
+
+  const totalDebit = form.lines.reduce((sum, line) => sum + (Number(line.debit) || 0), 0);
+  const totalCredit = form.lines.reduce((sum, line) => sum + (Number(line.credit) || 0), 0);
+  const balanced = totalDebit > 0 && Math.abs(totalDebit - totalCredit) < 0.01;
+
+  const updateLine = (index: number, patch: Partial<LineForm>) => {
+    const lines = [...form.lines];
+    lines[index] = { ...lines[index]!, ...patch };
+    setForm({ ...form, lines });
+  };
+
+  const submit = async () => {
+    if (!entry || !form.journalId || !form.date || !balanced) {
+      toast({ title: "Jurnal belum lengkap atau belum seimbang", variant: "destructive" });
+      return;
+    }
+    const lines = form.lines.filter((line) => line.accountId && (line.debit > 0 || line.credit > 0));
+    if (lines.length < 2) {
+      toast({ title: "Minimal harus ada 2 baris jurnal", variant: "destructive" });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        journalId: form.journalId,
+        date: new Date(form.date).toISOString(),
+        ref: form.ref || null,
+        description: form.description || null,
+        lines: lines.map((line) => ({
+          accountId: line.accountId,
+          debit: Number(line.debit) || 0,
+          credit: Number(line.credit) || 0,
+          description: line.description || null,
+        })),
+      };
+
+      if (mode === "edit") {
+        const response = await fetch(`/api/accounting/entries/${entry.id}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.message ?? `HTTP ${response.status}`);
+        toast({ title: "Draft jurnal berhasil diperbarui" });
+      } else {
+        // Buat draft koreksi terlebih dahulu. Jika reversal gagal, draft tetap
+        // tersimpan dan dapat dilanjutkan tanpa mengubah entry posted asli.
+        const draftResponse = await fetch("/api/accounting/entries", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const draftBody = await draftResponse.json().catch(() => ({}));
+        if (!draftResponse.ok) throw new Error(draftBody.message ?? `Gagal membuat draft koreksi (HTTP ${draftResponse.status})`);
+
+        const reversalResponse = await fetch(`/api/accounting/entries/${entry.id}/reverse`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reason: `Koreksi COA melalui jurnal ${draftBody.entryNumber ?? "draft baru"}`,
+            date: new Date().toISOString().slice(0, 10),
+          }),
+        });
+        const reversalBody = await reversalResponse.json().catch(() => ({}));
+        if (!reversalResponse.ok) {
+          throw new Error(`Draft koreksi sudah dibuat, tetapi reversal gagal: ${reversalBody.message ?? `HTTP ${reversalResponse.status}`}`);
+        }
+        toast({
+          title: "Reversal dibuat dan draft koreksi siap",
+          description: "Periksa kembali COA lalu klik Post pada jurnal koreksi.",
+        });
+      }
+      onOpenChange(false);
+      onDone();
+    } catch (error: unknown) {
+      toast({
+        title: mode === "edit" ? "Gagal mengedit draft" : "Gagal membuat koreksi COA",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>{mode === "edit" ? "Edit Jurnal Draft" : "Koreksi COA Jurnal Posted"}</DialogTitle>
+        </DialogHeader>
+        {!entry ? (
+          <div className="py-8 text-center text-muted-foreground">Memuat detail jurnal...</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-md border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-sm">
+              {mode === "edit"
+                ? <>Jurnal <span className="font-mono">{entry.entryNumber}</span> masih Draft dan dapat diedit.</>
+                : <>Jurnal <span className="font-mono">{entry.entryNumber}</span> akan dibuatkan reversal. Jurnal koreksi baru disimpan sebagai Draft agar dapat diperiksa sebelum diposting.</>}
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>Jurnal</Label>
+                <Select value={form.journalId ? String(form.journalId) : ""} onValueChange={(value) => setForm({ ...form, journalId: Number(value) })}>
+                  <SelectTrigger><SelectValue placeholder="Pilih jurnal" /></SelectTrigger>
+                  <SelectContent>{(journals ?? []).map((journal) => <SelectItem key={journal.id} value={String(journal.id)}>{journal.code} - {journal.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Tanggal</Label><DatePicker value={form.date} onChange={(date) => setForm({ ...form, date })} /></div>
+              <div><Label>Referensi</Label><Input value={form.ref} onChange={(e) => setForm({ ...form, ref: e.target.value })} /></div>
+            </div>
+            <div><Label>Deskripsi</Label><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+            <div className="border rounded-md overflow-x-auto">
+              <Table>
+                <TableHeader><TableRow><TableHead>Akun / COA</TableHead><TableHead className="w-32">Debit</TableHead><TableHead className="w-32">Kredit</TableHead><TableHead>Deskripsi</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+                <TableBody>
+                  {form.lines.map((line, index) => (
+                    <TableRow key={index}>
+                      <TableCell className="min-w-[300px]">
+                        <AccountCombobox
+                          accounts={accounts ?? []}
+                          value={line.accountId || null}
+                          onChange={(value) => updateLine(index, { accountId: value ?? 0 })}
+                        />
+                      </TableCell>
+                      <TableCell><Input type="number" min="0" step="0.01" value={line.debit || ""} onChange={(e) => updateLine(index, { debit: Number(e.target.value) || 0, credit: 0 })} /></TableCell>
+                      <TableCell><Input type="number" min="0" step="0.01" value={line.credit || ""} onChange={(e) => updateLine(index, { credit: Number(e.target.value) || 0, debit: 0 })} /></TableCell>
+                      <TableCell><Input value={line.description} onChange={(e) => updateLine(index, { description: e.target.value })} /></TableCell>
+                      <TableCell><Button size="icon" variant="ghost" onClick={() => setForm({ ...form, lines: form.lines.filter((_, i) => i !== index) })}><Trash2 className="h-4 w-4" /></Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <Button variant="outline" size="sm" onClick={() => setForm({ ...form, lines: [...form.lines, { accountId: 0, debit: 0, credit: 0, description: "" }] })}>+ Tambah Baris</Button>
+              <div className="flex gap-4">
+                <span>Total Debit: <strong className="font-mono">{idr(totalDebit)}</strong></span>
+                <span>Total Kredit: <strong className="font-mono">{idr(totalCredit)}</strong></span>
+                <Badge variant={balanced ? "default" : "destructive"}>{balanced ? "Seimbang" : "Tidak seimbang"}</Badge>
+              </div>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>Batal</Button>
+          <Button onClick={submit} disabled={!entry || loading || !balanced}>
+            {loading ? "Memproses..." : mode === "edit" ? "Simpan Perubahan" : "Buat Reversal & Draft Koreksi"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -296,6 +500,17 @@ export default function EntriesPage() {
   const { data: entries } = useListAccountingEntries(params, { query: { queryKey: getListAccountingEntriesQueryKey(params) } });
   const { data: journals } = useListJournals();
   const { data: accounts } = useListAccounts();
+  const actionParams = new URLSearchParams(window.location.search);
+  const editEntryId = Number(actionParams.get("editId") ?? 0);
+  const correctionEntryId = Number(actionParams.get("correctId") ?? 0);
+  const actionEntryId = editEntryId || correctionEntryId;
+  const actionMode: "edit" | "correction" = editEntryId ? "edit" : "correction";
+  const { data: actionEntry } = useGetAccountingEntry(actionEntryId, {
+    query: {
+      queryKey: [`/api/accounting/entries/${actionEntryId}`],
+      enabled: actionEntryId > 0,
+    },
+  });
   const createMut = useCreateAccountingEntry();
 
   const [open, setOpen] = useState(false);
@@ -353,6 +568,10 @@ export default function EntriesPage() {
   const refreshEntries = () => {
     qc.invalidateQueries({ queryKey: getListAccountingEntriesQueryKey() });
     setSelected(new Set());
+  };
+
+  const closeEntryAction = () => {
+    window.history.replaceState({}, "", "/accounting/entries");
   };
 
   const journalLabel = (id: number) => journals?.find((j) => j.id === id)?.code ?? `#${id}`;
@@ -426,6 +645,20 @@ export default function EntriesPage() {
 
   return (
     <AppShell>
+      <EntryEditorDialog
+        entry={actionEntry}
+        mode={actionMode}
+        open={actionEntryId > 0}
+        accounts={accounts}
+        journals={journals}
+        onOpenChange={(open) => {
+          if (!open) closeEntryAction();
+        }}
+        onDone={() => {
+          closeEntryAction();
+          refreshEntries();
+        }}
+      />
       <div className="space-y-6 p-6">
         <div className="flex items-center justify-between">
           <div className="flex items-start gap-3">
@@ -648,6 +881,20 @@ export default function EntriesPage() {
                     <div className="flex flex-col items-end gap-1">
                       <div className="flex gap-1 justify-end">
                         <PostDraftButton entry={e} onDone={refreshEntries} />
+                        {e.source === "manual" && e.status === "draft" && (
+                          <Link href={`/accounting/entries?editId=${e.id}`}>
+                            <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-blue-400 hover:text-blue-300 hover:bg-blue-900/20 px-2">
+                              <Pencil className="h-3 w-3" /> Edit
+                            </Button>
+                          </Link>
+                        )}
+                        {e.status === "posted" && (e.source as string) !== "reversal" && (
+                          <Link href={`/accounting/entries?correctId=${e.id}`}>
+                            <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-amber-400 hover:text-amber-300 hover:bg-amber-900/20 px-2">
+                              <FilePenLine className="h-3 w-3" /> Koreksi COA
+                            </Button>
+                          </Link>
+                        )}
                         <ReverseDialog
                           entry={e}
                           companyId={isConsolidated ? null : activeCompanyId}
