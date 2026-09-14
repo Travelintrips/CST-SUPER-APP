@@ -1,0 +1,22 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const pageSource = readFileSync(
+  resolve(process.cwd(), "src/pages/accounting/bank-reconciliation.tsx"),
+  "utf8",
+);
+
+describe("Sport Center candidate selection UI contract", () => {
+  it("hides generic exact-match readiness while multiple Sport Center candidates remain", () => {
+    expect(pageSource).toContain("function sportPaymentSelectionRequired");
+    expect(pageSource).toContain("sportPaymentSelectionRequired(m)");
+    expect(pageSource).toContain("Pilih tepat satu kandidat Sport Center");
+    expect(pageSource).toContain("isUiApprovalEligible(m, selectedCandidateId ?? null)");
+  });
+
+  it("keeps candidate selection and approval distinct from canonical settlement linking", () => {
+    expect(pageSource).toContain("Pilih Kandidat & Approve");
+    expect(pageSource).toContain("Tautkan &amp; Approve Settlement");
+  });
+});

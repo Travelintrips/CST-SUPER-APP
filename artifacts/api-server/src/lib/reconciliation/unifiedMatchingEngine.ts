@@ -2482,7 +2482,7 @@ export async function approveAndCreateJournal(
        let selectedCandidateSource = candidateSource;
         if (matchId) {
          const { rows: matchRows } = await tx.execute(sql.raw(`
-           SELECT id, candidate_type, candidate_id, candidate_source
+            SELECT id, candidate_type, candidate_id, candidate_source, status
            FROM bank_reconciliation_matches
            WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
            FOR UPDATE
@@ -2493,12 +2493,40 @@ export async function approveAndCreateJournal(
              { code: "INVALID_MATCH" },
            );
          }
-         selectedCandidateType = String((matchRows[0] as any).candidate_type ?? "");
-         selectedCandidateId = Number((matchRows[0] as any).candidate_id);
-          selectedCandidateSource = (matchRows[0] as any).candidate_source ?? null;
+          const selectedMatchRow = matchRows[0] as any;
+          if (!["candidate", "approved"].includes(String(selectedMatchRow.status ?? "").toLowerCase())) {
+            throw Object.assign(
+              new Error("Kandidat rekonsiliasi sudah tidak aktif; muat ulang daftar kandidat."),
+              { code: "INVALID_MATCH" },
+            );
+          }
+          selectedCandidateType = String(selectedMatchRow.candidate_type ?? "");
+          selectedCandidateId = Number(selectedMatchRow.candidate_id);
+          selectedCandidateSource = selectedMatchRow.candidate_source ?? null;
        }
 
        const selectedType = canonicalCandidateType(selectedCandidateType);
+        if (selectedType === "sport_payment") {
+          const { rows: activeSportCandidates } = await tx.execute(sql.raw(`
+            SELECT candidate_id::text AS candidate_id
+            FROM bank_reconciliation_matches
+            WHERE mutation_id = ${mutationId}
+              AND status IN ('candidate', 'approved')
+              AND candidate_type IN ('sport_payment', 'sport_payments')
+            FOR UPDATE
+          `));
+          const activeSportCandidateIds = new Set(
+            activeSportCandidates.map((row: any) => String(row.candidate_id)),
+          );
+          if (activeSportCandidateIds.size > 1 && !matchId) {
+            throw Object.assign(
+              new Error(
+                "Mutasi memiliki lebih dari satu kandidat Sport Center aktif. Pilih satu kandidat sebelum approve.",
+              ),
+              { code: "SPORT_PAYMENT_CANDIDATE_SELECTION_REQUIRED" },
+            );
+          }
+        }
         // The requirement is persisted in the rule-match audit trail so this
         // remains enforceable even when the browser sends no candidate payload
         // or sends the Rule AI evidence row itself. Older audit rows without a

@@ -443,6 +443,19 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     'accounting_payment', 'invoice', 'expense',
     'logistic_order', 'tenant_invoice'
   )`;
+  // A Sport Center payment is a real transaction candidate, but more than one
+  // active payment is not an approval decision. Keep the mutation in review
+  // until the reviewer explicitly chooses one candidate. Count distinct
+  // source identities so duplicate match rows do not create false ambiguity.
+  const sportPaymentSelectionRequired = `EXISTS (
+    SELECT 1
+    FROM bank_reconciliation_matches sport_payment_match
+    WHERE sport_payment_match.mutation_id = ${alias}.id
+      AND sport_payment_match.status IN ('candidate', 'approved')
+      AND sport_payment_match.candidate_type IN ('sport_payment', 'sport_payments')
+    GROUP BY sport_payment_match.mutation_id
+    HAVING COUNT(DISTINCT sport_payment_match.candidate_id::text) > 1
+  )`;
   const requiredCandidateRuleEvidence = `EXISTS (
     SELECT 1
     FROM bank_reconciliation_audit required_rule_audit
@@ -519,6 +532,9 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     WHEN ${alias}.status = 'matched'
       AND ${qrisMutationNeedsMatchingSql(alias)}
     THEN 'unmatched'
+    WHEN ${alias}.status = 'matched'
+      AND ${sportPaymentSelectionRequired}
+    THEN 'duplicate_need_review'
     WHEN ${alias}.status = 'matched'
       AND NOT EXISTS (
         SELECT 1
@@ -8127,6 +8143,13 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
       return res.status(409).json({
         error: result.error,
         code: result.code,
+      });
+    }
+    if (result.code === "SPORT_PAYMENT_CANDIDATE_SELECTION_REQUIRED") {
+      return res.status(409).json({
+        error: result.error,
+        code: result.code,
+        manual_review_required: true,
       });
     }
     return res.status(400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });

@@ -1299,6 +1299,21 @@ function hasApprovedReconciliationMatch(m: BankMutation): boolean {
     ) ?? false);
 }
 
+function activeSportPaymentCandidatesForMutation(m: BankMutation): Candidate[] {
+  return visibleCandidates(m).filter(candidate =>
+    ["sport_payment", "sport_payments"].includes(
+      String(candidate.candidate_type ?? "").trim().toLowerCase(),
+    )
+    && ["candidate", "approved"].includes(String(candidate.status ?? "").toLowerCase()),
+  );
+}
+
+function sportPaymentSelectionRequired(m: BankMutation): boolean {
+  return new Set(
+    activeSportPaymentCandidatesForMutation(m).map(candidate => String(candidate.candidate_id)),
+  ).size > 1;
+}
+
 function isFullyUsedQrisCandidate(candidate: Candidate): boolean {
   if (candidate.candidate_type !== "qris_settlement") return false;
   const candidateStatus = String(candidate.status ?? "").toLowerCase();
@@ -1650,7 +1665,12 @@ function hasUnresolvedVariance(m: BankMutation): boolean {
 
 function isExactMatch(m: BankMutation): boolean {
   const candidate = visibleCandidates(m)[0];
-  if (!candidate || m.status !== "matched" || hasUnresolvedVariance(m)) return false;
+  if (
+    !candidate
+    || m.status !== "matched"
+    || sportPaymentSelectionRequired(m)
+    || hasUnresolvedVariance(m)
+  ) return false;
   // A same-day, same-amount bank transfer is selectable for reviewer
   // confirmation even when it has no reference/proof bonus. The backend still
   // validates the selected match and COA mapping inside its transaction.
@@ -1678,7 +1698,10 @@ function requiresRealTransactionCandidate(m: BankMutation): boolean {
   return m.review_code === "RULE_CANDIDATE_REQUIRED";
 }
 
-function isUiApprovalEligible(m: BankMutation): boolean {
+function isUiApprovalEligible(
+  m: BankMutation,
+  selectedCandidateId: number | null = null,
+): boolean {
   // This is deliberately stricter than the backend action guard. The server
   // remains the final authority; the UI only avoids offering an unsafe action.
   // QRIS must use the canonical batch settlement flow. The generic bank
@@ -1687,8 +1710,23 @@ function isUiApprovalEligible(m: BankMutation): boolean {
   // to look like an exact match.
   const requiredCandidateAvailable = !requiresRealTransactionCandidate(m)
     || visibleCandidates(m).some(isRealTransactionCandidate);
+  const selectedCandidate = visibleCandidates(m).find(
+    candidate => candidate.id === selectedCandidateId,
+  );
+  const selectedSportCandidateIsReady =
+    selectedCandidateId != null
+    && selectedCandidate != null
+    && selectedCandidate.amount_match === true
+    && selectedCandidate.date_match === true;
   return canApprove(m)
-    && isExactMatch(m)
+    && (
+      isExactMatch(m)
+      || (
+        sportPaymentSelectionRequired(m)
+        && selectedSportCandidateIsReady
+        && !hasUnresolvedVariance(m)
+      )
+    )
     && !isQrisMutation(m)
     && requiredCandidateAvailable;
 }
@@ -5371,6 +5409,7 @@ function MutationCard({
   const selectableMatchingCandidates = realCandidateRequired
     ? matchingCandidates.filter(isRealTransactionCandidate)
     : matchingCandidates;
+  const requiresSportPaymentSelection = sportPaymentSelectionRequired(m);
   const selectedCandidate = selectableMatchingCandidates.find(
     candidate => candidate.id === selectedCandidateId,
   );
@@ -5621,7 +5660,7 @@ function MutationCard({
                                {candidateApprovalBlockedReason}
                              </p>
                            ) : onApproveCandidate && canApprove(m) && candidateIsSelectable && (
-                             <Button
+                              <Button
                                type="button"
                                size="sm"
                                className="mt-2 h-7 gap-1 bg-green-600 px-2.5 text-[11px] text-white hover:bg-green-700"
@@ -5629,13 +5668,21 @@ function MutationCard({
                                onClick={event => {
                                  event.preventDefault();
                                  event.stopPropagation();
-                                 onApproveCandidate(m, candidate);
+                                  if (requiresSportPaymentSelection) {
+                                    onToggleCandidate?.(m.id, candidate.id, true);
+                                  } else {
+                                    onApproveCandidate(m, candidate);
+                                  }
                                }}
                              >
                                {approvePending
                                  ? <Loader2 className="h-3 w-3 animate-spin" />
                                  : <CheckCircle2 className="h-3 w-3" />}
-                               {approvePending ? "Menyimpan..." : "Approve kandidat"}
+                                {approvePending
+                                  ? "Menyimpan..."
+                                  : requiresSportPaymentSelection
+                                    ? "Pilih Kandidat"
+                                    : "Approve kandidat"}
                              </Button>
                            )}
                            {realCandidateRequired && !candidateIsSelectable && (
@@ -5839,9 +5886,14 @@ function MutationCard({
                 Pilih COA
               </Button>
             )}
+            {!isClosedQrisSettlement && requiresSportPaymentSelection && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                Pilih tepat satu kandidat Sport Center. Mutasi tetap Review Manual sampai kandidat dipilih dan disetujui.
+              </div>
+            )}
             {!isClosedQrisSettlement
               && !mappingError
-              && isUiApprovalEligible(m)
+               && isUiApprovalEligible(m, selectedCandidateId ?? null)
               && (
               <Button
                 size="sm"
@@ -5920,7 +5972,7 @@ function MutationCard({
             )}
              {!isClosedQrisSettlement
               && !isManualReviewActionable(m)
-              && !isUiApprovalEligible(m)
+               && !isUiApprovalEligible(m, selectedCandidateId ?? null)
               && !canonicalApprovalReady
               && matchingCandidates.length === 0
               && !(canApprove(m) && cands.length === 0 && !isQrisMutation(m))
