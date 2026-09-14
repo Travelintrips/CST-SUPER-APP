@@ -2246,6 +2246,16 @@ async function triggerAutomaticQrisApproval(
   const authorization = typeof req.headers?.authorization === "string"
     ? req.headers.authorization
     : "";
+  // The approval call is internal, but it still carries the user's session
+  // cookie. Production CSRF protection therefore requires the same trusted
+  // portal origin that authorized the outer request. Without forwarding it,
+  // the loopback call is rejected as PORTAL_CSRF_ORIGIN_INVALID.
+  const origin = typeof req.headers?.origin === "string"
+    ? req.headers.origin
+    : "";
+  const referer = typeof req.headers?.referer === "string"
+    ? req.headers.referer
+    : "";
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < candidateIds.length) {
@@ -2264,6 +2274,8 @@ async function triggerAutomaticQrisApproval(
               "x-qris-auto-approval": "1",
               ...(cookie ? { cookie } : {}),
               ...(authorization ? { authorization } : {}),
+              ...(origin ? { origin } : {}),
+              ...(referer ? { referer } : {}),
             },
             body: JSON.stringify({ companyId }),
           },

@@ -7,4 +7,4 @@ Candidate regeneration triggered by a payment date, amount, or settlement-status
 
 **Why:** A refresh path previously regenerated MATCHED provisional candidates but stopped before the approval worker, leaving them waiting even though the source data was now eligible. Loopback approval also needs the listener port that accepted the request because primary and artifact API listeners can coexist on different ports.
 
-**How to apply:** Pass the originating request through authenticated refresh queues, derive the loopback port from `req.socket.localPort` before environment fallbacks, and keep approval on the canonical builder/link path with its existing company, H-1, exact-net, and race guards.
+**How to apply:** Pass the originating request through authenticated refresh queues, derive the loopback port from `req.socket.localPort` before environment fallbacks, forward its trusted `Origin`/`Referer` when the internal call carries a session cookie, and keep approval on the canonical builder/link path with its existing company, H-1, exact-net, and race guards.

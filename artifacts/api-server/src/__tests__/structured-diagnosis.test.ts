@@ -134,6 +134,27 @@ describe("structured QRIS reconciliation diagnosis", () => {
     expect(repairSource).not.toMatch(/INSERT\s+INTO\s+accounting_entries/i);
   });
 
+  it("forwards the authenticated portal origin to internal auto-approval", () => {
+    const approvalStart = bankReconciliationRouteSource.indexOf(
+      "async function triggerAutomaticQrisApproval(",
+    );
+    const approvalEnd = bankReconciliationRouteSource.indexOf(
+      "// ───",
+      approvalStart,
+    );
+    expect(approvalStart).toBeGreaterThanOrEqual(0);
+    expect(approvalEnd).toBeGreaterThan(approvalStart);
+
+    const approvalSource = bankReconciliationRouteSource.slice(
+      approvalStart,
+      approvalEnd,
+    );
+    expect(approvalSource).toContain("req.headers?.origin");
+    expect(approvalSource).toContain("req.headers?.referer");
+    expect(approvalSource).toContain("...(origin ? { origin } : {})");
+    expect(approvalSource).toContain("...(referer ? { referer } : {})");
+  });
+
   it("returns diagnosis from approval and candidate-generation failure responses", () => {
     expect(bankReconciliationRouteSource).toContain("qrisAutoPostDiagnostic(");
     expect(bankReconciliationRouteSource).toContain("buildQrisAutoPostDiagnosis(");
