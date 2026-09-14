@@ -8373,8 +8373,8 @@ export default function BankReconciliationPage() {
       setQrisPaymentAmountReason("");
       toast({
         title: result.changed ? "Nominal payment berhasil dikoreksi" : "Tidak ada perubahan",
-        description: result.changed
-          ? `Jurnal koreksi #${result.correctionEntryId ?? "—"} dibuat. Kandidat QRIS akan diregenerasi sebagai review-only.`
+          description: result.changed
+            ? `Jurnal koreksi #${result.correctionEntryId ?? "—"} dibuat. Kandidat QRIS akan diregenerasi dan retry approval canonical dijalankan bila seluruh guard terpenuhi.`
           : result.message ?? "Nominal payment sudah sesuai.",
       });
 
@@ -10788,7 +10788,8 @@ export default function BankReconciliationPage() {
             <DialogTitle>Koreksi nominal payment Sport Center</DialogTitle>
             <DialogDescription>
               Jurnal posted lama tidak diubah. Sistem akan membuat jurnal additive yang seimbang,
-              memperbarui source/mirror, lalu meregenerasi kandidat QRIS sebagai review-only.
+              memperbarui source/mirror dan gross jurnal canonical, lalu meregenerasi kandidat QRIS
+              serta menjalankan retry approval canonical bila seluruh guard terpenuhi.
             </DialogDescription>
           </DialogHeader>
           {qrisAmountTarget && (
@@ -10824,7 +10825,7 @@ export default function BankReconciliationPage() {
                     </strong>
                   </p>
                   <p>Jurnal posted lama tetap immutable; MDR/net payment dihitung ulang dari nominal baru.</p>
-                  <p>Kandidat QRIS diregenerasi setelah commit dan tetap review-only.</p>
+                  <p>Kandidat QRIS diregenerasi setelah commit; retry approval canonical memakai guard yang sama.</p>
                 </div>
               </div>
               <div className="space-y-2">

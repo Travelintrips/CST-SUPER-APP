@@ -3249,7 +3249,7 @@ router.post("/qris-candidates/:candidateId/repair", async (req, res) => {
 // ─── PATCH /api/bank-reconciliation/qris-candidates/payments/:paymentId/amount ─
 // Correct a posted Sport Center payment without mutating its posted journal.
 // The transaction validates the canonical source, public mirror, accounting
-// payment, and posted journal before creating one additive correction entry.
+// payment, and posted journals before creating additive correction entries.
 router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
 
@@ -3300,6 +3300,7 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
         companyId,
         requestedAmount,
         reason,
+        actor: (req as any).user?.email ?? "admin",
       }),
     );
 
@@ -3308,7 +3309,7 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
       module: "accounting",
       resourceId: `sport-payment-${paymentId}`,
       companyId,
-      description: "Koreksi nominal payment posted melalui additive journal",
+      description: "Koreksi nominal payment posted melalui workflow accounting additive",
       before: {
         amount: result.previousAmount,
         accountingPaymentId: result.accountingPaymentId,
@@ -3337,7 +3338,7 @@ router.patch("/qris-candidates/payments/:paymentId/amount", async (req, res) => 
       correctionEntryId: result.correctionEntryId,
       candidateRefreshPending: result.changed,
          message: result.changed
-        ? "Nominal payment dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi dan diproses otomatis bila memenuhi seluruh guard canonical."
+        ? "Nominal payment dan gross jurnal canonical dikoreksi dengan jurnal additive. Jurnal posted lama tetap immutable; kandidat QRIS akan diregenerasi dan diproses otomatis bila memenuhi seluruh guard canonical."
         : "Nominal payment sudah sesuai; tidak ada jurnal koreksi baru.",
     });
   } catch (error: any) {

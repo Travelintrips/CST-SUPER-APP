@@ -96,6 +96,20 @@ describe("Sport payment amount correction policy", () => {
     });
   });
 
+  it("creates an additive canonical-journal correction when source already matches requested amount", () => {
+    expect(assessSportPaymentAmountCorrection(
+      identity({ canonicalJournalGrossAmount: 120_000 }),
+      100_000,
+    )).toEqual({
+      kind: "apply",
+      amount: 100_000,
+      delta: 0,
+      absoluteDelta: 0,
+      journalDelta: -20_000,
+      absoluteJournalDelta: 20_000,
+    });
+  });
+
   it("blocks a second correction through the payment-scoped idempotency identity", () => {
     expect(assessSportPaymentAmountCorrection(
       identity({ existingCorrectionId: 812 }),

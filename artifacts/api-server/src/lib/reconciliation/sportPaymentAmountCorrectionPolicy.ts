@@ -4,6 +4,7 @@ export type SportPaymentAmountCorrectionIdentity = {
   accountingPaymentAmount: number;
   journalTotalDebit: number;
   journalTotalCredit: number;
+  canonicalJournalGrossAmount?: number;
   settlementStatus: string | null;
   activeSettlementCount: number;
   sourceStatus: string;
@@ -18,6 +19,8 @@ export type SportPaymentAmountCorrectionDecision =
       amount: number;
       delta: number;
       absoluteDelta: number;
+      journalDelta: number;
+      absoluteJournalDelta: number;
     };
 
 export type SportPaymentAmountCorrectionLine = {
@@ -88,15 +91,36 @@ export function assessSportPaymentAmountCorrection(
   }
 
   if (close(amount, identity.sourceAmount)) {
+    const canonicalJournalGross = identity.canonicalJournalGrossAmount;
+    if (
+      canonicalJournalGross != null
+      && Number.isFinite(canonicalJournalGross)
+      && !close(amount, canonicalJournalGross)
+    ) {
+      const journalDelta = roundSportPaymentMoney(amount - canonicalJournalGross);
+      return {
+        kind: "apply",
+        amount,
+        delta: 0,
+        absoluteDelta: 0,
+        journalDelta,
+        absoluteJournalDelta: Math.abs(journalDelta),
+      };
+    }
     return { kind: "noop", amount };
   }
 
   const delta = roundSportPaymentMoney(amount - identity.sourceAmount);
+  const journalDelta = identity.canonicalJournalGrossAmount == null
+    ? delta
+    : roundSportPaymentMoney(amount - identity.canonicalJournalGrossAmount);
   return {
     kind: "apply",
     amount,
     delta,
     absoluteDelta: Math.abs(delta),
+    journalDelta,
+    absoluteJournalDelta: Math.abs(journalDelta),
   };
 }
 

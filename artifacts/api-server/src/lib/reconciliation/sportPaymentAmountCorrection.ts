@@ -38,7 +38,239 @@ type CorrectionInput = {
   companyId: number;
   requestedAmount: unknown;
   reason: string;
+  actor?: string;
 };
+
+type SportJournalLine = {
+  line_type: string;
+  account_code: string;
+  account_name: string;
+  amount: number;
+  description: string | null;
+};
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function journalCorrectionLines(
+  lines: SportJournalLine[],
+  delta: number,
+  originalGross: number,
+): Array<{
+  lineType: "debit" | "credit";
+  accountCode: string;
+  accountName: string;
+  amount: number;
+  description: string;
+}> {
+  const absoluteDelta = roundMoney(Math.abs(delta));
+  const debitLines = lines.filter((line) => line.line_type === "debit");
+  const creditLines = lines.filter((line) => line.line_type === "credit");
+  const debitTotal = debitLines.reduce((sum, line) => sum + line.amount, 0);
+  const creditTotal = creditLines.reduce((sum, line) => sum + line.amount, 0);
+  if (
+    absoluteDelta <= 0
+    || originalGross <= 0
+    || debitLines.length === 0
+    || creditLines.length === 0
+    || Math.abs(debitTotal - originalGross) > 0.01
+    || Math.abs(creditTotal - originalGross) > 0.01
+  ) {
+    throw new SportPaymentAmountCorrectionError(
+      "Jurnal Sport Center tidak memiliki line gross yang balance untuk koreksi additive",
+      409,
+      "SPORT_JOURNAL_LINES_NOT_BALANCED",
+    );
+  }
+
+  const buildSide = (
+    sourceLines: SportJournalLine[],
+    sourceTotal: number,
+    targetType: "debit" | "credit",
+  ) => {
+    let allocated = 0;
+    return sourceLines.map((line, index) => {
+      const amount = index === sourceLines.length - 1
+        ? roundMoney(absoluteDelta - allocated)
+        : roundMoney(absoluteDelta * line.amount / sourceTotal);
+      allocated = roundMoney(allocated + amount);
+      return {
+        lineType: delta < 0
+          ? (targetType === "debit" ? "credit" : "debit")
+          : targetType,
+        accountCode: line.account_code,
+        accountName: line.account_name,
+        amount,
+        description: `KOREKSI GROSS PAYMENT: ${line.description ?? line.account_name}`,
+      };
+    });
+  };
+
+  return [
+    ...buildSide(debitLines, debitTotal, "debit"),
+    ...buildSide(creditLines, creditTotal, "credit"),
+  ];
+}
+
+async function createSportCenterPaymentAmountCorrection(
+  tx: DbClient,
+  input: {
+    paymentId: number;
+    journalDelta: number;
+    actor: string;
+    reason: string;
+  },
+): Promise<number | null> {
+  if (Math.abs(input.journalDelta) <= 0.01) return null;
+
+  const journalResult = await tx.execute(sql`
+    SELECT *
+    FROM sport_center.accounting_journals
+    WHERE payment_id = ${input.paymentId}
+      AND journal_type = 'payment_confirmed'
+      AND is_reversal = FALSE
+      AND status = 'posted'
+    ORDER BY id
+    LIMIT 2
+    FOR UPDATE
+  `);
+  if (journalResult.rows.length !== 1) {
+    fail(
+      "Jurnal payment Sport Center harus tepat satu sebelum koreksi gross",
+      journalResult.rows.length === 0
+        ? "SPORT_JOURNAL_NOT_FOUND"
+        : "SPORT_JOURNAL_IDENTITY_AMBIGUOUS",
+    );
+  }
+  const journal = journalResult.rows[0] as Record<string, unknown>;
+  const journalId = Number(journal.id);
+  const originalGross = numberValue(journal.gross_amount);
+  if (!Number.isSafeInteger(journalId) || journalId <= 0 || originalGross <= 0) {
+    fail("Gross jurnal payment Sport Center tidak valid", "SPORT_JOURNAL_GROSS_INVALID");
+  }
+
+  const marker = `SPORT_PAYMENT_AMOUNT_CORRECTION:${input.paymentId}`;
+  const existingResult = await tx.execute(sql`
+    SELECT id
+    FROM sport_center.accounting_journals
+    WHERE payment_id = ${input.paymentId}
+      AND journal_type = 'payment_amount_correction'
+      AND is_reversal = FALSE
+      AND status = 'posted'
+      AND notes LIKE ${`%${marker}%`}
+    ORDER BY id DESC
+    LIMIT 1
+    FOR UPDATE
+  `);
+  if (existingResult.rows.length > 0) {
+    return Number((existingResult.rows[0] as Record<string, unknown>).id);
+  }
+
+  const lineResult = await tx.execute(sql`
+    SELECT line_type, account_code, account_name, amount, description
+    FROM sport_center.accounting_journal_lines
+    WHERE journal_id = ${journalId}
+    ORDER BY id
+  `);
+  const sourceLines = (lineResult.rows as Array<Record<string, unknown>>).map((line) => ({
+    line_type: String(line.line_type ?? "").toLowerCase(),
+    account_code: String(line.account_code ?? ""),
+    account_name: String(line.account_name ?? ""),
+    amount: numberValue(line.amount),
+    description: line.description == null ? null : String(line.description),
+  })) as SportJournalLine[];
+  const correctionLines = journalCorrectionLines(
+    sourceLines,
+    input.journalDelta,
+    originalGross,
+  );
+  const originalTax = numberValue(journal.tax_amount);
+  const taxRatio = originalGross > 0 ? originalTax / originalGross : 0;
+  const correctionTax = roundMoney(Math.abs(input.journalDelta) * taxRatio)
+    * (input.journalDelta < 0 ? -1 : 1);
+  const correctionDpp = roundMoney(input.journalDelta - correctionTax);
+
+  // Use the live catalog for optional/additive columns while keeping the
+  // original posted journal untouched. The correction is a normal draft-first
+  // Sport Center journal and is promoted only after its lines validate.
+  const columnsResult = await tx.execute(sql`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'sport_center'
+      AND table_name = 'accounting_journals'
+      AND column_name <> 'id'
+      AND is_generated = 'NEVER'
+      AND is_identity = 'NO'
+    ORDER BY ordinal_position
+  `);
+  const columns = (columnsResult.rows as Array<Record<string, unknown>>)
+    .map((row) => String(row.column_name))
+    .filter((column) => column !== "created_at" && column !== "updated_at");
+  const requiredColumns = [
+    "payment_id", "journal_type", "status", "gross_amount", "dpp_amount",
+    "tax_amount", "is_reversal", "reversal_of_id", "notes", "created_by",
+  ];
+  if (requiredColumns.some((column) => !columns.includes(column))) {
+    fail("Schema jurnal Sport Center tidak mendukung koreksi additive", "SPORT_JOURNAL_SCHEMA_UNSUPPORTED");
+  }
+  const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `""`)}"`;
+  const escapeSql = (value: string) => value.replaceAll("'", "''");
+  const selectExpressions = columns.map((column) => {
+    if (column === "status") return "'draft' AS " + quoteIdentifier(column);
+    if (column === "journal_type") return "'payment_amount_correction' AS " + quoteIdentifier(column);
+    if (column === "is_reversal") return "FALSE AS " + quoteIdentifier(column);
+    if (column === "reversal_of_id") return `${journalId} AS ${quoteIdentifier(column)}`;
+    if (column === "gross_amount") return `${input.journalDelta} AS ${quoteIdentifier(column)}`;
+    if (column === "dpp_amount") return `${correctionDpp} AS ${quoteIdentifier(column)}`;
+    if (column === "tax_amount") return `${correctionTax} AS ${quoteIdentifier(column)}`;
+    if (column === "notes") {
+      return `COALESCE(${quoteIdentifier(column)}, '') || ' ${marker} REASON:${escapeSql(input.reason)}' AS ${quoteIdentifier(column)}`;
+    }
+    if (column === "created_by") return `'${escapeSql(input.actor)}' AS ${quoteIdentifier(column)}`;
+    if (column === "source_event_id") return "gen_random_uuid() AS " + quoteIdentifier(column);
+    if (column === "correlation_id") return `'${escapeSql(marker)}' AS ${quoteIdentifier(column)}`;
+    return quoteIdentifier(column);
+  }).join(", ");
+  const columnList = columns.map(quoteIdentifier).join(", ");
+  const insertResult = await tx.execute(sql.raw(`
+    INSERT INTO sport_center.accounting_journals (${columnList})
+    SELECT ${selectExpressions}
+    FROM sport_center.accounting_journals
+    WHERE id = ${journalId}
+    RETURNING id
+  `));
+  const correctionJournalId = Number(
+    (insertResult.rows[0] as Record<string, unknown> | undefined)?.id,
+  );
+  if (!Number.isSafeInteger(correctionJournalId) || correctionJournalId <= 0) {
+    fail("Jurnal koreksi Sport Center tidak terbentuk", "SPORT_JOURNAL_CORRECTION_FAILED");
+  }
+
+  const lineValues = correctionLines.map((line) => sql`(
+    ${correctionJournalId},
+    ${line.lineType},
+    ${line.accountCode},
+    ${line.accountName},
+    ${line.amount},
+    ${line.description}
+  )`);
+  await tx.execute(sql`
+    INSERT INTO sport_center.accounting_journal_lines
+      (journal_id, line_type, account_code, account_name, amount, description)
+    VALUES ${sql.join(lineValues, sql`, `)}
+  `);
+  await tx.execute(sql`
+    SELECT sport_center.validate_accounting_journal(${correctionJournalId})
+  `);
+  await tx.execute(sql`
+    UPDATE sport_center.accounting_journals
+    SET status = 'posted'
+    WHERE id = ${correctionJournalId}
+      AND status = 'draft'
+  `);
+  return correctionJournalId;
+}
 
 export async function correctPostedSportPaymentAmount(
   tx: DbClient,
@@ -191,6 +423,29 @@ export async function correctPostedSportPaymentAmount(
     fail("Company jurnal tidak sesuai dengan company payment", "JOURNAL_COMPANY_MISMATCH");
   }
 
+  const sportJournalResult = await tx.execute(sql`
+    SELECT id, gross_amount, status, journal_type, is_reversal
+    FROM sport_center.accounting_journals
+    WHERE payment_id = ${input.paymentId}
+      AND journal_type = 'payment_confirmed'
+      AND is_reversal = FALSE
+    ORDER BY id
+    LIMIT 2
+    FOR UPDATE
+  `);
+  if (sportJournalResult.rows.length !== 1) {
+    fail(
+      "Jurnal payment Sport Center harus tepat satu",
+      sportJournalResult.rows.length === 0
+        ? "SPORT_JOURNAL_NOT_FOUND"
+        : "SPORT_JOURNAL_IDENTITY_AMBIGUOUS",
+    );
+  }
+  const sportJournal = sportJournalResult.rows[0] as Record<string, unknown>;
+  if (String(sportJournal.status ?? "").toLowerCase() !== "posted") {
+    fail("Workflow ini hanya untuk jurnal Sport Center yang sudah posted", "JOURNAL_NOT_POSTED");
+  }
+
   const correctionResult = await tx.execute(sql`
     SELECT id
     FROM public.accounting_entries
@@ -225,6 +480,7 @@ export async function correctPostedSportPaymentAmount(
         accountingPaymentAmount: numberValue(accounting.accounting_payment_amount),
         journalTotalDebit: numberValue(accounting.journal_total_debit),
         journalTotalCredit: numberValue(accounting.journal_total_credit),
+        canonicalJournalGrossAmount: numberValue(sportJournal.gross_amount),
         settlementStatus: String(source.settlement_status ?? "unsettled"),
         activeSettlementCount: activeSettlementResult.rows.length,
         sourceStatus: String(source.source_status ?? ""),
@@ -268,9 +524,12 @@ export async function correctPostedSportPaymentAmount(
 
   const settings = await ensureAccountingSettings(input.companyId);
   const journalId = settings.cashJournalId ?? settings.bankJournalId;
-  if (!journalId) fail("Jurnal kas/bank perusahaan belum dikonfigurasi", "ACCOUNTING_JOURNAL_NOT_CONFIGURED");
+  if (decision.delta !== 0 && !journalId) {
+    fail("Jurnal kas/bank perusahaan belum dikonfigurasi", "ACCOUNTING_JOURNAL_NOT_CONFIGURED");
+  }
 
-  const linesResult = await tx.execute(sql`
+  const linesResult = decision.delta !== 0
+    ? await tx.execute(sql`
     SELECT
       ael.account_id,
       COALESCE(ael.debit, 0)::numeric AS debit,
@@ -282,7 +541,8 @@ export async function correctPostedSportPaymentAmount(
     JOIN public.chart_of_accounts coa ON coa.id = ael.account_id
     WHERE ael.entry_id = ${Number(accounting.journal_id)}
     ORDER BY ael.id
-  `);
+  `)
+    : { rows: [] };
   const lines = linesResult.rows as Array<Record<string, unknown>>;
   const bankLine = lines.find((line) => {
     const type = String(line.account_type ?? "").toLowerCase();
@@ -295,8 +555,8 @@ export async function correctPostedSportPaymentAmount(
     return String(line.account_type ?? "").toLowerCase() === "liability"
       && (identity.includes("ppn") || Number(line.account_id) === Number(settings.ppnOutputAccountId));
   });
-  if (!bankLine) fail("Akun bank/kas pada jurnal posted tidak dapat diidentifikasi", "BANK_ACCOUNT_NOT_FOUND");
-  if (!revenueLine) fail("Akun pendapatan pada jurnal posted tidak dapat diidentifikasi", "REVENUE_ACCOUNT_NOT_FOUND");
+  if (decision.delta !== 0 && !bankLine) fail("Akun bank/kas pada jurnal posted tidak dapat diidentifikasi", "BANK_ACCOUNT_NOT_FOUND");
+  if (decision.delta !== 0 && !revenueLine) fail("Akun pendapatan pada jurnal posted tidak dapat diidentifikasi", "REVENUE_ACCOUNT_NOT_FOUND");
 
   const bookingTotal = numberValue(source.booking_total_amount);
   const storedTax = numberValue(source.booking_tax_amount);
@@ -305,31 +565,45 @@ export async function correctPostedSportPaymentAmount(
     : storedTax > 0 && bookingTotal > storedTax
       ? storedTax / (bookingTotal - storedTax) * 100
       : 0;
-  const correctionLines = buildSportPaymentAmountCorrectionLines({
-    delta: decision.delta,
-    bankAccountId: Number(bankLine.account_id),
-    revenueAccountId: Number(revenueLine.account_id),
-    taxAccountId: taxLine ? Number(taxLine.account_id) : settings.ppnOutputAccountId,
-    taxRate: derivedTaxRate,
-    bookingNumber: String(source.booking_number),
-  });
+  const correctionLines = decision.delta !== 0
+    ? buildSportPaymentAmountCorrectionLines({
+        delta: decision.delta,
+        bankAccountId: Number(bankLine!.account_id),
+        revenueAccountId: Number(revenueLine!.account_id),
+        taxAccountId: taxLine ? Number(taxLine.account_id) : settings.ppnOutputAccountId,
+        taxRate: derivedTaxRate,
+        bookingNumber: String(source.booking_number),
+      })
+    : [];
 
-  const correctionEntry = await postEntryWithClient(
+  const correctionEntry = decision.delta !== 0
+    ? await postEntryWithClient(
+        tx,
+        {
+          journalId: Number(journalId),
+          date: new Date(`${String(source.booking_date).slice(0, 10)}T00:00:00Z`),
+          ref: `${String(source.booking_number)}-AMOUNT-CORRECTION-${input.paymentId}`,
+          description: `[KOREKSI NOMINAL PAYMENT] ${String(source.booking_number)} ${String(source.customer_name ?? "")}: ${reason}`,
+          source: "sport_center_amount_correction",
+          sourceId: input.paymentId,
+          sourceEventId: correctionSourceEventId,
+          sourceModule: "sport_center_payment",
+          companyId: input.companyId,
+          costCenterId: await resolveCostCenterId("SPORT_CENTER", input.companyId, tx),
+          lines: correctionLines,
+        },
+        settings.cashJournalId ? "CSH" : "BNK",
+      )
+    : null;
+
+  const sportCorrectionJournalId = await createSportCenterPaymentAmountCorrection(
     tx,
     {
-      journalId: Number(journalId),
-      date: new Date(`${String(source.booking_date).slice(0, 10)}T00:00:00Z`),
-      ref: `${String(source.booking_number)}-AMOUNT-CORRECTION-${input.paymentId}`,
-      description: `[KOREKSI NOMINAL PAYMENT] ${String(source.booking_number)} ${String(source.customer_name ?? "")}: ${reason}`,
-      source: "sport_center_amount_correction",
-      sourceId: input.paymentId,
-      sourceEventId: correctionSourceEventId,
-      sourceModule: "sport_center_payment",
-      companyId: input.companyId,
-      costCenterId: await resolveCostCenterId("SPORT_CENTER", input.companyId, tx),
-      lines: correctionLines,
+      paymentId: input.paymentId,
+      journalDelta: decision.journalDelta,
+      actor: input.actor?.trim() || "bank-reconciliation",
+      reason,
     },
-    settings.cashJournalId ? "CSH" : "BNK",
   );
 
   const oldAmount = numberValue(source.source_amount);
@@ -346,7 +620,15 @@ export async function correctPostedSportPaymentAmount(
     0,
     roundSportPaymentMoney(decision.amount - mdrAmount - oldTaxWithheld - oldOtherFee),
   );
-  const updatedSourceResult = await tx.execute(sql`
+  const updatedSourceResult = decision.delta === 0
+    ? { rows: [{
+        id: Number(source.id),
+        amount: numberValue(source.source_amount),
+        mdr_amount: numberValue(source.mdr_amount),
+        net_amount: numberValue(source.net_amount),
+        status: String(source.source_status ?? ""),
+      }] }
+    : await tx.execute(sql`
     UPDATE sport_center.sport_payments
     SET amount = ${decision.amount},
         mdr_amount = ${mdrAmount},
@@ -383,7 +665,7 @@ export async function correctPostedSportPaymentAmount(
     bookingId: Number(source.booking_id),
     previousAmount: oldAmount,
     amount: decision.amount,
-    correctionEntryId: Number(correctionEntry.id),
+    correctionEntryId: correctionEntry ? Number(correctionEntry.id) : sportCorrectionJournalId,
     source: updatedSource,
     mirror: refreshedMirror,
     accountingPaymentId: Number(accounting.accounting_payment_id),
