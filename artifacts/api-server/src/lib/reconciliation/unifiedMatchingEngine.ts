@@ -2305,11 +2305,11 @@ export async function approveAndCreateJournal(
     const txResult = await db.transaction(async (tx) => {
 
        // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
-       const { rows: locked } = await tx.execute(sql.raw(`
-         SELECT bm.id, bm.status, bm.amount, bm.direction,
+        const { rows: locked } = await tx.execute(sql.raw(`
+          SELECT bm.id, bm.status, bm.amount, bm.direction,
                bm.transaction_date, bm.description, bm.mutation_key,
                  bm.provider_name, bm.provider_order_id, bm.normalized_description,
-                 bm.company_id, bm.bank_account_id, bm.journal_entry_id,
+                  bm.company_id, bm.bank_account_id AS bank_account_reference, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
         WHERE bm.id = ${mutationId}
@@ -2321,7 +2321,15 @@ export async function approveAndCreateJournal(
       const mut = locked[0] as Record<string, unknown>;
 
       const companyId   = normalizeCompanyId(mut["company_id"]);
-      const bankAccId   = mut["bank_account_id"] != null ? Number(mut["bank_account_id"]) : null;
+      const bankAccountReference = String(mut["bank_account_reference"] ?? "").trim();
+      // bank_account_id historically contains either the internal
+      // company_bank_accounts.id or the external account number from a
+      // statement/import. Keep the numeric ID only for code paths that truly
+      // require it; bank COA resolution below handles both identities.
+      const bankAccId = /^\d+$/.test(bankAccountReference)
+        && Number.isSafeInteger(Number(bankAccountReference))
+        ? Number(bankAccountReference)
+        : null;
       const txDate      = String(mut["transaction_date"] ?? "").split("T")[0];
       const amount      = Number(mut["amount"]);
       const direction   = String(mut["direction"] ?? "IN");
@@ -2625,11 +2633,29 @@ export async function approveAndCreateJournal(
         }
 
       // ── Step 3: Resolve bank COA + contra account + journal ───────────────
-      // Bank COA: company_bank_accounts.coa_id WHERE id = bank_account_id
+      // Bank COA: bank_account_reference may be either the internal
+      // company_bank_accounts.id or the external account number. Imports from
+      // statements commonly carry the latter, so resolving by id only leaves
+      // the selected manual COA unable to create a balanced journal.
       let bankCoaId: number | null = null;
-      if (bankAccId) {
+      if (companyId && bankAccountReference) {
+        const escapedBankAccountReference = escapeSql(bankAccountReference);
         const { rows: cbaRows } = await tx.execute(sql.raw(`
-          SELECT coa_id FROM company_bank_accounts WHERE id = ${bankAccId} LIMIT 1
+          SELECT coa_id
+          FROM company_bank_accounts
+          WHERE company_id = ${companyId}
+            AND is_active = TRUE
+            AND coa_id IS NOT NULL
+            AND (
+              id::text = '${escapedBankAccountReference}'
+              OR account_number::text = '${escapedBankAccountReference}'
+              OR regexp_replace(account_number::text, '[^0-9]', '', 'g') =
+                 regexp_replace('${escapedBankAccountReference}', '[^0-9]', '', 'g')
+            )
+          ORDER BY
+            CASE WHEN id::text = '${escapedBankAccountReference}' THEN 0 ELSE 1 END,
+            id
+          LIMIT 1
         `)).catch(() => ({ rows: [] as any[] }));
         bankCoaId = (cbaRows[0] as any)?.coa_id ? Number((cbaRows[0] as any).coa_id) : null;
       }
@@ -2649,8 +2675,35 @@ export async function approveAndCreateJournal(
         const sett = (settRows[0] as any) ?? {};
          settings = sett;
 
-        if (!bankCoaId && sett.default_bank_account_id) {
-          bankCoaId = Number(sett.default_bank_account_id);
+         if (!bankCoaId && sett.default_bank_account_id) {
+           // accounting_settings stores the default bank *COA* id, but old
+           // rows can contain a stale/non-postable reference. Validate it
+           // before using it as a journal line.
+           const defaultBankReference = escapeSql(String(sett.default_bank_account_id));
+           const { rows: defaultBankCoaRows } = await tx.execute(sql.raw(`
+             SELECT coa_id AS id, 0 AS priority
+             FROM company_bank_accounts
+             WHERE company_id = ${companyId}
+               AND is_active = TRUE
+               AND coa_id IS NOT NULL
+               AND (
+                 id::text = '${defaultBankReference}'
+                 OR account_number::text = '${defaultBankReference}'
+               )
+             UNION ALL
+             SELECT id, 1 AS priority
+             FROM chart_of_accounts
+             WHERE id = ${Number(sett.default_bank_account_id)}
+               AND (company_id = ${companyId} OR company_id IS NULL)
+               AND is_active = TRUE
+               AND is_header = FALSE
+               AND is_postable = TRUE
+             ORDER BY priority
+             LIMIT 1
+           `)).catch(() => ({ rows: [] as any[] }));
+           bankCoaId = defaultBankCoaRows[0]?.id != null
+             ? Number(defaultBankCoaRows[0].id)
+             : null;
         }
         journalId = sett.bank_journal_id ? Number(sett.bank_journal_id) : null;
       }
