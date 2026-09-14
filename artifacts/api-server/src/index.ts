@@ -2079,7 +2079,6 @@ async function startServer() {
     .then(() => runWithRetry("Customer Portal product COA migration", runCustomerPortalProductCoaMigration))
     .then(() => runWithRetry("Customer Portal service type migration", runCustomerPortalServiceTypeMigration))
     .then(() => runWithRetry("Customer Portal Paylabs config migration", runCustomerPortalPaylabsMigration))
-    .then(() => runWithRetry("Customer Portal settlement migration", runCustomerPortalSettlementMigration))
     .then(() => runWithRetry("Portal payment company scope migration", runPortalPaymentCompanyMigration))
     .then(() => runWithRetry("Accounting migration", runAccountingMigration))
     .then(() => runWithRetry("Accounting revenue mapping migration", runAccountingRevenueMappingMigration))

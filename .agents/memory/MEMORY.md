@@ -154,3 +154,6 @@
 - [Portal blank-screen diagnosis](portal-blank-screen-diagnosis.md) — a malformed JSX tag in any eagerly scanned BizPortal module can blank the whole portal; inspect Vite transform errors before API debugging.
 - [Reconciliation unit-test DB isolation](reconciliation-unit-test-db-isolation.md) — import the matching engine in pure tests only with mocked DB/Drizzle modules and an explicit transaction fixture.
 - [Sport Center PROD audit schema](sport-center-prod-audit-schema.md) — canonical payments lack journal links; resolve posted journals separately and use public booking_number, not order_number.
+- [Gateway source integrity](gateway-source-integrity.md) — verify the gateway module is not duplicated after sync; repeated module blocks prevent port 5000 from binding.
+- [Stale Gateway workflow lock](workflow-stale-gateway-lock.md) — an old start-dev-all process can hold the Gateway lock and make a new workflow time out.
+- [GitHub CLI authentication](github-cli-auth-replit.md) — Replit’s GitHub connector and Shell HTTPS Git credentials are separate authentication paths.

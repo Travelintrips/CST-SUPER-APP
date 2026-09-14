@@ -18,6 +18,7 @@ import {
 } from "../lib/startupReadinessState.js";
 
 const apiIndex = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
+const appSource = readFileSync(resolve(process.cwd(), "src/app.ts"), "utf8");
 const rlsMigration = readFileSync(resolve(process.cwd(), "src/lib/rlsMigration.ts"), "utf8");
 const startupState = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationState.ts"), "utf8");
 const startupRegistry = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationRegistry.ts"), "utf8");
@@ -173,6 +174,20 @@ describe("startup readiness steady-state contract", () => {
     expect(apiIndex).toContain("fixed_startup_delay_ms: 0");
     expect(apiIndex).not.toContain("sleep(8_000)");
     expect(apiIndex).toContain("database_ready_ms: registryInitializationMs");
+  });
+
+  it("does not execute one registered Customer Portal stage twice", () => {
+    const settlementCalls =
+      apiIndex.match(/runWithRetry\("Customer Portal settlement migration"/g) ?? [];
+    expect(settlementCalls).toHaveLength(1);
+  });
+
+  it("keeps the unauthenticated health compatibility alias before auth middleware", () => {
+    expect(appSource).toContain('app.get("/api/health", respondToLiveness);');
+    expect(appSource).toContain('app.get("/api/health/live", respondToLiveness);');
+    expect(appSource.indexOf('app.get("/api/health", respondToLiveness);')).toBeLessThan(
+      appSource.indexOf("app.use(authMiddleware);"),
+    );
   });
 
   it("exposes safe current, completed, and failed pre-start substep state", () => {
