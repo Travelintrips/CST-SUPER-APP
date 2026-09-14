@@ -136,6 +136,10 @@ export async function runExpectedCashFlowMigration(): Promise<void> {
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS ecf_status_idx  ON expected_cash_flows(company_id, status)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS ecf_due_idx     ON expected_cash_flows(company_id, due_date)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS ecf_source_type_idx ON expected_cash_flows(company_id, source_type)`)).catch(() => {});
+  await db.execute(sql.raw(`
+    CREATE INDEX IF NOT EXISTS ecf_matching_lookup_idx
+    ON expected_cash_flows(company_id, direction, status, outstanding_amount, due_date)
+  `)).catch(() => {});
 
   logger.info("[expectedCashFlowService] migration complete");
 }

@@ -137,7 +137,9 @@ const isTestEnv = process.env.VITEST === "true" || process.env.NODE_ENV === "tes
 // Pool config — configurable via env vars.
 // Dev default: max=8 (the artifact dev workflow overrides this to 4 so
 // interactive requests have capacity while serial startup migrations run)
-// Prod default: max=2 (reduced to avoid pgBouncer auth-failure throttle)
+// Prod default: max=2 (reduced to avoid pgBouncer auth-failure throttle).
+// Long-running reconciliation jobs derive their worker count from this value;
+// they must not open more concurrent database work than the pool can serve.
 // Test: max=2, allowExitOnIdle=true so the pool never keeps the process alive
 
 // Dev default: max=8 (fewer connections to reduce pgBouncer pressure)

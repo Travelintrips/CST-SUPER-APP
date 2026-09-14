@@ -13,7 +13,8 @@
  */
 
 import { Router } from "express";
-import { db } from "@workspace/db";
+import { randomUUID } from "node:crypto";
+import { db, getPoolConfig } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { audit } from "../lib/unifiedAudit.js";
@@ -1080,10 +1081,87 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     },
   };
 }
-// The full-bank matching run can legitimately outlive the browser request
-// timeout. Keep one background run per API process so repeated clicks do not
-// fan out duplicate work against the same mutation set.
+// The full-bank matching run can legitimately outlive the browser request.
+// This local flag is only a fallback for a database that has not completed the
+// additive job-state migration yet. Normal coordination is database-backed.
 let unifiedMatchingJobActive = false;
+const MATCHING_JOB_KEY = "bank_mutations";
+const MATCHING_JOB_LEASE_MINUTES = 30;
+
+function matchingConcurrency(): number {
+  const configured = Number.parseInt(process.env.RECON_MATCHING_CONCURRENCY ?? "", 10);
+  if (Number.isSafeInteger(configured) && configured > 0) {
+    return Math.min(configured, 8);
+  }
+  // Production uses a small shared pool. Never create more concurrent database
+  // work than the pool can serve.
+  return Math.max(1, Math.min(4, getPoolConfig().max));
+}
+
+async function ensureMatchingJobRow(): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO reconciliation_matching_jobs (job_key)
+    VALUES (${MATCHING_JOB_KEY})
+    ON CONFLICT (job_key) DO NOTHING
+  `);
+}
+
+async function claimMatchingJob(totalCount: number, ownerToken: string): Promise<boolean> {
+  await ensureMatchingJobRow();
+  const result = await db.execute(sql`
+    UPDATE reconciliation_matching_jobs
+    SET status = 'running',
+        owner_token = ${ownerToken},
+        total_count = ${totalCount},
+        processed_count = 0,
+        failed_count = 0,
+        summary = '{}'::jsonb,
+        error_message = NULL,
+        started_at = NOW(),
+        completed_at = NULL,
+        updated_at = NOW()
+    WHERE job_key = ${MATCHING_JOB_KEY}
+      AND (
+        status <> 'running'
+        OR updated_at < NOW() - (${MATCHING_JOB_LEASE_MINUTES} || ' minutes')::interval
+      )
+    RETURNING job_key
+  `);
+  return result.rows.length > 0;
+}
+
+async function updateMatchingJobProgress(ownerToken: string, failed = false): Promise<void> {
+  await db.execute(sql`
+    UPDATE reconciliation_matching_jobs
+    SET processed_count = processed_count + 1,
+        failed_count = failed_count + ${failed ? 1 : 0},
+        updated_at = NOW()
+    WHERE job_key = ${MATCHING_JOB_KEY}
+      AND owner_token = ${ownerToken}
+      AND status = 'running'
+  `).catch((error: any) => {
+    logger.warn({ err: error?.message ?? String(error) }, "[bankRecon] matching progress update failed");
+  });
+}
+
+async function finishMatchingJob(
+  ownerToken: string,
+  summary: Record<string, number>,
+  errorMessage?: string,
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE reconciliation_matching_jobs
+    SET status = ${errorMessage ? "failed" : "completed"},
+        summary = ${JSON.stringify(summary)}::jsonb,
+        error_message = ${errorMessage ?? null},
+        completed_at = NOW(),
+        updated_at = NOW()
+    WHERE job_key = ${MATCHING_JOB_KEY}
+      AND owner_token = ${ownerToken}
+  `).catch((error: any) => {
+    logger.warn({ err: error?.message ?? String(error) }, "[bankRecon] matching job finalization failed");
+  });
+}
 
 // Date corrections can arrive back-to-back (for example, when one booking has
 // multiple QRIS payments). Serialize the provisional candidate refresh per
@@ -1550,6 +1628,14 @@ export async function runBankReconciliationCoreMigration() {
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS bm_status_idx        ON bank_mutations(status)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS bm_date_idx          ON bank_mutations(transaction_date)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS brm_mutation_idx     ON bank_reconciliation_matches(mutation_id)`)).catch(() => {});
+  await db.execute(sql.raw(`
+    CREATE INDEX IF NOT EXISTS bm_matching_status_date_idx
+    ON bank_mutations(status, transaction_date DESC)
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    CREATE INDEX IF NOT EXISTS bra_mutation_action_idx
+    ON bank_reconciliation_audit(mutation_id, action)
+  `)).catch(() => {});
 
   // ── NEW CONSTRAINTS (ERP-grade locks) ──────────────────────────────────────
 
@@ -1644,6 +1730,27 @@ export async function runBankReconciliationCoreMigration() {
     CREATE INDEX IF NOT EXISTS idx_recon_sync_logs_created
     ON reconciliation_sync_logs (created_at DESC)
   `)).catch(() => {});
+
+  // A full matching run outlives the HTTP request. Keep its lease and progress
+  // in the database so multiple API instances cannot start duplicate runs and
+  // the status endpoint does not depend on process-local memory.
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS reconciliation_matching_jobs (
+      job_key        TEXT PRIMARY KEY,
+      status         TEXT NOT NULL DEFAULT 'idle',
+      owner_token    TEXT,
+      total_count    INTEGER NOT NULL DEFAULT 0,
+      processed_count INTEGER NOT NULL DEFAULT 0,
+      failed_count   INTEGER NOT NULL DEFAULT 0,
+      summary        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      error_message  TEXT,
+      started_at     TIMESTAMPTZ,
+      completed_at   TIMESTAMPTZ,
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.message ?? String(e) }, "[bankRecon] matching job table unavailable");
+  });
 
   // ── Multi-company Google Sheet configs ───────────────────────────────────────
   await db.execute(sql.raw(`
@@ -9286,10 +9393,47 @@ router.get("/:mutationId/proof-ocr", async (req, res) => {
 // ─── POST /api/bank-reconciliation/run-matching ───────────────────────────────
 // Jalankan ulang unified matching engine untuk semua atau sebagian mutasi
 router.get("/run-matching/status", async (_req, res) => {
-  return res.json({
-    ok: true,
-    running: unifiedMatchingJobActive,
-  });
+  try {
+    const result = await db.execute(sql`
+      SELECT status, total_count, processed_count, failed_count, summary,
+             error_message, started_at, completed_at, updated_at
+      FROM reconciliation_matching_jobs
+      WHERE job_key = ${MATCHING_JOB_KEY}
+      LIMIT 1
+    `);
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    const isFreshRunning =
+      row?.status === "running" &&
+      row.updated_at != null &&
+      Date.now() - new Date(String(row.updated_at)).getTime() <
+        MATCHING_JOB_LEASE_MINUTES * 60_000;
+    return res.json({
+      ok: true,
+      running: isFreshRunning,
+      status: row?.status ?? "idle",
+      total: Number(row?.total_count ?? 0),
+      processed: Number(row?.processed_count ?? 0),
+      failed: Number(row?.failed_count ?? 0),
+      summary: row?.summary ?? {},
+      error: row?.error_message ?? null,
+      startedAt: row?.started_at ?? null,
+      completedAt: row?.completed_at ?? null,
+      updatedAt: row?.updated_at ?? null,
+    });
+  } catch {
+    // Keep the endpoint compatible during the first startup while the
+    // additive job-state table is being installed.
+    return res.json({
+      ok: true,
+      running: unifiedMatchingJobActive,
+      status: unifiedMatchingJobActive ? "running" : "idle",
+      total: 0,
+      processed: 0,
+      failed: 0,
+      summary: {},
+      error: null,
+    });
+  }
 });
 
 router.post("/run-matching", async (req, res) => {
@@ -9321,10 +9465,10 @@ router.post("/run-matching", async (req, res) => {
   if (legacy_reference_coa_retry && requestedIds.length === 0) {
     return res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
   }
-  // Keep a small worker pool: matching performs several independent reads per
-  // mutation, so serial processing is unnecessarily slow, while unbounded
-  // Promise.all would exhaust the database pool during a large re-run.
-  const MATCHING_CONCURRENCY = 4;
+  // Keep the worker pool aligned with the actual database pool. The previous
+  // fixed value of four was unsafe in production, where the pool defaults to
+  // two connections.
+  const MATCHING_CONCURRENCY = matchingConcurrency();
 
   // Default matching is incremental: a mutation that already produced a
   // MATCH_CREATED audit event is not automatically reprocessed. In particular,
@@ -9425,8 +9569,10 @@ router.post("/run-matching", async (req, res) => {
   let unmatched_count = 0;
   let rule_matched = 0;
   let ecf_matched = 0;
+  const matchingOwnerToken = randomUUID();
 
   const processMutation = async (m: any) => {
+    let failed = false;
     try {
       if (legacy_reference_coa_retry) {
         await auditLog(Number(m.id), "REFERENCE_COA_RETRY_REQUESTED", actor, {
@@ -9722,7 +9868,13 @@ router.post("/run-matching", async (req, res) => {
       else unmatched_count++;
 
     } catch (e: any) {
+      failed = true;
       logger.warn({ err: e.message, id: m.id }, "[bankRecon] matching error for mutation");
+      return;
+    } finally {
+      // A mutation may return early after a rule/ECF match. Count it here so
+      // progress remains accurate for every path.
+      await updateMatchingJobProgress(matchingOwnerToken, failed);
     }
   };
 
@@ -9751,20 +9903,33 @@ router.post("/run-matching", async (req, res) => {
       "[bankRecon] background matching completed",
     );
   };
-  const runWorkersWithDatabaseCoordination = async () => {
-    await db.transaction(async (lockTx) => {
-      const lockResult = await lockTx.execute(sql`
-        SELECT pg_try_advisory_xact_lock(
-          hashtextextended('bank_reconciliation_mutation_write_v1', 0)
-        ) AS acquired
-      `);
-      if (!(lockResult.rows[0] as { acquired?: boolean } | undefined)?.acquired) {
+  const runWorkersWithDatabaseCoordination = async (alreadyClaimed = false) => {
+    if (!alreadyClaimed) {
+      const claimed = await claimMatchingJob(mutations.length, matchingOwnerToken);
+      if (!claimed) {
         const busyError = new Error("Proses rekonsiliasi lain sedang berjalan.") as Error & { code?: string };
         busyError.code = "RECONCILIATION_JOB_BUSY";
         throw busyError;
       }
+    }
+    try {
       await runWorkers();
-    });
+      await finishMatchingJob(matchingOwnerToken, {
+        processed,
+        auto_matched,
+        manual_review,
+        unmatched: unmatched_count,
+        rule_matched,
+        ecf_matched,
+      });
+    } catch (error: any) {
+      await finishMatchingJob(
+        matchingOwnerToken,
+        { processed, auto_matched, manual_review, unmatched: unmatched_count, rule_matched, ecf_matched },
+        String(error?.message ?? error),
+      );
+      throw error;
+    }
   };
 
   if (!ids?.length) {
@@ -9777,9 +9942,19 @@ router.post("/run-matching", async (req, res) => {
       });
     }
 
+    const claimed = await claimMatchingJob(mutations.length, matchingOwnerToken);
+    if (!claimed) {
+      return res.status(202).json({
+        ok: true,
+        queued: true,
+        alreadyRunning: true,
+        message: "AI Matching sedang berjalan di background.",
+      });
+    }
+
     unifiedMatchingJobActive = true;
     setImmediate(() => {
-      runWorkersWithDatabaseCoordination()
+      runWorkersWithDatabaseCoordination(true)
         .catch((e: any) => logger.error({ err: e }, "[bankRecon] background matching failed"))
         .finally(() => {
           unifiedMatchingJobActive = false;
