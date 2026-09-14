@@ -484,6 +484,89 @@ async function updatePostingStatus(
     }
 }
 
+/**
+ * Repair the one-sided handoff where a valid posted journal already owns the
+ * source payment but accounting_payments was never created. The journal is
+ * reused; a second journal is never inserted.
+ */
+async function recoverEntryOnlySportPayment(
+  input: IngestModulePaymentInput,
+  existing: ExistingAccountingMatch,
+  method: string,
+  client: DbClient,
+): Promise<IngestResult> {
+  const entryId = Number(existing.accountingEntryId ?? 0);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    throw new Error("ACCOUNTING_ENTRY_LINK_MISSING: existing journal tidak tersedia");
+  }
+
+  const entryResult = await client.execute(sql`
+    SELECT journal_id
+    FROM accounting_entries
+    WHERE id = ${entryId}
+      AND company_id = ${input.companyId}
+      AND status = 'posted'
+    LIMIT 1
+  `);
+  const journalId = Number(
+    (entryResult.rows[0] as Record<string, unknown> | undefined)?.journal_id ?? 0,
+  );
+  if (!Number.isInteger(journalId) || journalId <= 0) {
+    throw new Error("ACCOUNTING_ENTRY_LINK_INVALID: existing journal owner tidak valid");
+  }
+
+  const paymentNumber = await generatePaymentNumber(input.companyId, client);
+  const insertResult = await client.execute(sql`
+    INSERT INTO accounting_payments
+      (company_id, payment_number, payment_type, status, amount, journal_id,
+       entry_id, partner_name, date, ref, memo, payment_method,
+       source_type, source_doc_id, created_by_id, created_at, posted_at)
+    VALUES
+      (${input.companyId}, ${paymentNumber}, 'inbound', 'posted',
+       ${String(Math.round(input.amount * 100) / 100)}, ${journalId}, ${entryId},
+       ${input.partnerName ?? null}, ${input.date}::date, ${input.ref ?? null},
+       ${input.description ?? "Pembayaran sport center"}, ${method},
+       'sport_center', ${input.sourceDocId}, ${input.actorId ?? null}, NOW(), NOW())
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `);
+  let accountingPaymentId = Number(
+    (insertResult.rows[0] as Record<string, unknown> | undefined)?.id ?? 0,
+  );
+  if (!accountingPaymentId) {
+    const existingPayment = await client.execute(sql`
+      SELECT id
+      FROM accounting_payments
+      WHERE company_id = ${input.companyId}
+        AND source_type = 'sport_center'
+        AND source_doc_id = ${input.sourceDocId}
+      ORDER BY id
+      LIMIT 1
+    `);
+    accountingPaymentId = Number(
+      (existingPayment.rows[0] as Record<string, unknown> | undefined)?.id ?? 0,
+    );
+  }
+  if (!Number.isInteger(accountingPaymentId) || accountingPaymentId <= 0) {
+    throw new Error("ACCOUNTING_PAYMENT_RECOVERY_FAILED: payment tidak terbentuk");
+  }
+
+  await updatePostingStatus(
+    "sport_center",
+    input.sourceDocId,
+    accountingPaymentId,
+    "posted",
+    null,
+    client,
+  );
+  return {
+    ok: true,
+    alreadyPosted: true,
+    accountingPaymentId,
+    accountingEntryId: entryId,
+  };
+}
+
 async function withAccountingTransaction<T>(
   callback: (client: DbClient) => Promise<T>,
 ): Promise<T> {
@@ -731,30 +814,33 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
       companyId,
     );
     if (existing) {
-      return {
-        ok: true,
-        alreadyPosted: true,
-        accountingPaymentId: existing.accountingPaymentId ?? undefined,
-        accountingEntryId: existing.accountingEntryId ?? undefined,
-      };
+      if (existing.accountingPaymentId != null) {
+        return {
+          ok: true,
+          alreadyPosted: true,
+          accountingPaymentId: existing.accountingPaymentId,
+          accountingEntryId: existing.accountingEntryId ?? undefined,
+        };
+      }
     }
 
     return await withAccountingTransaction(async (client) => {
-      if (client !== db) {
-        const existingInTransaction = await findExistingPostedSportPayment(
-          sourceDocId,
-          amount,
-          client,
-          companyId,
-        );
-        if (existingInTransaction) {
+      const existingInTransaction = await findExistingPostedSportPayment(
+        sourceDocId,
+        amount,
+        client,
+        companyId,
+      );
+      if (existingInTransaction) {
+        if (existingInTransaction.accountingPaymentId != null) {
           return {
             ok: true,
             alreadyPosted: true,
-            accountingPaymentId: existingInTransaction.accountingPaymentId ?? undefined,
+            accountingPaymentId: existingInTransaction.accountingPaymentId,
             accountingEntryId: existingInTransaction.accountingEntryId ?? undefined,
           };
         }
+        return recoverEntryOnlySportPayment(input, existingInTransaction, method, client);
       }
 
       const journalId = await resolveJournal(companyId, method, client);
@@ -850,12 +936,15 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
               companyId,
             );
             if (recovered) {
-              return {
-                ok: true,
-                alreadyPosted: true,
-                accountingPaymentId: recovered.accountingPaymentId ?? undefined,
-                accountingEntryId: recovered.accountingEntryId ?? undefined,
-              };
+              if (recovered.accountingPaymentId != null) {
+                return {
+                  ok: true,
+                  alreadyPosted: true,
+                  accountingPaymentId: recovered.accountingPaymentId,
+                  accountingEntryId: recovered.accountingEntryId ?? undefined,
+                };
+              }
+              return recoverEntryOnlySportPayment(input, recovered, method, client);
             }
           }
           throw new Error(`Posting jurnal gagal: ${postResult.error} (${postResult.errorCode})`);

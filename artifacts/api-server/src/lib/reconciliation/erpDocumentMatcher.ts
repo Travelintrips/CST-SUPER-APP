@@ -290,6 +290,17 @@ async function fetchActiveCandidates(
                AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
                AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
            )` : "";
+  const approvedSportPaymentMatchExclusion = `
+           AND NOT EXISTS (
+             SELECT 1
+             FROM bank_reconciliation_matches brm
+             JOIN bank_mutations brm_mutation
+               ON brm_mutation.id = brm.mutation_id
+              AND brm_mutation.company_id = sp.company_id
+             WHERE brm.status = 'approved'
+               AND brm.candidate_type IN ('sport_payment', 'sport_payments')
+               AND brm.candidate_id::text = sp.id::text
+           )`;
 
   type SourceQuery = { type: ActiveErpSourceType; q: string };
 
@@ -469,6 +480,7 @@ async function fetchActiveCandidates(
           AND COALESCE(sp.status, 'pending') = 'paid'
            AND COALESCE(sp.method, '') ILIKE '%qris%'
             ${aggregateMatchFilter}
+            ${approvedSportPaymentMatchExclusion}
            ${sportPaymentCanonicalSettlementExclusionSql("sp")}
       `,
     }] : []),

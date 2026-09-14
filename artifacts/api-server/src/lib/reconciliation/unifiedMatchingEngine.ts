@@ -1456,6 +1456,19 @@ export async function fetchCandidates(
            )` : "";
   const canonicalSportPaymentExclusion =
     `AND ${sportPaymentCanonicalSettlementExclusionSql("sp")}`;
+  // An approved match is a consumed source identity, regardless of whether
+  // it was created through the source-aware or legacy candidate path.
+  const approvedSportPaymentMatchExclusion = `
+           AND NOT EXISTS (
+             SELECT 1
+             FROM bank_reconciliation_matches brm
+             JOIN bank_mutations brm_mutation
+               ON brm_mutation.id = brm.mutation_id
+              AND brm_mutation.company_id = sp.company_id
+             WHERE brm.status = 'approved'
+               AND brm.candidate_type IN ('sport_payment', 'sport_payments')
+               AND brm.candidate_id::text = sp.id::text
+           )`;
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = `AND ##TBL##.company_id = ${Number(company_id)}`;
@@ -1585,6 +1598,7 @@ export async function fetchCandidates(
           AND ${sportPaymentTypeExpr} = '${sportPaymentTypeForMutation}'
            ${aggregateMatchFilter}
            ${canonicalSportPaymentExclusion}
+           ${approvedSportPaymentMatchExclusion}
           AND (
             sp.bank_account_id IS NULL
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
@@ -1628,6 +1642,7 @@ export async function fetchCandidates(
           AND sp.status = 'paid'
           AND ${sportPaymentTypeExpr} = 'qris'
           ${canonicalSportPaymentExclusion}
+           ${approvedSportPaymentMatchExclusion}
           AND (
             sp.bank_account_id IS NULL
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}

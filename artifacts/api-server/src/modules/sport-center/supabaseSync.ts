@@ -52,6 +52,7 @@ async function promoteCompleteCanonicalPaymentJournal(
   grossAmount: number,
   revenueAmount: number,
   taxAmount: number,
+  client: DbClient = db,
 ): Promise<boolean> {
   if (![grossAmount, revenueAmount, taxAmount].every(Number.isFinite)) return false;
   if (
@@ -59,7 +60,7 @@ async function promoteCompleteCanonicalPaymentJournal(
     Math.abs(grossAmount - (revenueAmount + taxAmount)) > 0.01
   ) return false;
 
-  const promoted = await db.execute(sql`
+  const promoted = await client.execute(sql`
     UPDATE sport_center.accounting_journals j
     SET status = 'posted',
         posted_by = COALESCE(j.posted_by, 'canonical-payment-sync'),
@@ -77,6 +78,16 @@ async function promoteCompleteCanonicalPaymentJournal(
         FROM sport_center.accounting_journal_lines l
         WHERE l.journal_id = j.id
       ) >= 2
+       AND (
+         SELECT COALESCE(SUM(l.amount) FILTER (WHERE l.line_type = 'debit'), 0)
+         FROM sport_center.accounting_journal_lines l
+         WHERE l.journal_id = j.id
+       ) = ${grossAmount}
+       AND (
+         SELECT COALESCE(SUM(l.amount) FILTER (WHERE l.line_type = 'credit'), 0)
+         FROM sport_center.accounting_journal_lines l
+         WHERE l.journal_id = j.id
+       ) = ${grossAmount}
     RETURNING j.id
   `);
   return promoted.rows.length > 0;
@@ -922,22 +933,28 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         throw new Error(`CANONICAL_PAYMENT_JOURNAL_UNBALANCED: payment=${paymentId}`);
       }
 
-      if (raw.journal_status === "draft" && raw.canonical_journal_id != null) {
-        const promoted = await promoteCompleteCanonicalPaymentJournal(
-          paymentId,
-          Number(raw.canonical_journal_id),
-          gross,
-          revenue,
-          tax,
-        );
-        if (promoted) raw.journal_status = "posted";
-      }
-      if (raw.journal_status !== "posted" || raw.is_reversal === true) {
-        throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
-      }
-
       const dateValue = String(raw.journal_date ?? raw.paid_at ?? new Date().toISOString()).slice(0, 10);
       const result = await db.transaction(async (tx) => {
+        // Promote the canonical owner inside the same transaction as the
+        // BizPortal accounting mirror and source pointer. If any later
+        // validation/write fails, the owner journal remains draft as well.
+        if (String(raw.journal_status ?? "").toLowerCase() === "draft"
+            && raw.canonical_journal_id != null) {
+          const promoted = await promoteCompleteCanonicalPaymentJournal(
+            paymentId,
+            Number(raw.canonical_journal_id),
+            gross,
+            revenue,
+            tax,
+            tx,
+          );
+          if (promoted) raw.journal_status = "posted";
+        }
+        if (String(raw.journal_status ?? "").toLowerCase() !== "posted"
+            || raw.is_reversal === true) {
+          throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
+        }
+
         const canonicalEventId = String(
           raw.source_event_id ?? raw.journal_source_event_id ?? "",
         ).trim() || null;
