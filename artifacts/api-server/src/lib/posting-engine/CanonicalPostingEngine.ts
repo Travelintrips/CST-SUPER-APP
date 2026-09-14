@@ -11,7 +11,7 @@
  */
 
 import { db, type accountingEntriesTable } from "@workspace/db";
-import { postEntryWithClient, type PostingInput } from "../accounting.js";
+import { postEntryWithClient, type DbClient, type PostingInput } from "../accounting.js";
 import { logger } from "../logger.js";
 import type { PostingRequest, PostingResult, PostingValidator } from "./types.js";
 import { PostingValidationError } from "./types.js";
@@ -22,7 +22,14 @@ type JournalEntryRow = typeof accountingEntriesTable.$inferSelect;
 export class CanonicalPostingEngine {
   constructor(private readonly validators: PostingValidator[] = createDefaultValidators()) {}
 
-  async post(request: PostingRequest): Promise<PostingResult> {
+  /**
+   * Post using the caller's transaction client when one is supplied.
+   *
+   * The default remains the root db client for existing callers. Payment
+   * ingestion supplies its transaction client so validators, the journal, its
+   * lines, and the source/payment links all share one PostgreSQL transaction.
+   */
+  async post(request: PostingRequest, client: DbClient = db): Promise<PostingResult> {
     if (request.taxes && request.taxes.length > 0) {
       // v1 scope: atomic tax+journal posting is not wired up yet — the real
       // tax-detection logic (rate lookup, PPh21 progressive calc, period-lock
@@ -40,7 +47,7 @@ export class CanonicalPostingEngine {
 
     try {
       for (const validator of this.validators) {
-        await validator.validate(request, { client: db });
+        await validator.validate(request, { client });
       }
     } catch (err) {
       if (err instanceof PostingValidationError) {
@@ -64,40 +71,29 @@ export class CanonicalPostingEngine {
     };
 
     try {
-      // ⚠️ NOT wrapped in db.transaction() yet, even though this engine's whole
-      // purpose is atomic journal+tax posting. Reason (found during Tahap 3
-      // testing, see docs/canonical-posting-engine/03-findings-addendum.md):
-      // `postLedgerEvent()` swallows its own INSERT errors internally
-      // (fire-and-forget audit trail), but if it runs INSIDE a caller-owned
-      // `db.transaction()`, a swallowed error there still poisons the whole
-      // Postgres transaction — every later statement (including the entry
-      // lines insert) silently fails, yet COMMIT does not throw, so the
-      // caller gets back a "successful" entryId for a row that was actually
-      // rolled back. Wrapping here without first hardening `postLedgerEvent`
-      // (SAVEPOINT before its own INSERT) would make that failure MORE likely
-      // to happen unnoticed, not less. Until that's fixed, this engine posts
-      // exactly like `postEntry()` does today (no explicit transaction) —
-      // still fully idempotent/period-lock/balance-checked via
-      // `postEntryWithClient`, just not yet wrapping this specific insert
-      // with an outer explicit transaction. Re-enable `db.transaction()` here
-      // once `taxes` support lands AND postLedgerEvent uses a SAVEPOINT.
-      const entry: JournalEntryRow = await postEntryWithClient(db, input, request.journalCode, request.initialStatus ?? "posted");
+      // The caller owns the transaction boundary. postEntryWithClient inserts
+      // the entry as draft, inserts lines, then promotes it to posted.
+      const entry: JournalEntryRow = await postEntryWithClient(client, input, request.journalCode, request.initialStatus ?? "posted");
 
-      // Post-commit hooks — fire-and-forget, must never fail the caller.
-      import("../ledgerImmutability.js").then(({ lockAccountingEntry }) => {
-        lockAccountingEntry(entry.id, request.createdById ?? "SYSTEM").catch(() => {});
-      }).catch(() => {});
-      import("../events/financialEventBus.js").then(({ emitJournalCreated }) => {
-        emitJournalCreated({
-          entryId: entry.id,
-          sourceType: request.source,
-          sourceId: request.sourceId,
-          amount: request.lines.reduce((s, l) => s + (l.debit ?? 0), 0),
-          actor: request.createdById ?? "SYSTEM",
-          ref: request.ref ?? null,
-          companyId: request.companyId,
-        });
-      }).catch(() => {});
+      // These hooks are only safe for the root-client path. A transaction
+      // caller may still roll back after post() returns, so it must publish
+      // its own post-commit effects after the transaction commits.
+      if (client === db) {
+        import("../ledgerImmutability.js").then(({ lockAccountingEntry }) => {
+          lockAccountingEntry(entry.id, request.createdById ?? "SYSTEM").catch(() => {});
+        }).catch(() => {});
+        import("../events/financialEventBus.js").then(({ emitJournalCreated }) => {
+          emitJournalCreated({
+            entryId: entry.id,
+            sourceType: request.source,
+            sourceId: request.sourceId,
+            amount: request.lines.reduce((s, l) => s + (l.debit ?? 0), 0),
+            actor: request.createdById ?? "SYSTEM",
+            ref: request.ref ?? null,
+            companyId: request.companyId,
+          });
+        }).catch(() => {});
+      }
 
       return { ok: true, entryId: entry.id };
     } catch (err) {

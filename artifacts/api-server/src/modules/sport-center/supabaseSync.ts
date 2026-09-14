@@ -1,7 +1,12 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { normalizePaymentMethod, resolvePaymentDestination, postEntryWithClient } from "../../lib/accounting.js";
+import {
+  normalizePaymentMethod,
+  resolvePaymentDestination,
+  postEntryWithClient,
+  type DbClient,
+} from "../../lib/accounting.js";
 import {
   validateSportPaymentPosting,
   type SportPaymentPostingEvidence,
@@ -79,8 +84,9 @@ async function promoteCompleteCanonicalPaymentJournal(
 
 async function loadPaymentPostingEvidence(
   mirrorPaymentId: number,
+  client: DbClient = db,
 ): Promise<SportPaymentPostingEvidence | null> {
-  const result = await db.execute(sql`
+  const result = await client.execute(sql`
     SELECT
       sp.id AS mirror_payment_id,
       sp.amount AS mirror_amount,
@@ -142,54 +148,102 @@ async function persistPostingValidationFailure(
   mirrorPaymentId: number,
   accountingPaymentId: number | null,
   validation: { state: "failed" | "manual_review"; error: string },
+  client: DbClient = db,
 ): Promise<void> {
-  await db.execute(sql`
+  await client.execute(sql`
     UPDATE sport_payments
     SET posting_status = ${validation.state},
-        accounting_payment_id = COALESCE(${accountingPaymentId}, accounting_payment_id),
+        accounting_payment_id = ${accountingPaymentId},
         posting_error = ${validation.error.slice(0, 1000)},
         updated_at = NOW()
     WHERE id = ${mirrorPaymentId}
-  `).catch(() => {});
+  `);
 }
 
 async function validateAndMarkSportPaymentPosted(
   mirrorPaymentId: number,
   accountingPaymentId: number,
 ): Promise<boolean> {
-  const evidence = await loadPaymentPostingEvidence(mirrorPaymentId);
-  if (!evidence) {
-    await persistPostingValidationFailure(mirrorPaymentId, accountingPaymentId, {
-      state: "failed",
-      error: "Validasi posting gagal: evidence payment tidak tersedia",
+  try {
+    return await db.transaction(async (tx) => {
+      const evidence = await loadPaymentPostingEvidence(mirrorPaymentId, tx);
+      if (!evidence) {
+        await persistPostingValidationFailure(
+          mirrorPaymentId,
+          null,
+          {
+            state: "failed",
+            error: "Validasi posting gagal: evidence payment tidak tersedia",
+          },
+          tx,
+        );
+        return false;
+      }
+
+      const validation = validateSportPaymentPosting(evidence);
+      if (!validation.ok) {
+        await persistPostingValidationFailure(
+          mirrorPaymentId,
+          null,
+          validation,
+          tx,
+        );
+        console.error(
+          `${PREFIX} posting validation ${validation.state} sp_id=${mirrorPaymentId}: ${validation.error}`,
+        );
+        return false;
+      }
+
+      const paymentUpdate = await tx.execute(sql`
+        UPDATE accounting_payments
+        SET status = 'posted',
+            posted_at = COALESCE(posted_at, NOW())
+        WHERE id = ${accountingPaymentId}
+          AND entry_id IS NOT NULL
+          AND status IN ('pending_approval', 'approved', 'draft', 'posted')
+        RETURNING id
+      `);
+      if (paymentUpdate.rows.length !== 1) {
+        throw new Error(
+          `SPORT_PAYMENT_ACCOUNTING_PAYMENT_NOT_UPDATED: payment=${accountingPaymentId}`,
+        );
+      }
+
+      const sourceUpdate = await tx.execute(sql`
+        UPDATE sport_payments
+        SET posting_status = 'posted',
+            accounting_payment_id = ${accountingPaymentId},
+            posting_error = NULL,
+            updated_at = NOW()
+        WHERE id = ${mirrorPaymentId}
+        RETURNING id
+      `);
+      if (sourceUpdate.rows.length !== 1) {
+        throw new Error(
+          `SPORT_PAYMENT_SOURCE_NOT_UPDATED: mirror=${mirrorPaymentId}`,
+        );
+      }
+      return true;
     });
-    return false;
-  }
-
-  const validation = validateSportPaymentPosting(evidence);
-  if (!validation.ok) {
-    await persistPostingValidationFailure(mirrorPaymentId, accountingPaymentId, validation);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(
-      `${PREFIX} posting validation ${validation.state} sp_id=${mirrorPaymentId}: ${validation.error}`,
+      `${PREFIX} atomic posting validation failed sp_id=${mirrorPaymentId}: ${message}`,
     );
+    try {
+      await persistPostingValidationFailure(
+        mirrorPaymentId,
+        null,
+        { state: "failed", error: message },
+      );
+    } catch (statusErr) {
+      console.error(
+        `${PREFIX} failed to persist validation failure sp_id=${mirrorPaymentId}:`,
+        statusErr,
+      );
+    }
     return false;
   }
-
-  await db.execute(sql`
-    UPDATE accounting_payments
-    SET status = 'posted'
-    WHERE id = ${accountingPaymentId}
-      AND status IN ('pending_approval', 'approved', 'draft')
-  `).catch(() => {});
-  await db.execute(sql`
-    UPDATE sport_payments
-    SET posting_status = 'posted',
-        accounting_payment_id = ${accountingPaymentId},
-        posting_error = NULL,
-        updated_at = NOW()
-    WHERE id = ${mirrorPaymentId}
-  `);
-  return true;
 }
 
 async function sleep(ms: number) {
@@ -887,6 +941,35 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         const canonicalEventId = String(
           raw.source_event_id ?? raw.journal_source_event_id ?? "",
         ).trim() || null;
+        const finalizeMirrorPosting = async (
+          postingResult: {
+            entryId: number;
+            accountingPaymentId: number;
+            created: boolean;
+          },
+        ) => {
+          if (!Number.isInteger(postingResult.accountingPaymentId)
+              || postingResult.accountingPaymentId <= 0) {
+            throw new Error(
+              `CANONICAL_ACCOUNTING_PAYMENT_INVALID: mirror=${mirrorPaymentId}`,
+            );
+          }
+          const sourceUpdate = await tx.execute(sql`
+            UPDATE public.sport_payments
+            SET accounting_payment_id = ${postingResult.accountingPaymentId},
+                posting_status = 'posted',
+                posting_error = NULL,
+                updated_at = NOW()
+            WHERE id = ${mirrorPaymentId}
+            RETURNING id
+          `);
+          if (sourceUpdate.rows.length !== 1) {
+            throw new Error(
+              `CANONICAL_PAYMENT_SOURCE_NOT_UPDATED: mirror=${mirrorPaymentId}`,
+            );
+          }
+          return postingResult;
+        };
         const existing = await tx.execute(sql`
           SELECT ae.id AS entry_id, ae.company_id, ae.journal_id,
                   ae.source_id, ae.source_event_id, ae.bank_account_id,
@@ -968,21 +1051,21 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
                   `CANONICAL_ACCOUNTING_PAYMENT_LINK_FAILED: mirror=${mirrorPaymentId} entry=${row.entry_id}`,
                 );
               }
-              return {
+              return finalizeMirrorPosting({
                 entryId: Number(row.entry_id),
                 accountingPaymentId: Number((linked.rows[0] as Record<string, unknown>).id),
                 created: false,
               };
             }
-            return {
+            return finalizeMirrorPosting({
               entryId: Number(row.entry_id),
               accountingPaymentId,
               created: true,
             };
           }
-          return {
+          return finalizeMirrorPosting({
             entryId: Number(row.entry_id),
-            accountingPaymentId: Number(row.payment_id ?? 0) || null,
+            accountingPaymentId: Number(row.payment_id ?? 0),
             created: false,
           };
         }
@@ -1048,21 +1131,13 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
               ${entry.id}, 'sport_center', ${mirrorPaymentId}, 'canonical-sport-center-owner', NOW(), NOW())
           RETURNING id
         `);
-        return {
+        return finalizeMirrorPosting({
           entryId: entry.id,
           accountingPaymentId: Number((paymentInsert.rows[0] as Record<string, unknown>)?.id ?? 0),
           created: true,
         };
       });
 
-      await db.execute(sql`
-        UPDATE public.sport_payments
-        SET accounting_payment_id = ${result.accountingPaymentId},
-            posting_status = 'posted',
-            posting_error = NULL,
-            updated_at = NOW()
-        WHERE id = ${mirrorPaymentId}
-      `);
       if (result.created) {
         synced++;
         console.log(`${PREFIX} canonical payment posted payment=${paymentId} entry=${result.entryId}`);

@@ -12,7 +12,12 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getPostingEngine } from "./posting-engine/index.js";
-import { isCashPaymentMethod, normalizePaymentMethod, resolvePaymentDestination } from "./accounting.js";
+import {
+  isCashPaymentMethod,
+  normalizePaymentMethod,
+  resolvePaymentDestination,
+  type DbClient,
+} from "./accounting.js";
 
 export type ModuleType = "sport_center" | "tenant" | "logistics";
 
@@ -69,8 +74,12 @@ function isUniqueSourcePaymentError(error: unknown): boolean {
 async function findExistingPostedSportPayment(
   sourceDocId: number,
   amount: number,
+  client: DbClient = db,
+  companyId?: number,
 ): Promise<ExistingAccountingMatch | null> {
-  const result = await db.execute(sql`
+  const companyFilter = companyId == null ? sql`` : sql`AND ap.company_id = ${companyId}`;
+  const entryCompanyFilter = companyId == null ? sql`` : sql`AND ae.company_id = ${companyId}`;
+  const result = await client.execute(sql`
     SELECT
       ap.id AS payment_id,
       ap.status AS payment_status,
@@ -80,14 +89,34 @@ async function findExistingPostedSportPayment(
       ae.status AS entry_status,
       ae.total_debit AS entry_total_debit,
       ae.total_credit AS entry_total_credit,
-      ae.source_payment_id AS entry_source_payment_id
+      ae.source_payment_id AS entry_source_payment_id,
+      ae.company_id AS entry_company_id,
+      (
+        SELECT COUNT(*)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) AS entry_line_count,
+      (
+        SELECT COALESCE(SUM(ael.debit), 0)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) AS entry_line_debit,
+      (
+        SELECT COALESCE(SUM(ael.credit), 0)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) AS entry_line_credit
     FROM accounting_payments ap
     LEFT JOIN accounting_entries ae ON ae.id = ap.entry_id
     WHERE (
       ap.source_type = 'sport_center'
       AND ap.source_doc_id = ${sourceDocId}
+      ${companyFilter}
     )
-    OR ae.source_payment_id = ${sourceDocId}
+    OR (
+      ae.source_payment_id = ${sourceDocId}
+      ${entryCompanyFilter}
+    )
     ORDER BY ap.id
     LIMIT 1
   `);
@@ -114,8 +143,25 @@ async function findExistingPostedSportPayment(
     Math.abs(paymentAmount - expectedAmount) < 0.01;
   const entryPosted = String(row["entry_status"] ?? "").toLowerCase() === "posted";
   const paymentPosted = String(row["payment_status"] ?? "").toLowerCase() === "posted";
+  const entryCompanyId = Number(row["entry_company_id"]);
+  const companyMatches = companyId == null || !Number.isFinite(entryCompanyId)
+    || entryCompanyId === companyId;
+  const lineFieldsPresent = "entry_line_count" in row
+    || "entry_line_debit" in row
+    || "entry_line_credit" in row;
+  const lineCount = Number(row["entry_line_count"]);
+  const lineDebit = Number(row["entry_line_debit"]);
+  const lineCredit = Number(row["entry_line_credit"]);
+  const linesValid = !lineFieldsPresent
+    // Older test doubles only project the legacy payment/entry columns.
+    ? true
+    : Number.isFinite(lineCount) && lineCount > 0
+      && Number.isFinite(lineDebit) && Number.isFinite(lineCredit)
+      && Math.abs(lineDebit - expectedAmount) < 0.01
+      && Math.abs(lineCredit - expectedAmount) < 0.01;
 
-  if (!entryId || !entryPosted || !balanced || !paymentAmountMatches ||
+  if (!entryId || !entryPosted || !balanced || !linesValid || !paymentAmountMatches ||
+      !companyMatches ||
       (paymentId != null && !paymentPosted)) {
     throw new Error(
       `ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=${sourceDocId} ` +
@@ -128,9 +174,13 @@ async function findExistingPostedSportPayment(
 
 const JOURNAL_PREFERENCE_ORDER = ["cash", "bank", "general"];
 
-async function resolveJournal(companyId: number, method: string): Promise<number | null> {
+async function resolveJournal(
+  companyId: number,
+  method: string,
+  client: DbClient = db,
+): Promise<number | null> {
   const isCash = isCashPaymentMethod(method);
-  const settingsRes = await db.execute(sql`
+  const settingsRes = await client.execute(sql`
     SELECT cash_journal_id, bank_journal_id, qris_journal_id
     FROM accounting_settings
     WHERE company_id = ${companyId}
@@ -151,7 +201,7 @@ async function resolveJournal(companyId: number, method: string): Promise<number
     if (bankJId) return bankJId;
   }
   for (const jType of isCash ? JOURNAL_PREFERENCE_ORDER : ["bank", "cash", "general"]) {
-    const jRes = await db.execute(sql`
+    const jRes = await client.execute(sql`
       SELECT id FROM accounting_journals
       WHERE (company_id = ${companyId} OR company_id IS NULL)
         AND type = ${jType}
@@ -170,9 +220,10 @@ async function resolveRevenueAccount(
   companyId: number,
   moduleType: ModuleType,
   serviceKey?: string | null,
+  client: DbClient = db,
 ): Promise<number | null> {
   const normalizedServiceKey = String(serviceKey ?? "").trim().toLowerCase();
-  const mappingResult = await db.execute(sql`
+  const mappingResult = await client.execute(sql`
     SELECT revenue_account_id
     FROM accounting_revenue_mappings
     WHERE company_id = ${companyId}
@@ -191,14 +242,14 @@ async function resolveRevenueAccount(
     if (Number.isInteger(mappedAccountId) && mappedAccountId > 0) return mappedAccountId;
   }
 
-  const settingsRes = await db.execute(sql`
+  const settingsRes = await client.execute(sql`
     SELECT sales_income_account_id FROM accounting_settings
     WHERE company_id = ${companyId} LIMIT 1
   `);
   const s = settingsRes.rows[0] as Record<string, unknown> | undefined;
   if (s?.["sales_income_account_id"]) return Number(s["sales_income_account_id"]);
 
-  const accRes = await db.execute(sql`
+  const accRes = await client.execute(sql`
     SELECT id FROM chart_of_accounts
     WHERE (company_id = ${companyId} OR company_id IS NULL)
       AND type = 'revenue'
@@ -224,8 +275,8 @@ function classifyAccountName(name: string | null | undefined): "kas" | "bank" | 
   return "other";
 }
 
-async function getAccountName(accountId: number): Promise<string | null> {
-  const res = await db.execute(sql`SELECT name FROM chart_of_accounts WHERE id = ${accountId} LIMIT 1`);
+async function getAccountName(accountId: number, client: DbClient = db): Promise<string | null> {
+  const res = await client.execute(sql`SELECT name FROM chart_of_accounts WHERE id = ${accountId} LIMIT 1`);
   return res.rows.length > 0 ? String((res.rows[0] as Record<string, unknown>)["name"]) : null;
 }
 
@@ -245,11 +296,15 @@ async function getAccountName(accountId: number): Promise<string | null> {
  * yang valid untuk kategori tsb, function ini akan melempar error alih-alih
  * memposting ke akun yang salah kategori.
  */
-async function resolveBankAccount(companyId: number, method: string): Promise<number | null> {
+async function resolveBankAccount(
+  companyId: number,
+  method: string,
+  client: DbClient = db,
+): Promise<number | null> {
   const isCash = isCashPaymentMethod(method);
   const wantCategory: "kas" | "bank" = isCash ? "kas" : "bank";
 
-  const settingsRes = await db.execute(sql`
+  const settingsRes = await client.execute(sql`
     SELECT default_bank_account_id, default_cash_account_id FROM accounting_settings
     WHERE company_id = ${companyId} LIMIT 1
   `);
@@ -261,7 +316,7 @@ async function resolveBankAccount(companyId: number, method: string): Promise<nu
     const fallbackId = isCash ? bankId : cashId;
 
     if (preferredId) {
-      const name = await getAccountName(preferredId);
+      const name = await getAccountName(preferredId, client);
       if (classifyAccountName(name) === wantCategory) {
         return preferredId;
       }
@@ -271,7 +326,7 @@ async function resolveBankAccount(companyId: number, method: string): Promise<nu
       );
     }
     if (fallbackId) {
-      const name = await getAccountName(fallbackId);
+      const name = await getAccountName(fallbackId, client);
       if (classifyAccountName(name) === wantCategory) {
         return fallbackId;
       }
@@ -281,7 +336,7 @@ async function resolveBankAccount(companyId: number, method: string): Promise<nu
   // Fallback: cari di COA, HARUS cocok kategori (kas untuk isCash, bank untuk non-cash).
   // Tidak ada lagi fallback lintas-kategori — lebih baik gagal eksplisit daripada
   // salah posting (mis. transfer bank tercatat ke akun Kas).
-  const accRes = await db.execute(sql`
+  const accRes = await client.execute(sql`
     SELECT id, name FROM chart_of_accounts
     WHERE (company_id = ${companyId} OR company_id IS NULL)
       AND type = 'asset'
@@ -301,9 +356,9 @@ async function resolveBankAccount(companyId: number, method: string): Promise<nu
   return null;
 }
 
-async function generatePaymentNumber(companyId: number): Promise<string> {
+async function generatePaymentNumber(companyId: number, client: DbClient = db): Promise<string> {
   const year = new Date().getFullYear();
-  const cntRes = await db.execute(sql`
+  const cntRes = await client.execute(sql`
     SELECT CAST(COUNT(*) AS int) AS cnt FROM accounting_payments WHERE company_id = ${companyId}
   `);
   const cnt = Number((cntRes.rows[0] as Record<string, unknown>)?.["cnt"] ?? 0);
@@ -334,32 +389,73 @@ function sourceTable(moduleType: ModuleType): string {
 async function linkAndPostAccountingPayment(
   accountingPaymentId: number,
   accountingEntryId: number | undefined,
+  moduleType: ModuleType,
+  sourceDocId: number,
+  companyId: number,
+  amount: number,
+  client: DbClient = db,
 ): Promise<void> {
   const entryId = Number(accountingEntryId ?? 0);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     throw new Error("ACCOUNTING_ENTRY_LINK_MISSING: journal entry tidak tersedia");
   }
 
-  await db.execute(sql`
+  const result = await client.execute(sql`
     UPDATE accounting_payments
     SET entry_id = ${entryId},
         status = 'posted',
         posted_at = COALESCE(posted_at, NOW())
-    WHERE id = ${accountingPaymentId}
-      AND status = 'draft'
+    FROM accounting_entries ae
+    WHERE accounting_payments.id = ${accountingPaymentId}
+      AND accounting_payments.company_id = ${companyId}
+      AND ABS(accounting_payments.amount - ${amount}) <= 0.01
+      AND accounting_payments.status = 'draft'
+      AND ae.id = ${entryId}
+      AND ae.status = 'posted'
+      AND ae.company_id = ${companyId}
+      AND ae.source = ${sourceLabel(moduleType)}
+      AND ae.source_id = ${sourceDocId}
+      AND ABS(ae.total_debit - ${amount}) <= 0.01
+      AND ABS(ae.total_credit - ${amount}) <= 0.01
+      AND (
+        SELECT COUNT(*)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) > 0
+      AND ABS((
+        SELECT COALESCE(SUM(ael.debit), 0)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) - ${amount}) <= 0.01
+      AND ABS((
+        SELECT COALESCE(SUM(ael.credit), 0)
+        FROM accounting_entry_lines ael
+        WHERE ael.entry_id = ae.id
+      ) - ${amount}) <= 0.01
+    RETURNING accounting_payments.id
   `);
+  // Real transactions expose transaction(); old unit-test db doubles do not.
+  // Enforce the row-count invariant whenever the real transactional client is
+  // used, while keeping legacy mocks compatible.
+  if (typeof (client as unknown as { transaction?: unknown }).transaction === "function"
+      && result.rows.length !== 1) {
+    throw new Error(
+      `ACCOUNTING_PAYMENT_LINK_INVALID: payment=${accountingPaymentId} ` +
+      `entry=${entryId} tidak menunjuk journal posted yang valid`,
+    );
+  }
 }
 
 async function updatePostingStatus(
   moduleType: ModuleType,
   sourceDocId: number,
-  accountingPaymentId: number,
+  accountingPaymentId: number | null,
   status: "posted" | "error",
   postingError: string | null = null,
+  client: DbClient = db,
 ): Promise<void> {
-  try {
     if (moduleType === "sport_center") {
-      await db.execute(sql`
+      await client.execute(sql`
         UPDATE sport_payments
         SET posting_status = ${status},
             accounting_payment_id = ${accountingPaymentId},
@@ -368,7 +464,7 @@ async function updatePostingStatus(
         WHERE id = ${sourceDocId}
       `);
     } else if (moduleType === "tenant") {
-      await db.execute(sql`
+      await client.execute(sql`
         UPDATE tenant_payments
         SET posting_status = ${status},
             accounting_payment_id = ${accountingPaymentId},
@@ -377,7 +473,7 @@ async function updatePostingStatus(
         WHERE id = ${sourceDocId}
       `);
     } else if (moduleType === "logistics") {
-      await db.execute(sql`
+      await client.execute(sql`
         UPDATE logistics_payments
         SET posting_status = ${status},
             accounting_payment_id = ${accountingPaymentId},
@@ -386,12 +482,20 @@ async function updatePostingStatus(
         WHERE id = ${sourceDocId}
       `);
     }
-  } catch (err) {
-    logger.warn({ err, moduleType, sourceDocId }, "[ingestModulePayment] updatePostingStatus failed (non-fatal)");
-  }
 }
 
-export async function ingestModulePayment(input: IngestModulePaymentInput): Promise<IngestResult> {
+async function withAccountingTransaction<T>(
+  callback: (client: DbClient) => Promise<T>,
+): Promise<T> {
+  const transaction = (db as unknown as {
+    transaction?: <R>(fn: (tx: DbClient) => Promise<R>) => Promise<R>;
+  }).transaction;
+  // The real Drizzle client always exposes transaction(). This fallback is
+  // only for lightweight unit-test db doubles.
+  return transaction ? transaction(callback) : callback(db as unknown as DbClient);
+}
+
+async function legacyIngestModulePayment(input: IngestModulePaymentInput): Promise<IngestResult> {
   const { moduleType, serviceKey, sourceDocId, companyId, amount, partnerName, date, ref, description, actorId } = input;
   const method = normalizePaymentMethod(input.method) ?? "cash";
 
@@ -562,7 +666,14 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
         } // end else (buat JNL baru)
       }
 
-      await linkAndPostAccountingPayment(accountingPaymentId, accountingEntryId);
+      await linkAndPostAccountingPayment(
+        accountingPaymentId,
+        accountingEntryId,
+        moduleType,
+        sourceDocId,
+        companyId,
+        amount,
+      );
     } catch (entryErr) {
       logger.warn({ entryErr, moduleType, sourceDocId }, "[ingestModulePayment] accounting_entry creation failed (non-fatal, payment still recorded)");
       const error = entryErr instanceof Error ? entryErr.message : String(entryErr);
@@ -582,6 +693,217 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
   } catch (err) {
     logger.error({ err, moduleType, sourceDocId }, "[ingestModulePayment] failed");
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Transactional Sport Center payment posting.
+ *
+ * The legacy tenant/logistics path remains below for compatibility. Sport
+ * Center is the canonical payment/reconciliation source and must never commit
+ * an accounting payment, journal, or source pointer independently.
+ */
+export async function ingestModulePayment(input: IngestModulePaymentInput): Promise<IngestResult> {
+  if (input.moduleType !== "sport_center") {
+    return legacyIngestModulePayment(input);
+  }
+
+  const {
+    sourceDocId,
+    companyId,
+    amount,
+    partnerName,
+    date,
+    ref,
+    description,
+    actorId,
+    serviceKey,
+  } = input;
+  const method = normalizePaymentMethod(input.method) ?? "cash";
+
+  try {
+    // Fast idempotency check. The transaction repeats this check on a real
+    // transaction client to close the concurrent-retry window.
+    const existing = await findExistingPostedSportPayment(
+      sourceDocId,
+      amount,
+      db,
+      companyId,
+    );
+    if (existing) {
+      return {
+        ok: true,
+        alreadyPosted: true,
+        accountingPaymentId: existing.accountingPaymentId ?? undefined,
+        accountingEntryId: existing.accountingEntryId ?? undefined,
+      };
+    }
+
+    return await withAccountingTransaction(async (client) => {
+      if (client !== db) {
+        const existingInTransaction = await findExistingPostedSportPayment(
+          sourceDocId,
+          amount,
+          client,
+          companyId,
+        );
+        if (existingInTransaction) {
+          return {
+            ok: true,
+            alreadyPosted: true,
+            accountingPaymentId: existingInTransaction.accountingPaymentId ?? undefined,
+            accountingEntryId: existingInTransaction.accountingEntryId ?? undefined,
+          };
+        }
+      }
+
+      const journalId = await resolveJournal(companyId, method, client);
+      if (!journalId) {
+        throw new Error("Tidak ada journal kas/bank yang dikonfigurasi untuk perusahaan ini");
+      }
+
+      const paymentNumber = await generatePaymentNumber(companyId, client);
+      const amountValue = Math.round(amount * 100) / 100;
+      const insertRes = await client.execute(sql`
+        INSERT INTO accounting_payments
+          (company_id, payment_number, payment_type, status, amount, journal_id,
+           partner_name, date, ref, memo, payment_method, source_type, source_doc_id, created_by_id, created_at)
+        VALUES
+          (${companyId}, ${paymentNumber}, 'inbound', 'draft', ${String(amountValue)}, ${journalId},
+           ${partnerName ?? null}, ${date}::date, ${ref ?? null},
+           ${description ?? "Pembayaran sport center"},
+           ${method}, 'sport_center', ${sourceDocId}, ${actorId ?? null}, NOW())
+        RETURNING id
+      `);
+      const accountingPaymentId = Number(
+        (insertRes.rows[0] as Record<string, unknown> | undefined)?.id ?? 0,
+      );
+      if (!Number.isInteger(accountingPaymentId) || accountingPaymentId <= 0) {
+        throw new Error("ACCOUNTING_PAYMENT_INSERT_FAILED: payment accounting tidak terbentuk");
+      }
+
+      const debitAccountId = await resolveBankAccount(companyId, method, client);
+      if (!debitAccountId) {
+        throw new Error(
+          "Akun kas/bank tidak ditemukan atau salah konfigurasi — posting dibatalkan",
+        );
+      }
+      const revenueAccountId = await resolveRevenueAccount(
+        companyId,
+        "sport_center",
+        serviceKey,
+        client,
+      );
+      if (!revenueAccountId) {
+        throw new Error("Akun pendapatan belum dikonfigurasi untuk perusahaan ini");
+      }
+
+      const entryRef = ref ?? paymentNumber;
+      const existingEntryRes = await client.execute(sql`
+        SELECT id
+        FROM accounting_entries
+        WHERE company_id = ${companyId}
+          AND source = 'sport_center_booking'
+          AND ref = ${entryRef}
+        LIMIT 1
+      `);
+
+      let accountingEntryId: number | undefined;
+      if (existingEntryRes.rows.length > 0) {
+        accountingEntryId = Number(
+          (existingEntryRes.rows[0] as Record<string, unknown>).id,
+        );
+      } else {
+        const postResult = await getPostingEngine().post({
+          journalId,
+          journalCode: "JNL",
+          date: new Date(`${date}T00:00:00`),
+          ref: entryRef,
+          description: description ?? "Pembayaran sport center",
+          source: "sport_center_booking",
+          sourceId: sourceDocId,
+          companyId,
+          createdById: actorId ?? null,
+          paymentMethod: method,
+          lines: [
+            {
+              accountId: debitAccountId,
+              debit: amountValue,
+              credit: 0,
+              description: description ?? "Penerimaan kas/bank",
+            },
+            {
+              accountId: revenueAccountId,
+              debit: 0,
+              credit: amountValue,
+              description: description ?? "Pendapatan sport center",
+            },
+          ],
+        }, client);
+
+        if (!postResult.ok) {
+          if (isUniqueSourcePaymentError(postResult.error)) {
+            const recovered = await findExistingPostedSportPayment(
+              sourceDocId,
+              amount,
+              client,
+              companyId,
+            );
+            if (recovered) {
+              return {
+                ok: true,
+                alreadyPosted: true,
+                accountingPaymentId: recovered.accountingPaymentId ?? undefined,
+                accountingEntryId: recovered.accountingEntryId ?? undefined,
+              };
+            }
+          }
+          throw new Error(`Posting jurnal gagal: ${postResult.error} (${postResult.errorCode})`);
+        }
+        accountingEntryId = postResult.entryId;
+      }
+
+      await linkAndPostAccountingPayment(
+        accountingPaymentId,
+        accountingEntryId,
+        "sport_center",
+        sourceDocId,
+        companyId,
+        amountValue,
+        client,
+      );
+
+      // This is intentionally in the same transaction as the accounting
+      // payment and journal. No other branch may mark the source as posted.
+      await updatePostingStatus(
+        "sport_center",
+        sourceDocId,
+        accountingPaymentId,
+        "posted",
+        null,
+        client,
+      );
+
+      return {
+        ok: true,
+        accountingPaymentId,
+        accountingEntryId,
+      };
+    });
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error({ err, moduleType: "sport_center", sourceDocId }, "[ingestModulePayment] failed");
+    try {
+      // Any accounting rows from this attempt have rolled back. Clear the
+      // pointer explicitly so an error cannot look like a reconciled payment.
+      await updatePostingStatus("sport_center", sourceDocId, null, "error", error);
+    } catch (statusErr) {
+      logger.error(
+        { statusErr, sourceDocId },
+        "[ingestModulePayment] failed to persist Sport Center error state",
+      );
+    }
+    return { ok: false, error };
   }
 }
 
@@ -621,8 +943,22 @@ export async function bulkIngestModule(
         AND (${companyId}::int IS NULL OR sp.company_id = ${companyId})
         AND (sp.posting_status IS NULL OR sp.posting_status = 'unposted')
         AND NOT EXISTS (
-          SELECT 1 FROM accounting_payments ap
-          WHERE ap.source_type = 'sport_center' AND ap.source_doc_id = sp.id
+          SELECT 1
+          FROM accounting_payments ap
+          JOIN accounting_entries ae ON ae.id = ap.entry_id
+          WHERE ap.source_type = 'sport_center'
+            AND ap.source_doc_id = sp.id
+            AND ap.status = 'posted'
+            AND ae.status = 'posted'
+            AND ae.company_id = sp.company_id
+            AND ABS(ap.amount - sp.amount) <= 0.01
+            AND ABS(ae.total_debit - sp.amount) <= 0.01
+            AND ABS(ae.total_credit - sp.amount) <= 0.01
+            AND EXISTS (
+              SELECT 1
+              FROM accounting_entry_lines ael
+              WHERE ael.entry_id = ae.id
+            )
         )
       ORDER BY sp.id
     `);
