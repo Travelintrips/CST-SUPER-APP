@@ -62,36 +62,40 @@ function makeSportPaymentRow(overrides: Record<string, unknown> = {}): Record<st
 }
 
 /**
- * Seeds mockExecute with the 11 sequential responses that represent
+ * Seeds mockExecute with the 13 sequential responses that represent
  * a single sport_center payment being successfully posted end-to-end.
  *
  * Call order inside bulkIngestModule('sport_center') + ingestModulePayment:
  *  1.  SELECT sport_payments JOIN sport_bookings (bulk candidates)
  *  2.  SELECT accounting_payments (alreadyPosted idempotency check)
- *  3.  SELECT accounting_settings   → resolveJournal (bank_journal_id)
- *  4.  SELECT COUNT accounting_payments → generatePaymentNumber
- *  5.  INSERT accounting_payments RETURNING id
- *  6.  SELECT accounting_settings   → resolveBankAccount (bank account)
- *  7.  SELECT chart_of_accounts name → getAccountName (validate "bank")
- *  8.  SELECT accounting_settings   → resolveRevenueAccount
- *  9.  SELECT accounting_entries    → idempotency check before posting
+ *  3.  SELECT accounting_payments (transaction-local idempotency check)
+ *  4.  SELECT accounting_settings   → resolveJournal (bank_journal_id)
+ *  5.  SELECT COUNT accounting_payments → generatePaymentNumber
+ *  6.  INSERT accounting_payments RETURNING id
+ *  7.  SELECT accounting_settings   → resolveBankAccount (bank account)
+ *  8.  SELECT chart_of_accounts name → getAccountName (validate "bank")
+ *  9.  SELECT accounting_revenue_mappings → no service override
+ * 10.  SELECT accounting_settings   → resolveRevenueAccount
+ * 11.  SELECT accounting_entries    → idempotency check before posting
  *       (getPostingEngine().post() mocked separately)
- * 10.  UPDATE accounting_payments SET entry_id
- * 11.  UPDATE sport_payments SET posting_status = 'posted'
+ * 12.  UPDATE accounting_payments SET entry_id
+ * 13.  UPDATE sport_payments SET posting_status = 'posted'
  */
 function seedHappyPath(row: Record<string, unknown> = makeSportPaymentRow()): void {
   mockExecute
     .mockResolvedValueOnce({ rows: [row] })                                             // 1
-    .mockResolvedValueOnce({ rows: [] })                                                // 2
-    .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })   // 3
-    .mockResolvedValueOnce({ rows: [{ cnt: 2 }] })                                     // 4
-    .mockResolvedValueOnce({ rows: [{ id: 501 }] })                                    // 5
-    .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
-    .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                           // 7
-    .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                // 8
-    .mockResolvedValueOnce({ rows: [] })                                               // 9
-    .mockResolvedValueOnce({ rows: [] })                                               // 10
-    .mockResolvedValueOnce({ rows: [] });                                              // 11
+    .mockResolvedValueOnce({ rows: [] })                                                // 2 fast idempotency
+    .mockResolvedValueOnce({ rows: [] })                                                // 3 transaction idempotency
+    .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })   // 4
+    .mockResolvedValueOnce({ rows: [{ cnt: 2 }] })                                     // 5
+    .mockResolvedValueOnce({ rows: [{ id: 501 }] })                                    // 6
+    .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 7
+    .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] })                           // 8
+    .mockResolvedValueOnce({ rows: [] })                                               // 9 mapping
+    .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                // 10
+    .mockResolvedValueOnce({ rows: [] })                                               // 11
+    .mockResolvedValueOnce({ rows: [] })                                               // 12
+    .mockResolvedValueOnce({ rows: [] });                                              // 13
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -99,6 +103,8 @@ function seedHappyPath(row: Record<string, unknown> = makeSportPaymentRow()): vo
 describe("bulkIngestModule('sport_center') — sport center payments accounting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecute.mockReset();
+    mockPost.mockReset();
     mockPost.mockResolvedValue({ ok: true, entryId: 801 });
   });
 
@@ -221,13 +227,15 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
     });
     mockExecute
       .mockResolvedValueOnce({ rows: [makeSportPaymentRow({ id: 268, amount: "700000" })] }) // candidates
-      .mockResolvedValueOnce({ rows: [] }) // pre-insert idempotency check
+      .mockResolvedValueOnce({ rows: [] }) // fast idempotency check
+      .mockResolvedValueOnce({ rows: [] }) // transaction idempotency check
       .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] }) // journal
       .mockResolvedValueOnce({ rows: [{ cnt: 2 }] }) // payment number
       .mockResolvedValueOnce({ rows: [{ id: 5777 }] }) // accounting payment insert
       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // bank account
       .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] }) // account name
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] }) // revenue
+      .mockResolvedValueOnce({ rows: [] }) // revenue mapping
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] }) // revenue settings
       .mockResolvedValueOnce({ rows: [] }) // entry by ref
       .mockResolvedValueOnce({ // re-read after unique race
         rows: [{
@@ -272,11 +280,12 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
   it("increments errors count and does not call posting engine when no journal is configured", async () => {
     mockExecute
       .mockResolvedValueOnce({ rows: [makeSportPaymentRow({ id: 9, payment_number: "SPT-009", amount: "150000" })] }) // 1
-      .mockResolvedValueOnce({ rows: [] })                                              // 2. not yet posted
-      .mockResolvedValueOnce({ rows: [{ cash_journal_id: null, bank_journal_id: null }] }) // 3. no journals in settings
-      .mockResolvedValueOnce({ rows: [] })                                              // 4. fallback: no bank journal
-      .mockResolvedValueOnce({ rows: [] })                                              // 5. fallback: no cash journal
-      .mockResolvedValueOnce({ rows: [] });                                             // 6. fallback: no general journal
+      .mockResolvedValueOnce({ rows: [] })                                              // 2. fast idempotency
+      .mockResolvedValueOnce({ rows: [] })                                              // 3. transaction idempotency
+      .mockResolvedValueOnce({ rows: [{ cash_journal_id: null, bank_journal_id: null }] }) // 4. no journals in settings
+      .mockResolvedValueOnce({ rows: [] })                                              // 5. fallback: no bank journal
+      .mockResolvedValueOnce({ rows: [] })                                              // 6. fallback: no cash journal
+      .mockResolvedValueOnce({ rows: [] });                                             // 7. fallback: no general journal
 
     const result = await bulkIngestModule("sport_center", 1);
 
@@ -292,16 +301,18 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
     const cashRow = makeSportPaymentRow({ method: "tunai", amount: "80000" });
     mockExecute
       .mockResolvedValueOnce({ rows: [cashRow] })                                       // 1
-      .mockResolvedValueOnce({ rows: [] })                                              // 2
-      .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] }) // 3
-      .mockResolvedValueOnce({ rows: [{ cnt: 1 }] })                                   // 4
-      .mockResolvedValueOnce({ rows: [{ id: 502 }] })                                  // 5
-      .mockResolvedValueOnce({ rows: [{ default_bank_account_id: null, default_cash_account_id: 30 }] }) // 6
-      .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                 // 7
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })              // 8
-      .mockResolvedValueOnce({ rows: [] })                                              // 9
-      .mockResolvedValueOnce({ rows: [] })                                              // 10
-      .mockResolvedValueOnce({ rows: [] });                                             // 11
+      .mockResolvedValueOnce({ rows: [] })                                              // 2 fast idempotency
+      .mockResolvedValueOnce({ rows: [] })                                              // 3 transaction idempotency
+      .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] }) // 4
+      .mockResolvedValueOnce({ rows: [{ cnt: 1 }] })                                   // 5
+      .mockResolvedValueOnce({ rows: [{ id: 502 }] })                                  // 6
+      .mockResolvedValueOnce({ rows: [{ default_bank_account_id: null, default_cash_account_id: 30 }] }) // 7
+      .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                 // 8
+      .mockResolvedValueOnce({ rows: [] })                                              // 9 revenue mapping
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })              // 10
+      .mockResolvedValueOnce({ rows: [] })                                              // 11
+      .mockResolvedValueOnce({ rows: [] })                                              // 12
+      .mockResolvedValueOnce({ rows: [] });                                             // 13
 
     const result = await bulkIngestModule("sport_center", 1);
 
@@ -335,33 +346,37 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
     // "Kas Sport Center" (kas category, not bank). The safeguard must reject it and fall
     // back to the COA query which finds a real bank account (id 55).
     //
-    // DB call sequence (12 total):
+     // DB call sequence (14 total):
     //  1.  SELECT sport_payments JOIN sport_bookings (bulk candidates)
-    //  2.  SELECT accounting_payments (alreadyPosted check)
-    //  3.  SELECT accounting_settings → resolveJournal
-    //  4.  SELECT COUNT accounting_payments → generatePaymentNumber
-    //  5.  INSERT accounting_payments RETURNING id
-    //  6.  SELECT accounting_settings → resolveBankAccount (bank + cash ids)
-    //  7.  SELECT chart_of_accounts name (getAccountName for id 50) → "Kas Sport Center" ❌
-    //       (fallbackId = null → skip fallback check)
-    //  8.  SELECT chart_of_accounts (COA fallback for '%bank%') → [{ id: 55, name: "Bank BNI" }]
-    //  9.  SELECT accounting_settings → resolveRevenueAccount
-    //  10. SELECT accounting_entries → idempotency check
-    //  11. UPDATE accounting_payments SET entry_id
-    //  12. UPDATE sport_payments SET posting_status
+     //  2.  SELECT accounting_payments (fast idempotency check)
+     //  3.  SELECT accounting_payments (transaction idempotency check)
+     //  4.  SELECT accounting_settings → resolveJournal
+     //  5.  SELECT COUNT accounting_payments → generatePaymentNumber
+     //  6.  INSERT accounting_payments RETURNING id
+     //  7.  SELECT accounting_settings → resolveBankAccount (bank + cash ids)
+     //  8.  SELECT chart_of_accounts name (getAccountName for id 50) → "Kas Sport Center" ❌
+     //       (fallbackId = null → skip fallback check)
+     //  9.  SELECT chart_of_accounts (COA fallback for '%bank%') → [{ id: 55, name: "Bank BNI" }]
+     //  10. SELECT accounting_revenue_mappings → no service override
+     //  11. SELECT accounting_settings → resolveRevenueAccount
+     //  12. SELECT accounting_entries → idempotency check
+     //  13. UPDATE accounting_payments SET entry_id
+     //  14. UPDATE sport_payments SET posting_status
     mockExecute
       .mockResolvedValueOnce({ rows: [makeSportPaymentRow()] })                                         // 1
-      .mockResolvedValueOnce({ rows: [] })                                                               // 2
-      .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })                   // 3
-      .mockResolvedValueOnce({ rows: [{ cnt: 5 }] })                                                     // 4
-      .mockResolvedValueOnce({ rows: [{ id: 503 }] })                                                    // 5
-      .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
-      .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                                   // 7  ← wrong category
-      .mockResolvedValueOnce({ rows: [{ id: 55, name: "Bank BNI" }] })                                   // 8  COA fallback
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 9
-      .mockResolvedValueOnce({ rows: [] })                                                               // 10
-      .mockResolvedValueOnce({ rows: [] })                                                               // 11
-      .mockResolvedValueOnce({ rows: [] });                                                              // 12
+       .mockResolvedValueOnce({ rows: [] })                                                               // 2 fast idempotency
+       .mockResolvedValueOnce({ rows: [] })                                                               // 3 transaction idempotency
+       .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })                   // 4
+       .mockResolvedValueOnce({ rows: [{ cnt: 5 }] })                                                     // 5
+       .mockResolvedValueOnce({ rows: [{ id: 503 }] })                                                    // 6
+       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 7
+       .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                                   // 8  ← wrong category
+       .mockResolvedValueOnce({ rows: [{ id: 55, name: "Bank BNI" }] })                                   // 9  COA fallback
+       .mockResolvedValueOnce({ rows: [] })                                                               // 10 revenue mapping
+       .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 11
+       .mockResolvedValueOnce({ rows: [] })                                                               // 12
+       .mockResolvedValueOnce({ rows: [] })                                                               // 13
+       .mockResolvedValueOnce({ rows: [] });                                                              // 14
 
     const result = await bulkIngestModule("sport_center", 1);
 
@@ -419,27 +434,32 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
     // AND the COA '%bank%' query returns nothing. resolveBankAccount returns null.
     // The posting engine must NOT be called; the payment row is still recorded.
     //
-    // DB call sequence (10 total):
+     // DB call sequence (at least 10 total; transaction-local checks included):
     //  1.  SELECT sport_payments JOIN sport_bookings
-    //  2.  SELECT accounting_payments
-    //  3.  SELECT accounting_settings → resolveJournal
-    //  4.  SELECT COUNT accounting_payments → generatePaymentNumber
-    //  5.  INSERT accounting_payments RETURNING id
-    //  6.  SELECT accounting_settings → resolveBankAccount
-    //  7.  SELECT chart_of_accounts name (getAccountName for id 50) → "Kas Sport Center" ❌
-    //  8.  SELECT chart_of_accounts (COA fallback) → [] (none)
-    //  9.  UPDATE sport_payments SET posting_status='error', posting_error
+     //  2.  SELECT accounting_payments (fast idempotency check)
+     //  3.  SELECT accounting_payments (transaction idempotency check)
+     //  4.  SELECT accounting_settings → resolveJournal
+     //  5.  SELECT COUNT accounting_payments → generatePaymentNumber
+     //  6.  INSERT accounting_payments RETURNING id
+     //  7.  SELECT accounting_settings → resolveBankAccount
+     //  8.  SELECT chart_of_accounts name (getAccountName for id 50) → "Kas Sport Center" ❌
+     //  9.  SELECT chart_of_accounts (COA fallback) → [] (none)
+     //  10. SELECT accounting_revenue_mappings → no service override
+     //  11. SELECT accounting_settings → resolveRevenueAccount
+     //  12. UPDATE sport_payments SET posting_status='error', posting_error
     mockExecute
       .mockResolvedValueOnce({ rows: [makeSportPaymentRow()] })                                         // 1
-      .mockResolvedValueOnce({ rows: [] })                                                               // 2
-      .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })                   // 3
-      .mockResolvedValueOnce({ rows: [{ cnt: 5 }] })                                                     // 4
-      .mockResolvedValueOnce({ rows: [{ id: 504 }] })                                                    // 5
-      .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 6
-      .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                                   // 7  ← wrong category
-      .mockResolvedValueOnce({ rows: [] })                                                               // 8  COA fallback empty
-      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 9
-      .mockResolvedValueOnce({ rows: [] });                                                              // 10 updatePostingStatus
+       .mockResolvedValueOnce({ rows: [] })                                                               // 2 fast idempotency
+       .mockResolvedValueOnce({ rows: [] })                                                               // 3 transaction idempotency
+       .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] })                   // 4
+       .mockResolvedValueOnce({ rows: [{ cnt: 5 }] })                                                     // 5
+       .mockResolvedValueOnce({ rows: [{ id: 504 }] })                                                    // 6
+       .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // 7
+       .mockResolvedValueOnce({ rows: [{ name: "Kas Sport Center" }] })                                   // 8  ← wrong category
+       .mockResolvedValueOnce({ rows: [] })                                                               // 9  COA fallback empty
+       .mockResolvedValueOnce({ rows: [] })                                                               // 10 revenue mapping
+       .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] })                                // 11
+       .mockResolvedValueOnce({ rows: [] });                                                              // 12 updatePostingStatus
 
     const result = await bulkIngestModule("sport_center", 1);
 
