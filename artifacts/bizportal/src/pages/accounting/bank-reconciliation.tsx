@@ -4474,6 +4474,9 @@ function QrisMutationCard({
         ? auditObservedDeduction
         : null;
   const storedAmountComparison = audit.auto_post_details?.amountComparison;
+  const hasSourceGrossMismatch = Boolean(
+    audit.auto_post_details?.sourceGrossMismatch,
+  );
   // The persisted auto-post diagnosis can describe an older candidate
   // snapshot. When the API has a complete live payment scope, render the
   // same gross/net figures used by the summary cards instead of mixing old
@@ -4676,7 +4679,7 @@ function QrisMutationCard({
             {audit.auto_post_status === "failed" && !canonicalStateResolved && (
               <div
                 className={`mt-3 rounded-md border px-3 py-2.5 text-xs ${
-                  liveAmountMatchesBank && amountComparisonIsStale
+                  liveAmountMatchesBank && amountComparisonIsStale && !hasSourceGrossMismatch
                     ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
                     : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950"
                 } text-black dark:text-black`}
@@ -4684,17 +4687,17 @@ function QrisMutationCard({
               >
                 <div className="flex items-start gap-2">
                   <ShieldAlert className={`mt-0.5 h-4 w-4 shrink-0 ${
-                    liveAmountMatchesBank && amountComparisonIsStale
+                    liveAmountMatchesBank && amountComparisonIsStale && !hasSourceGrossMismatch
                       ? "text-amber-600 dark:text-amber-300"
                       : "text-red-600 dark:text-red-300"
                   }`} />
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <p className="font-semibold">
-                      {liveAmountMatchesBank && amountComparisonIsStale
+                      {liveAmountMatchesBank && amountComparisonIsStale && !hasSourceGrossMismatch
                         ? "Diagnosis snapshot lama — perlu refresh kandidat"
                         : audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
                     </p>
-                    <p><strong>Apa yang salah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                    <p><strong>Apa yang salah:</strong> {liveAmountMatchesBank && amountComparisonIsStale && !hasSourceGrossMismatch
                       ? "Diagnosis tersimpan masih memakai agregat candidate lama. Perhitungan payment live sekarang sudah sama dengan nominal mutasi bank."
                       : audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
                     {audit.auto_post_details?.rootCause && (
@@ -4735,7 +4738,7 @@ function QrisMutationCard({
                     {(audit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
                       <p><strong>Field:</strong> {audit.auto_post_details?.fieldNames?.join(", ")}</p>
                     )}
-                    <p><strong>Langkah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                    <p><strong>Langkah:</strong> {liveAmountMatchesBank && amountComparisonIsStale && !hasSourceGrossMismatch
                       ? "Refresh snapshot candidate dari source payment canonical. Jangan mengubah payment atau journal posted."
                       : audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
                     {(audit.auto_post_details?.errorCode ?? audit.auto_post_details?.code) && (
@@ -4744,7 +4747,7 @@ function QrisMutationCard({
                         {audit.auto_post_details.correlationId ? ` · ID: ${audit.auto_post_details.correlationId}` : ""}
                       </p>
                     )}
-                    {onRepairQrisCandidate && audit.id != null && (
+                    {onRepairQrisCandidate && audit.id != null && !hasSourceGrossMismatch && (
                       <Button
                         type="button"
                         size="sm"
