@@ -285,6 +285,7 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
         )
          AND LOWER(COALESCE(qris_ready.status, '')) IN ${ACTIVE_QRIS_CANDIDATE_STATUS_SQL}
         AND ${qrisCandidateSourcePaymentMethodSql("qris_ready", "qris_ready_item")}
+        AND ${qrisCandidateApprovalPaymentEligibilitySql("qris_ready", "qris_ready_item")}
         AND UPPER(COALESCE(qris_ready.reconciliation_status, '')) = 'MATCHED'
         AND qris_ready.estimated_settlement_date::text = ${alias}.transaction_date::text
         AND NOT EXISTS (
@@ -339,6 +340,38 @@ function qrisCandidateSourcePaymentMethodSql(
           AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
       )
   )`;
+}
+
+/**
+ * Approval is stricter than candidate visibility. A pending payment remains
+ * reviewable evidence, but it must not make a bank mutation appear
+ * "matched"/approval-ready. The canonical builder also requires a non-empty
+ * item set and every selected payment to be confirmed and unsettled.
+ */
+function qrisCandidateApprovalPaymentEligibilitySql(
+  candidateAlias = "qc",
+  itemAlias = "qris_approval_item",
+): string {
+  return `jsonb_array_length(COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)) > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)) ${itemAlias}
+      WHERE COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id') IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM sport_center.sport_payments approval_payment
+          WHERE approval_payment.id = CASE
+            WHEN COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id') ~ '^[0-9]+$'
+              THEN COALESCE(
+                ${itemAlias}->>'paymentId',
+                ${itemAlias}->>'payment_id'
+              )::integer
+            ELSE NULL
+          END
+            AND LOWER(COALESCE(approval_payment.status::text, '')) = 'confirmed'
+            AND LOWER(COALESCE(approval_payment.settlement_status::text, 'unsettled')) = 'unsettled'
+        )
+    )`;
 }
 
 /**

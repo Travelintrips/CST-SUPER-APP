@@ -1556,6 +1556,7 @@ function statusLabel(m: BankMutation): string {
   }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
+  if (sportPaymentSelectionRequired(m)) return "Perlu Diperiksa — Pilih Kandidat";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
@@ -1572,6 +1573,7 @@ function statusColor(m: BankMutation): string {
   if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
+  if (sportPaymentSelectionRequired(m)) return STATUS_COLORS.duplicate_need_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
@@ -1716,6 +1718,12 @@ function isUiApprovalEligible(
   const selectedSportCandidateIsReady =
     selectedCandidateId != null
     && selectedCandidate != null
+    && ["sport_payment", "sport_payments"].includes(
+      String(selectedCandidate.candidate_type ?? "").trim().toLowerCase(),
+    )
+    && ["candidate", "approved"].includes(
+      String(selectedCandidate.status ?? "").trim().toLowerCase(),
+    )
     && selectedCandidate.amount_match === true
     && selectedCandidate.date_match === true;
   return canApprove(m)
@@ -1803,7 +1811,23 @@ function isInhouseBankTransferMutation(m: BankMutation): boolean {
 }
 
 function isQrisMutation(m: BankMutation): boolean {
-  if (qrisAuditsForMutation(m).length > 0) return true;
+  const bankEvidence = [
+    m.provider_name,
+    m.provider_order_id,
+    m.description,
+    m.normalized_description,
+  ];
+  // A stale/ineligible QRIS audit is still enough to keep the mutation on the
+  // QRIS lane. The filtered audit list is for visible approval evidence only;
+  // using it here would reopen the generic COA flow after canonical payment
+  // eligibility failed.
+  if (
+    !bankEvidence.some(value => isInhouseBankTransferDescription(value))
+    && (
+      (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0)
+      || m.qris_candidate_audit != null
+    )
+  ) return true;
   return classifyBankMutationPaymentType({
     providerName: m.provider_name,
     providerOrderId: m.provider_order_id,
@@ -4603,6 +4627,8 @@ function QrisMutationCard({
        ? "Settlement Tertunda — Siap Ditautkan"
     : hasCanonicalSettlementCandidate
        ? "Settlement Canonical — Perlu Review"
+     : sportPaymentSelectionRequired(m)
+        ? "Perlu Diperiksa — Pilih Kandidat"
     : isApproved
       ? "Sudah Disetujui"
       : isDepleted
@@ -4620,7 +4646,8 @@ function QrisMutationCard({
      || audit.auto_post_status === "succeeded"
      || canonicalStateResolved
     || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate
-      && !hasCanonicalSettlementCandidate);
+       && !hasCanonicalSettlementCandidate
+       && !sportPaymentSelectionRequired(m));
 
   return (
     <Card
