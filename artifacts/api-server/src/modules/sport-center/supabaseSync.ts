@@ -1072,19 +1072,19 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
                 entryId: Number(row.entry_id),
                 accountingPaymentId: Number((linked.rows[0] as Record<string, unknown>).id),
                 created: false,
-              };
+              });
             }
             return finalizeMirrorPosting({
               entryId: Number(row.entry_id),
               accountingPaymentId,
               created: true,
-            };
+            });
           }
           return finalizeMirrorPosting({
             entryId: Number(row.entry_id),
             accountingPaymentId: Number(row.payment_id ?? 0),
             created: false,
-          };
+          });
         }
 
         const entry = await postEntryWithClient(
@@ -1152,7 +1152,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           entryId: entry.id,
           accountingPaymentId: Number((paymentInsert.rows[0] as Record<string, unknown>)?.id ?? 0),
           created: true,
-        };
+        });
       });
 
       if (result.created) {

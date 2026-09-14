@@ -2297,6 +2297,17 @@ function mapDbErrorToUserMessage(rootMsg: string, originalError: any): string {
   return "Terjadi kesalahan saat membuat jurnal. Silakan coba lagi atau hubungi tim teknis.";
 }
 
+function assertSingleRowMutation(
+  result: { rowCount?: number | null } | null | undefined,
+  operation: string,
+): void {
+  // Production Drizzle/Postgres supplies rowCount. Test doubles may omit it;
+  // an explicit zero or multi-row mutation must still fail closed.
+  if (result && result.rowCount != null && Number(result.rowCount) !== 1) {
+    throw new Error(`${operation} affected ${Number(result.rowCount)} rows`);
+  }
+}
+
 export async function approveAndCreateJournal(
   mutationId: number,
   matchId: number | null,
@@ -2430,9 +2441,10 @@ export async function approveAndCreateJournal(
                WHERE id = ${entryId} AND status = 'draft'
              `));
            }
-           await tx.execute(sql.raw(`
+          const recoveredMutation = await tx.execute(sql.raw(`
              UPDATE bank_mutations
-             SET status = 'posted',
+            SET status = 'posted',
+                reconciliation_status = 'reconciled',
                  journal_entry_id = ${entryId},
                  approved_by = '${escapeSql(actor)}',
                  approved_at = NOW(),
@@ -2443,6 +2455,7 @@ export async function approveAndCreateJournal(
                  updated_at = NOW()
              WHERE id = ${mutationId}
            `));
+           assertSingleRowMutation(recoveredMutation, "recovered bank mutation");
            const recoveryMeta = JSON.stringify({
              journal_entry_id: entryId,
              entry_number: entryNumber,
@@ -2779,9 +2792,10 @@ export async function approveAndCreateJournal(
        // decision === "CREATE_NEW_JOURNAL": reusedEntry stays null → fall through to new journal path
 
        if (reusedEntry) {
-         await tx.execute(sql.raw(`
+         const reusedMutation = await tx.execute(sql.raw(`
            UPDATE bank_mutations
            SET status = 'posted',
+               reconciliation_status = 'reconciled',
                journal_entry_id = ${reusedEntry.id},
                approved_by = '${escapeSql(actor)}',
                approved_at = NOW(),
@@ -2790,6 +2804,7 @@ export async function approveAndCreateJournal(
                updated_at = NOW()
            WHERE id = ${mutationId}
          `));
+         assertSingleRowMutation(reusedMutation, "reused bank mutation");
 
          // Promote draft accounting entry → posted.
          // Upstream modules (sport center, payroll, etc.) create journal entries in
@@ -2806,11 +2821,12 @@ export async function approveAndCreateJournal(
          `));
 
          if (matchId) {
-           await tx.execute(sql.raw(`
+           const reusedMatch = await tx.execute(sql.raw(`
              UPDATE bank_reconciliation_matches
              SET status = 'approved'
              WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
            `));
+           assertSingleRowMutation(reusedMatch, "reused reconciliation match");
          } else if (selectedCandidateType && selectedCandidateId != null) {
            await tx.execute(sql.raw(`
              INSERT INTO bank_reconciliation_matches
@@ -3004,15 +3020,17 @@ export async function approveAndCreateJournal(
        // Normal approval stops at approved_pending_posting. Explicit reference
        // rules may request autoPost; in that case promote the same balanced
        // journal atomically before committing.
-      await tx.execute(sql.raw(`
+      const approvedMutation = await tx.execute(sql.raw(`
         UPDATE bank_mutations
         SET status           = 'approved_pending_posting',
+            reconciliation_status = 'matched',
             journal_entry_id = ${entry.id},
             approved_by      = '${actor.replace(/'/g, "''")}',
             approved_at      = NOW(),
             updated_at       = NOW()
         WHERE id = ${mutationId}
       `));
+      assertSingleRowMutation(approvedMutation, "approved bank mutation");
 
        if (autoPost) {
          await tx.execute(sql.raw(`
@@ -3020,23 +3038,26 @@ export async function approveAndCreateJournal(
            SET status = 'posted'
            WHERE id = ${entry.id} AND status = 'draft'
          `));
-         await tx.execute(sql.raw(`
+         const postedMutation = await tx.execute(sql.raw(`
            UPDATE bank_mutations
            SET status = 'posted',
+               reconciliation_status = 'reconciled',
                posted_by = '${actor.replace(/'/g, "''")}',
                posted_at = NOW(),
                updated_at = NOW()
            WHERE id = ${mutationId} AND status = 'approved_pending_posting'
          `));
+         assertSingleRowMutation(postedMutation, "posted bank mutation");
        }
 
       // ── Step 6: Update/insert approved match record ────────────────────────
       if (matchId) {
-        await tx.execute(sql.raw(`
+        const approvedMatch = await tx.execute(sql.raw(`
           UPDATE bank_reconciliation_matches
           SET status = 'approved'
           WHERE id = ${matchId} AND mutation_id = ${mutationId}
         `));
+        assertSingleRowMutation(approvedMatch, "approved reconciliation match");
        } else if (selectedCandidateType && selectedCandidateId != null) {
         await tx.execute(sql.raw(`
           INSERT INTO bank_reconciliation_matches
