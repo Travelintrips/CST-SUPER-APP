@@ -10676,7 +10676,7 @@ export default function BankReconciliationPage() {
                        matchMut.mutate(mode);
                     }}
                   onRepairQrisCandidate={
-                    qrisCompanyId != null && workflowStage !== "matching"
+                    qrisCompanyId != null
                       ? (candidateId) => qrisRepairMut.mutate(candidateId)
                       : undefined
                   }
@@ -11046,7 +11046,7 @@ export default function BankReconciliationPage() {
         onApproveCandidate={handleDirectApproveCandidate}
          onDeleteDuplicateCandidate={handleDeleteDuplicateCandidate}
         onRepairQrisCandidate={
-          qrisCompanyId != null && workflowStage !== "matching"
+          qrisCompanyId != null
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
             : undefined
         }

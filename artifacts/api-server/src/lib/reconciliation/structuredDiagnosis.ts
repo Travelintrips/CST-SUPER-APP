@@ -261,6 +261,16 @@ const PROFILE_BY_CODE: Record<string, DiagnosisProfile> = {
     fieldNames: ["sport_payment_id", "settlement_id", "item_status"],
     retryAllowed: true,
   },
+  CANONICAL_PAYMENT_NOT_ELIGIBLE: {
+    title: "Payment QRIS belum eligible untuk settlement baru",
+    rootCause: "Satu atau lebih payment yang akan dimasukkan ke batch baru masih memiliki settlement_status selain unsettled. Ini dapat berasal dari status stale, atau payment memang masih dimiliki batch canonical lain.",
+    expectedValue: "Semua payment yang dipilih berstatus settlement_status = unsettled dan tidak memiliki item settlement aktif.",
+    adminAction: "Pada setiap payment yang berstatus Tersettle, gunakan Reset terkontrol dengan alasan audit. Jika reset ditolak karena batch aktif, lakukan reversal/de-link pada batch pemilik terlebih dahulu. Setelah semua payment eligible, refresh kandidat lalu retry auto-post.",
+    adminLocation: "Accounting → Bank Reconciliation → detail kandidat QRIS",
+    tableName: "sport_center.sport_payments",
+    fieldNames: ["settlement_status", "settlement_reference", "settlement_date"],
+    retryAllowed: true,
+  },
   SCHEMA_QUERY_ERROR: {
     title: "Perlu perbaikan sistem",
     rootCause: "Query atau schema reconciliation gagal sehingga safeguard tidak dapat membuktikan state canonical.",
