@@ -2977,12 +2977,12 @@ function CreateDisbDialog({
                 <p className="text-xs font-semibold text-amber-800">
                   {paymentMode === "expense" && "Gunakan modul Expense untuk membayar biaya yang sudah diajukan"}
                   {paymentMode === "loan_payment" && "Gunakan modul Pinjaman untuk membayar cicilan pinjaman"}
-                  {paymentMode === "tax_payment" && "Disarankan: gunakan modul Pajak untuk membayar kewajiban pajak"}
+                  {paymentMode === "tax_payment" && "Gunakan modul Pajak untuk membayar kewajiban pajak"}
                 </p>
                 <p className="text-[11px] text-amber-700 leading-relaxed">
                   {paymentMode === "expense" && "Bank Disbursement langsung untuk expense akan ditolak API jika tidak memiliki referensi expense yang disetujui. Buka menu Expense → Bayar untuk membayar."}
                   {paymentMode === "loan_payment" && "Bank Disbursement langsung untuk cicilan akan ditolak API jika tidak memiliki referensi pinjaman. Buka menu Pinjaman → Bayar Cicilan untuk membayar."}
-                  {paymentMode === "tax_payment" && "Untuk akurasi SPT dan rekonsiliasi pajak, gunakan modul Pajak. Bank Disbursement langsung diperbolehkan selama P0."}
+                  {paymentMode === "tax_payment" && "Bank Disbursement langsung untuk pajak akan ditolak API tanpa referensi transaction_taxes yang valid. Buka modul Pajak untuk membayar kewajiban pajak dan menjaga akurasi SPT serta rekonsiliasi."}
                 </p>
               </div>
             </div>

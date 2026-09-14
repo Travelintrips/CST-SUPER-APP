@@ -44,10 +44,15 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql, eq, desc, and, inArray } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
-import { postEntry } from "../lib/accounting.js";
+import { postEntry, postEntryWithClient } from "../lib/accounting.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
-import { validateBdSource, updateSourceAfterDisbursement } from "../lib/bdSourceGuard.js";
+import {
+  normalizeBdTransactionType,
+  validateBdSource,
+  updateSourceAfterDisbursement,
+} from "../lib/bdSourceGuard.js";
+import { auditFromReq } from "../lib/auditLog.js";
 import {
   accountingJournalsTable,
   accountingEntriesTable,
@@ -1650,6 +1655,7 @@ router.post("/", async (req, res) => {
       amount: number;           // DPP — gross amount sebelum PPN dan WHT
       notes: string | null;
       purchase_document_id: number | null;  // Phase 1
+      vendor_invoice_id: number | null;
       wht_amount: number;                    // Phase 1 (default 0)
       wht_account_id: number | null;         // Phase 1
       party_name: string | null;             // Phase 4
@@ -1660,7 +1666,10 @@ router.post("/", async (req, res) => {
     const processedItems: ProcessedItem[] = [];
 
     for (let i = 0; i < items.length; i++) {
-      const it = items[i];
+      const it = {
+        ...items[i],
+        transactionType: normalizeBdTransactionType(String(items[i].transactionType ?? "")),
+      };
       const itemLabel = `Item ${i + 1}`;
 
       if (!it.accountId) {
@@ -1672,6 +1681,20 @@ router.post("/", async (req, res) => {
       }
       if (!validTypes.includes(it.transactionType)) {
         return res.status(400).json({ message: `${itemLabel}: jenis transaksi tidak valid` });
+      }
+
+      // Supplier payments are source-linked business transactions. The
+      // dedicated vendor_invoice flow remains separate, but direct callers
+      // must still identify the purchase document or vendor invoice being
+      // settled; otherwise Bank Disbursement becomes a second source of truth.
+      if (
+        it.transactionType === "supplier_payment" &&
+        it.purchaseDocumentId == null &&
+        it.vendorInvoiceId == null
+      ) {
+        return res.status(422).json({
+          message: `${itemLabel}: supplier_payment wajib memiliki purchaseDocumentId atau vendorInvoiceId. Gunakan flow Bayar Invoice Vendor jika pembayaran berasal dari invoice.`,
+        });
       }
 
       // ── Phase 2: Anti-double-payment check ──────────────────────────────
@@ -1690,10 +1713,16 @@ router.post("/", async (req, res) => {
                     WHERE bd2.id = bdi.disbursement_id AND bd2.status = 'posted'
                   )
             WHERE pd.id = ${Number(it.purchaseDocumentId)}
+              AND pd.company_id = ${companyId}
             GROUP BY pd.grand_total
           `)
         );
         const row = outstandingRows[0];
+        if (!row) {
+          return res.status(400).json({
+            message: `${itemLabel}: Dokumen pembelian #${it.purchaseDocumentId} tidak ditemukan, bukan milik perusahaan, atau belum dapat dibayar.`,
+          });
+        }
         if (row) {
           const grandTotal = parseFloat(row.grand_total);
           const totalPaid  = parseFloat(row.total_paid);
@@ -1702,6 +1731,42 @@ router.post("/", async (req, res) => {
               message: `Item ${i + 1}: Dokumen pembelian #${it.purchaseDocumentId} sudah lunas (total_paid=${totalPaid}, grand_total=${grandTotal}). Tidak dapat membuat disbursement baru.`,
             });
           }
+        }
+      }
+
+      if (it.vendorInvoiceId != null && it.transactionType === "supplier_payment") {
+        const vendorInvoiceRows = execRows<{
+          id: number;
+          grand_total: string;
+          amount_paid: string | null;
+          invoice_number: string | null;
+        }>(await db.execute(sql`
+          SELECT id, grand_total, amount_paid, invoice_number
+          FROM vendor_invoices
+          WHERE id = ${Number(it.vendorInvoiceId)}
+            AND company_id = ${companyId}
+            AND status = 'posted'
+            AND cancelled_at IS NULL
+          LIMIT 1
+        `));
+        const vendorInvoice = vendorInvoiceRows[0];
+        if (!vendorInvoice) {
+          return res.status(400).json({
+            message: `${itemLabel}: Vendor Invoice #${it.vendorInvoiceId} tidak ditemukan, bukan milik perusahaan, atau belum posted.`,
+          });
+        }
+        const outstanding = round2(
+          Number(vendorInvoice.grand_total) - Number(vendorInvoice.amount_paid ?? 0),
+        );
+        if (outstanding <= 0) {
+          return res.status(409).json({
+            message: `${itemLabel}: Vendor Invoice ${vendorInvoice.invoice_number ?? `#${vendorInvoice.id}`} sudah lunas.`,
+          });
+        }
+        if (amt > outstanding + 0.01) {
+          return res.status(400).json({
+            message: `${itemLabel}: Jumlah bayar (${amt}) melebihi sisa hutang invoice (${outstanding}).`,
+          });
         }
       }
 
@@ -1847,6 +1912,7 @@ router.post("/", async (req, res) => {
         amount: amt,
         notes: it.notes ?? null,
         purchase_document_id: it.purchaseDocumentId ? Number(it.purchaseDocumentId) : null,
+        vendor_invoice_id: it.vendorInvoiceId ? Number(it.vendorInvoiceId) : null,
         wht_amount: whtAmt,
         wht_account_id: whtAccountId,
         party_name: it.partyName ? String(it.partyName) : null,
@@ -1854,6 +1920,11 @@ router.post("/", async (req, res) => {
         ppn_account_id: ppnAccountId,
       });
     }
+
+    const amountByType = processedItems.reduce<Record<string, number>>((acc, it) => {
+      acc[it.transaction_type] = round2((acc[it.transaction_type] ?? 0) + it.amount);
+      return acc;
+    }, {});
 
     // ── P0: Source Guard validation ───────────────────────────────────────
     // Restricted transaction types (employee_advance, expense, loan_payment)
@@ -1868,6 +1939,7 @@ router.post("/", async (req, res) => {
         sourceModule: smVal0,
         sourceId: sidVal0,
         amount: totalAmt0,
+        amountByType,
         companyId,
       });
       if (!guardResult.ok) {
@@ -1963,21 +2035,6 @@ router.post("/", async (req, res) => {
     const seq    = (Number(cnt) + 1).toString().padStart(4, "0");
     const disbNum = `BD/${year}/${seq}`;
 
-    // ── Post journal entry ────────────────────────────────────────────────
-    const entry = await postEntry(
-      {
-        journalId: journal.id,
-        date,
-        ref: ref ?? null,
-        description: memo ?? `Bank Disbursement ${disbNum}`,
-        source: "manual_payment",
-        companyId,
-        lines: journalLines,
-      },
-      journal.code,
-    );
-
-    // ── Insert header ─────────────────────────────────────────────────────
     const smVal  = sourceModule  ? String(sourceModule)  : null;
     const sidVal = sourceId      ? Number(sourceId)       : null;
     const snVal  = sourceNumber  ? String(sourceNumber)   : null;
@@ -1989,57 +2046,125 @@ router.post("/", async (req, res) => {
     const cpIdVal         = counterpartyId        ? Number(counterpartyId)        : null;
     const attachUrlDirect = attachmentUrlDirect   ? String(attachmentUrlDirect)   : null;
 
-    const insertedRows = execRows<{ id: number }>(await db.execute<{ id: number }>(sql`
-      INSERT INTO bank_disbursements
-        (company_id, disbursement_number, journal_id, date, ref, memo, total_amount, status, entry_id, created_by_id,
-         source_module, source_id, source_number, payment_type,
-         counterparty_name, counterparty_type, counterparty_id, attachment_url)
-      VALUES
-        (${companyId}, ${disbNum}, ${journal.id}, ${dateStr}, ${ref ?? null}, ${memo ?? null},
-         ${String(totalAmount)}, 'posted', ${entry.id}, ${(req as any).user?.id ?? null},
-         ${smVal}, ${sidVal}, ${snVal}, 'direct',
-         ${cpNameVal}, ${cpTypeVal}, ${cpIdVal}, ${attachUrlDirect})
-      RETURNING id
-    `));
+    // ── P0: journal, disbursement, lines, and source update are atomic ───
+      const { entry, disbId } = await db.transaction(async (tx) => {
+      const entry = await postEntryWithClient(
+        tx as any,
+        {
+          journalId: journal.id,
+          date,
+          ref: ref ?? null,
+          description: memo ?? `Bank Disbursement ${disbNum}`,
+          source: "manual_payment",
+          companyId,
+          lines: journalLines,
+        },
+        journal.code,
+      );
 
-    const disbId = insertedRows[0]!.id;
-
-    // ── Insert line items (Phase 1 + Phase 4 + Phase 7 columns) ─────────
-    for (const it of processedItems) {
-      await db.execute(sql`
-        INSERT INTO bank_disbursement_items
-          (disbursement_id, seq, transaction_type, account_id, description, amount, notes,
-           purchase_document_id, wht_amount, wht_account_id, party_name,
-           ppn_amount, ppn_account_id)
+      const insertedRows = execRows<{ id: number }>(await tx.execute(sql`
+        INSERT INTO bank_disbursements
+          (company_id, disbursement_number, journal_id, date, ref, memo, total_amount, status, entry_id, created_by_id,
+           source_module, source_id, source_number, payment_type,
+           counterparty_name, counterparty_type, counterparty_id, attachment_url)
         VALUES
-          (${disbId}, ${it.seq}, ${it.transaction_type}, ${it.account_id},
-           ${it.description}, ${String(it.amount)}, ${it.notes},
-           ${it.purchase_document_id ?? null},
-           ${String(it.wht_amount)}, ${it.wht_account_id ?? null},
-           ${it.party_name ?? null},
-           ${String(it.ppn_amount)}, ${it.ppn_account_id ?? null})
-      `);
-    }
+          (${companyId}, ${disbNum}, ${journal.id}, ${dateStr}, ${ref ?? null}, ${memo ?? null},
+           ${String(totalAmount)}, 'posted', ${entry.id}, ${(req as any).user?.id ?? null},
+           ${smVal}, ${sidVal}, ${snVal}, 'direct',
+           ${cpNameVal}, ${cpTypeVal}, ${cpIdVal}, ${attachUrlDirect})
+        RETURNING id
+      `));
+      const disbId = insertedRows[0]!.id;
 
-    // ── P0: Update source business object after disbursement ─────────────
-    // Best-effort — disbursement is already created; errors are logged but not thrown.
-    // P1: wrap this + postEntry + INSERT in a single db.transaction().
-    {
-      const txTypes = processedItems.map((it) => it.transaction_type);
-      const sidValPost = sourceId ? Number(sourceId) : null;
-      const smValPost  = sourceModule ? String(sourceModule) : null;
-      if (sidValPost && smValPost) {
+      for (const it of processedItems) {
+        await tx.execute(sql`
+          INSERT INTO bank_disbursement_items
+            (disbursement_id, seq, transaction_type, account_id, description, amount, notes,
+             purchase_document_id, vendor_invoice_id, wht_amount, wht_account_id, party_name,
+             ppn_amount, ppn_account_id)
+          VALUES
+            (${disbId}, ${it.seq}, ${it.transaction_type}, ${it.account_id},
+             ${it.description}, ${String(it.amount)}, ${it.notes},
+             ${it.purchase_document_id ?? null},
+             ${it.vendor_invoice_id ?? null},
+             ${String(it.wht_amount)}, ${it.wht_account_id ?? null},
+             ${it.party_name ?? null},
+             ${String(it.ppn_amount)}, ${it.ppn_account_id ?? null})
+        `);
+      }
+
+      // Keep standalone vendor invoices in sync with the same transaction as
+      // the journal and bank-disbursement rows. The dedicated vendor_invoice
+      // mode has its own legacy update path below.
+      const linkedVendorInvoiceAmounts = new Map<number, number>();
+      for (const it of processedItems) {
+        if (it.vendor_invoice_id) {
+          linkedVendorInvoiceAmounts.set(
+            it.vendor_invoice_id,
+            round2(
+              (linkedVendorInvoiceAmounts.get(it.vendor_invoice_id) ?? 0)
+              + it.amount
+              + it.wht_amount,
+            ),
+          );
+        }
+      }
+      for (const [vendorInvoiceId, paidAmount] of linkedVendorInvoiceAmounts) {
+        const updatedInvoice = await tx.execute(sql`
+          UPDATE vendor_invoices
+          SET amount_paid = COALESCE(amount_paid, 0) + ${String(paidAmount)},
+              updated_at = NOW()
+          WHERE id = ${vendorInvoiceId}
+            AND company_id = ${companyId}
+            AND status = 'posted'
+            AND cancelled_at IS NULL
+            AND COALESCE(amount_paid, 0) + ${String(paidAmount)} <= grand_total + 0.01
+          RETURNING id
+        `);
+        if (execRows(updatedInvoice).length !== 1) {
+          throw new Error(`Vendor Invoice #${vendorInvoiceId} berubah status atau saldo tidak mencukupi.`);
+        }
+        const paymentStatus = await recalculateVendorInvoicePaymentStatus(
+          tx as any,
+          companyId,
+          vendorInvoiceId,
+        );
+        if (paymentStatus.status === "missing") {
+          throw new Error(`Vendor Invoice #${vendorInvoiceId} tidak ditemukan setelah pembaruan pembayaran.`);
+        }
+      }
+
+      if (sidVal && smVal) {
         await updateSourceAfterDisbursement({
-          transactionTypes: txTypes,
-          sourceModule: smValPost,
-          sourceId: sidValPost,
+          client: tx as any,
+          transactionTypes: processedItems.map((it) => it.transaction_type),
+          sourceModule: smVal,
+          sourceId: sidVal,
           disbId,
           disbNumber: disbNum,
-          amount: totalAmount,
+          amount: smVal === "bank_loans" ? (amountByType.loan_payment ?? 0) : totalAmount,
           date,
           companyId,
         });
       }
+
+      return { entry, disbId };
+    });
+
+    if (smVal && sidVal) {
+      auditFromReq(req, {
+        action: "create_from_source",
+        module: "bank_disbursements",
+        referenceId: String(disbId),
+        newData: {
+          source_type: smVal,
+          source_id: sidVal,
+          created_by: (req as any).user?.id ?? null,
+          amount: totalAmount,
+          bank_account_id: bankAccountId,
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     // ── Phase 1: Trigger recalculate payment_status untuk linked POs ──────

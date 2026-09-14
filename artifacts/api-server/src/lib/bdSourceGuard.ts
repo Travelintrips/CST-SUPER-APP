@@ -15,28 +15,42 @@
  *   expense           → source_module = 'expenses'
  *   loan_payment      → source_module = 'bank_loans'
  *
- * Soft block (warn only — tax module belum sepenuhnya terintegrasi):
- *   tax_payment       → source_module = 'tax_periods' / 'tax_payables'
+ * Tax payments use transaction_taxes as their source of truth:
+ *   tax_payment       → source_module = 'transaction_taxes'
  *
  * Pure bank types (no source required):
- *   fund_transfer, equity_withdrawal, supplier_payment, other
+ *   fund_transfer, equity_withdrawal, other
  */
 
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
+import type { DbClient } from "./accounting.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Transaction types that MUST have source_module + source_id */
+/** Normalize business names accepted by older callers to the canonical item type. */
+export const TRANSACTION_TYPE_ALIASES: Record<string, string> = {
+  vendor_payment: "supplier_payment",
+  reimbursement: "expense",
+  employee_fund: "employee_advance",
+  dana_talangan: "employee_advance",
+};
+
+export function normalizeBdTransactionType(transactionType: string): string {
+  return TRANSACTION_TYPE_ALIASES[transactionType] ?? transactionType;
+}
+
+/** Transaction types that MUST have a business source reference. */
 export const HARD_BLOCKED_TYPES = new Set([
   "employee_advance",
   "expense",
   "loan_payment",
+  "tax_payment",
 ]);
 
-/** Transaction types that SHOULD have source_module + source_id (soft warning) */
-export const SOFT_BLOCKED_TYPES = new Set(["tax_payment"]);
+/** Kept as a separate set for compatibility; business types are hard-blocked. */
+export const SOFT_BLOCKED_TYPES = new Set<string>();
 
 /** All restricted types (hard + soft) */
 export const ALL_RESTRICTED_TYPES = new Set([
@@ -52,7 +66,7 @@ export const CANONICAL_SOURCE_MODULE: Record<string, string[]> = {
   employee_advance: ["cash_advances"],
   expense:          ["expenses"],
   loan_payment:     ["bank_loans"],
-  tax_payment:      ["tax_periods", "tax_payables", "tax_reports", "tax_spt_drafts"],
+  tax_payment:      ["transaction_taxes"],
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -102,7 +116,14 @@ function execRows<T>(result: unknown): T[] {
 export async function validateBdSource(
   input: BdSourceValidationInput,
 ): Promise<BdSourceValidationResult> {
-  const { transactionTypes, sourceModule, sourceId, amount, companyId } = input;
+  const {
+    transactionTypes: rawTransactionTypes,
+    sourceModule,
+    sourceId,
+    amount,
+    companyId,
+  } = input;
+  const transactionTypes = rawTransactionTypes.map(normalizeBdTransactionType);
 
   // Determine the most-restricted transaction type in the list
   const hardRestrictedItems = transactionTypes.filter((t) => HARD_BLOCKED_TYPES.has(t));
@@ -120,6 +141,7 @@ export async function validateBdSource(
       employee_advance: "Kasbon Karyawan",
       expense:          "Expense / Biaya",
       loan_payment:     "Cicilan Pinjaman",
+      tax_payment:      "Pembayaran Pajak",
     };
     const names = [...new Set(hardRestrictedItems)].map((t) => typeLabel[t] ?? t).join(", ");
     return {
@@ -127,7 +149,7 @@ export async function validateBdSource(
       hard: true,
       statusCode: 422,
       error: `Transaksi jenis ${names} harus dibuat dari modul sumber terkait, bukan langsung dari Bank Disbursement. ` +
-             `Gunakan modul Kasbon, Expense, atau Pinjaman untuk mencairkan/membayar transaksi ini.`,
+             `Gunakan modul sumber terkait untuk mencairkan/membayar transaksi ini.`,
     };
   }
 
@@ -163,8 +185,9 @@ export async function validateBdSource(
         return { ok: false, hard: true, statusCode: 404, error: `Kasbon #${sourceId} tidak ditemukan atau bukan milik perusahaan ini.` };
       }
       const ca = rows[0];
-      if (ca.status === "repaid" || ca.status === "voided") {
-        return { ok: false, hard: true, statusCode: 409, error: `Kasbon #${sourceId} sudah lunas atau dibatalkan (status: ${ca.status}).` };
+      const advanceStatus = (ca as { lifecycle_status?: string | null }).lifecycle_status ?? ca.status;
+      if (advanceStatus !== "approved") {
+        return { ok: false, hard: true, statusCode: 409, error: `Kasbon #${sourceId} harus berstatus approved sebelum dicairkan. Status saat ini: ${advanceStatus}.` };
       }
       // Double-posting check
       const dupRows = execRows<{ cnt: number }>(
@@ -195,8 +218,8 @@ export async function validateBdSource(
         return { ok: false, hard: true, statusCode: 404, error: `Expense #${sourceId} tidak ditemukan atau bukan milik perusahaan ini.` };
       }
       const exp = rows[0];
-      if (exp.status === "void" || exp.status === "cancelled") {
-        return { ok: false, hard: true, statusCode: 409, error: `Expense #${sourceId} sudah dibatalkan (status: ${exp.status}).` };
+      if (exp.status !== "active") {
+        return { ok: false, hard: true, statusCode: 409, error: `Expense #${sourceId} harus berstatus active/approved sebelum dibayar. Status saat ini: ${exp.status}.` };
       }
       // Double-posting check via disbursement_id column
       if (exp.disbursement_id) {
@@ -280,19 +303,22 @@ export async function validateBdSource(
       }
     }
 
-    else if (CANONICAL_SOURCE_MODULE["tax_payment"]?.includes(sourceModule)) {
-      // Soft validation for tax module — just check source exists
-      // Tax module structure is complex; skip deep validation in P0
-      logger.info({ sourceModule, sourceId, companyId }, "[bdSourceGuard] tax_payment source validation (soft/P0)");
+    else if (sourceModule === "transaction_taxes") {
+      const rows = execRows<{ id: number; status: string; company_id: number; paid_at: string | null }>(
+        await db.execute(sql`
+          SELECT id, status, company_id, paid_at
+          FROM transaction_taxes
+          WHERE id = ${sourceId} AND company_id = ${companyId}
+          LIMIT 1
+        `)
+      );
+      if (!rows[0]) {
+        return { ok: false, hard: true, statusCode: 404, error: `Transaksi pajak #${sourceId} tidak ditemukan atau bukan milik perusahaan ini.` };
+      }
+      if (rows[0].status === "paid" || rows[0].status === "reported" || rows[0].paid_at) {
+        return { ok: false, hard: true, statusCode: 409, error: `Transaksi pajak #${sourceId} sudah dibayar atau dilaporkan.` };
+      }
     }
-  }
-
-  // ── Soft block for tax_payment without source_id ──────────────────────
-  if (softRestrictedItems.length > 0 && hardRestrictedItems.length === 0 && (!sourceId || !sourceModule)) {
-    // Log as warning but don't block — P0 soft enforcement
-    logger.warn({ companyId, transactionTypes }, "[bdSourceGuard] tax_payment without source_id — soft warning P0");
-    // Return ok but with a warning signal (caller may log or tag)
-    return { ok: true };
   }
 
   return { ok: true };
@@ -301,6 +327,7 @@ export async function validateBdSource(
 // ── Update Source After Disbursement ─────────────────────────────────────────
 
 export interface BdSourceUpdateInput {
+  client?: DbClient;
   transactionTypes: string[];
   sourceModule: string;
   sourceId: number;
@@ -314,69 +341,86 @@ export interface BdSourceUpdateInput {
 /**
  * updateSourceAfterDisbursement
  *
- * Call AFTER the disbursement + journal entry have been inserted.
- * Updates the source business object to reflect payment.
- *
- * This is best-effort: if the update fails, log the error but do NOT throw —
- * the disbursement is already created. P1 will wrap this in a full transaction.
+ * Call inside the same transaction as the journal and disbursement inserts.
+ * Any error propagates so the complete posting rolls back.
  */
 export async function updateSourceAfterDisbursement(
   input: BdSourceUpdateInput,
 ): Promise<void> {
-  const { transactionTypes, sourceModule, sourceId, disbId, disbNumber, amount, date, companyId } = input;
+  const {
+    client = db,
+    transactionTypes,
+    sourceModule,
+    sourceId,
+    disbId,
+    disbNumber,
+    amount,
+    date,
+    companyId,
+  } = input;
 
-  try {
     if (sourceModule === "cash_advances") {
-      // Update kasbon: mark disbursed_at, increment paid_amount
-      await db.execute(sql`
+      const result = await client.execute(sql`
         UPDATE cash_advances
         SET
+          lifecycle_status = 'disbursed',
+          status         = 'active',
           disbursed_at  = COALESCE(disbursed_at, ${date}),
-          paid_amount   = COALESCE(paid_amount, 0) + ${String(amount)},
           updated_at    = NOW()
         WHERE id = ${sourceId} AND company_id = ${companyId}
+          AND COALESCE(lifecycle_status, status) = 'approved'
+        RETURNING id
       `);
+      if (execRows(result).length !== 1) {
+        throw new Error(`Kasbon #${sourceId} berubah status sebelum pencairan.`);
+      }
       logger.info({ sourceId, disbId, amount }, "[bdSourceGuard] cash_advance updated after disbursement");
     }
 
     else if (sourceModule === "expenses") {
-      // Update expense: link disbursement_id
-      await db.execute(sql`
+      const result = await client.execute(sql`
         UPDATE expenses
         SET
           disbursement_id = ${disbId},
+          status         = 'paid',
           updated_at      = NOW()
         WHERE id = ${sourceId} AND company_id = ${companyId}
+          AND status = 'active'
           AND (disbursement_id IS NULL OR disbursement_id = ${disbId})
+        RETURNING id
       `);
+      if (execRows(result).length !== 1) {
+        throw new Error(`Expense #${sourceId} berubah status atau sudah dibayar.`);
+      }
       logger.info({ sourceId, disbId }, "[bdSourceGuard] expense disbursement_id updated");
     }
 
     else if (sourceModule === "bank_loans") {
-      // Update loan outstanding + paid amount + status
-      const rows = execRows<{ outstanding_amount: string; paid_amount: string; principal_amount: string }>(
-        await db.execute(sql`
-          SELECT outstanding_amount, paid_amount, principal_amount
-          FROM bank_loans WHERE id = ${sourceId} AND company_id = ${companyId}
-          LIMIT 1
-        `)
-      );
-      if (rows[0]) {
-        const newOutstanding = Math.max(0, Number(rows[0].outstanding_amount) - amount);
-        const newPaid = Number(rows[0].paid_amount ?? 0) + amount;
-        const newStatus = newOutstanding <= 0.01 ? "paid" : "partial";
+      // `amount` is the principal amount for loan-only postings. The route
+      // supplies loan-only amount for mixed principal+interest postings.
+      if (!transactionTypes.includes("loan_payment") || amount <= 0) {
+        throw new Error(`Pinjaman #${sourceId} tidak memiliki nominal pokok.`);
+      }
+      const result = await client.execute(sql`
+        UPDATE bank_loans
+        SET
+          outstanding_amount = outstanding_amount - ${String(amount)},
+          paid_amount        = COALESCE(paid_amount, 0) + ${String(amount)},
+          status = CASE
+            WHEN outstanding_amount - ${String(amount)} <= 0.01 THEN 'paid'
+            ELSE 'partial'
+          END
+        WHERE id = ${sourceId}
+          AND company_id = ${companyId}
+          AND status <> 'paid'
+          AND outstanding_amount >= ${String(amount)}
+        RETURNING id
+      `);
+      if (execRows(result).length !== 1) {
+        throw new Error(`Pinjaman #${sourceId} berubah status atau saldo outstanding tidak mencukupi.`);
+      }
 
-        await db.execute(sql`
-          UPDATE bank_loans
-          SET
-            outstanding_amount = ${String(newOutstanding)},
-            paid_amount        = ${String(newPaid)},
-            status             = ${newStatus}
-          WHERE id = ${sourceId} AND company_id = ${companyId}
-        `);
-
-        // Insert payment record
-        await db.execute(sql`
+      await client.execute(sql`
           INSERT INTO bank_loan_payments
             (loan_id, payment_date, principal_amount, interest_amount, total_amount, payment_method, reference, notes)
           VALUES
@@ -384,15 +428,26 @@ export async function updateSourceAfterDisbursement(
              ${String(amount)}, '0', ${String(amount)},
              'bank', ${disbNumber}, ${'Auto-recorded via Bank Disbursement ' + disbNumber})
         `);
-        logger.info({ sourceId, disbId, newOutstanding, newStatus }, "[bdSourceGuard] bank_loan updated after disbursement");
+      logger.info({ sourceId, disbId, principalAmount: amount }, "[bdSourceGuard] bank_loan updated after disbursement");
+    }
+
+    else if (sourceModule === "transaction_taxes") {
+      const result = await client.execute(sql`
+        UPDATE transaction_taxes
+        SET status = 'paid', paid_at = ${date}, updated_at = NOW()
+        WHERE id = ${sourceId}
+          AND company_id = ${companyId}
+          AND status NOT IN ('paid', 'reported')
+          AND paid_at IS NULL
+        RETURNING id
+      `);
+      if (execRows(result).length !== 1) {
+        throw new Error(`Transaksi pajak #${sourceId} berubah status atau sudah dibayar.`);
       }
+      logger.info({ sourceId, disbId }, "[bdSourceGuard] transaction_tax updated after disbursement");
     }
 
     else {
-      logger.info({ sourceModule, sourceId, disbId }, "[bdSourceGuard] source module update — no handler (non-fatal)");
+      throw new Error(`source_module "${sourceModule}" belum memiliki handler update sumber.`);
     }
-  } catch (err) {
-    // Non-fatal: disbursement already created; log for manual reconciliation
-    logger.error({ err, sourceModule, sourceId, disbId }, "[bdSourceGuard] source update failed after disbursement — manual reconciliation may be needed");
-  }
 }
