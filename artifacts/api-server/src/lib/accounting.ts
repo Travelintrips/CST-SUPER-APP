@@ -128,6 +128,7 @@ export interface PostingInput {
     | "bank_mutation_import"
     | "bank_reconciliation"
     | "bank_reconciliation_void"
+    | "historical_duplicate_reversal"
     | "closing_entry"
     | "gsheet_import"
     | "fleet_cash_payment"
@@ -716,13 +717,13 @@ async function _postEntryCore(
     entry = { ...entry!, status: initialStatus as "posted" };
   }
 
-  // Emit POST ledger event (fire-and-forget — intentionally uses global `db`,
-  // NOT the caller's transaction client). Passing the tx client here would
-  // abort the whole transaction if ledger_events INSERT fails (PG 25P02).
-  // Audit events are non-critical; they must never poison the main tx.
+  // Emit POST ledger event without awaiting it. It intentionally uses global
+  // db rather than the caller's transaction client so an audit-event failure
+  // cannot poison the posting transaction. This is important when a governed
+  // correction is posted inside the Finance Review transaction.
   const entryPeriod = input.date.toISOString().slice(0, 7);
   const eventType = (source === "reversal") ? "REVERSE" : "POST";
-  await postLedgerEvent({
+  void postLedgerEvent({
     companyId:  requireAccountingCompanyId(input.companyId),
     eventType,
     period:     entryPeriod,
@@ -858,6 +859,266 @@ export async function postEntry(
   }).catch(() => {});
 
   return entry;
+}
+
+export interface PurchaseInvoiceReclassificationLine {
+  lineId: number;
+  accountId: number;
+  amount: number;
+  description?: string | null;
+}
+
+export interface PurchaseInvoiceReclassificationInput {
+  invoiceId: number;
+  originalEntryId: number;
+  companyId: number;
+  journalId: number;
+  journalCode: string;
+  ref: string;
+  actor: string;
+  reason: string;
+  lines: PurchaseInvoiceReclassificationLine[];
+}
+
+export interface PurchaseInvoiceReclassificationResult {
+  ok: boolean;
+  correctionEntryId?: number;
+  alreadyCorrected?: boolean;
+  changedLineCount?: number;
+  error?: string;
+  code?: string;
+}
+
+/**
+ * Reclassify a posted Vendor Invoice without editing its historical lines.
+ *
+ * The original purchase_bill remains posted and immutable. Only the net
+ * difference between the persisted invoice-line COA and the original debit
+ * line is posted as a balanced correction entry. This function is intended
+ * to run inside the Finance Review transaction so the confirmed COA and the
+ * correction cannot commit independently.
+ */
+export async function reclassifyPostedPurchaseInvoice(
+  client: DbClient,
+  input: PurchaseInvoiceReclassificationInput,
+): Promise<PurchaseInvoiceReclassificationResult> {
+  const originalResult = await client.execute(sql`
+    SELECT id, company_id, status::text AS status, source::text AS source,
+           source_id, journal_id, ref, total_debit, total_credit
+    FROM accounting_entries
+    WHERE id = ${input.originalEntryId}
+      AND company_id = ${input.companyId}
+    FOR UPDATE
+  `);
+  const original = originalResult.rows[0] as Record<string, unknown> | undefined;
+  if (!original) return { ok: false, error: "Jurnal Vendor Invoice asal tidak ditemukan.", code: "ORIGINAL_NOT_FOUND" };
+  if (String(original.status) !== "posted") {
+    return { ok: false, error: "Koreksi hanya boleh dilakukan terhadap jurnal Vendor Invoice yang posted.", code: "ORIGINAL_NOT_POSTED" };
+  }
+  if (String(original.source) !== "purchase_bill" || Number(original.source_id) !== input.invoiceId) {
+    return { ok: false, error: "Jurnal asal bukan purchase_bill untuk Vendor Invoice ini.", code: "ORIGINAL_SOURCE_MISMATCH" };
+  }
+  if (Number(original.journal_id) !== input.journalId) {
+    return { ok: false, error: "Journal Vendor Invoice tidak sesuai dengan jurnal asal.", code: "JOURNAL_MISMATCH" };
+  }
+
+  const existingResult = await client.execute(sql`
+    SELECT id, status::text AS status, previous_entry_id
+    FROM accounting_entries
+    WHERE company_id = ${input.companyId}
+      AND source::text = 'reversal'
+      AND source_id = ${input.originalEntryId}
+    ORDER BY id
+    LIMIT 2
+  `);
+  if (existingResult.rows.length > 1) {
+    return { ok: false, error: "Lebih dari satu jurnal koreksi tercatat untuk jurnal asal.", code: "MULTIPLE_CORRECTIONS" };
+  }
+  const existing = existingResult.rows[0] as Record<string, unknown> | undefined;
+  if (existing) {
+    if (
+      String(existing.status) !== "posted"
+      || Number(existing.previous_entry_id) !== input.originalEntryId
+    ) {
+      return { ok: false, error: "Jurnal koreksi yang sudah ada tidak valid; koreksi dihentikan.", code: "INVALID_EXISTING_CORRECTION" };
+    }
+    const existingLineResult = await client.execute(sql`
+      SELECT account_id, debit, credit
+      FROM accounting_entry_lines
+      WHERE entry_id = ${Number(existing.id)}
+        AND debit > 0
+        AND credit = 0
+      ORDER BY id
+    `);
+    const existingDebits = existingLineResult.rows as Array<Record<string, unknown>>;
+    const requestedDebitKeys = input.lines.map((line) =>
+      `${line.accountId}:${Math.round(line.amount * 100)}`,
+    );
+    const matchesRequestedTarget = existingDebits.every((line) =>
+      requestedDebitKeys.includes(
+        `${Number(line.account_id)}:${Math.round(Number(line.debit) * 100)}`,
+      ),
+    );
+    if (!matchesRequestedTarget) {
+      return {
+        ok: false,
+        error: "Jurnal koreksi sudah ada untuk jurnal asal dengan COA tujuan yang berbeda.",
+        code: "CORRECTION_ALREADY_EXISTS",
+      };
+    }
+    return {
+      ok: true,
+      correctionEntryId: Number(existing.id),
+      alreadyCorrected: true,
+      changedLineCount: 0,
+    };
+  }
+
+  const targetAccountIds = [...new Set(input.lines.map((line) => line.accountId))];
+  if (!targetAccountIds.length || input.lines.some((line) =>
+    !Number.isInteger(line.accountId) || line.accountId <= 0 || !Number.isFinite(line.amount) || line.amount <= 0
+  )) {
+    return { ok: false, error: "COA tujuan dan nominal line koreksi tidak valid.", code: "INVALID_TARGET_LINES" };
+  }
+  const accountResult = await client.execute(sql`
+    SELECT id
+    FROM chart_of_accounts
+    WHERE company_id = ${input.companyId}
+      AND id = ANY(${targetAccountIds}::int[])
+      AND is_active = TRUE
+      AND COALESCE(is_postable, TRUE) = TRUE
+      AND COALESCE(status::text, 'ACTIVE') = 'ACTIVE'
+  `);
+  if (accountResult.rows.length !== targetAccountIds.length) {
+    return { ok: false, error: "COA tujuan harus aktif, postable, dan berada pada company yang sama.", code: "TARGET_ACCOUNT_INVALID" };
+  }
+
+  const originalLinesResult = await client.execute(sql`
+    SELECT account_id, debit, credit, description
+    FROM accounting_entry_lines
+    WHERE entry_id = ${input.originalEntryId}
+    ORDER BY id
+  `);
+  const originalLines = originalLinesResult.rows as Array<Record<string, unknown>>;
+  const originalDebit = originalLines
+    .filter((line) => Number(line.debit ?? 0) > 0 && Number(line.credit ?? 0) === 0);
+  const totalDebit = originalLines.reduce((sum, line) => sum + Number(line.debit ?? 0), 0);
+  const totalCredit = originalLines.reduce((sum, line) => sum + Number(line.credit ?? 0), 0);
+  if (
+    !originalLines.length
+    || Math.abs(totalDebit - totalCredit) > 0.01
+    || Math.abs(totalDebit - Number(original.total_debit ?? 0)) > 0.01
+    || Math.abs(totalCredit - Number(original.total_credit ?? 0)) > 0.01
+  ) {
+    return { ok: false, error: "Jurnal asal tidak balance; koreksi dihentikan.", code: "ORIGINAL_UNBALANCED" };
+  }
+
+  const targetTotal = input.lines.reduce((sum, line) => sum + line.amount, 0);
+  const targetCents = Math.round(targetTotal * 100);
+  const subsetByCents = new Map<number, number[]>([[0, []]]);
+  for (let index = 0; index < originalDebit.length; index += 1) {
+    const amountCents = Math.round(Number(originalDebit[index]!.debit ?? 0) * 100);
+    for (const [sumCents, indexes] of [...subsetByCents.entries()]) {
+      const nextCents = sumCents + amountCents;
+      if (nextCents <= targetCents && !subsetByCents.has(nextCents)) {
+        subsetByCents.set(nextCents, [...indexes, index]);
+      }
+    }
+  }
+  const reclassIndexes = subsetByCents.get(targetCents);
+  if (!reclassIndexes?.length) {
+    return { ok: false, error: "Total COA line Finance tidak cocok dengan debit net jurnal asal.", code: "TARGET_AMOUNT_MISMATCH" };
+  }
+  const reclassDebit = reclassIndexes.map((index) => originalDebit[index]!);
+
+  // Match one-to-one where possible. A single legacy debit line may represent
+  // several invoice lines, so it can also be split when its total matches.
+  const usedOriginal = new Set<number>();
+  const correctionLines: PostingLine[] = [];
+  for (const target of input.lines) {
+    const exactIndex = reclassDebit.findIndex((line, index) =>
+      !usedOriginal.has(index) && Math.abs(Number(line.debit ?? 0) - target.amount) <= 0.01,
+    );
+    const fallbackIndex = reclassDebit.length === 1 ? 0 : -1;
+    const originalIndex = exactIndex >= 0 ? exactIndex : fallbackIndex;
+    if (originalIndex < 0) {
+      return { ok: false, error: `Tidak dapat memetakan nominal line ${target.lineId} ke jurnal asal.`, code: "ORIGINAL_LINE_AMBIGUOUS" };
+    }
+    const oldLine = reclassDebit[originalIndex]!;
+    const oldAccountId = Number(oldLine.account_id);
+    if (oldAccountId !== target.accountId) {
+      correctionLines.push(
+        {
+          accountId: target.accountId,
+          debit: target.amount,
+          credit: 0,
+          description: `[RECLASS VI] ${target.description ?? `Line ${target.lineId}`} — ${input.reason}`,
+        },
+        {
+          accountId: oldAccountId,
+          debit: 0,
+          credit: target.amount,
+          description: `[RECLASS VI] Koreksi dari COA lama line ${target.lineId} — ${input.reason}`,
+        },
+      );
+    }
+    if (exactIndex >= 0) usedOriginal.add(originalIndex);
+  }
+
+  if (!correctionLines.length) {
+    return { ok: true, changedLineCount: 0 };
+  }
+  const correctionDebit = correctionLines.reduce((sum, line) => sum + line.debit, 0);
+  const correctionCredit = correctionLines.reduce((sum, line) => sum + line.credit, 0);
+  if (Math.abs(correctionDebit - correctionCredit) > 0.01) {
+    return { ok: false, error: "Jurnal reclassification tidak balance.", code: "CORRECTION_UNBALANCED" };
+  }
+
+  const correction = await postEntryWithClient(
+    client,
+    {
+      journalId: input.journalId,
+      date: new Date(),
+      ref: input.ref,
+      description: `[RECLASS VENDOR INVOICE] ${input.ref} — ${input.reason}`,
+      source: "reversal",
+      sourceId: input.originalEntryId,
+      createdById: input.actor,
+      companyId: input.companyId,
+      lines: correctionLines,
+    },
+    input.journalCode,
+  );
+  await client.execute(sql`
+    UPDATE accounting_entries
+    SET previous_entry_id = ${input.originalEntryId}
+    WHERE id = ${correction.id}
+  `);
+  await client.execute(sql`
+    INSERT INTO erp_audit_logs
+      (company_id, user_id, action, module, reference_id, old_data, new_data, created_at)
+    VALUES
+      (${input.companyId}, ${input.actor}, 'VENDOR_INVOICE_JOURNAL_RECLASSIFIED',
+       'purchase_workflow', ${input.ref},
+       ${JSON.stringify({
+         invoice_id: input.invoiceId,
+         original_entry_id: input.originalEntryId,
+         reason: input.reason,
+         source_coa_ids: correctionLines.filter((line) => line.credit > 0).map((line) => line.accountId),
+       })}::jsonb,
+       ${JSON.stringify({
+         correction_entry_id: correction.id,
+         target_coa_ids: correctionLines.filter((line) => line.debit > 0).map((line) => line.accountId),
+         balanced: true,
+       })}::jsonb,
+       NOW())
+  `);
+
+  return {
+    ok: true,
+    correctionEntryId: correction.id,
+    changedLineCount: correctionLines.length / 2,
+  };
 }
 
 /**

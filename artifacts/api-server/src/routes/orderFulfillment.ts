@@ -616,7 +616,6 @@ fulfillmentPublicRouter.post("/:token", async (req: Request, res: Response) => {
     }, "[WA-driver] orderFulfillment (legacy) cek kirim WA ke driver");
 
     if (_driverPhoneOF) {
-      const driverAppUrl = `${getBaseUrl()}/driver`;
       const waDriver = [
         `🚛 *Konfirmasi Job Order*`,
         ``,
@@ -629,7 +628,7 @@ fulfillmentPublicRouter.post("/:token", async (req: Request, res: Response) => {
         String((body as any).vehicleType ?? "").trim() ? `🚐 *Kendaraan* : ${String((body as any).vehicleType).trim()}` : null,
         String((body as any).pickupTime  ?? "").trim() ? `🕐 *Pickup*    : ${String((body as any).pickupTime).trim()}` : null,
         ``,
-        `📱 Driver App: ${driverAppUrl}`,
+        `📲 Detail progres akan dikirim melalui WhatsApp.`,
       ].filter(Boolean).join("\n");
 
       logger.info({

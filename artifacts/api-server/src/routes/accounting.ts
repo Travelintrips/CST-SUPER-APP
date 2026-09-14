@@ -940,6 +940,153 @@ router.get("/entries/:id", async (req, res) => {
   });
 });
 
+/**
+ * PATCH /accounting/entries/:id — edit jurnal manual yang masih draft.
+ *
+ * Posted/otomatis tidak boleh diubah langsung. Untuk koreksi posted gunakan
+ * reversal lalu buat entry manual baru melalui alur koreksi di UI.
+ */
+router.patch("/entries/:id", async (req, res) => {
+  const id = Number(String(req.params.id));
+  if (Number.isNaN(id)) return res.status(400).json({ message: "Invalid id" });
+
+  const [entry] = await db
+    .select()
+    .from(accountingEntriesTable)
+    .where(eq(accountingEntriesTable.id, id));
+  if (!entry) return res.status(404).json({ message: "Entri tidak ditemukan" });
+
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(entry.companyId, companyId, req, res, { resourceType: "accounting_entry", resourceId: id })) return;
+  if (entry.source !== "manual" || entry.status !== "draft") {
+    return res.status(409).json({
+      message: "Hanya jurnal manual berstatus draft yang dapat diedit. Jurnal posted harus dikoreksi dengan reversal.",
+      code: "ENTRY_NOT_EDITABLE",
+    });
+  }
+
+  const lockCheck = await checkEntryLocked(id);
+  if (lockCheck.locked) {
+    await reportImmutabilityViolation({
+      companyId: entry.companyId,
+      entryId: id,
+      attemptedAction: "UPDATE",
+      actor: (req as any).user?.email ?? null,
+    });
+    return res.status(409).json({ message: lockCheck.message, code: "ENTRY_LOCKED" });
+  }
+
+  const { journalId, date: dateStr, ref, description, lines } = req.body ?? {};
+  const nextJournalId = Number(journalId ?? entry.journalId);
+  const nextDate = new Date(String(dateStr ?? entry.date));
+  if (!Number.isInteger(nextJournalId) || nextJournalId <= 0 || Number.isNaN(nextDate.getTime())) {
+    return res.status(400).json({ message: "journalId dan date wajib valid" });
+  }
+  if (!Array.isArray(lines) || lines.length < 2) {
+    return res.status(400).json({ message: "Minimal harus ada 2 baris jurnal" });
+  }
+
+  const normalizedLines: PostingLine[] = lines.map((line: any) => ({
+    accountId: Number(line.accountId),
+    debit: Number(line.debit ?? 0),
+    credit: Number(line.credit ?? 0),
+    description: line.description == null ? null : String(line.description),
+  }));
+  if (normalizedLines.some((line) =>
+    !Number.isInteger(line.accountId) ||
+    line.accountId <= 0 ||
+    !Number.isFinite(line.debit) ||
+    !Number.isFinite(line.credit) ||
+    line.debit < 0 ||
+    line.credit < 0 ||
+    (line.debit > 0 && line.credit > 0) ||
+    (line.debit === 0 && line.credit === 0)
+  )) {
+    return res.status(400).json({ message: "Setiap baris harus memiliki COA valid dan hanya debit atau kredit" });
+  }
+
+  const totalDebit = normalizedLines.reduce((sum, line) => sum + line.debit, 0);
+  const totalCredit = normalizedLines.reduce((sum, line) => sum + line.credit, 0);
+  if (totalDebit <= 0 || Math.abs(totalDebit - totalCredit) > 0.01) {
+    return res.status(400).json({ message: "Total debit dan kredit harus seimbang dan lebih besar dari nol" });
+  }
+
+  const [journal] = await db
+    .select({ id: accountingJournalsTable.id })
+    .from(accountingJournalsTable)
+    .where(and(
+      eq(accountingJournalsTable.id, nextJournalId),
+      or(isNull(accountingJournalsTable.companyId), eq(accountingJournalsTable.companyId, entry.companyId ?? companyId)),
+    ));
+  if (!journal) return res.status(404).json({ message: "Jurnal tidak ditemukan untuk perusahaan ini" });
+
+  const accountIds = [...new Set(normalizedLines.map((line) => line.accountId))];
+  const validAccounts = await db
+    .select({ id: chartOfAccountsTable.id })
+    .from(chartOfAccountsTable)
+    .where(and(
+      inArray(chartOfAccountsTable.id, accountIds),
+      or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, entry.companyId ?? companyId)),
+      eq(chartOfAccountsTable.isActive, true),
+    ));
+  if (validAccounts.length !== accountIds.length) {
+    return res.status(400).json({ message: "Ada COA yang tidak aktif atau bukan milik perusahaan ini" });
+  }
+
+  const oldLines = await db
+    .select()
+    .from(accountingEntryLinesTable)
+    .where(eq(accountingEntryLinesTable.entryId, id));
+
+  try {
+    const updated = await db.transaction(async (tx) => {
+      const [next] = await tx
+        .update(accountingEntriesTable)
+        .set({
+          journalId: nextJournalId,
+          date: nextDate.toISOString().slice(0, 10),
+          ref: ref == null ? null : String(ref),
+          description: description == null ? null : String(description),
+          totalDebit: totalDebit.toFixed(2),
+          totalCredit: totalCredit.toFixed(2),
+        })
+        .where(eq(accountingEntriesTable.id, id))
+        .returning();
+
+      await tx.delete(accountingEntryLinesTable)
+        .where(eq(accountingEntryLinesTable.entryId, id));
+      await tx.insert(accountingEntryLinesTable).values(
+        normalizedLines.map((line) => ({
+          entryId: id,
+          accountId: line.accountId,
+          debit: line.debit.toFixed(2),
+          credit: line.credit.toFixed(2),
+          description: line.description ?? null,
+        })),
+      );
+      return next;
+    });
+
+    audit(req, {
+      action: "update",
+      module: "accounting",
+      resourceId: entry.entryNumber,
+      companyId: entry.companyId,
+      description: "Draft journal updated",
+      before: { ...serializeEntry(entry), lines: oldLines.map(serializeEntryLine) },
+      after: { ...serializeEntry(updated!), lines: normalizedLines },
+    });
+
+    const fullLines = await db
+      .select()
+      .from(accountingEntryLinesTable)
+      .where(eq(accountingEntryLinesTable.entryId, id));
+    return res.json({ ...serializeEntry(updated!), lines: fullLines.map(serializeEntryLine) });
+  } catch (err) {
+    return res.status(400).json({ message: String((err as Error)?.message ?? err) });
+  }
+});
+
 router.post("/entries", async (req, res) => {
   const companyId = resolveCompanyId(req);
   const { journalId, date: dateStr, ref, description, lines } = req.body ?? {};
@@ -2587,34 +2734,106 @@ router.post("/entries/:id/reverse", async (req, res) => {
   if (!entry) return res.status(404).json({ message: "Entri tidak ditemukan" });
   // IDOR guard
   if (!await assertCompanyAccess(entry.companyId, companyId, req, res, { resourceType: "accounting_entry", resourceId: id })) return;
+
+  // The correction flow creates the draft before asking for the reversal. If
+  // the reversal fails, return a server-verified draft identity so the UI can
+  // offer a direct recovery link instead of making the user search by number.
+  const requestedDraftId = Number(req.body?.draftEntryId);
+  const [requestedDraft] = Number.isInteger(requestedDraftId) && requestedDraftId > 0
+    ? await db
+      .select({
+        id: accountingEntriesTable.id,
+        entryNumber: accountingEntriesTable.entryNumber,
+        status: accountingEntriesTable.status,
+        source: accountingEntriesTable.source,
+        companyId: accountingEntriesTable.companyId,
+      })
+      .from(accountingEntriesTable)
+      .where(and(
+        eq(accountingEntriesTable.id, requestedDraftId),
+        eq(accountingEntriesTable.companyId, companyId),
+      ))
+    : [];
+  const draftRecovery = requestedDraft?.source === "manual" && requestedDraft.status === "draft"
+    ? {
+      draftEntryId: requestedDraft.id,
+      draftEntryNumber: requestedDraft.entryNumber ?? null,
+    }
+    : null;
+  const reversalFailure = (status: number, message: string, code?: string) =>
+    res.status(status).json({
+      message,
+      ...(code ? { code } : {}),
+      ...(draftRecovery ?? {}),
+    });
+
   if (entry.status !== "posted")
-    return res
-      .status(400)
-      .json({ message: "Hanya entri berstatus 'posted' yang bisa dibalik" });
+    return reversalFailure(400, "Hanya entri berstatus 'posted' yang bisa dibalik");
   if (entry.source === "reversal")
-    return res
-      .status(400)
-      .json({ message: "Entri pembalik tidak bisa dibalik lagi" });
+    return reversalFailure(400, "Entri pembalik tidak bisa dibalik lagi");
+
+  // A reversal may have been committed just before a client timeout or a
+  // retry. Reuse the one canonical posted reversal instead of creating a
+  // second ledger entry. The unique source/source_id index remains the final
+  // concurrent-write guard, but this path gives retries a successful response.
+  const existingReversals = await db
+    .select()
+    .from(accountingEntriesTable)
+    .where(
+      and(
+        eq(accountingEntriesTable.source, "reversal"),
+        eq(accountingEntriesTable.sourceId, id),
+        eq(accountingEntriesTable.companyId, companyId),
+      ),
+    )
+    .limit(2);
+  if (existingReversals.length > 0) {
+    if (existingReversals.length > 1) {
+      return reversalFailure(
+        409,
+        "Entri memiliki lebih dari satu reversal; retry dihentikan untuk mencegah duplikasi.",
+        "MULTIPLE_REVERSALS_FOUND",
+      );
+    }
+
+    const existingReversal = existingReversals[0]!;
+    if (existingReversal.status !== "posted") {
+      return reversalFailure(
+        409,
+        "Reversal untuk entri ini sudah ada tetapi belum berstatus posted.",
+        "REVERSAL_NOT_POSTED",
+      );
+    }
+
+    const existingLines = await db
+      .select()
+      .from(accountingEntryLinesTable)
+      .where(eq(accountingEntryLinesTable.entryId, existingReversal.id));
+    return res.status(200).json({
+      ...serializeEntry(existingReversal),
+      lines: existingLines.map(serializeEntryLine),
+      reused: true,
+    });
+  }
 
   const origLines = await db
     .select()
     .from(accountingEntryLinesTable)
     .where(eq(accountingEntryLinesTable.entryId, id));
   if (origLines.length === 0)
-    return res
-      .status(400)
-      .json({
-        message: "Entri tidak memiliki baris jurnal",
-        detail: "Entri ini kemungkinan dibuat sebelum perbaikan sistem (bug draft-first). Muat ulang halaman — sistem sedang memperbaiki entri ini secara otomatis saat startup. Jika masalah berlanjut setelah muat ulang, hubungi administrator.",
-        code: "NO_LINES_ORPHAN_ENTRY",
-      });
+    return res.status(400).json({
+      message: "Entri tidak memiliki baris jurnal",
+      detail: "Entri ini kemungkinan dibuat sebelum perbaikan sistem (bug draft-first). Muat ulang halaman — sistem sedang memperbaiki entri ini secara otomatis saat startup. Jika masalah berlanjut setelah muat ulang, hubungi administrator.",
+      code: "NO_LINES_ORPHAN_ENTRY",
+      ...(draftRecovery ?? {}),
+    });
 
   const [journal] = await db
     .select()
     .from(accountingJournalsTable)
     .where(eq(accountingJournalsTable.id, entry.journalId));
   if (!journal)
-    return res.status(400).json({ message: "Jurnal tidak ditemukan" });
+    return reversalFailure(400, "Jurnal tidak ditemukan");
 
   const reversalLines: PostingLine[] = origLines.map((l) => ({
     accountId: l.accountId,
@@ -2707,9 +2926,7 @@ router.post("/entries/:id/reverse", async (req, res) => {
         lines: fullLines.map(serializeEntryLine),
       });
   } catch (err) {
-    return res
-      .status(400)
-      .json({ message: String((err as Error)?.message ?? err) });
+    return reversalFailure(400, String((err as Error)?.message ?? err), "REVERSAL_FAILED");
   }
 });
 

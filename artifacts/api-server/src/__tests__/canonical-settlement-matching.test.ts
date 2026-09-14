@@ -20,6 +20,7 @@ import {
 import {
   classifyMatch,
   dedupeCandidatesByIdentity,
+  isExactMatchEligibleForAutoPost,
   scoreUnified,
   type MatchCandidate,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
@@ -70,6 +71,16 @@ function mutation(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Phase 4C-5 canonical settlement matching", () => {
+  it("allows only exact non-canonical matches into generic auto-post", () => {
+    expect(isExactMatchEligibleForAutoPost({ score: 100, amount_match: true })).toBe(true);
+    expect(isExactMatchEligibleForAutoPost({ score: 99, amount_match: true })).toBe(false);
+    expect(isExactMatchEligibleForAutoPost({ score: 100, amount_match: false })).toBe(false);
+    expect(isExactMatchEligibleForAutoPost(
+      { score: 100, amount_match: true },
+      true,
+    )).toBe(false);
+  });
+
   it("matches the canonical net amount and retains source-qualified identity", () => {
     const scored = scoreUnified(mutation(), canonicalCandidate());
 

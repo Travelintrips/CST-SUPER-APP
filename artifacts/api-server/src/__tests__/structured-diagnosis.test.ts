@@ -134,6 +134,27 @@ describe("structured QRIS reconciliation diagnosis", () => {
     expect(repairSource).not.toMatch(/INSERT\s+INTO\s+accounting_entries/i);
   });
 
+  it("forwards the authenticated portal origin to internal auto-approval", () => {
+    const approvalStart = bankReconciliationRouteSource.indexOf(
+      "async function triggerAutomaticQrisApproval(",
+    );
+    const approvalEnd = bankReconciliationRouteSource.indexOf(
+      "// ───",
+      approvalStart,
+    );
+    expect(approvalStart).toBeGreaterThanOrEqual(0);
+    expect(approvalEnd).toBeGreaterThan(approvalStart);
+
+    const approvalSource = bankReconciliationRouteSource.slice(
+      approvalStart,
+      approvalEnd,
+    );
+    expect(approvalSource).toContain("req.headers?.origin");
+    expect(approvalSource).toContain("req.headers?.referer");
+    expect(approvalSource).toContain("...(origin ? { origin } : {})");
+    expect(approvalSource).toContain("...(referer ? { referer } : {})");
+  });
+
   it("returns diagnosis from approval and candidate-generation failure responses", () => {
     expect(bankReconciliationRouteSource).toContain("qrisAutoPostDiagnostic(");
     expect(bankReconciliationRouteSource).toContain("buildQrisAutoPostDiagnosis(");
@@ -159,6 +180,10 @@ describe("structured QRIS reconciliation diagnosis", () => {
     expect(bankReconciliationRouteSource).toContain('"sql_correction"');
     expect(bankReconciliationRouteSource).toContain('"auto_repair"');
     expect(bankReconciliationRouteSource).toContain('"developer_action_required"');
+    expect(bankReconciliationRouteSource).toContain("QRIS_CANONICAL_EVIDENCE_REQUIRED");
+    expect(bankReconciliationRouteSource).toContain("isQrisSettlementMatch");
+    expect(bankReconciliationRouteSource).toContain("Snapshot atau ID historis yang tidak ditemukan");
+    expect(bankReconciliationRouteSource).toContain("&& !isQrisSettlementMatch");
 
     const helperStart = bankReconciliationRouteSource.indexOf(
       "function buildStaleApprovedMatchRepairSql",

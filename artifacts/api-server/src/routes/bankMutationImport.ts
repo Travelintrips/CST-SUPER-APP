@@ -23,6 +23,7 @@ import {
   resolveActiveBankAccountId,
   type ActiveBankAccount,
 } from "../lib/reconciliation/bankAccountIdentity.js";
+import { directionFromBankColumns } from "../lib/reconciliation/bankFormatParsers.js";
 
 const router = Router();
 
@@ -568,7 +569,7 @@ async function normalizeBankMutationRow(row: {
   status:         'READY' | 'NEED_REVIEW' | 'NEED_COA_MAPPING';
 }> {
   const credit     = Number(row.credit || 0);
-  const direction: 'IN' | 'OUT' = credit > 0 ? 'IN' : 'OUT';
+  const direction = directionFromBankColumns(Number(row.debit || 0), credit);
   const erpCategory = row.erpCategory ?? null;
 
   let normClass = normalizeAccountingClass(row.accountingClass);
@@ -1085,13 +1086,13 @@ async function postBatchFromNormalized(
     try {
       // ⚡ RECONCILIATION_ONLY — menggunakan Unified Matching Engine (bukan findMatchingTransaction lama)
       if (importMode === 'RECONCILIATION_ONLY') {
-        const _amount = Number(ne.credit || ne.amount || 0) > 0
-          ? Number(ne.credit || ne.amount || 0)
-          : Number(ne.debit || 0);
+        const _debit = Number(ne.debit || 0);
+        const _credit = Number(ne.credit || 0);
+        const _dir = directionFromBankColumns(_debit, _credit);
+        const _amount = (_dir === 'IN' ? _credit : _debit) || Number(ne.amount || 0);
         const _txDate = ne.transaction_date
           ? new Date(ne.transaction_date).toISOString().split('T')[0]!
           : new Date().toISOString().split('T')[0]!;
-        const _dir: 'IN' | 'OUT' = Number(ne.credit || 0) > 0 ? 'IN' : 'OUT';
         const _mk = ne.unique_key ?? `${_txDate.replace(/-/g, '')}_${Math.round(_amount)}_${_dir}`;
         const _descSafe = String(ne.description ?? '').replace(/'/g, "''");
         const _normDesc = _descSafe.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1301,7 +1302,7 @@ async function postBatchFromNormalized(
         const _gDate = ne.transaction_date
           ? new Date(ne.transaction_date).toISOString().split('T')[0]!
           : new Date().toISOString().split('T')[0]!;
-        const _gDir: 'IN' | 'OUT' = Number(ne.credit || 0) > 0 ? 'IN' : 'OUT';
+        const _gDir = directionFromBankColumns(Number(ne.debit || 0), Number(ne.credit || 0));
         const _gMk = ne.unique_key ?? `${_gDate.replace(/-/g, '')}_${Math.round(_gAmount)}_${_gDir}`;
         const _gDesc = String(ne.description ?? '').replace(/'/g, "''");
         const _gNorm = _gDesc.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -2319,7 +2320,7 @@ router.post("/save", async (req, res) => {
         const txRows: TxRow[] = (transferRows as any[]).map(r => ({
           id: Number(r.id),
           amount: Math.max(Number(r.debit || 0), Number(r.credit || 0)),
-          direction: Number(r.credit || 0) > 0 ? 'IN' : 'OUT',
+          direction: directionFromBankColumns(Number(r.debit || 0), Number(r.credit || 0)),
         }));
         const byAmount = new Map<number, TxRow[]>();
         for (const r of txRows) {
@@ -2982,8 +2983,8 @@ async function syncToBankMutations(batchId: number): Promise<void> {
       const descSafe  = String(row.description ?? "").replace(/'/g, "''");
       const credit    = Number(row.credit  || 0);
       const debit     = Number(row.debit   || 0);
-      const amount    = credit > 0 ? credit : debit;
-      const direction = credit > 0 ? "IN" : "OUT";
+      const direction = directionFromBankColumns(debit, credit);
+      const amount    = (direction === "IN" ? credit : debit) || Number(row.amount || 0);
       const txDate    = row.transaction_date
         ? new Date(row.transaction_date).toISOString().split("T")[0]
         : new Date().toISOString().split("T")[0];

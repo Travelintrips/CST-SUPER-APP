@@ -846,7 +846,8 @@ export async function resolveContraAccount(
   // A Rule AI match is an explicit COA decision. Resolve it before the
   // description normalizer so a "kas besar" rule cannot fall through to an
   // arbitrary second bank account or an expense fallback.
-  if (type === "recon_rule" && candidateId != null && companyId != null) {
+  if (type === "recon_rule" && candidateId != null) {
+    if (companyId == null) return null;
     const ruleTarget = await loadReconRuleTarget(client, companyId, candidateId);
     if (!ruleTarget?.targetCoaCode) return null;
     const accountId = await findCompanyCoa(client, companyId, ruleTarget.targetCoaCode);
@@ -1185,6 +1186,17 @@ export function classifyMatch(s: UnifiedScoredMatch): "auto_matched" | "manual_r
   return "unmatched";
 }
 
+/**
+ * Only an exact score-100 match may enter the generic auto-post path.
+ * Canonical Sport Center settlements have a separate settlement owner.
+ */
+export function isExactMatchEligibleForAutoPost(
+  match: Pick<UnifiedScoredMatch, "score" | "amount_match">,
+  isCanonicalCandidate = false,
+): boolean {
+  return !isCanonicalCandidate && match.score >= 100 && match.amount_match;
+}
+
 export function confidenceLabel(score: number): "high" | "medium" | "low" | "none" {
   if (score >= 95) return "high";
   if (score >= 90) return "high";
@@ -1468,7 +1480,8 @@ export async function fetchCandidates(
         SELECT ap.id, ap.amount,
                ap.date::text AS date,
                COALESCE(ap.partner_name, ap.memo, '') AS name,
-               ap.ref AS ref
+               ap.ref AS ref,
+               ap.company_id
         FROM accounting_payments ap
         WHERE ${amtFilter.replace("##AMT##", "ap.amount")}
           AND ap.date BETWEEN ${dateFrom} AND ${dateTo}
@@ -1490,7 +1503,8 @@ export async function fetchCandidates(
         SELECT lo.id, lo.grand_total AS amount,
                lo.created_at::date::text AS date,
                COALESCE(lo.sender_name, '') AS name,
-               lo.order_number AS ref
+               lo.order_number AS ref,
+               lo.company_id
         FROM logistic_orders lo
         WHERE ${amtFilter.replace("##AMT##", "lo.grand_total")}
           AND '${direction}' = 'OUT'
@@ -1505,7 +1519,8 @@ export async function fetchCandidates(
                COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) AS amount,
                COALESCE(sd.invoice_date, sd.created_at::date)::text AS date,
                COALESCE(c.name, '') AS name,
-               sd.doc_number AS ref
+               sd.doc_number AS ref,
+               sd.company_id
         FROM sales_documents sd
         LEFT JOIN customers c ON c.id = sd.customer_id
         WHERE sd.invoice_number IS NOT NULL
@@ -1523,7 +1538,8 @@ export async function fetchCandidates(
         SELECT e.id, e.total AS amount,
                e.date::text AS date,
                COALESCE(e.description, '') AS name,
-               e.expense_number AS ref
+               e.expense_number AS ref,
+               e.company_id
         FROM expenses e
         WHERE ${amtFilter.replace("##AMT##", "e.total")}
           AND '${direction}' = 'OUT'
@@ -1627,6 +1643,7 @@ export async function fetchCandidates(
                qs.settlement_date::text AS date,
                COALESCE(qs.settlement_reference, 'QRIS settlement') AS name,
                qs.settlement_reference AS ref,
+               qs.company_id,
                qs.gross_amount,
                qs.mdr_amount,
                qs.tax_withheld_amount,
@@ -1650,10 +1667,11 @@ export async function fetchCandidates(
     {
       type: "tenant_invoice" as CandidateType,
       q: `
-        SELECT ti.id, ti.total_amount AS amount,
+         SELECT ti.id, ti.total_amount AS amount,
                ti.created_at::date::text AS date,
                COALESCE(t.business_name, '') AS name,
-               ti.invoice_number AS ref
+                ti.invoice_number AS ref,
+                ti.company_id
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
         WHERE ${amtFilter.replace("##AMT##", "ti.total_amount")}
@@ -1853,8 +1871,8 @@ async function writeReconAudit(
 /**
  * runUnifiedMatching — fetch candidates, score, save to bank_reconciliation_matches.
  * Updates bank_mutations.status to 'matched' or 'unmatched'.
- * For auto_matched: also marks the best match as 'approved' in bank_reconciliation_matches.
- * Journal creation is NOT done here — always deferred to approveAndCreateJournal().
+ * An exact score-100 auto-match also runs through approveAndCreateJournal()
+ * with the auto-post guard enabled. Lower scores remain matched-only.
  */
 export async function runUnifiedMatching(
   mutation: MutationInput,
@@ -2059,16 +2077,120 @@ export async function runUnifiedMatching(
   });
 
   if (classification === "auto_matched") {
-    // Mark best candidate as approved in matches table
+    const exactAutoPost = isExactMatchEligibleForAutoPost(best, isCanonicalBest);
+    if (exactAutoPost) {
+      const candidateSourceSql = best.candidate.candidateSource
+        ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'`
+        : "NULL";
+      const candidateIdSql = `'${String(best.candidate.id).replace(/'/g, "''")}'`;
+      const { rows: matchRows } = await db.execute(sql.raw(`
+        SELECT id
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutation.id}
+          AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
+           AND candidate_id = ${candidateIdSql}
+          AND candidate_source IS NOT DISTINCT FROM ${candidateSourceSql}
+          AND status = 'candidate'
+        ORDER BY id DESC
+        LIMIT 1
+      `));
+      const exactMatchId = Number((matchRows[0] as Record<string, unknown> | undefined)?.id);
+
+      if (Number.isSafeInteger(exactMatchId) && exactMatchId > 0) {
+        await writeReconAudit(mutation.id, "AUTO_POST_ATTEMPTED", actor, {
+          match_id: exactMatchId,
+          candidate_type: best.candidate.type,
+          candidate_id: best.candidate.id,
+          candidate_source: best.candidate.candidateSource ?? null,
+          score: best.score,
+          amount_match: best.amount_match,
+          reason: "Exact match score 100 dengan nominal mutasi cocok.",
+        });
+
+        const approval = await approveAndCreateJournal(
+          mutation.id,
+          exactMatchId,
+          best.candidate.type,
+          best.candidate.id,
+          actor,
+          "Auto-post berdasarkan exact match 100%",
+          null,
+          best.candidate.candidateSource ?? null,
+          true,
+        );
+
+        if (approval.ok) {
+          logger.info(
+            {
+              mutationId: mutation.id,
+              score: best.score,
+              journalEntryId: approval.journalEntryId,
+            },
+            "[unifiedMatchingEngine] exact match auto-posted",
+          );
+          return { status: "auto_matched", best, all: scored };
+        }
+
+        const blockedReason = approval.error ?? "Auto-post ditahan oleh safeguard jurnal.";
+        await db.execute(sql.raw(`
+          UPDATE bank_mutations
+          SET status = 'manual_review',
+              review_reason = '${blockedReason.replace(/'/g, "''").slice(0, 500)}',
+              review_code = '${(approval.code ?? "AUTO_POST_GUARD").replace(/'/g, "''")}',
+              updated_at = NOW()
+          WHERE id = ${mutation.id}
+            AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+        `)).catch(() => {});
+        await writeReconAudit(mutation.id, "AUTO_POST_BLOCKED", actor, {
+          match_id: exactMatchId,
+          candidate_type: best.candidate.type,
+          candidate_id: best.candidate.id,
+          candidate_source: best.candidate.candidateSource ?? null,
+          score: best.score,
+          code: approval.code ?? "AUTO_POST_GUARD",
+          reason: blockedReason,
+        });
+        logger.warn(
+          { mutationId: mutation.id, score: best.score, error: blockedReason },
+          "[unifiedMatchingEngine] exact match auto-post blocked; leaving for manual review",
+        );
+        return { status: "manual_review", best, all: scored };
+      }
+
+      await writeReconAudit(mutation.id, "AUTO_POST_BLOCKED", actor, {
+        candidate_type: best.candidate.type,
+        candidate_id: best.candidate.id,
+        candidate_source: best.candidate.candidateSource ?? null,
+        score: best.score,
+        code: "MATCH_ROW_NOT_FOUND",
+        reason: "Exact match tersimpan tanpa row kandidat aktif yang dapat di-approve.",
+      });
+      await db.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status = 'manual_review',
+            review_reason = 'Exact match 100% tidak memiliki row kandidat aktif untuk approval.',
+            review_code = 'MATCH_ROW_NOT_FOUND',
+            updated_at = NOW()
+        WHERE id = ${mutation.id}
+          AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+      `)).catch(() => {});
+      logger.warn(
+        { mutationId: mutation.id, score: best.score },
+        "[unifiedMatchingEngine] exact match auto-post skipped: match row not found",
+      );
+      return { status: "manual_review", best, all: scored };
+    }
+
+    // Lower-confidence auto-match and canonical QRIS settlement candidates
+    // remain matched-only. Canonical QRIS is approved by its dedicated flow.
     await db.execute(sql.raw(`
       UPDATE bank_reconciliation_matches
       SET status = 'approved'
       WHERE mutation_id = ${mutation.id}
-        AND candidate_type = '${best.candidate.type}'
-        AND candidate_id = ${best.candidate.id}
-        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource}'` : "NULL"}
+        AND candidate_type = '${best.candidate.type.replace(/'/g, "''")}'
+        AND candidate_id = '${String(best.candidate.id).replace(/'/g, "''")}'
+        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
     `)).catch(() => {});
-    // Set mutation status to 'matched' — journal will be created by approval gate
     await db.execute(sql.raw(
       `UPDATE bank_mutations SET status = 'matched', updated_at = NOW() WHERE id = ${mutation.id}`,
     )).catch(() => {});
@@ -2108,8 +2230,9 @@ export async function runUnifiedMatching(
  *   → COMMIT or full ROLLBACK if any step throws
  *
  * Period lock: enforced by _postEntryCore — throws PERIOD_CLOSED for closed periods.
- * Auto-post is opt-in for a fully matched, explicit COA reference rule. Normal
- * human approval still creates a draft and requires the separate post action.
+ * Auto-post is enabled only when the caller has already established an exact
+ * score-100 match. Normal human approval still creates a draft and requires
+ * the separate post action.
  */
 
 /**
@@ -2182,11 +2305,11 @@ export async function approveAndCreateJournal(
     const txResult = await db.transaction(async (tx) => {
 
        // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
-       const { rows: locked } = await tx.execute(sql.raw(`
-         SELECT bm.id, bm.status, bm.amount, bm.direction,
+        const { rows: locked } = await tx.execute(sql.raw(`
+          SELECT bm.id, bm.status, bm.amount, bm.direction,
                bm.transaction_date, bm.description, bm.mutation_key,
                  bm.provider_name, bm.provider_order_id, bm.normalized_description,
-                 bm.company_id, bm.bank_account_id, bm.journal_entry_id,
+                  bm.company_id, bm.bank_account_id AS bank_account_reference, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
         WHERE bm.id = ${mutationId}
@@ -2198,7 +2321,15 @@ export async function approveAndCreateJournal(
       const mut = locked[0] as Record<string, unknown>;
 
       const companyId   = normalizeCompanyId(mut["company_id"]);
-      const bankAccId   = mut["bank_account_id"] != null ? Number(mut["bank_account_id"]) : null;
+      const bankAccountReference = String(mut["bank_account_reference"] ?? "").trim();
+      // bank_account_id historically contains either the internal
+      // company_bank_accounts.id or the external account number from a
+      // statement/import. Keep the numeric ID only for code paths that truly
+      // require it; bank COA resolution below handles both identities.
+      const bankAccId = /^\d+$/.test(bankAccountReference)
+        && Number.isSafeInteger(Number(bankAccountReference))
+        ? Number(bankAccountReference)
+        : null;
       const txDate      = String(mut["transaction_date"] ?? "").split("T")[0];
       const amount      = Number(mut["amount"]);
       const direction   = String(mut["direction"] ?? "IN");
@@ -2502,11 +2633,29 @@ export async function approveAndCreateJournal(
         }
 
       // ── Step 3: Resolve bank COA + contra account + journal ───────────────
-      // Bank COA: company_bank_accounts.coa_id WHERE id = bank_account_id
+      // Bank COA: bank_account_reference may be either the internal
+      // company_bank_accounts.id or the external account number. Imports from
+      // statements commonly carry the latter, so resolving by id only leaves
+      // the selected manual COA unable to create a balanced journal.
       let bankCoaId: number | null = null;
-      if (bankAccId) {
+      if (companyId && bankAccountReference) {
+        const escapedBankAccountReference = escapeSql(bankAccountReference);
         const { rows: cbaRows } = await tx.execute(sql.raw(`
-          SELECT coa_id FROM company_bank_accounts WHERE id = ${bankAccId} LIMIT 1
+          SELECT coa_id
+          FROM company_bank_accounts
+          WHERE company_id = ${companyId}
+            AND is_active = TRUE
+            AND coa_id IS NOT NULL
+            AND (
+              id::text = '${escapedBankAccountReference}'
+              OR account_number::text = '${escapedBankAccountReference}'
+              OR regexp_replace(account_number::text, '[^0-9]', '', 'g') =
+                 regexp_replace('${escapedBankAccountReference}', '[^0-9]', '', 'g')
+            )
+          ORDER BY
+            CASE WHEN id::text = '${escapedBankAccountReference}' THEN 0 ELSE 1 END,
+            id
+          LIMIT 1
         `)).catch(() => ({ rows: [] as any[] }));
         bankCoaId = (cbaRows[0] as any)?.coa_id ? Number((cbaRows[0] as any).coa_id) : null;
       }
@@ -2526,8 +2675,35 @@ export async function approveAndCreateJournal(
         const sett = (settRows[0] as any) ?? {};
          settings = sett;
 
-        if (!bankCoaId && sett.default_bank_account_id) {
-          bankCoaId = Number(sett.default_bank_account_id);
+         if (!bankCoaId && sett.default_bank_account_id) {
+           // accounting_settings stores the default bank *COA* id, but old
+           // rows can contain a stale/non-postable reference. Validate it
+           // before using it as a journal line.
+           const defaultBankReference = escapeSql(String(sett.default_bank_account_id));
+           const { rows: defaultBankCoaRows } = await tx.execute(sql.raw(`
+             SELECT coa_id AS id, 0 AS priority
+             FROM company_bank_accounts
+             WHERE company_id = ${companyId}
+               AND is_active = TRUE
+               AND coa_id IS NOT NULL
+               AND (
+                 id::text = '${defaultBankReference}'
+                 OR account_number::text = '${defaultBankReference}'
+               )
+             UNION ALL
+             SELECT id, 1 AS priority
+             FROM chart_of_accounts
+             WHERE id = ${Number(sett.default_bank_account_id)}
+               AND (company_id = ${companyId} OR company_id IS NULL)
+               AND is_active = TRUE
+               AND is_header = FALSE
+               AND is_postable = TRUE
+             ORDER BY priority
+             LIMIT 1
+           `)).catch(() => ({ rows: [] as any[] }));
+           bankCoaId = defaultBankCoaRows[0]?.id != null
+             ? Number(defaultBankCoaRows[0].id)
+             : null;
         }
         journalId = sett.bank_journal_id ? Number(sett.bank_journal_id) : null;
       }
@@ -2731,6 +2907,32 @@ export async function approveAndCreateJournal(
         );
       }
       if (!contraCoaId) {
+         if (selectedCandidateType === "recon_rule" && selectedCandidateId != null) {
+           const ruleTarget = await loadReconRuleTarget(
+             tx as unknown as DbClient,
+             companyId,
+             selectedCandidateId,
+           );
+          if (!ruleTarget) {
+            throw new JournalMappingError(
+              "RECON_COA_MISSING",
+              "Rule AI tidak ditemukan atau sudah tidak aktif untuk perusahaan ini. Jalankan ulang matching sebelum approve.",
+              { mutationId, ruleId: selectedCandidateId },
+            );
+          }
+          if (!ruleTarget.targetCoaCode) {
+             throw new JournalMappingError(
+               "RECON_COA_MISSING",
+               "Rule AI cocok, tetapi COA tujuan belum dikonfigurasi. Lengkapi COA tujuan pada Recon Rule lalu jalankan ulang matching.",
+               { mutationId, ruleId: selectedCandidateId },
+             );
+           }
+            throw new JournalMappingError(
+              "RECON_COA_MISSING",
+             `COA tujuan Rule AI "${ruleTarget.targetCoaCode}" tidak ditemukan atau tidak aktif untuk perusahaan ini.`,
+             { mutationId, ruleId: selectedCandidateId, targetCoaCode: ruleTarget.targetCoaCode },
+           );
+         }
         throw new JournalMappingError(
           "JOURNAL_MAPPING_REQUIRED",
            direction === "IN"

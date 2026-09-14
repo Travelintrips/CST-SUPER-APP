@@ -3,8 +3,8 @@ name: Monorepo dependency workflow refresh
 description: Workflow behavior after synchronizing pnpm dependencies in the multi-artifact workspace.
 ---
 
-After a lockfile-based pnpm synchronization, restart every affected artifact workflow before judging dependency resolution or preview behavior. Existing Vite processes can retain the old package graph and continue reporting missing packages even though the artifact symlinks are repaired.
+After a lockfile-based pnpm synchronization, restart every affected artifact workflow before judging dependency resolution or preview behavior. Existing Vite processes can retain the old package graph and continue reporting missing packages even though the artifact symlinks are repaired. If a declared package is still missing, a frozen-lockfile install may be required before restarting; this can require restarting both the API loader workflow and the portal Vite workflow.
 
 **Why:** the workspace runs several long-lived artifact processes, while pnpm can replace a large part of the virtual store and importer links during synchronization. The running process does not automatically reload its module-resolution state.
 
-**How to apply:** run the lockfile synchronization, restart API and any affected portal workflows once, then inspect fresh workflow logs and preview requests. Treat pre-restart dependency warnings as stale evidence.
+**How to apply:** run the lockfile synchronization, restart API and any affected portal workflows once, then inspect fresh workflow logs and preview requests. Treat pre-restart dependency warnings as stale evidence; verify the preview on the workflow's current proxy port after restart.

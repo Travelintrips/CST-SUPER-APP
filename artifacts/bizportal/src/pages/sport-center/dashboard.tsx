@@ -533,18 +533,21 @@ export default function SportCenterDashboard() {
 
   const syncAccounting = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/sport-center/sync/accounting", {
+      const r = await fetch("/api/sport-center/sync/run-daily", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ companyId: activeCompanyId }),
       });
-      if (!r.ok) throw new Error("Sync akuntansi gagal");
-      return r.json() as Promise<{
+      const payload = await r.json().catch(() => ({})) as Record<string, unknown>;
+      if (!r.ok) {
+        throw new Error(String(payload.message ?? payload.error ?? "Sync akuntansi gagal"));
+      }
+      return payload as {
         ok: boolean;
         bookings: { pulled: number; deleted: number; errors: number; total: number };
         payments: { pulled: number; deleted: number; skipped: number; errors: number; total: number };
         accounting: { synced: number; skipped: number; errors: number };
-      }>;
+      };
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["accounting-payments"] });

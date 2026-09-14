@@ -236,7 +236,7 @@ export default function SportCenterBookings() {
       syncTimeout = setTimeout(() => {
         setRealtimeCount((c) => c + 1);
         qc.invalidateQueries({ queryKey: ["sport-center-supabase-bookings-raw"] });
-        void fetch("/api/sport-center/sync/accounting", {
+        void fetch("/api/sport-center/sync/run-daily", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ companyId: activeCompanyId ?? 1 }),
@@ -350,13 +350,19 @@ export default function SportCenterBookings() {
       // Step 1: server-side full sync (pull bookings + payments dari Supabase admin → local DB)
       let serverResult: { ok?: boolean; bookings?: any; payments?: any } = {};
       try {
-        const sr = await fetch("/api/sport-center/sync/accounting", {
+        const sr = await fetch("/api/sport-center/sync/run-daily", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ companyId: activeCompanyId ?? 1 }),
         });
-        if (sr.ok) serverResult = await sr.json();
-      } catch { /* server-side sync opsional — fallback ke frontend sync */ }
+        const payload = await sr.json().catch(() => ({})) as Record<string, unknown>;
+        if (!sr.ok) {
+          throw new Error(String(payload.message ?? payload.error ?? "Sync Sport Center gagal"));
+        }
+        serverResult = payload as typeof serverResult;
+      } catch (error) {
+        throw error instanceof Error ? error : new Error("Sync Sport Center gagal");
+      }
 
       // Step 2: frontend-based fallback — update payment_status dari supaBookings (cek payments table)
       const bookings = sourceRows ?? supaBookings ?? [];

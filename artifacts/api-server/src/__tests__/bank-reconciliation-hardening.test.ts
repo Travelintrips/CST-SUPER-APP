@@ -41,6 +41,10 @@ const bankReconciliationRouteSource = readFileSync(
   new URL("../routes/bankReconciliation.ts", import.meta.url),
   "utf8",
 );
+const unifiedMatchingEngineSource = readFileSync(
+  new URL("../lib/reconciliation/unifiedMatchingEngine.ts", import.meta.url),
+  "utf8",
+);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +82,31 @@ describe("directionFromBankColumns — bank statement semantics", () => {
 
   it("classifies Credit/Masuk receipts as IN", () => {
     expect(directionFromBankColumns(0, 12_480_000)).toBe("IN");
+  });
+});
+
+describe("Rule AI approval COA guard", () => {
+  it("exposes company-scoped COA validation status to the reviewer", () => {
+    expect(bankReconciliationRouteSource).toContain("'targetCoaValidationStatus'");
+    expect(bankReconciliationRouteSource).toContain("THEN 'missing'");
+    expect(bankReconciliationRouteSource).toContain("THEN 'valid'");
+    expect(bankReconciliationRouteSource).toContain("ELSE 'invalid'");
+    expect(bankReconciliationRouteSource).toContain("is_active = TRUE");
+    expect(bankReconciliationRouteSource).toContain("is_postable = TRUE");
+    expect(bankReconciliationRouteSource).toContain("coa_valid.company_id = bm.company_id");
+  });
+
+  it("uses RECON_COA_MISSING for empty, stale, or invalid Rule AI targets", () => {
+    const approvalStart = unifiedMatchingEngineSource.indexOf(
+      "export async function approveAndCreateJournal",
+    );
+    const approvalSource = unifiedMatchingEngineSource.slice(approvalStart);
+
+    expect(approvalStart).toBeGreaterThanOrEqual(0);
+    expect(approvalSource).toContain('"RECON_COA_MISSING"');
+    expect(approvalSource).toContain("Rule AI tidak ditemukan atau sudah tidak aktif");
+    expect(approvalSource).toContain("belum dikonfigurasi");
+    expect(approvalSource).toContain("tidak ditemukan atau tidak aktif untuk perusahaan ini");
   });
 });
 
@@ -180,9 +209,9 @@ describe("Cross-source key parity — Sheet vs CSV", () => {
   const rawDesc  = "Bayar invoice PT Maju  #INV-123";
 
   it("Sheet IN and CSV IN generate the same canonical key", () => {
-    // sheetSyncService: direction=IN → debitAmt=amount, kreditAmt=0
+    // sheetSyncService: direction=IN → debitAmt=0, kreditAmt=amount
     const keyFromSheet = sheetKeyFromRowData({
-      date: txDate, debitAmt: amount, kreditAmt: 0, description: rawDesc,
+      date: txDate, debitAmt: 0, kreditAmt: amount, description: rawDesc,
     });
     const csvRow: ParsedBankRow = {
       date: txDate, description: rawDesc, amount, direction: "IN",
@@ -192,9 +221,9 @@ describe("Cross-source key parity — Sheet vs CSV", () => {
   });
 
   it("Sheet OUT and CSV OUT generate the same canonical key", () => {
-    // sheetSyncService: direction=OUT → debitAmt=0, kreditAmt=amount
+    // sheetSyncService: direction=OUT → debitAmt=amount, kreditAmt=0
     const keyFromSheet = sheetKeyFromRowData({
-      date: txDate, debitAmt: 0, kreditAmt: amount, description: rawDesc,
+      date: txDate, debitAmt: amount, kreditAmt: 0, description: rawDesc,
     });
     const csvRow: ParsedBankRow = {
       date: txDate, description: rawDesc, amount, direction: "OUT",
@@ -238,8 +267,8 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
   // Expected canonical key — computed from first-principles (no raw parser)
   const EXPECTED_KEY = canonicalMutationKey({
     transaction_date: TX_DATE,
-    debit:  TX_AMOUNT, // IN = money received = debit in bank account
-    credit: 0,
+    debit:  0,
+    credit: TX_AMOUNT, // IN = money received = credit in bank statement
     description: TX_DESC,
     bank_reference: TX_REF || null,
     company_id: null,
@@ -260,11 +289,11 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
   });
 
   it("CSV parser OUT row produces correct canonical key", () => {
-    // OUT transaction (debit column)
+    // OUT transaction (debit/keluar column)
     const outKey = canonicalMutationKey({
       transaction_date: TX_DATE,
-      debit:  0,
-      credit: TX_AMOUNT,
+      debit:  TX_AMOUNT,
+      credit: 0,
       description: TX_DESC,
       company_id: null,
       bank_account_id: null,
@@ -282,14 +311,26 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
     expect(key).toBe(outKey);
   });
 
+  it("CSV parser recognizes the Indonesian Debet header for OUT rows", () => {
+    const csvContent = [
+      "tanggal,keterangan,kredit,Debet",
+      `${TX_DATE},${TX_DESC},,${TX_AMOUNT}`,
+    ].join("\n");
+
+    const rows = parseCSVText(csvContent);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].amount).toBe(TX_AMOUNT);
+    expect(rows[0].direction).toBe("OUT");
+  });
+
   it("Sheet parser representation matches canonical key", () => {
     // sheetSyncService calls canonicalMutationKey with:
-    //   debit = debitAmt (IN amount), credit = kreditAmt (OUT amount)
-    // For an IN row: debitAmt = TX_AMOUNT, kreditAmt = 0
+    //   debit = debitAmt (OUT amount), credit = kreditAmt (IN amount)
+    // For an IN row: debitAmt = 0, kreditAmt = TX_AMOUNT
     const keyFromSheet = sheetKeyFromRowData({
       date: TX_DATE,
-      debitAmt: TX_AMOUNT,
-      kreditAmt: 0,
+      debitAmt: 0,
+      kreditAmt: TX_AMOUNT,
       description: TX_DESC,
     });
     expect(keyFromSheet).toBe(EXPECTED_KEY);
@@ -318,7 +359,7 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
     ].join("\n");
     const csvRows = parseCSVText(csvContent);
     const keyCSV   = buildMutationKeyFromParsed(csvRows[0]);
-    const keySheet = sheetKeyFromRowData({ date: TX_DATE, debitAmt: TX_AMOUNT, kreditAmt: 0, description: TX_DESC });
+    const keySheet = sheetKeyFromRowData({ date: TX_DATE, debitAmt: 0, kreditAmt: TX_AMOUNT, description: TX_DESC });
     const keyExcel = buildMutationKeyFromParsed({ date: TX_DATE, description: TX_DESC, amount: TX_AMOUNT, direction: "IN", rawSource: "EXCEL" });
 
     expect(keyCSV).toBe(keySheet);
@@ -333,7 +374,7 @@ describe("Real parser parity — Sheet / CSV / Excel produce identical keys", ()
     const csvRow: ParsedBankRow = { date: TX_DATE, description: TX_DESC, amount: TX_AMOUNT, direction: "IN", rawSource: "CSV" };
     const excelRow: ParsedBankRow = { date: TX_DATE, description: TX_DESC, amount: TX_AMOUNT, direction: "IN", rawSource: "EXCEL" };
     keys.add(buildMutationKeyFromParsed(csvRow));
-    keys.add(sheetKeyFromRowData({ date: TX_DATE, debitAmt: TX_AMOUNT, kreditAmt: 0, description: TX_DESC }));
+    keys.add(sheetKeyFromRowData({ date: TX_DATE, debitAmt: 0, kreditAmt: TX_AMOUNT, description: TX_DESC }));
     keys.add(buildMutationKeyFromParsed(excelRow));
     // All three are the same key → set size == 1
     expect(keys.size).toBe(1);
@@ -559,17 +600,17 @@ describe("Void and reversal flow", () => {
 // ─── 9. buildMutationKeyFromParsed — IN/OUT mapping ──────────────────────────
 
 describe("Journal balance — debit == credit via buildMutationKeyFromParsed", () => {
-  it("IN row maps amount to debit, not credit", () => {
+  it("IN row maps amount to credit, not debit", () => {
     const row: ParsedBankRow = { date: "2026-07-01", description: "X", amount: 50000, direction: "IN", reference: undefined, rawSource: "CSV" };
     const keyIN = buildMutationKeyFromParsed(row);
-    const manual = canonicalMutationKey({ transaction_date: "2026-07-01", debit: 50000, credit: 0, description: "X" });
+    const manual = canonicalMutationKey({ transaction_date: "2026-07-01", debit: 0, credit: 50000, description: "X" });
     expect(keyIN).toBe(manual);
   });
 
-  it("OUT row maps amount to credit, not debit", () => {
+  it("OUT row maps amount to debit, not credit", () => {
     const row: ParsedBankRow = { date: "2026-07-01", description: "X", amount: 50000, direction: "OUT", reference: undefined, rawSource: "CSV" };
     const keyOUT = buildMutationKeyFromParsed(row);
-    const manual = canonicalMutationKey({ transaction_date: "2026-07-01", debit: 0, credit: 50000, description: "X" });
+    const manual = canonicalMutationKey({ transaction_date: "2026-07-01", debit: 50000, credit: 0, description: "X" });
     expect(keyOUT).toBe(manual);
   });
 });
@@ -979,7 +1020,7 @@ describe("Void-journal partial reversal — fail-closed endpoint contract", () =
     expect(voidJournalStart).toBeGreaterThanOrEqual(0);
     expect(reopenStart).toBeGreaterThan(voidJournalStart);
     expect(failureStart).toBeGreaterThanOrEqual(0);
-    expect(failurePath).toContain("SET status = 'posted'");
+    expect(failurePath).toContain("SET status = '${String(preMut.status)");
     expect(failurePath).toContain("mutation_status: \"posted\"");
     expect(failurePath).toContain("return res.status(partialReversal ? 409 : 400)");
     expect(failurePath).not.toContain('auditLog(mutId, "JOURNAL_VOIDED"');

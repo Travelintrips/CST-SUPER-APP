@@ -1,12 +1,12 @@
 - [Bank statement direction semantics](bank-statement-direction-semantics.md) — bank Debit/Keluar is OUT and Credit/Masuk is IN; share this mapping across every import path.
 - [Marketplace deal price concurrency](marketplace-deal-price-concurrency.md) — optimistic deal-price updates need a locked quote, checked update result, and monotonic millisecond timestamp.
 - [Vendor product approval boundary](vendor-product-approval-boundary.md) — every vendor-originated product, including onboarding products, must enter pending review before marketplace publication.
-- [BizPortal route loading boundary](bizportal-route-loading-boundary.md) — preloading removes first-click chunk delay, but an older primary API process can survive artifact restarts and still dominate authenticated navigation latency.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
 - [Auto-post block evidence](auto-post-block-evidence.md) — every rule auto-post failure must persist a structured reason and remain reviewable until an explicit rerun.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
 - [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
+- [API loader dependency link](api-loader-dependency-link.md) — direct runtime proofs need the artifact workspace dependencies materialized with the frozen lockfile before invoking load-secrets.
 - [Authenticated runtime proof contract](authenticated-runtime-proof-contract.md) — bedakan row sumber Sheet vs row unik persisted; posting governance wajib company context + tanggal.
 - [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
@@ -20,12 +20,7 @@
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
-- [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
-- [Portal auth bootstrap recovery](portal-auth-bootstrap-recovery.md) — a valid HttpOnly session without the readable hint must recover through canonical bootstrap, not remain on `/login`.
-- [Portal authenticated query reuse](portal-authenticated-query-reuse.md) — portal list routes should reuse middleware-loaded customer identity; duplicate identity reads amplify pooler latency during parallel dashboard loads.
 - [Quality gate shared project references](quality-gate-shared-project-references.md) — build composite shared declarations before dependent typechecks; parallel large checks can cause TS6305 or Node heap exhaustion.
-- [Portal bootstrap pooler serialization](portal-bootstrap-pooler-serialization.md) — Supabase transaction-pooler contention makes parallel auth reads slower; keep the measured bootstrap reads serialized.
-- [Customer Portal multi-method auth](portal-auth-multimethod.md) — keep one canonical portal account, link verified provider subjects uniquely, and register additive auth migrations separately.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.
@@ -70,7 +65,6 @@
 - [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
 - [Portal functional recovery boundary](portal-functional-recovery-boundary.md) — SMTP health and controlled auth proof are required; public catalog publication responses must not be cached.
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
-- [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
 - [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
@@ -108,9 +102,11 @@
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
 - [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
+- [Rule AI rerun after rule change](rule-ai-rerun-after-rule-change.md) — setelah rule dibuat/diubah, mutasi Sheet dengan MATCH_CREATED perlu rematch non-final; jangan memaksa rule OUT ke mutasi IN.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
 - [QRIS snapshot publish boundary](qris-snapshot-publish-boundary.md) — a corrected production snapshot can be superseded by an older deployed generator until the matching code is published.
+- [QRIS candidate aggregate drift](qris-candidate-aggregate-drift.md) — compare persisted totals with payment items and live source before regenerating a candidate.
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
 - [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
 - [Development workflow secret loader](development-workflow-secret-loader.md) — API readiness stops before binding when the managed GCP bootstrap JSON is malformed; repair the secret, never bypass the loader.
@@ -135,6 +131,7 @@
 - [Angkasa Pura vendor tax policy](angkasa-pura-vendor-tax-policy.md) — PPN is 11% of DPP; concession PPh 15%, electricity/water PPh 4(2) 10%; supplier receives gross less withholding.
 - [PPh 15 liability account](pph15-liability-account.md) — new PPh 15 withholding uses the company-scoped 2-1102 liability COA; legacy 2-1030 history is not rewritten implicitly.
 - [Vendor payable child posting](vendor-payable-child-posting.md) — Vendor Invoice must post to the supplier-payable child, never directly to its configured AP parent.
+- [Vendor invoice reclassification net boundary](vendor-invoice-reclassification-net-boundary.md) — posted invoice COA corrections reclassify net expense/GRIR debits only; preserve separate PPN and AP lines.
 - [Production vendor invoice orphan boundary](production-vendor-invoice-orphan-boundary.md) — posted bank/purchase journals can outlive vendor_invoices; reconcile source identity before remediation.
 - [Production accounting orphan audit](production-accounting-orphan-audit.md) — final status must prove a transaction entry and canonical source; master journals and legacy source tags are insufficient.
 - [Posted bank unmatch lifecycle](posted-bank-unmatch-lifecycle.md) — posted bank mutations need reversal first, then reopen while releasing approved matches back to candidates.
@@ -156,3 +153,6 @@
 - [Gateway source integrity](gateway-source-integrity.md) — verify the gateway module is not duplicated after sync; repeated module blocks prevent port 5000 from binding.
 - [Stale Gateway workflow lock](workflow-stale-gateway-lock.md) — an old start-dev-all process can hold the Gateway lock and make a new workflow time out.
 - [GitHub CLI authentication](github-cli-auth-replit.md) — Replit’s GitHub connector and Shell HTTPS Git credentials are separate authentication paths.
+- [Portal blank-screen diagnosis](portal-blank-screen-diagnosis.md) — a malformed JSX tag in any eagerly scanned BizPortal module can blank the whole portal; inspect Vite transform errors before API debugging.
+- [Reconciliation unit-test DB isolation](reconciliation-unit-test-db-isolation.md) — import the matching engine in pure tests only with mocked DB/Drizzle modules and an explicit transaction fixture.
+- [Sport Center PROD audit schema](sport-center-prod-audit-schema.md) — canonical payments lack journal links; resolve posted journals separately and use public booking_number, not order_number.

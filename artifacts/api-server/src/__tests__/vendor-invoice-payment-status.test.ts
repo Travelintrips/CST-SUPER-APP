@@ -16,6 +16,21 @@ describe("vendor invoice payment status", () => {
     });
   });
 
+  it("uses the gross balance as the comparison baseline for a persisted net payment", () => {
+    const netPaid = 23_783_170;
+    const grossTotal = 26_852_296;
+    const withholding = 3_069_126;
+
+    expect(inferVendorInvoiceGrossSettlement({
+      paymentAmount: netPaid,
+      outstanding: grossTotal,
+      withholdingAmount: withholding,
+    })).toEqual({
+      grossAmount: grossTotal,
+      withholdingAmount: withholding,
+    });
+  });
+
   it("does not credit the full PPh amount on a genuinely partial payment", () => {
     expect(inferVendorInvoiceGrossSettlement({
       paymentAmount: 4_000,

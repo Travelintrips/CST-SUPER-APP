@@ -47,7 +47,7 @@ type GeofenceAlertsResponse = {
 
 const CHECKPOINT_LABELS: Record<string, string> = {
   order_task: "Update dari Mini Form",
-  driver_app: "Driver App",
+  driver_app: "WA Progress",
   pickup: "Pickup",
   delivery: "Delivery",
   checkpoint: "Checkpoint",

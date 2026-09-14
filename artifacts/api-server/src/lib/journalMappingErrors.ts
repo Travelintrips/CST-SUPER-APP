@@ -22,6 +22,7 @@ export const JournalMappingErrorCode = {
   COA_EFFECTIVE_DATE_INVALID:  "COA_EFFECTIVE_DATE_INVALID",
   COA_HEADER_NOT_POSTABLE:     "COA_HEADER_NOT_POSTABLE",
   COA_MAPPING_AMBIGUOUS:       "COA_MAPPING_AMBIGUOUS",
+  RECON_COA_MISSING:           "RECON_COA_MISSING",
 } as const;
 
 export type JournalMappingErrorCode =
@@ -39,6 +40,7 @@ const HTTP_STATUS_MAP: Record<JournalMappingErrorCode, number> = {
   COA_EFFECTIVE_DATE_INVALID: 422,
   COA_HEADER_NOT_POSTABLE:    422,
   COA_MAPPING_AMBIGUOUS:      422,
+  RECON_COA_MISSING:          422,
 };
 
 // ── Error class ────────────────────────────────────────────────────────────────

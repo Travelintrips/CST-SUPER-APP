@@ -631,7 +631,7 @@ export function VendorInvoiceEditorPage() {
                 {resetPaymentMut.isPending ? "Mengoreksi..." : "Reset Pembayaran"}
               </Button>
             )}
-            {!isNew && vi && vi.status !== "paid" && Number(vi.amountPaid) > 0 && Number(vi.grandTotal) > Number(vi.amountPaid) && (
+            {!isNew && vi && vi.status !== "paid" && Number(vi.amountPaid) > 0 && (
               <Button
                 variant="outline"
                 className="text-blue-700 border-blue-300 hover:bg-blue-50"

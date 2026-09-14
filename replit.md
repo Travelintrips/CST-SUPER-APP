@@ -48,10 +48,17 @@ See `.env.example` for the full list. Minimum to start the API:
 
 ```bash
 pnpm install
-bash start-dev.sh
 ```
 
-The gateway starts on port 5000 and proxies to all sub-services.
+The imported project is configured as separate Replit workflows. Start the
+`artifacts/api-server: API Server` workflow first, then start
+`artifacts/bizportal: web` for the internal finance/admin UI. The API binds to
+port `18444`; BizPortal serves through its proxy on port `18442`.
+
+The API workflow runs `bash start-dev.sh` from inside `artifacts/api-server`.
+The BizPortal workflow runs `bash start-dev.sh` from inside
+`artifacts/bizportal`. Both workflows force `APP_ENV=development` and load the
+remaining application configuration from Google Cloud Secret Manager.
 | Secret | Purpose |
 |---|---|
 | `GCP_PROJECT_ID` | GCP project that owns the Secret Manager secrets |

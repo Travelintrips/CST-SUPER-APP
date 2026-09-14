@@ -25,6 +25,9 @@ import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { postEntry, type PostingLine, type PostingInput } from "./accounting.js";
 import { auditFromReq } from "./auditLog.js";
+import {
+  buildOriginalVoidUpdateFailureResult,
+} from "./accounting/reversalFailure.js";
 import type { Request } from "express";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -209,13 +212,38 @@ export async function createReversalJournal(input: CreateReversalJournalInput): 
     return { ok: false, error: msg };
   }
 
-  await db.execute(sql`
-    UPDATE accounting_entries
-    SET status = 'voided', voided_at = NOW(), void_entry_id = ${reversalEntry.id}
-    WHERE id = ${originalEntryId}
-  `).catch((e: unknown) => {
-    logger.warn({ e, originalEntryId }, "[accountingPostingGuard] mark voided failed (non-fatal)");
-  });
+  try {
+    const metadataUpdate = await db.execute(sql`
+      UPDATE accounting_entries
+      SET status = 'voided', voided_at = NOW(), void_entry_id = ${reversalEntry.id}
+      WHERE id = ${originalEntryId}
+        AND status = 'posted'
+        AND void_entry_id IS NULL
+      RETURNING status, void_entry_id
+    `);
+    const updated = metadataUpdate.rows[0] as
+      | { status?: unknown; void_entry_id?: unknown }
+      | undefined;
+    if (
+      metadataUpdate.rows.length !== 1
+      || updated?.status !== "voided"
+      || Number(updated.void_entry_id) !== reversalEntry.id
+    ) {
+      throw new Error(
+        `metadata update affected ${metadataUpdate.rows.length} row(s) or returned unexpected void metadata`,
+      );
+    }
+  } catch (cause: unknown) {
+    logger.error(
+      { err: cause, originalEntryId, voidEntryId: reversalEntry.id },
+      "[accountingPostingGuard] reversal created but original metadata update failed",
+    );
+    return buildOriginalVoidUpdateFailureResult({
+      entryId: originalEntryId,
+      voidEntryId: reversalEntry.id,
+      cause,
+    });
+  }
 
   await db.execute(sql`
     UPDATE accounting_entries SET previous_entry_id = ${originalEntryId} WHERE id = ${reversalEntry.id}

@@ -81,6 +81,7 @@ import {
   parseCSVText,
   buildMutationKeyFromParsed,
   normalizeForMatching,
+  directionFromBankColumns,
   type ParsedBankRow,
 } from "../lib/reconciliation/bankFormatParsers.js";
 import { runReconBatch3Migration } from "../lib/reconciliation/reconBatch3Migration.js";
@@ -739,6 +740,12 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
   const matches = matchesResult.rows as Array<Record<string, unknown>>;
   const approvedMatches = matches.filter(row => String(row.status) === "approved");
   const selectedMatch = approvedMatches[0] ?? matches[0] ?? null;
+  // QRIS matches require a live canonical settlement batch and its settlement
+  // journal. A historical/provisional match row alone is never enough to
+  // generate a repair or posting action.
+  const isQrisSettlementMatch =
+    selectedMatch?.candidate_type === "qris_settlement"
+    || selectedMatch?.candidate_source === CANONICAL_SETTLEMENT_SOURCE;
 
   const journalEntryId = mutation.journal_entry_id == null
     ? null
@@ -881,6 +888,15 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     code = canonicalState.code;
     title = "Canonical State Valid";
     reason = canonicalState.reason;
+  } else if (isQrisSettlementMatch) {
+    disposition = "developer_action_required";
+    code = "QRIS_CANONICAL_EVIDENCE_REQUIRED";
+    title = "QRIS Evidence Required";
+    reason =
+      "Perbaikan diblokir: match QRIS harus dapat dibuktikan terhadap settlement batch canonical, " +
+      "payment source, bank mutation, dan settlement journal yang masih live. " +
+      "Snapshot atau ID historis yang tidak ditemukan tidak boleh dipakai untuk rerun, approval, " +
+      "posting, atau SQL correction.";
   } else if (
     mutationStatus === "unmatched"
     && journalEntryId == null
@@ -909,6 +925,7 @@ async function getReconciliationRepairDiagnosis(mutationId: number) {
     && journalIsBalanced
     && journalCompanyMatches
     && approvedMatches.length === 1
+    && !isQrisSettlementMatch
   ) {
     disposition = "auto_repair";
     code = "BALANCED_DRAFT_READY_TO_POST";
@@ -1856,7 +1873,7 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
     const rawDate   = get(["tanggal", "date", "tgl"]);
     const rawDesc   = get(["keterangan", "description", "desc", "ket", "narasi"]);
     const rawCredit = get(["kredit", "credit", "masuk", "cr", "in"]);
-    const rawDebit  = get(["debit", "keluar", "db", "out"]);
+    const rawDebit  = get(["debit", "debet", "keluar", "db", "out"]);
     const rawAmt    = get(["nominal", "amount", "jumlah"]);
     const rawBank   = get(["source account", "bank name", "bank", "rekening", "account"]);
 
@@ -1876,9 +1893,9 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
 
     const credit = parseAmount(rawCredit);
     const debit  = parseAmount(rawDebit);
-    let amount = credit || debit;
+    const direction = directionFromBankColumns(debit, credit);
+    let amount = direction === "IN" ? credit : debit;
     if (!amount) amount = parseAmount(rawAmt);
-    const direction: "IN" | "OUT" = credit > 0 ? "IN" : "OUT";
 
     return {
       transaction_date: parsedDate,
@@ -1889,8 +1906,8 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
       direction,
       mutation_key: canonicalMutationKey({
         transaction_date: parsedDate,
-        debit:  direction === "IN"  ? amount : 0,
-        credit: direction === "OUT" ? amount : 0,
+        debit:  direction === "OUT" ? amount : 0,
+        credit: direction === "IN"  ? amount : 0,
         description: rawDesc,
       }),
       normalized_description: normalizeForMatching(rawDesc),
@@ -2229,6 +2246,16 @@ async function triggerAutomaticQrisApproval(
   const authorization = typeof req.headers?.authorization === "string"
     ? req.headers.authorization
     : "";
+  // The approval call is internal, but it still carries the user's session
+  // cookie. Production CSRF protection therefore requires the same trusted
+  // portal origin that authorized the outer request. Without forwarding it,
+  // the loopback call is rejected as PORTAL_CSRF_ORIGIN_INVALID.
+  const origin = typeof req.headers?.origin === "string"
+    ? req.headers.origin
+    : "";
+  const referer = typeof req.headers?.referer === "string"
+    ? req.headers.referer
+    : "";
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < candidateIds.length) {
@@ -2247,6 +2274,8 @@ async function triggerAutomaticQrisApproval(
               "x-qris-auto-approval": "1",
               ...(cookie ? { cookie } : {}),
               ...(authorization ? { authorization } : {}),
+              ...(origin ? { origin } : {}),
+              ...(referer ? { referer } : {}),
             },
             body: JSON.stringify({ companyId }),
           },
@@ -5547,7 +5576,13 @@ router.get("/mutations", async (req, res) => {
   // Filters untuk sumber bank_mutations (bm)
   const bmFilters: string[] = [];
   if (status && status !== "all") {
-    if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
+    if (status === "completed") {
+      // The UI's "Selesai" card intentionally combines both states:
+      // approved reconciliation and already-posted accounting journals.
+      // Use the same effective status projection as the summary endpoint so
+      // clicking the card cannot exclude approved rows.
+      bmFilters.push(`${effectiveBankMutationStatusSql("bm")} IN ('posted', 'approved')`);
+    } else if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
       // Use the same derived status as the summary endpoint. In particular,
       // QRIS rows with an already-approved match are surfaced as
       // duplicate_need_review even when bank_mutations.status is still matched.
@@ -5593,6 +5628,7 @@ router.get("/mutations", async (req, res) => {
     bmiFilters.push(`(bmi.description ILIKE '%${s}%' OR bmi.unique_key ILIKE '%${s}%')`);
   }
   if (status === "approved")                   bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
+  else if (status === "completed")             bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
   else if (status === "rejected")              bmiFilters.push(`bmi.status IN ('REJECTED','DUPLICATE')`);
   else if (status === "unmatched")             bmiFilters.push(`bmi.status IN ('READY','NEED_REVIEW','DRAFT')`);
   else if (status === "duplicate_need_review") bmiFilters.push(`bmi.status = 'NEED_REVIEW'`);
@@ -5714,6 +5750,41 @@ router.get("/mutations", async (req, res) => {
             ORDER BY CASE WHEN coa.company_id = rr.company_id THEN 0 ELSE 1 END, coa.id
             LIMIT 1
           ),
+           'targetCoaValidationStatus', CASE
+             WHEN NULLIF(BTRIM(rr.target_coa_code::text), '') IS NULL THEN 'missing'
+             WHEN EXISTS (
+               SELECT 1
+               FROM chart_of_accounts coa_valid
+               WHERE (coa_valid.code = BTRIM(rr.target_coa_code::text)
+                 OR coa_valid.code LIKE BTRIM(rr.target_coa_code::text) || '-%')
+                 AND (
+                   (bm.company_id IS NOT NULL AND (coa_valid.company_id = bm.company_id OR coa_valid.company_id IS NULL))
+                   OR (bm.company_id IS NULL AND coa_valid.company_id IS NULL)
+                 )
+                 AND coa_valid.is_active = TRUE
+                 AND coa_valid.is_header = FALSE
+                 AND coa_valid.is_postable = TRUE
+             ) THEN 'valid'
+             ELSE 'invalid'
+           END,
+           'targetCoaValidationMessage', CASE
+             WHEN NULLIF(BTRIM(rr.target_coa_code::text), '') IS NULL
+               THEN 'COA tujuan Rule AI belum dikonfigurasi.'
+             WHEN EXISTS (
+               SELECT 1
+               FROM chart_of_accounts coa_valid
+               WHERE (coa_valid.code = BTRIM(rr.target_coa_code::text)
+                 OR coa_valid.code LIKE BTRIM(rr.target_coa_code::text) || '-%')
+                 AND (
+                   (bm.company_id IS NOT NULL AND (coa_valid.company_id = bm.company_id OR coa_valid.company_id IS NULL))
+                   OR (bm.company_id IS NULL AND coa_valid.company_id IS NULL)
+                 )
+                 AND coa_valid.is_active = TRUE
+                 AND coa_valid.is_header = FALSE
+                 AND coa_valid.is_postable = TRUE
+             ) THEN NULL
+             ELSE 'COA tujuan Rule AI tidak ditemukan, tidak aktif, atau bukan akun postable untuk perusahaan ini.'
+           END,
           'confidenceScore', rr.confidence_score,
           'stopProcessing', rr.stop_processing,
           'requiresDocumentUpload', rr.requires_document_upload,
@@ -5940,8 +6011,19 @@ router.get("/mutations", async (req, res) => {
          END
        ) AS sport_payment_type,
        'bank_mutations' AS _source_table,
-       (SELECT json_agg(
-          to_jsonb(m) || jsonb_build_object('details', ${candidateDetailsSql})
+        (SELECT json_agg(
+           to_jsonb(m) || jsonb_build_object(
+             'details', ${candidateDetailsSql},
+             'duplicate_count', (
+               SELECT COUNT(*)::int
+               FROM bank_reconciliation_matches duplicate_match
+               WHERE duplicate_match.mutation_id = m.mutation_id
+                 AND duplicate_match.candidate_type = m.candidate_type
+                 AND duplicate_match.candidate_id = m.candidate_id
+                 AND duplicate_match.candidate_source IS NOT DISTINCT FROM m.candidate_source
+                 AND duplicate_match.status = 'candidate'
+             )
+           )
           ORDER BY m.match_score DESC
         )
        FROM bank_reconciliation_matches m
@@ -6493,8 +6575,92 @@ router.post(
 
 // ─── POST /api/bank-reconciliation/:mutationId/vendor-invoice-payment ────────
 // A bank mutation that settles a posted vendor invoice must debit AP, not the
-// expense COA used by the invoice journal. This path keeps the bank mutation,
-// payment journal, invoice amount_paid, and reconciliation link atomic.
+// expense COA used by the invoice journal. Approval creates a draft journal;
+// invoice amount_paid is updated only when the separate posting step succeeds.
+// This keeps the invoice payment projection consistent with the posted ledger.
+async function applyPostedVendorInvoiceBatchPayment(
+  tx: { execute: (query: unknown) => Promise<unknown> },
+  mutationId: number,
+  companyId: number,
+): Promise<void> {
+  const auditResult = await tx.execute(sql`
+    SELECT meta
+    FROM bank_reconciliation_audit
+    WHERE mutation_id = ${mutationId}
+      AND action = 'MATCH_APPROVED'
+    ORDER BY id DESC
+    LIMIT 1
+  `);
+  const auditRows = (auditResult as { rows?: Array<{ meta?: unknown }> })?.rows ?? [];
+  const rawMeta = auditRows[0]?.meta;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = typeof rawMeta === "string"
+      ? JSON.parse(rawMeta) as Record<string, unknown>
+      : (rawMeta && typeof rawMeta === "object" ? rawMeta as Record<string, unknown> : {});
+  } catch {
+    return;
+  }
+  if (meta.candidate_type !== "vendor_invoice_batch") return;
+
+  const candidateIds = Array.isArray(meta.candidate_ids)
+    ? meta.candidate_ids.map(Number)
+    : [];
+  const grossAmounts = Array.isArray(meta.gross_amounts)
+    ? meta.gross_amounts.map(Number)
+    : [];
+  const amountPaidBefore = Array.isArray(meta.amount_paid_before)
+    ? meta.amount_paid_before.map(Number)
+    : [];
+  if (
+    candidateIds.length === 0
+    || candidateIds.length !== grossAmounts.length
+    || candidateIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    || grossAmounts.some((amount) => !Number.isFinite(amount) || amount <= 0)
+  ) {
+    return;
+  }
+
+  for (let index = 0; index < candidateIds.length; index += 1) {
+    const invoiceId = candidateIds[index]!;
+    const grossAmount = Math.round(grossAmounts[index]! * 100) / 100;
+    const rowsResult = await tx.execute(sql`
+      SELECT id, amount_paid, grand_total
+      FROM vendor_invoices
+      WHERE id = ${invoiceId}
+        AND company_id = ${companyId}
+      FOR UPDATE
+    `);
+    const invoiceRows = (rowsResult as {
+      rows?: Array<{ id: number; amount_paid?: unknown; grand_total?: unknown }>;
+    })?.rows ?? [];
+    const invoice = invoiceRows[0];
+    if (!invoice) continue;
+
+    const currentAmountPaid = Number(invoice.amount_paid ?? 0);
+    const grandTotal = Number(invoice.grand_total ?? 0);
+    const before = Number(amountPaidBefore[index]);
+    // New audit rows carry the pre-approval amount. Older rows were already
+    // updating amount_paid during approval, so leave them unchanged here.
+    const targetAmountPaid = Number.isFinite(before)
+      ? Math.min(grandTotal, Math.round((before + grossAmount) * 100) / 100)
+      : currentAmountPaid;
+    const nextAmountPaid = Math.max(currentAmountPaid, targetAmountPaid);
+
+    if (nextAmountPaid > currentAmountPaid + 0.001) {
+      await tx.execute(sql`
+        UPDATE vendor_invoices
+        SET amount_paid = ${String(nextAmountPaid)},
+            status = 'posted',
+            updated_at = NOW()
+        WHERE id = ${invoiceId}
+          AND company_id = ${companyId}
+      `);
+    }
+    await recalculateVendorInvoicePaymentStatus(tx, companyId, invoiceId);
+  }
+}
+
 router.post(
   "/:mutationId/vendor-invoice-payment-batch",
   createIdempotencyMiddleware("reconciliation:vendor-invoice-payment-batch"),
@@ -6796,21 +6962,6 @@ router.post(
           "draft",
         );
 
-        for (const item of allocations) {
-          const newPaid = Math.round((item.amountPaid + item.grossAmount) * 100) / 100;
-          await tx.execute(sql`
-            UPDATE vendor_invoices
-            SET amount_paid = ${String(newPaid)},
-                 status = 'posted',
-                updated_at = NOW()
-            WHERE id = ${Number(item.invoice.id)}
-          `);
-           await recalculateVendorInvoicePaymentStatus(
-             tx as unknown as { execute: (query: unknown) => Promise<unknown> },
-             companyId,
-             Number(item.invoice.id),
-           );
-        }
         const invoiceIdsText = allocations.map((item) => Number(item.invoice.id)).join(",");
         await tx.execute(sql`
           UPDATE bank_mutations
@@ -6837,6 +6988,7 @@ router.post(
             ${JSON.stringify({
               candidate_type: "vendor_invoice_batch",
               candidate_ids: allocations.map((item) => Number(item.invoice.id)),
+              amount_paid_before: allocations.map((item) => item.amountPaid),
               amounts: allocations.map((item) => item.amount),
               gross_amounts: allocations.map((item) => item.grossAmount),
               withholding_amounts: allocations.map((item) => item.withholdingCredit),
@@ -7844,7 +7996,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     const credit  = Number(bmi.credit ?? 0);
     const debit   = Number(bmi.debit  ?? 0);
     const amount  = Math.max(credit, debit);
-    const direction = credit > 0 ? "IN" : "OUT";
+    const direction = directionFromBankColumns(debit, credit);
     const mKey    = String(bmi.mutation_key ?? bmi.id).replace(/'/g, "''");
     const desc    = String(bmi.description ?? "").replace(/'/g, "''");
     const txDate  = String(bmi.transaction_date ?? "").split("T")[0];
@@ -8559,6 +8711,15 @@ router.post("/:mutationId/post", async (req, res) => {
         WHERE id = ${mutId} AND (status = 'approved_pending_posting' OR status = 'approved')
       `));
 
+       // Vendor-invoice batch approval intentionally leaves invoice payment
+       // totals pending until the linked journal is posted. This is idempotent:
+       // a retry sees the already-applied amount and does not add it again.
+       await applyPostedVendorInvoiceBatchPayment(
+         tx as unknown as { execute: (query: unknown) => Promise<unknown> },
+         mutId,
+         companyId,
+       );
+
       // 9. Audit log inside tx (must succeed or rollback)
       const meta = JSON.stringify({
         journal_entry_id: journalEntryId,
@@ -9189,6 +9350,17 @@ router.post("/run-matching", async (req, res) => {
   const { rows: mutations } = await db.execute(sql.raw(
     `SELECT * FROM bank_mutations WHERE ${whereClause} ORDER BY transaction_date DESC LIMIT 500`
   ));
+  if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true" && requestedIds.length) {
+    logger.info(
+      {
+        requestedIds,
+        matchingMode: matching_mode,
+        selectedIds: mutations.map((mutation: any) => Number(mutation.id)),
+        selectedStatuses: mutations.map((mutation: any) => String(mutation.status)),
+      },
+      "[bankRecon] development matching selection",
+    );
+  }
 
   let processed = 0;
   let auto_matched = 0;
@@ -9245,6 +9417,17 @@ router.post("/run-matching", async (req, res) => {
 
       if (!decision.eligible) {
         // Status guard blocked — skip, do not count as processed
+        if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true") {
+          logger.info(
+            {
+              mutationId: Number(m.id),
+              status: String(m.status),
+              blockedReason: decision.blockedReason,
+              decisionSource: decision.decisionSource,
+            },
+            "[bankRecon] development matching eligibility blocked",
+          );
+        }
         logger.debug({ mutationId: m.id, reason: decision.blockedReason }, "[run-matching] blocked by status guard");
         return;
       }
@@ -9462,6 +9645,19 @@ router.post("/run-matching", async (req, res) => {
         bank_account_id: m.bank_account_id ?? null,
         direction: m.direction,
       }, actor);
+      if (process.env.APP_ENV === "development" && process.env.SAFE_DEV_TEST_MODE === "true") {
+        logger.info(
+          {
+            mutationId: Number(m.id),
+            resultStatus: result.status,
+            bestScore: result.best?.score ?? null,
+            bestCandidateType: result.best?.candidate?.type ?? null,
+            bestCandidateId: result.best?.candidate?.id ?? null,
+            bestCandidateSource: result.best?.candidate?.candidateSource ?? null,
+          },
+          "[bankRecon] development unified matching result",
+        );
+      }
 
       processed++;
       if (result.status === "auto_matched") auto_matched++;
@@ -9838,9 +10034,40 @@ router.delete("/purge-mutations", async (req, res) => {
   await runBankReconciliationCoreMigration();
   const actor = (req as any).user?.email ?? (req as any).user?.id ?? "authenticated-admin";
 
-  if (process.env.APP_ENV !== "development") {
+  const requestedScope = String(req.body?.scope ?? "").trim();
+  const scopedSheetPurge = requestedScope === "unprocessed_google_sheet";
+  const productionScopedPurge = process.env.APP_ENV === "production" && scopedSheetPurge;
+  const requestedCompanyId = scopedSheetPurge ? Number(req.body?.company_id) : null;
+  const requestedCreatedAfter = scopedSheetPurge
+    ? new Date(String(req.body?.created_after ?? ""))
+    : null;
+
+  if (
+    process.env.APP_ENV !== "development"
+    && process.env.APP_ENV !== "production"
+  ) {
     return res.status(403).json({
-      error: "Hapus permanen mutasi hanya tersedia di environment development.",
+      error: "Environment aplikasi tidak mengizinkan purge mutasi.",
+    });
+  }
+  if (
+    scopedSheetPurge
+    && (
+      requestedCompanyId == null
+      || !Number.isSafeInteger(requestedCompanyId)
+      || requestedCompanyId <= 0
+      || !requestedCreatedAfter
+      || Number.isNaN(requestedCreatedAfter.getTime())
+      || String(req.body?.confirmation ?? "") !== "HAPUS MUTASI SYNC PROD"
+    )
+  ) {
+    return res.status(400).json({
+      error: "Untuk purge scoped wajib memilih company, mengisi waktu mulai sync yang valid, dan mengisi konfirmasi: HAPUS MUTASI SYNC PROD.",
+    });
+  }
+  if (process.env.APP_ENV === "production" && !scopedSheetPurge) {
+    return res.status(403).json({
+      error: "Purge PROD hanya boleh untuk mutasi Google Sheet belum diproses dengan scope perusahaan.",
     });
   }
   if (unifiedMatchingJobActive) {
@@ -9874,9 +10101,21 @@ router.delete("/purge-mutations", async (req, res) => {
         CREATE TEMP TABLE _dev_purge_mutation_ids ON COMMIT DROP AS
         SELECT bm.id
         FROM bank_mutations bm
-        WHERE bm.journal_entry_id IS NULL
+        WHERE 1 = 1
+          ${scopedSheetPurge ? sql`
+            AND bm.source = 'google_sheet'
+            AND bm.company_id = ${requestedCompanyId}
+            AND bm.created_at >= ${requestedCreatedAfter?.toISOString() ?? null}::timestamptz
+          ` : sql``}
+          AND bm.journal_entry_id IS NULL
           AND COALESCE(bm.accounting_posted, false) = false
-          AND LOWER(COALESCE(bm.status::text, 'unmatched')) NOT IN ('approved', 'posted')
+          AND LOWER(COALESCE(bm.status::text, 'unmatched')) NOT IN (
+            'approved_pending_posting', 'approved', 'posted', 'void'
+          )
+          ${scopedSheetPurge ? sql`
+            AND bm.matched_payment_id IS NULL
+            AND bm.matched_order_id IS NULL
+          ` : sql``}
           AND NOT EXISTS (
             SELECT 1
             FROM customer_portal_settlement_batches cpsb
@@ -9898,8 +10137,9 @@ router.delete("/purge-mutations", async (req, res) => {
         CREATE TEMP TABLE _dev_purge_import_ids ON COMMIT DROP AS
         SELECT bmi.id
         FROM bank_mutation_imports bmi
-        WHERE bmi.journal_entry_id IS NULL
+        WHERE ${scopedSheetPurge ? sql`FALSE` : sql`bmi.journal_entry_id IS NULL
           AND UPPER(COALESCE(bmi.status::text, 'DRAFT')) NOT IN ('APPROVED', 'POSTED')
+        `}
       `);
 
       const sourceCounts = await tx.execute(sql`
@@ -9937,11 +10177,26 @@ router.delete("/purge-mutations", async (req, res) => {
       };
     });
 
-    logger.warn({ actor, ...result }, "[bankRecon] DEV source mutations purged");
+    logger.warn(
+      { actor, productionScopedPurge, companyId: requestedCompanyId, ...result },
+      productionScopedPurge
+        ? "[bankRecon] PROD unprocessed Google Sheet mutations purged"
+        : "[bankRecon] DEV source mutations purged",
+    );
+    if (productionScopedPurge) {
+      audit(req, {
+        action: "purge-unprocessed-google-sheet-mutations",
+        module: "bank-reconciliation",
+        resourceId: `company-${requestedCompanyId}`,
+        after: result,
+      });
+    }
     return res.json({
       ok: true,
       ...result,
-      message: "Mutasi development yang tidak memiliki posting atau settlement telah dihapus permanen.",
+      message: productionScopedPurge
+        ? "Mutasi Google Sheet PROD yang belum diproses telah dihapus. Data Google Sheet sumber tetap utuh dan siap di-sync ulang."
+        : "Mutasi development yang tidak memiliki posting atau settlement telah dihapus permanen.",
     });
   } catch (e: any) {
     logger.error({ actor, err: e }, "[bankRecon] DEV source mutation purge failed");
@@ -9949,8 +10204,155 @@ router.delete("/purge-mutations", async (req, res) => {
       return res.status(409).json({ error: e.message });
     }
     return res.status(500).json({
-      error: e?.message ?? "Hapus permanen mutasi DEV gagal.",
+      error: e?.message ?? (productionScopedPurge
+        ? "Hapus mutasi sync PROD belum diproses gagal."
+        : "Hapus permanen mutasi DEV gagal."),
     });
+  }
+});
+
+// ─── DELETE /api/bank-reconciliation/:mutationId/candidates/:candidateId ─────
+// Hanya menghapus row kandidat yang benar-benar duplikat. Kandidat pertama
+// (MIN(id)) dipertahankan sebagai identity stabil; kandidat approved/posted,
+// kandidat tunggal, dan mutasi lintas company tidak boleh disentuh.
+router.delete("/:mutationId/candidates/:candidateId", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  await runBankReconciliationCoreMigration();
+
+  const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+  const candidateId = Number.parseInt(String(req.params.candidateId ?? ""), 10);
+  if (!Number.isSafeInteger(mutationId) || mutationId <= 0 || !Number.isSafeInteger(candidateId) || candidateId <= 0) {
+    return res.status(400).json({ error: "ID mutasi dan kandidat tidak valid." });
+  }
+
+  const companyId = resolveCompanyId(req);
+  const actor = String((req as any).user?.email ?? "admin").trim() || "admin";
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const mutationResult = await tx.execute(sql`
+        SELECT id, status, journal_entry_id, company_id
+        FROM bank_mutations
+        WHERE id = ${mutationId}
+          AND company_id = ${companyId}
+        FOR UPDATE
+      `);
+      const mutation = mutationResult.rows[0] as Record<string, unknown> | undefined;
+      if (!mutation) {
+        throw Object.assign(new Error("Mutasi tidak ditemukan dalam company scope aktif."), { code: "NOT_FOUND" });
+      }
+
+      const mutationStatus = String(mutation.status ?? "").toLowerCase();
+      if (
+        ["approved_pending_posting", "approved", "posted", "void"].includes(mutationStatus)
+        || mutation.journal_entry_id != null
+      ) {
+        throw Object.assign(
+          new Error("Kandidat tidak dapat dihapus setelah mutasi memiliki approval atau jurnal. Gunakan alur unmatch/reversal."),
+          { code: "FINAL_MUTATION" },
+        );
+      }
+
+      const candidateResult = await tx.execute(sql`
+        SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+        FROM bank_reconciliation_matches
+        WHERE id = ${candidateId}
+          AND mutation_id = ${mutationId}
+        FOR UPDATE
+      `);
+      const candidate = candidateResult.rows[0] as Record<string, unknown> | undefined;
+      if (!candidate) {
+        throw Object.assign(new Error("Kandidat tidak ditemukan untuk mutasi ini."), { code: "NOT_FOUND" });
+      }
+      if (String(candidate.status ?? "").toLowerCase() !== "candidate") {
+        throw Object.assign(
+          new Error("Hanya kandidat aktif yang dapat dihapus. Kandidat approved/rejected tetap menjadi bagian dari audit."),
+          { code: "NOT_ACTIVE_CANDIDATE" },
+        );
+      }
+
+      const duplicateCountResult = await tx.execute(sql`
+        SELECT COUNT(*)::int AS count
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutationId}
+          AND candidate_type = ${String(candidate.candidate_type)}
+          AND candidate_id = ${Number(candidate.candidate_id)}
+          AND candidate_source IS NOT DISTINCT FROM ${candidate.candidate_source == null ? null : String(candidate.candidate_source)}
+          AND status = 'candidate'
+      `);
+      const duplicateCount = Number(
+        (duplicateCountResult.rows[0] as { count?: number | string } | undefined)?.count ?? 0,
+      );
+      if (duplicateCount < 2) {
+        throw Object.assign(
+          new Error("Kandidat ini bukan duplikat aktif, sehingga tidak dihapus."),
+          { code: "NOT_DUPLICATE" },
+        );
+      }
+
+      const keeperResult = await tx.execute(sql`
+        SELECT MIN(id)::int AS keeper_id
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutationId}
+          AND candidate_type = ${String(candidate.candidate_type)}
+          AND candidate_id = ${Number(candidate.candidate_id)}
+          AND candidate_source IS NOT DISTINCT FROM ${candidate.candidate_source == null ? null : String(candidate.candidate_source)}
+          AND status = 'candidate'
+      `);
+      const keeperId = Number(
+        (keeperResult.rows[0] as { keeper_id?: number | string } | undefined)?.keeper_id ?? 0,
+      );
+      if (candidateId === keeperId) {
+        throw Object.assign(
+          new Error(`Kandidat utama #${keeperId} dipertahankan. Hapus row duplikat lainnya.`),
+          { code: "KEEPER_CANDIDATE" },
+        );
+      }
+
+      const deletedResult = await tx.execute(sql`
+        DELETE FROM bank_reconciliation_matches
+        WHERE id = ${candidateId}
+          AND mutation_id = ${mutationId}
+          AND status = 'candidate'
+        RETURNING id
+      `);
+      if (deletedResult.rows.length !== 1) {
+        throw Object.assign(new Error("Kandidat berubah bersamaan; muat ulang data dan coba lagi."), {
+          code: "CONCURRENT_CHANGE",
+        });
+      }
+
+      const meta = {
+        candidate_id: candidateId,
+        candidate_type: String(candidate.candidate_type),
+        candidate_source: candidate.candidate_source ?? null,
+        duplicate_count_before: duplicateCount,
+        keeper_id: keeperId,
+        reason: "duplicate_candidate_removed",
+      };
+      await tx.execute(sql`
+        INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+        VALUES (${mutationId}, 'CANDIDATE_DUPLICATE_DELETED', ${actor}, ${JSON.stringify(meta)}::jsonb)
+      `);
+
+      return {
+        deleted_candidate_id: candidateId,
+        keeper_candidate_id: keeperId,
+        duplicate_count_remaining: duplicateCount - 1,
+      };
+    });
+
+    audit(req, {
+      action: "delete-duplicate-reconciliation-candidate",
+      module: "bank-reconciliation",
+      resourceId: `bank-mutation-${mutationId}`,
+      after: result,
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error: any) {
+    const code = String(error?.code ?? "");
+    const status = code === "NOT_FOUND" ? 404 : code === "CONCURRENT_CHANGE" ? 409 : 400;
+    return res.status(status).json({ error: error?.message ?? "Kandidat duplikat gagal dihapus." });
   }
 });
 

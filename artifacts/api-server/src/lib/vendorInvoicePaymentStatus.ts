@@ -260,22 +260,25 @@ export async function recalculateVendorInvoicePaymentStatus(
         SELECT brm.mutation_id, brm.candidate_source::text AS candidate_source
         FROM public.bank_reconciliation_matches brm
         INNER JOIN public.bank_mutations bm ON bm.id = brm.mutation_id
+        INNER JOIN public.accounting_entries ae
+          ON ae.id = bm.journal_entry_id
+         AND ae.company_id = ${companyId}
+         AND ae.status = 'posted'
         WHERE brm.candidate_type::text = 'vendor_invoice'
           AND brm.candidate_id::text = ${String(vendorInvoiceId)}
           AND brm.status::text = 'approved'
           AND bm.direction::text = 'OUT'
-          AND bm.status::text IN ('approved_pending_posting', 'approved', 'posted', 'reconciled', 'matched')
-          AND (
-            bm.journal_entry_id IS NOT NULL
-            OR brm.candidate_source::text = 'bank_disbursement'
-          )
+          AND bm.status::text IN ('posted', 'reconciled')
         ORDER BY brm.id DESC
         LIMIT 1
       `),
     );
     const inferredSettlement = inferVendorInvoiceGrossSettlement({
       paymentAmount: amountPaid,
-      outstanding: grandTotal - amountPaid,
+      // amountPaid may be the net cash transferred to the supplier. Compare
+      // that cash with the pre-payment invoice balance so persisted
+      // withholding can close the remaining gross liability.
+      outstanding: grandTotal,
       withholdingAmount: linkage.withholdingAmount,
     });
     if (evidenceRows.length > 0 && inferredSettlement.grossAmount >= grandTotal - 0.01) {

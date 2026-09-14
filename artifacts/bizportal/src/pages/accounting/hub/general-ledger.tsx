@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   RefreshCw, ChevronLeft, ChevronRight, ArrowLeft, X, Trash2,
-  AlertTriangle, CalendarRange, ChevronUp, ChevronDown, ChevronsUpDown,
+  AlertTriangle, CalendarRange, ChevronUp, ChevronDown, ChevronsUpDown, Pencil, FilePenLine,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -739,18 +739,52 @@ export default function AccountingHubGLPage() {
                   <td className="px-3 py-2">
                     <Badge variant={r.status === "posted" ? "default" : "secondary"} className="text-xs">{r.status}</Badge>
                   </td>
-                  <td className="px-3 py-2">
-                    {isFirstLineOfEntry && canVoid && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        title="Batalkan entry ini (buat jurnal pembalik)"
-                        onClick={() => openVoidDialog(r)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
+                   <td className="px-3 py-2">
+                     {isFirstLineOfEntry && (
+                       <div className="flex items-center gap-1">
+                         {r.status === "draft" && r.source_module === "manual" && (
+                           <Link
+                             href={`/accounting/entries?editId=${r.entry_id}`}
+                             onClick={(e) => e.stopPropagation()}
+                           >
+                             <Button
+                               size="sm"
+                               variant="ghost"
+                               className="h-7 px-2 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                               title="Edit jurnal draft"
+                             >
+                               <Pencil className="h-3.5 w-3.5" />
+                             </Button>
+                           </Link>
+                         )}
+                         {canVoid && (
+                           <>
+                             <Link
+                               href={`/accounting/entries?correctId=${r.entry_id}`}
+                               onClick={(e) => e.stopPropagation()}
+                             >
+                               <Button
+                                 size="sm"
+                                 variant="ghost"
+                                 className="h-7 px-2 text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+                                 title="Koreksi COA: reversal dan jurnal baru"
+                               >
+                                 <FilePenLine className="h-3.5 w-3.5" />
+                               </Button>
+                             </Link>
+                             <Button
+                               size="sm"
+                               variant="ghost"
+                               className="h-7 px-2 text-red-600 hover:bg-red-50 hover:text-red-700"
+                               title="Batalkan entry ini (buat jurnal pembalik)"
+                               onClick={() => openVoidDialog(r)}
+                             >
+                               <Trash2 className="h-3.5 w-3.5" />
+                             </Button>
+                           </>
+                         )}
+                       </div>
+                     )}
                   </td>
                 </tr>
               );

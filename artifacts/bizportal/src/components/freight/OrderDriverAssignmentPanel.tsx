@@ -13,21 +13,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import {
   Truck, User, Phone, Copy, ExternalLink, Plus, RefreshCw,
-  CheckCircle2, XCircle, Clock, Smartphone, MessageCircle,
+  CheckCircle2, XCircle, Clock, MessageCircle,
   ChevronDown, ChevronUp, Circle, Navigation, Zap, Filter,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-interface Driver {
-  id: number;
-  name: string;
-  email: string;
-  phone: string | null;
-  vehiclePlate: string | null;
-  vehicleType: string | null;
-  isActive: boolean;
-}
 
 interface StatusLog {
   id: number;
@@ -162,7 +152,6 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [showDialog, setShowDialog] = useState(false);
-  const [mode, setMode] = useState<"INTERNAL" | "EXTERNAL">("INTERNAL");
   const [showForceDialog, setShowForceDialog] = useState(false);
   const [forceJobId, setForceJobId] = useState<number | null>(null);
   const [forceStatus, setForceStatus] = useState("");
@@ -180,24 +169,10 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
     specialInstruction: "",
   });
 
-  const [externalForm, setExternalForm] = useState({
-    driverId: "",
-    pickupAddress: origin ?? "",
-    deliveryAddress: destination ?? "",
-    cargoDescription: commodity ?? "",
-    specialInstruction: "",
-  });
-
   const { data: jobs = [], isLoading: jobsLoading, refetch } = useQuery<DriverJob[]>({
     queryKey: ["driver-jobs-by-order", orderId],
     queryFn: () => apiFetch<DriverJob[]>(`/api/drivers/jobs/list?logisticOrderId=${orderId}`),
     refetchInterval: 20_000,
-  });
-
-  const { data: drivers = [] } = useQuery<Driver[]>({
-    queryKey: ["drivers"],
-    queryFn: () => apiFetch<Driver[]>("/api/drivers"),
-    enabled: showDialog && mode === "EXTERNAL",
   });
 
   // SSE realtime updates
@@ -219,42 +194,25 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
     return true;
   });
 
-  const activeDrivers = drivers.filter((d) => d.isActive);
   const activeJob = filteredJobs.find((j) => j.status !== "COMPLETED" && j.status !== "CANCELLED");
   const pastJobs = filteredJobs.filter((j) => j.status === "COMPLETED" || j.status === "CANCELLED");
 
   const assignMutation = useMutation({
     mutationFn: async () => {
-      if (mode === "INTERNAL") {
-        return apiFetch("/api/drivers/jobs", {
-          method: "POST",
-          body: JSON.stringify({
-            logisticOrderId: orderId,
-            customerName: customerName ?? "",
-            driverType: "INTERNAL",
-            executionMode: "WA_MINI_FORM",
-            driverNameOverride: internalForm.driverNameOverride,
-            driverPhoneOverride: internalForm.driverPhoneOverride || null,
-            vehiclePlateOverride: internalForm.vehiclePlateOverride || null,
-            pickupAddress: internalForm.pickupAddress || null,
-            deliveryAddress: internalForm.deliveryAddress || null,
-            cargoDescription: internalForm.cargoDescription || null,
-            specialInstruction: internalForm.specialInstruction || null,
-          }),
-        });
-      }
       return apiFetch("/api/drivers/jobs", {
         method: "POST",
         body: JSON.stringify({
-          driverId: Number(externalForm.driverId),
           logisticOrderId: orderId,
           customerName: customerName ?? "",
-          driverType: "EXTERNAL",
-          executionMode: "DRIVER_APP",
-          pickupAddress: externalForm.pickupAddress || null,
-          deliveryAddress: externalForm.deliveryAddress || null,
-          cargoDescription: externalForm.cargoDescription || null,
-          specialInstruction: externalForm.specialInstruction || null,
+          driverType: "INTERNAL",
+          executionMode: "WA_MINI_FORM",
+          driverNameOverride: internalForm.driverNameOverride,
+          driverPhoneOverride: internalForm.driverPhoneOverride || null,
+          vehiclePlateOverride: internalForm.vehiclePlateOverride || null,
+          pickupAddress: internalForm.pickupAddress || null,
+          deliveryAddress: internalForm.deliveryAddress || null,
+          cargoDescription: internalForm.cargoDescription || null,
+          specialInstruction: internalForm.specialInstruction || null,
         }),
       });
     },
@@ -404,30 +362,9 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
             <DialogTitle>Assign Driver — {orderNumber ?? `Order #${orderId}`}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label className="text-xs text-slate-500 mb-2 block">Mode Eksekusi</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {(["INTERNAL", "EXTERNAL"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMode(m)}
-                    className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-sm transition-colors ${
-                      mode === m ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 hover:border-slate-300 text-slate-600"
-                    }`}
-                  >
-                    {m === "INTERNAL" ? <MessageCircle className="w-5 h-5" /> : <Smartphone className="w-5 h-5" />}
-                    <span className="font-medium">{m === "INTERNAL" ? "Driver Internal" : "Driver Eksternal"}</span>
-                    <span className="text-xs opacity-70">{m === "INTERNAL" ? "Via WA Mini Form" : "Via WhatsApp"}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {mode === "INTERNAL" ? (
               <div className="space-y-3">
                 <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-100 text-xs text-indigo-700">
-                  Driver tanpa akun app. Link WA Mini Form akan dikirim ke nomor driver.
+                  Link WA Mini Form akan dikirim ke nomor driver untuk memperbarui progres pengiriman.
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="col-span-2">
@@ -441,45 +378,19 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
                   <div>
                     <Label className="text-xs">Plat Kendaraan</Label>
                     <Input className="mt-1" value={internalForm.vehiclePlateOverride} onChange={(e) => setInternalForm(f => ({ ...f, vehiclePlateOverride: e.target.value }))} />
-                  </div>
-                </div>
+               </div>
                 <div><Label className="text-xs">Alamat Pickup</Label><Input className="mt-1" value={internalForm.pickupAddress} onChange={(e) => setInternalForm(f => ({ ...f, pickupAddress: e.target.value }))} /></div>
                 <div><Label className="text-xs">Alamat Tujuan</Label><Input className="mt-1" value={internalForm.deliveryAddress} onChange={(e) => setInternalForm(f => ({ ...f, deliveryAddress: e.target.value }))} /></div>
                 <div><Label className="text-xs">Deskripsi Muatan</Label><Input className="mt-1" value={internalForm.cargoDescription} onChange={(e) => setInternalForm(f => ({ ...f, cargoDescription: e.target.value }))} /></div>
                 <div><Label className="text-xs">Catatan Khusus</Label><Textarea className="mt-1 text-sm" rows={2} value={internalForm.specialInstruction} onChange={(e) => setInternalForm(f => ({ ...f, specialInstruction: e.target.value }))} /></div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-100 text-xs text-sky-700">
-                  Driver terdaftar. Detail penugasan dikirim melalui WhatsApp.
                 </div>
-                <div>
-                  <Label className="text-xs">Pilih Driver <span className="text-red-500">*</span></Label>
-                  <Select value={externalForm.driverId} onValueChange={(v) => setExternalForm(f => ({ ...f, driverId: v }))}>
-                    <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih driver aktif…" /></SelectTrigger>
-                    <SelectContent>
-                      {activeDrivers.length === 0 ? (
-                        <div className="px-3 py-2 text-sm text-slate-400">Tidak ada driver aktif</div>
-                      ) : activeDrivers.map((d) => (
-                        <SelectItem key={d.id} value={String(d.id)}>
-                          {d.name}{d.vehiclePlate ? ` — ${d.vehiclePlate}` : ""}{d.vehicleType ? ` (${d.vehicleType})` : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div><Label className="text-xs">Alamat Pickup</Label><Input className="mt-1" value={externalForm.pickupAddress} onChange={(e) => setExternalForm(f => ({ ...f, pickupAddress: e.target.value }))} /></div>
-                <div><Label className="text-xs">Alamat Tujuan</Label><Input className="mt-1" value={externalForm.deliveryAddress} onChange={(e) => setExternalForm(f => ({ ...f, deliveryAddress: e.target.value }))} /></div>
-                <div><Label className="text-xs">Deskripsi Muatan</Label><Input className="mt-1" value={externalForm.cargoDescription} onChange={(e) => setExternalForm(f => ({ ...f, cargoDescription: e.target.value }))} /></div>
-                <div><Label className="text-xs">Catatan Khusus</Label><Textarea className="mt-1 text-sm" rows={2} value={externalForm.specialInstruction} onChange={(e) => setExternalForm(f => ({ ...f, specialInstruction: e.target.value }))} /></div>
               </div>
-            )}
-          </div>
+            </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Batal</Button>
             <Button
               onClick={() => assignMutation.mutate()}
-              disabled={assignMutation.isPending || (mode === "INTERNAL" ? !internalForm.driverNameOverride : !externalForm.driverId)}
+              disabled={assignMutation.isPending || !internalForm.driverNameOverride}
             >
               {assignMutation.isPending ? "Menyimpan…" : "Assign Driver"}
             </Button>
@@ -669,7 +580,7 @@ function ActiveJobCard({
             </Badge>
           ) : (
             <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-sky-50 text-sky-600 border-sky-200">
-              <Smartphone className="w-2.5 h-2.5 mr-0.5" /> Driver App
+              <MessageCircle className="w-2.5 h-2.5 mr-0.5" /> WA Progress
             </Badge>
           )}
         </div>

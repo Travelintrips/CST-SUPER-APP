@@ -146,7 +146,6 @@ export default function AccountingHubTrialBalancePage() {
   };
 
   function drillDown(r: TBRow) {
-    if (r.is_header) return;
     const params = new URLSearchParams({ account_id: String(r.account_id) });
     if (filters.company_id) params.set("company_id", filters.company_id);
     if (filters.date_from)  params.set("date_from",  filters.date_from);
@@ -201,9 +200,9 @@ export default function AccountingHubTrialBalancePage() {
           else drillDown(r);
         }}
         title={canExpand
-          ? `${isExpanded ? "Sembunyikan" : "Tampilkan"} akun child ${r.code} – ${r.name}`
+          ? `${isExpanded ? "Sembunyikan" : "Tampilkan"} akun child ${r.code} – ${r.name}. Gunakan ikon buku untuk melihat transaksi parent dan seluruh child.`
           : r.is_header
-            ? `Saldo akumulasi akun child ${r.code} – ${r.name}`
+            ? `Saldo akumulasi akun child ${r.code} – ${r.name}. Gunakan ikon buku untuk melihat transaksi.`
             : `Klik untuk lihat detail transaksi akun ${r.code} – ${r.name}`}
         aria-expanded={canExpand ? isExpanded : undefined}
       >
@@ -276,9 +275,25 @@ export default function AccountingHubTrialBalancePage() {
               </button>
             )}
             {canExpand
-              ? (isExpanded
-                ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />)
+              ? (
+                <>
+                  {isExpanded
+                    ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                  <button
+                    type="button"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded border border-blue-300 text-blue-700 hover:bg-blue-50"
+                    title={`Lihat transaksi ${r.code} — ${r.name} dan seluruh child`}
+                    aria-label={`Lihat transaksi ${r.code} dan seluruh child`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      drillDown(r);
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </button>
+                </>
+              )
               : <ExternalLink className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary" />}
           </div>
         </td>

@@ -286,7 +286,7 @@ export function parseCSVText(content: string): ParsedBankRow[] {
   const dateIdx   = findCol(["tanggal", "date", "tgl"]);
   const descIdx   = findCol(["keterangan", "description", "desc", "narasi", "ket"]);
   const creditIdx = findCol(["kredit", "credit", "masuk", "cr"]);
-  const debitIdx  = findCol(["debit", "keluar", "db"]);
+  const debitIdx  = findCol(["debit", "debet", "keluar", "db"]);
   const amtIdx    = findCol(["nominal", "amount", "jumlah"]);
   const refIdx    = findCol(["referensi", "reference", "ref", "no transaksi"]);
   const vendorIdx = findCol(["vendor", "nama", "name", "counterparty", "pihak"]);
@@ -334,7 +334,7 @@ export function parseCSVText(content: string): ParsedBankRow[] {
     if (!amount) amount = parseNum(rawAmt);
     if (!amount) continue;
 
-    const direction: "IN" | "OUT" = credit > 0 ? "IN" : "OUT";
+    const direction = directionFromBankColumns(debit, credit);
     const balance = rawBal ? parseNum(rawBal) : undefined;
 
     results.push({
@@ -373,8 +373,8 @@ export function buildMutationKeyFromParsed(
 ): string {
   return canonicalMutationKey({
     transaction_date: row.date,
-    debit:  row.direction === "IN"  ? row.amount : 0,
-    credit: row.direction === "OUT" ? row.amount : 0,
+    debit:  row.direction === "OUT" ? row.amount : 0,
+    credit: row.direction === "IN"  ? row.amount : 0,
     description:      row.description,
     bank_reference:   row.reference ?? null,
     company_id:       opts?.company_id      ?? null,

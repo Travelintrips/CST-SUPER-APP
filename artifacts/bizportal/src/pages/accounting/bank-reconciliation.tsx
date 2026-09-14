@@ -597,6 +597,7 @@ interface Candidate {
   order_id_match: boolean;
   proof_match: boolean;
   status: string;
+  duplicate_count?: number;
   customer_name?: string | null;
   details?: CandidateDetails | null;
 }
@@ -652,6 +653,8 @@ interface CandidateDetails {
   targetType?: string | null;
   targetCoaCode?: string | null;
   targetCoaName?: string | null;
+  targetCoaValidationStatus?: "missing" | "invalid" | "valid" | null;
+  targetCoaValidationMessage?: string | null;
   confidenceScore?: number | null;
   stopProcessing?: boolean | null;
   requiresDocumentUpload?: boolean | null;
@@ -993,7 +996,7 @@ type QrisAmountComparison = NonNullable<
 function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountComparison }) {
   const difference = Number(comparison.difference) || 0;
   return (
-    <div className="mt-2 rounded border border-red-200 bg-white/70 p-2 dark:border-red-800 dark:bg-red-950/40">
+    <div className="mt-2 rounded border border-red-200 bg-white/70 p-2 text-black dark:border-red-800 dark:bg-red-950/40 dark:text-black">
       <p className="font-semibold">Rincian nominal yang dibandingkan:</p>
       <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
         <span>Total bruto payment ({comparison.paymentCount} payment)</span>
@@ -1005,7 +1008,7 @@ function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountCom
         <span>Nominal mutasi bank</span>
         <strong className="sm:text-right">{idr(comparison.mutationAmount)}</strong>
         <span>Selisih (netto − mutasi)</span>
-        <strong className={`sm:text-right ${difference === 0 ? "text-green-700" : "text-red-700 dark:text-red-300"}`}>
+        <strong className="sm:text-right text-black">
           {idr(difference)}
         </strong>
       </div>
@@ -1877,8 +1880,19 @@ function visibleCandidates(m: BankMutation): Candidate[] {
   // guard already rejects a second link; the read-side must not invite it.
   if (hasApprovedReconciliationMatch(m)) return [];
 
+  const rawCandidates = m.candidates ?? [];
+  const duplicateCounts = new Map<string, number>();
+  for (const candidate of rawCandidates) {
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
+  }
+
   const seen = new Set<string>();
-  const eligible = (m.candidates ?? [])
+  const eligible = rawCandidates
     .filter(candidate => {
       const requiresQrisEvidence = isQrisCandidate(candidate, m);
       const candidateDate = candidate.details?.settlementDate ?? candidate.details?.date;
@@ -1892,7 +1906,13 @@ function visibleCandidates(m: BankMutation): Candidate[] {
         candidate.candidate_id,
         candidate.candidate_source ?? "<historical-null>",
       ].join(":");
-      if (!dateEligible || seen.has(identity)) return false;
+      const duplicateCount = Math.max(
+        Number(candidate.duplicate_count ?? 0),
+        duplicateCounts.get(identity) ?? 0,
+      );
+      // Keep exact duplicates visible so an admin can remove the redundant
+      // row. Non-duplicate candidates retain the existing read-side dedupe.
+      if (!dateEligible || (seen.has(identity) && duplicateCount < 2)) return false;
       seen.add(identity);
       return true;
     });
@@ -1901,6 +1921,12 @@ function visibleCandidates(m: BankMutation): Candidate[] {
   for (const candidate of eligible) {
     const businessIdentity = candidateBusinessIdentity(candidate);
     if (!businessIdentity) continue;
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    if ((duplicateCounts.get(identity) ?? 0) > 1) continue;
     const existing = seenBusiness.get(businessIdentity);
     if (!existing || candidateBusinessPriority(candidate) > candidateBusinessPriority(existing)) {
       seenBusiness.set(businessIdentity, candidate);
@@ -1909,7 +1935,14 @@ function visibleCandidates(m: BankMutation): Candidate[] {
 
   return eligible.filter(candidate => {
     const businessIdentity = candidateBusinessIdentity(candidate);
-    return !businessIdentity || seenBusiness.get(businessIdentity) === candidate;
+    if (!businessIdentity) return true;
+    const identity = [
+      candidate.candidate_type,
+      candidate.candidate_id,
+      candidate.candidate_source ?? "<historical-null>",
+    ].join(":");
+    return (duplicateCounts.get(identity) ?? 0) > 1
+      || seenBusiness.get(businessIdentity) === candidate;
   });
 }
 
@@ -2026,6 +2059,13 @@ function CandidateDetailsBlock({
     { label: "Status", value: d.status },
     { label: "Memo / Catatan", value: d.memo },
     { label: "COA target", value: d.targetCoaCode ? `${d.targetCoaCode}${d.targetCoaName ? ` — ${d.targetCoaName}` : ""}` : null },
+    { label: "Status COA target", value: isRuleCandidate
+      ? d.targetCoaValidationStatus === "valid"
+        ? "Valid dan postable"
+        : d.targetCoaValidationStatus === "invalid"
+          ? "Tidak valid untuk perusahaan ini"
+          : "Belum dikonfigurasi"
+      : null },
     { label: "Deskripsi rule", value: d.ruleDescription },
     { label: "Prioritas rule", value: d.rulePriority },
     { label: "Arah rule", value: d.ruleDirection },
@@ -2072,6 +2112,14 @@ function CandidateDetailsBlock({
         className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
         onClick={event => event.stopPropagation()}
       >
+        {isRuleCandidate && d.targetCoaValidationStatus !== "valid" && (
+          <p className="mb-2 rounded border border-amber-300/60 bg-amber-950/20 px-2 py-1.5 text-[11px] text-amber-200">
+            {d.targetCoaValidationMessage
+              ?? (d.targetCoaCode
+                ? "COA tujuan Rule AI tidak valid untuk perusahaan ini. Pastikan akun aktif dan postable."
+                : "COA tujuan Rule AI belum dikonfigurasi. Kandidat tidak dapat di-approve sebelum mapping COA dilengkapi.")}
+          </p>
+        )}
         {d.settlementPartial && (
           <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
             Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
@@ -2213,6 +2261,20 @@ function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[]
     reasons.push("Kandidat belum memenuhi seluruh safeguard untuk diproses otomatis.");
   }
   return reasons;
+}
+
+function candidateApprovalBlockReason(candidate: Candidate): string | null {
+  if (candidate.candidate_type !== "recon_rule") return null;
+  const targetCoaCode = String(candidate.details?.targetCoaCode ?? "").trim();
+  const validationStatus = candidate.details?.targetCoaValidationStatus;
+  if (!targetCoaCode || validationStatus === "missing") {
+    return "Rule AI ini belum memiliki COA tujuan. Lengkapi COA tujuan pada Recon Rule sebelum approve.";
+  }
+  if (validationStatus !== "valid") {
+    return candidate.details?.targetCoaValidationMessage
+      ?? `COA tujuan Rule AI "${targetCoaCode}" tidak valid untuk perusahaan ini. Pastikan akun aktif dan postable.`;
+  }
+  return null;
 }
 
 function MatchingReviewReasonBlock({
@@ -2642,7 +2704,7 @@ function SummaryCards({
       bg: "hover:bg-yellow-50 dark:hover:bg-yellow-950/20",
     },
     {
-      key: "posted",
+      key: "completed",
       icon: CheckCircle2,
       label: "Selesai",
       count: (summaryMap.posted?.count ?? 0) + (summaryMap.approved?.count ?? 0),
@@ -4368,6 +4430,37 @@ function QrisMutationCard({
       : hasLiveSettlementProposal
         ? auditObservedDeduction
         : null;
+  const storedAmountComparison = audit.auto_post_details?.amountComparison;
+  // The persisted auto-post diagnosis can describe an older candidate
+  // snapshot. When the API has a complete live payment scope, render the
+  // same gross/net figures used by the summary cards instead of mixing old
+  // aggregate metadata into the current payment list.
+  const liveAmountComparison = !isReadOnlyEvidence
+    && hasLiveScope
+    && allItems.length > 0
+    && expectedNet != null
+    ? {
+        mutationAmount: bankAmount,
+        grossAmount: candidateGross,
+        mdrAmount: mdr ?? Math.max(0, candidateGross - expectedNet),
+        expectedNetAmount: expectedNet,
+        difference: expectedNet - bankAmount,
+        paymentCount: availablePaymentIds.length,
+      }
+    : null;
+  const amountComparisonIsStale = Boolean(
+    storedAmountComparison
+    && liveAmountComparison
+    && (
+      Math.abs(Number(storedAmountComparison.grossAmount) - liveAmountComparison.grossAmount) > 0.01
+      || Math.abs(Number(storedAmountComparison.mdrAmount) - liveAmountComparison.mdrAmount) > 0.01
+      || Math.abs(Number(storedAmountComparison.expectedNetAmount) - liveAmountComparison.expectedNetAmount) > 0.01
+      || Number(storedAmountComparison.paymentCount) !== liveAmountComparison.paymentCount
+    ),
+  );
+  const displayedAmountComparison = liveAmountComparison ?? storedAmountComparison;
+  const liveAmountMatchesBank = liveAmountComparison != null
+    && Math.abs(liveAmountComparison.difference) < 0.5;
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
   const differenceExplanation = differenceAbs != null && differenceAbs < 0.5
@@ -4539,21 +4632,33 @@ function QrisMutationCard({
             )}
             {audit.auto_post_status === "failed" && !canonicalStateResolved && (
               <div
-                className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                className={`mt-3 rounded-md border px-3 py-2.5 text-xs ${
+                  liveAmountMatchesBank && amountComparisonIsStale
+                    ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
+                    : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950"
+                } text-black dark:text-black`}
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-start gap-2">
-                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
+                  <ShieldAlert className={`mt-0.5 h-4 w-4 shrink-0 ${
+                    liveAmountMatchesBank && amountComparisonIsStale
+                      ? "text-amber-600 dark:text-amber-300"
+                      : "text-red-600 dark:text-red-300"
+                  }`} />
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <p className="font-semibold">
-                      {audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
+                      {liveAmountMatchesBank && amountComparisonIsStale
+                        ? "Diagnosis snapshot lama — perlu refresh kandidat"
+                        : audit.auto_post_details?.title ?? "Auto-post QRIS tertahan oleh safeguard"}
                     </p>
-                    <p><strong>Apa yang salah:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    <p><strong>Apa yang salah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                      ? "Diagnosis tersimpan masih memakai agregat candidate lama. Perhitungan payment live sekarang sudah sama dengan nominal mutasi bank."
+                      : audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
                     {audit.auto_post_details?.rootCause && (
                       <p><strong>Kenapa diblokir:</strong> {audit.auto_post_details.rootCause}</p>
                     )}
-                    {audit.auto_post_details?.amountComparison && (
-                      <QrisAmountComparisonDetails comparison={audit.auto_post_details.amountComparison} />
+                    {displayedAmountComparison && (
+                      <QrisAmountComparisonDetails comparison={displayedAmountComparison} />
                     )}
                     {audit.auto_post_details?.actualValue != null
                       && !audit.auto_post_details?.amountComparison && (
@@ -4582,7 +4687,9 @@ function QrisMutationCard({
                     {(audit.auto_post_details?.fieldNames?.length ?? 0) > 0 && (
                       <p><strong>Field:</strong> {audit.auto_post_details?.fieldNames?.join(", ")}</p>
                     )}
-                    <p><strong>Langkah:</strong> {audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    <p><strong>Langkah:</strong> {liveAmountMatchesBank && amountComparisonIsStale
+                      ? "Refresh snapshot candidate dari source payment canonical. Jangan mengubah payment atau journal posted."
+                      : audit.auto_post_details?.adminAction ?? audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
                     {(audit.auto_post_details?.errorCode ?? audit.auto_post_details?.code) && (
                       <p className="text-[10px] opacity-75">
                         Kode: {audit.auto_post_details.errorCode ?? audit.auto_post_details.code}
@@ -4936,6 +5043,20 @@ function QrisMutationCard({
                   {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
                 </Button>
               )}
+              {onUnmatch && canUnmatch(m) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUnmatch(m);
+                  }}
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  Unmatch
+                </Button>
+              )}
               {canReject(m) && (
                 <Button
                   size="sm"
@@ -5199,6 +5320,12 @@ function MutationCard({
   const selectableMatchingCandidates = realCandidateRequired
     ? matchingCandidates.filter(isRealTransactionCandidate)
     : matchingCandidates;
+  const selectedCandidate = selectableMatchingCandidates.find(
+    candidate => candidate.id === selectedCandidateId,
+  );
+  const selectedCandidateApprovalBlockedReason = selectedCandidate
+    ? candidateApprovalBlockReason(selectedCandidate)
+    : null;
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
@@ -5381,6 +5508,7 @@ function MutationCard({
                     const candidateDetails = candidate.details;
                      const candidateIsSelectable =
                        !realCandidateRequired || isRealTransactionCandidate(candidate);
+                    const candidateApprovalBlockedReason = candidateApprovalBlockReason(candidate);
                     const checked = selectedCandidateId === candidate.id;
                     const candidateApproved = String(candidate.status ?? "").toLowerCase() === "approved";
                     const candidateName = candidateDetails?.name ?? candidate.customer_name;
@@ -5437,7 +5565,11 @@ function MutationCard({
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
                            <CandidateDetailsBlock candidate={candidate} compact />
-                           {onApproveCandidate && canApprove(m) && candidateIsSelectable && (
+                           {candidateApprovalBlockedReason ? (
+                             <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+                               {candidateApprovalBlockedReason}
+                             </p>
+                           ) : onApproveCandidate && canApprove(m) && candidateIsSelectable && (
                              <Button
                                type="button"
                                size="sm"
@@ -5663,8 +5795,16 @@ function MutationCard({
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                disabled={selectableMatchingCandidates.length > 0 && selectedCandidateId == null}
-                title={selectableMatchingCandidates.length > 0 && selectedCandidateId == null ? "Pilih kandidat transaksi yang cocok terlebih dahulu" : undefined}
+                 disabled={
+                   (selectableMatchingCandidates.length > 0 && selectedCandidateId == null)
+                   || !!selectedCandidateApprovalBlockedReason
+                 }
+                 title={
+                   selectedCandidateApprovalBlockedReason
+                     ?? (selectableMatchingCandidates.length > 0 && selectedCandidateId == null
+                       ? "Pilih kandidat transaksi yang cocok terlebih dahulu"
+                       : undefined)
+                 }
                 onClick={() => {
                   const selected = selectableMatchingCandidates.find(candidate => candidate.id === selectedCandidateId);
                   if (selected && onApproveCandidate) {
@@ -6340,6 +6480,7 @@ function MutationDetailPanel({
   onApproveQris,
   onApproveCandidate,
   onManualOverrideCandidate,
+  onDeleteDuplicateCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
   onRepairQrisCandidate,
@@ -6368,6 +6509,7 @@ function MutationDetailPanel({
   onApproveQris: (m: BankMutation) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  onDeleteDuplicateCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   onRepairQrisCandidate?: (candidateId: number) => void;
@@ -6618,6 +6760,23 @@ function MutationDetailPanel({
                         {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Order ID</span>}
                         {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
+                       {Number(c.duplicate_count ?? 0) > 1 && c.status === "candidate" && onDeleteDuplicateCandidate && (
+                         <div className="flex items-center justify-between gap-2 pt-1">
+                           <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                             Duplikat aktif ({c.duplicate_count} kandidat)
+                           </span>
+                           <Button
+                             type="button"
+                             size="sm"
+                             variant="outline"
+                             className="h-7 gap-1 border-red-300 px-2 text-[11px] text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
+                             onClick={() => onDeleteDuplicateCandidate(m, c)}
+                           >
+                             <Trash2 className="h-3 w-3" />
+                             Hapus duplikat
+                           </Button>
+                         </div>
+                       )}
                        <CandidateDetailsBlock candidate={c} />
                     </div>
                   ))}
@@ -7771,6 +7930,8 @@ export default function BankReconciliationPage() {
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
   const [showPurgeMutations,  setShowPurgeMutations]  = useState(false);
+  const [showPurgeSyncedProd, setShowPurgeSyncedProd] = useState(false);
+  const [purgeCreatedAfter, setPurgeCreatedAfter] = useState("");
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
     error: string;
@@ -8995,6 +9156,7 @@ export default function BankReconciliationPage() {
       if (d?.__manualReview) {
         // Show warning in-dialog; do NOT close or invalidate — mapping not done.
         setManualReviewWarning({ error: d.error, code: d.code, mutId: d.mutId });
+        toast({ title: "Approve diblokir", description: d.error, variant: "destructive" });
         return;
       }
       setManualReviewWarning(null);
@@ -9209,6 +9371,32 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal hapus semua", description: e.message, variant: "destructive" }),
   });
 
+  const deleteDuplicateCandidateMut = useMutation({
+    mutationFn: async ({ mutationId, candidateId }: { mutationId: number; candidateId: number }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/candidates/${candidateId}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      const body = await response.json().catch(() => ({ error: response.statusText }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    onSuccess: async (data, variables) => {
+      toast({
+        title: "Kandidat duplikat dihapus",
+        description: `Kandidat #${variables.candidateId} dihapus. Kandidat utama #${data.keeper_candidate_id} tetap dipertahankan.`,
+      });
+      await refreshMutationDetail(variables.mutationId);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal menghapus kandidat duplikat",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const purgeMutations = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/purge-mutations", {
@@ -9231,6 +9419,41 @@ export default function BankReconciliationPage() {
     },
     onError: (e: Error) => {
       toast({ title: "Gagal menghapus mutasi", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const purgeSyncedProdMutations = useMutation({
+    mutationFn: async () => {
+      if (activeCompanyId == null || activeCompanyId <= 0) {
+        throw new Error("Pilih satu perusahaan terlebih dahulu. Purge PROD tidak boleh dijalankan dalam mode konsolidasi.");
+      }
+      const r = await fetch("/api/bank-reconciliation/purge-mutations", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "unprocessed_google_sheet",
+          company_id: activeCompanyId,
+          created_after: purgeCreatedAfter,
+          confirmation: "HAPUS MUTASI SYNC PROD",
+        }),
+      });
+      const body = await r.json().catch(() => ({ error: r.statusText }));
+      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      return body;
+    },
+    onSuccess: (d) => {
+      toast({
+        title: "Mutasi sync PROD dihapus",
+        description:
+          `${d.mutations_deleted ?? 0} mutasi hasil Google Sheet dihapus. ` +
+          `${d.mutations_preserved ?? 0} mutasi yang memiliki posting/settlement tetap dipertahankan.`,
+      });
+      setPage(0);
+      invalidate();
+    },
+    onError: (e: Error) => {
+      toast({ title: "Gagal menghapus mutasi sync PROD", description: e.message, variant: "destructive" });
     },
   });
 
@@ -9257,6 +9480,14 @@ export default function BankReconciliationPage() {
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
   const handleOpenUnapprove = (m: BankMutation) => setActionDialog({ mutation: m, mode: "unapprove" });
   const handleOpenUnmatch = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "unmatch" }); };
+  const handleDeleteDuplicateCandidate = (m: BankMutation, candidate: Candidate) => {
+    if (candidate.status !== "candidate" || Number(candidate.duplicate_count ?? 0) < 2) return;
+    const confirmed = window.confirm(
+      `Hapus kandidat duplikat #${candidate.id}?\n\nKandidat utama dengan transaksi yang sama akan tetap dipertahankan.`,
+    );
+    if (!confirmed) return;
+    deleteDuplicateCandidateMut.mutate({ mutationId: m.id, candidateId: candidate.id });
+  };
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
   const handleApproveQris = (m: BankMutation) => {
@@ -9307,6 +9538,11 @@ export default function BankReconciliationPage() {
     // mutation payload can still contain a historical H+1 candidate from a
     // previous matching run, which must never be approved accidentally.
     const chosen = approveDialogCands.find(c => c.id === selectedCandidateId);
+    const blockedReason = chosen ? candidateApprovalBlockReason(chosen) : null;
+    if (blockedReason) {
+      toast({ title: "Approve diblokir", description: blockedReason, variant: "destructive" });
+      return;
+    }
     approveMut.mutate({
       mutId: m.id,
       matchId: chosen?.id,
@@ -9324,6 +9560,11 @@ export default function BankReconciliationPage() {
   };
 
   const handleDirectApproveCandidate = (m: BankMutation, candidate: Candidate) => {
+    const blockedReason = candidateApprovalBlockReason(candidate);
+    if (blockedReason) {
+      toast({ title: "Approve diblokir", description: blockedReason, variant: "destructive" });
+      return;
+    }
     approveMut.mutate({
       mutId: m.id,
       matchId: candidate.id,
@@ -9509,6 +9750,16 @@ export default function BankReconciliationPage() {
               title="Hapus permanen mutasi development yang tidak terhubung ke posting atau settlement"
             >
               <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi DEV
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-700 hover:text-red-800 h-8 text-xs"
+              onClick={() => setShowPurgeSyncedProd(true)}
+              disabled={activeCompanyId == null || activeCompanyId <= 0}
+              title="Hapus hanya mutasi Google Sheet perusahaan aktif yang belum memiliki jurnal atau settlement"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" /> Hapus Mutasi Sync
             </Button>
           </div>
         </div>
@@ -10736,6 +10987,7 @@ export default function BankReconciliationPage() {
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
         onApproveCandidate={handleDirectApproveCandidate}
+         onDeleteDuplicateCandidate={handleDeleteDuplicateCandidate}
         onRepairQrisCandidate={
           qrisCompanyId != null && workflowStage !== "matching"
             ? (candidateId) => qrisRepairMut.mutate(candidateId)
@@ -10789,15 +11041,24 @@ export default function BankReconciliationPage() {
               {approveDialogCands.length > 0 ? (
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Pilih kandidat yang cocok:</p>
-                  {approveDialogCands.map(c => (
+                  {approveDialogCands.map(c => {
+                    const blockedReason = candidateApprovalBlockReason(c);
+                    return (
                     <div
                       key={c.id}
-                      className={`border rounded-lg p-3 cursor-pointer transition-all ${selectedCandidateId === c.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
-                      onClick={() => setSelectedCandidateId(c.id)}
+                      className={`border rounded-lg p-3 transition-all ${
+                        blockedReason ? "cursor-not-allowed opacity-80" : "cursor-pointer"
+                      } ${selectedCandidateId === c.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
+                      onClick={() => !blockedReason && setSelectedCandidateId(c.id)}
                       role="radio"
                       aria-checked={selectedCandidateId === c.id}
+                      aria-disabled={!!blockedReason}
                       tabIndex={0}
-                      onKeyDown={e => (e.key === "Enter" || e.key === " ") && setSelectedCandidateId(c.id)}
+                      onKeyDown={e => {
+                        if (!blockedReason && (e.key === "Enter" || e.key === " ")) {
+                          setSelectedCandidateId(c.id);
+                        }
+                      }}
                     >
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm font-medium">
@@ -10818,7 +11079,12 @@ export default function BankReconciliationPage() {
                           </div>
                         </div>
                       )}
-                      <p className="text-xs text-muted-foreground">{c.match_reason}</p>
+                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
+                       {blockedReason && (
+                         <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                           {blockedReason}
+                         </p>
+                       )}
                       <div className="flex gap-1.5 mt-1 flex-wrap">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nominal</span>}
                         {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
@@ -10828,7 +11094,8 @@ export default function BankReconciliationPage() {
                       </div>
                        <CandidateDetailsBlock candidate={c} compact />
                     </div>
-                  ))}
+                    );
+                  })}
                   <div
                     className={`border rounded-lg p-3 cursor-pointer transition-all ${selectedCandidateId === -1 ? "border-primary bg-primary/5 ring-1 ring-primary" : "hover:bg-muted/40"}`}
                     onClick={() => setSelectedCandidateId(-1)}
@@ -10939,6 +11206,7 @@ export default function BankReconciliationPage() {
               disabled={
                 approveMut.isPending ||
                 (approveDialogCands.length > 0 && selectedCandidateId === null) ||
+                !!(approveSelectedCand && candidateApprovalBlockReason(approveSelectedCand)) ||
                 // Resolve manual-review errors through the COA picker.
                 !!manualReviewWarning
               }
@@ -11321,6 +11589,49 @@ export default function BankReconciliationPage() {
               disabled={purgeMutations.isPending}
             >
               {purgeMutations.isPending ? "Menghapus..." : "Ya, Hapus Permanen"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showPurgeSyncedProd} onOpenChange={setShowPurgeSyncedProd}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Mutasi Sync Perusahaan Aktif?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hanya mutasi dari Google Sheet pada perusahaan yang sedang dipilih yang akan dihapus.
+              Waktu mulai sync di bawah menjadi batas bawah <code>created_at</code>, sehingga mutasi lama tidak ikut terhapus.
+              Mutasi yang sudah memiliki jurnal, posting, atau settlement tidak akan disentuh.
+              Data di Google Sheet tetap utuh sehingga dapat di-sync ulang setelah proses ini selesai.
+              Jangan jalankan jika matching atau posting sedang berlangsung.
+            </AlertDialogDescription>
+            <div className="space-y-1.5">
+              <Label htmlFor="purge-created-after">Hapus hanya baris yang dibuat setelah</Label>
+              <Input
+                id="purge-created-after"
+                value={purgeCreatedAfter}
+                onChange={(event) => setPurgeCreatedAfter(event.target.value)}
+                placeholder="2026-09-13T15:00:00+07:00"
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                Gunakan waktu mulai sync terakhir dengan zona waktu, misalnya Asia/Jakarta (+07:00).
+              </p>
+            </div>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { setShowPurgeSyncedProd(false); purgeSyncedProdMutations.mutate(); }}
+              disabled={
+                purgeSyncedProdMutations.isPending
+                || activeCompanyId == null
+                || activeCompanyId <= 0
+                || !purgeCreatedAfter.trim()
+              }
+            >
+              {purgeSyncedProdMutations.isPending ? "Menghapus..." : "Ya, Hapus Mutasi Sync"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
