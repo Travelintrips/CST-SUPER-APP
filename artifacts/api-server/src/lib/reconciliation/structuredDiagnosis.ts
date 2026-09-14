@@ -46,6 +46,19 @@ export interface StructuredReconciliationDiagnosis {
       mdrAmount: number;
     }>;
   };
+  sourceGrossMismatch?: {
+    paymentId: number;
+    sourceGrossAmount: number;
+    journalGrossAmount: number;
+    difference: number;
+    paymentCount?: number;
+    mismatches?: Array<{
+      paymentId: number;
+      sourceGrossAmount: number;
+      journalGrossAmount: number;
+      difference: number;
+    }>;
+  };
 
   // Backward-compatible fields used by the current persisted/UI projection.
   code: string;
@@ -116,6 +129,16 @@ const PROFILE_BY_CODE: Record<string, DiagnosisProfile> = {
     fieldNames: ["payment_items", "company_id", "source_date", "estimated_settlement_date", "provider_code"],
     canAutoFix: true,
     autoFixAction: "Regenerasi snapshot kandidat dari source canonical dan retry hanya untuk mutasi ini.",
+    retryAllowed: true,
+  },
+  CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH: {
+    title: "Gross payment dan jurnal tidak sama",
+    rootCause: "Nominal payment live berbeda dari gross yang tersimpan pada jurnal payment posted; approval ditahan agar ledger tidak salah.",
+    expectedValue: "Gross payment canonical sama dengan gross jurnal payment yang posted.",
+    adminAction: "Jangan mengubah jurnal posted secara manual. Verifikasi sumber payment dan gunakan workflow koreksi nominal resmi, lalu jalankan approval ulang.",
+    adminLocation: "Sport Center → Payment → Accounting correction / Payment Journal",
+    tableName: "sport_center.accounting_journals",
+    fieldNames: ["payment_id", "gross_amount", "effective_gross_amount", "status"],
     retryAllowed: true,
   },
   CANONICAL_SETTLEMENT_CONFIG_UNRESOLVED: {
@@ -325,8 +348,11 @@ export function buildQrisAutoPostDiagnosis(
   const rawAmountComparison = rawError?.details?.amountComparison;
   const hasAmountComparison = rawAmountComparison
     && typeof rawAmountComparison === "object";
+  const rawSourceGrossMismatch = rawError?.details?.sourceGrossMismatch;
+  const hasSourceGrossMismatch = rawSourceGrossMismatch
+    && typeof rawSourceGrossMismatch === "object";
   const profile = PROFILE_BY_CODE[code];
-  const developerAction = hasAmountComparison
+  const developerAction = hasAmountComparison || hasSourceGrossMismatch
     ? false
     : profile?.developerAction
     ?? (!profile && ![
@@ -335,7 +361,7 @@ export function buildQrisAutoPostDiagnosis(
       "MATCHING_IN_PROGRESS",
     ].includes(code));
   const title = profile?.title
-    ?? (hasAmountComparison
+    ?? (hasAmountComparison || hasSourceGrossMismatch
       ? "Nominal settlement QRIS tidak cocok"
       : "Perlu perbaikan sistem pada auto-post QRIS");
   const stage = String(rawError?.qrisStage ?? (
@@ -351,7 +377,7 @@ export function buildQrisAutoPostDiagnosis(
   const correlationId = context.correlationId
     ?? String(rawError?.correlationId ?? `qris-${context.mutationId ?? context.candidateId ?? "unknown"}`);
   const expectedValue = profile?.expectedValue
-    ?? (hasAmountComparison
+    ?? (hasAmountComparison || hasSourceGrossMismatch
       ? "Netto payment setelah MDR harus sama persis dengan nominal mutasi bank."
       : "Proses canonical berhasil tanpa melonggarkan safeguard accounting/settlement.");
   const amountComparison = rawAmountComparison
@@ -374,6 +400,26 @@ export function buildQrisAutoPostDiagnosis(
           : [],
       }
     : undefined;
+  const sourceGrossMismatch = hasSourceGrossMismatch
+    && Number.isFinite(Number(rawSourceGrossMismatch.paymentId))
+    && Number.isFinite(Number(rawSourceGrossMismatch.sourceGrossAmount))
+    && Number.isFinite(Number(rawSourceGrossMismatch.journalGrossAmount))
+    ? {
+        paymentId: Number(rawSourceGrossMismatch.paymentId),
+        sourceGrossAmount: Number(rawSourceGrossMismatch.sourceGrossAmount),
+        journalGrossAmount: Number(rawSourceGrossMismatch.journalGrossAmount),
+        difference: Number(rawSourceGrossMismatch.difference ?? 0),
+        paymentCount: Number(rawSourceGrossMismatch.paymentCount ?? 1),
+        mismatches: Array.isArray(rawSourceGrossMismatch.mismatches)
+          ? rawSourceGrossMismatch.mismatches.map((item: any) => ({
+              paymentId: Number(item.paymentId),
+              sourceGrossAmount: Number(item.sourceGrossAmount ?? 0),
+              journalGrossAmount: Number(item.journalGrossAmount ?? 0),
+              difference: Number(item.difference ?? 0),
+            }))
+          : undefined,
+      }
+    : undefined;
   const actualValue = {
     message,
     code,
@@ -382,6 +428,7 @@ export function buildQrisAutoPostDiagnosis(
     mutationId: context.mutationId ?? null,
     companyId: context.companyId ?? null,
     ...(amountComparison ? { amountComparison } : {}),
+    ...(sourceGrossMismatch ? { sourceGrossMismatch } : {}),
   };
   const adminAction = profile?.adminAction
     ?? (amountComparison
@@ -438,6 +485,7 @@ export function buildQrisAutoPostDiagnosis(
         : "Data/configuration canonical pada tahap auto-post"),
     action,
     ...(amountComparison ? { amountComparison } : {}),
+    ...(sourceGrossMismatch ? { sourceGrossMismatch } : {}),
     technicalDetail: rawError?.detail
       ? String(rawError.detail).slice(0, 500)
       : rawError?.cause?.detail

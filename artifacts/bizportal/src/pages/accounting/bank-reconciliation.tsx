@@ -895,6 +895,19 @@ interface QrisCandidateAudit {
         mdrAmount: number;
       }>;
     };
+     sourceGrossMismatch?: {
+       paymentId: number;
+       sourceGrossAmount: number;
+       journalGrossAmount: number;
+       difference: number;
+       paymentCount?: number;
+       mismatches?: Array<{
+         paymentId: number;
+         sourceGrossAmount: number;
+         journalGrossAmount: number;
+         difference: number;
+       }>;
+     };
     technicalDetail?: string | null;
   } | null;
 }
@@ -1028,6 +1041,36 @@ function QrisAmountComparisonDetails({ comparison }: { comparison: QrisAmountCom
             ))}
           </div>
         </details>
+      )}
+    </div>
+  );
+}
+
+function QrisSourceGrossMismatchDetails({
+  mismatch,
+}: {
+  mismatch: NonNullable<QrisCandidateAudit["auto_post_details"]>["sourceGrossMismatch"];
+}) {
+  if (!mismatch) return null;
+  return (
+    <div className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+      <p className="font-semibold">Rincian sumber yang tidak sama:</p>
+      <div className="mt-1 grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+        <span>Payment #{mismatch.paymentId}</span>
+        <strong className="sm:text-right">{idr(mismatch.sourceGrossAmount)}</strong>
+        <span>Gross jurnal payment posted</span>
+        <strong className="sm:text-right">{idr(mismatch.journalGrossAmount)}</strong>
+        <span>Selisih jurnal − payment</span>
+        <strong className="sm:text-right">{idr(mismatch.difference)}</strong>
+      </div>
+      <p className="mt-1 leading-relaxed">
+        Mutasi bank dan netto payment boleh sudah cocok, tetapi approval tetap ditahan
+        sampai gross payment dan jurnalnya konsisten. Jangan mengubah jurnal posted manual.
+      </p>
+      {(mismatch.mismatches?.length ?? 0) > 1 && mismatch.mismatches && (
+        <p className="mt-1 text-[11px]">
+          {mismatch.mismatches.length} payment memiliki perbedaan gross dengan jurnal.
+        </p>
       )}
     </div>
   );
@@ -4660,6 +4703,11 @@ function QrisMutationCard({
                     {displayedAmountComparison && (
                       <QrisAmountComparisonDetails comparison={displayedAmountComparison} />
                     )}
+                     {audit.auto_post_details?.sourceGrossMismatch && (
+                       <QrisSourceGrossMismatchDetails
+                         mismatch={audit.auto_post_details.sourceGrossMismatch}
+                       />
+                     )}
                     {audit.auto_post_details?.actualValue != null
                       && !audit.auto_post_details?.amountComparison && (
                       <p>
@@ -6870,6 +6918,11 @@ function MutationDetailPanel({
                         )}
                         {qrisAudit.auto_post_details?.amountComparison && (
                           <QrisAmountComparisonDetails comparison={qrisAudit.auto_post_details.amountComparison} />
+                        )}
+                        {qrisAudit.auto_post_details?.sourceGrossMismatch && (
+                          <QrisSourceGrossMismatchDetails
+                            mismatch={qrisAudit.auto_post_details.sourceGrossMismatch}
+                          />
                         )}
                         {qrisAudit.auto_post_details?.actualValue != null
                           && !qrisAudit.auto_post_details?.amountComparison && (

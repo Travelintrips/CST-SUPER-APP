@@ -27,6 +27,7 @@ export const CANONICAL_SETTLEMENT_BUILDER_CODES = {
   SOURCE_PAYMENT_REQUIRED: "CANONICAL_SOURCE_PAYMENT_REQUIRED",
   PAYMENT_NOT_FOUND: "CANONICAL_PAYMENT_NOT_FOUND",
   PAYMENT_NOT_ELIGIBLE: "CANONICAL_PAYMENT_NOT_ELIGIBLE",
+  PAYMENT_JOURNAL_GROSS_MISMATCH: "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
   PAYMENT_JOURNAL_NOT_POSTED: "CANONICAL_PAYMENT_JOURNAL_NOT_POSTED",
   PAYMENT_JOURNAL_BRIDGE_UNRESOLVED:
     "CANONICAL_PAYMENT_JOURNAL_BRIDGE_UNRESOLVED",
@@ -96,6 +97,7 @@ type Row = Record<string, unknown>;
 
 type PaymentIdentity = {
   id: number;
+  amount: number | null;
   payment_method: string | null;
   company_id: number | null;
   provider_id: string | null;
@@ -639,7 +641,7 @@ async function buildInTransaction(
   ];
   const sourceResult = await client.execute(sql`
     SELECT
-      p.id, p.company_id, p.provider_id, p.provider_name,
+      p.id, p.amount, p.company_id, p.provider_id, p.provider_name,
       p.payment_method::text AS payment_method,
       lower(btrim(p.payment_provider::text)) AS provider_code,
       p.bank_account_id::text AS bank_account_id,
@@ -662,6 +664,7 @@ async function buildInTransaction(
   );
   const source: PaymentIdentity = {
     id: Number(sourceRow.id),
+    amount: numberOrNull(sourceRow.amount),
     payment_method: textOrNull(sourceRow.payment_method),
     company_id: numberOrNull(sourceRow.company_id),
     provider_id: textOrNull(sourceRow.provider_id),
@@ -714,7 +717,7 @@ async function buildInTransaction(
 
   const groupResult = await client.execute(sql`
     SELECT
-      p.id, p.company_id, p.provider_id, p.provider_name,
+      p.id, p.amount, p.company_id, p.provider_id, p.provider_name,
       p.payment_method::text AS payment_method,
       lower(btrim(p.payment_provider::text)) AS provider_code,
       p.bank_account_id::text AS bank_account_id,
@@ -733,6 +736,7 @@ async function buildInTransaction(
   `);
   const payments = rows(groupResult).map((row): PaymentIdentity => ({
     id: Number(row.id),
+    amount: numberOrNull(row.amount),
     payment_method: textOrNull(row.payment_method),
     company_id: numberOrNull(row.company_id),
     provider_id: textOrNull(row.provider_id),
@@ -956,6 +960,47 @@ async function buildInTransaction(
   const paymentJournals = await lockPaymentJournals(client, paymentIds);
   if (options.qrisApprovalEvidence) {
     const evidence = options.qrisApprovalEvidence;
+    const journalGrossMismatches = eligiblePayments
+      .map((payment) => {
+        const journalGross = numberOrNull(
+          paymentJournals.get(payment.id)?.effective_gross_amount,
+        );
+        const sourceGross = payment.amount;
+        if (
+          sourceGross == null
+          || journalGross == null
+          || Math.abs(sourceGross - journalGross) <= 0.01
+        ) {
+          return null;
+        }
+        return {
+          paymentId: payment.id,
+          sourceGrossAmount: sourceGross,
+          journalGrossAmount: journalGross,
+          difference: journalGross - sourceGross,
+        };
+      })
+      .filter((item): item is {
+        paymentId: number;
+        sourceGrossAmount: number;
+        journalGrossAmount: number;
+        difference: number;
+      } => item !== null);
+    if (journalGrossMismatches.length > 0) {
+      const firstMismatch = journalGrossMismatches[0];
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_JOURNAL_GROSS_MISMATCH,
+        `Gross payment ${firstMismatch.paymentId} (${firstMismatch.sourceGrossAmount}) ` +
+          `berbeda dengan gross jurnal payment (${firstMismatch.journalGrossAmount}).`,
+        {
+          sourceGrossMismatch: {
+            ...firstMismatch,
+            paymentCount: journalGrossMismatches.length,
+            mismatches: journalGrossMismatches,
+          },
+        },
+      );
+    }
     const mutation = rowOrThrow(
       await client.execute(sql`
         SELECT id, company_id, transaction_date::text AS transaction_date, amount

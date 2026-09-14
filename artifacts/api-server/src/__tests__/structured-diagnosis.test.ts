@@ -52,6 +52,56 @@ describe("structured QRIS reconciliation diagnosis", () => {
     expect(asRepairResult(diagnosis)).toBe("FIXED_AND_RETRIED");
   });
 
+  it("separates a live payment versus posted journal gross mismatch from snapshot drift", () => {
+    const diagnosis = buildQrisAutoPostDiagnosis(
+      {
+        code: "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
+        message: "Gross payment 7001 (2700000) berbeda dengan gross jurnal payment (2650000).",
+        details: {
+          sourceGrossMismatch: {
+            paymentId: 7001,
+            sourceGrossAmount: 2700000,
+            journalGrossAmount: 2650000,
+            difference: -50000,
+            paymentCount: 1,
+            mismatches: [
+              {
+                paymentId: 7001,
+                sourceGrossAmount: 2700000,
+                journalGrossAmount: 2650000,
+                difference: -50000,
+              },
+            ],
+          },
+        },
+      },
+      { candidateId: 42, mutationId: 9010, companyId: 1 },
+    );
+
+    expect(diagnosis).toMatchObject({
+      errorCode: "CANONICAL_PAYMENT_JOURNAL_GROSS_MISMATCH",
+      title: "Gross payment dan jurnal tidak sama",
+      canAutoFix: false,
+      retryAllowed: true,
+      adminAction: expect.stringContaining("workflow koreksi"),
+      tableName: "sport_center.accounting_journals",
+      sourceGrossMismatch: {
+        paymentId: 7001,
+        sourceGrossAmount: 2700000,
+        journalGrossAmount: 2650000,
+        difference: -50000,
+      },
+    });
+    expect(diagnosis.actualValue).toMatchObject({
+      sourceGrossMismatch: {
+        paymentId: 7001,
+        sourceGrossAmount: 2700000,
+        journalGrossAmount: 2650000,
+      },
+    });
+    expect(asRepairResult(diagnosis)).toBe("ADMIN_ACTION_REQUIRED");
+  });
+
   it("keeps portal origin mismatch fail-closed without changing financial data", () => {
     const diagnosis = buildQrisAutoPostDiagnosis(
       {
