@@ -28,3 +28,14 @@ referencing an absent compatibility column turns a read-only queue into an HTTP 
 **How to apply:** Verify `information_schema.columns` before adding canonical queue
 filters or joins, and keep the queue read-only and source-aware rather than guessing
 legacy columns.
+
+Schema-availability probes used by candidate generation may cache only a positive
+result; a negative probe can race the asynchronous canonical migration and must be
+retried before falling back to a non-canonical query shape.
+
+**Why:** A process can start before the Sport Center settlement tables are installed.
+Caching that transient absence for the process lifetime disables the payment-level
+duplicate exclusion after the migration completes.
+
+**How to apply:** Treat false/exceptional availability checks as retryable startup
+state, and keep the canonical exclusion active once a later probe succeeds.

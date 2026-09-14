@@ -32,11 +32,13 @@ function esc(value: unknown): string {
 // sport_center.payment_settlement_batches / _items may not exist on all DBs
 // (they are created by runSportCenterMigration which runs asynchronously).
 // We cache the result to avoid repeated to_regclass() calls.
-let _canonicalSchemaKnown = false;
 let _canonicalSchemaAvailable = false;
 
 async function hasCanonicalSettlementSchema(): Promise<boolean> {
-  if (_canonicalSchemaKnown) return _canonicalSchemaAvailable;
+  // Only cache a successful probe. A false result can be a startup race with
+  // the asynchronous Sport Center migration; caching it permanently would
+  // disable the canonical-payment exclusion for the rest of the process.
+  if (_canonicalSchemaAvailable) return true;
   try {
     const { rows } = await db.execute(sql.raw(
       `SELECT to_regclass('sport_center.payment_settlement_items') AS s`,
@@ -45,7 +47,6 @@ async function hasCanonicalSettlementSchema(): Promise<boolean> {
   } catch {
     _canonicalSchemaAvailable = false;
   }
-  _canonicalSchemaKnown = true;
   return _canonicalSchemaAvailable;
 }
 

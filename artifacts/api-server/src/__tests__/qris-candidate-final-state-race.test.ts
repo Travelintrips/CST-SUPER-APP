@@ -5,6 +5,8 @@ const dbMock = vi.hoisted(() => ({
   transaction: vi.fn(),
 }));
 
+let canonicalSchemaAvailable = false;
+
 vi.mock("@workspace/db", () => ({
   db: {
     execute: dbMock.execute,
@@ -22,6 +24,7 @@ function queryText(query: { queryChunks?: Array<{ value?: unknown }> }): string 
 
 describe("QRIS candidate final-state race protection", () => {
   beforeEach(() => {
+    canonicalSchemaAvailable = false;
     dbMock.execute.mockReset();
     dbMock.transaction.mockReset();
     dbMock.transaction.mockImplementation(async (callback) => callback({
@@ -31,7 +34,9 @@ describe("QRIS candidate final-state race protection", () => {
       const text = queryText(query);
 
       if (text.includes("to_regclass('sport_center.payment_settlement_items')")) {
-        return { rows: [{ s: null }] };
+        return {
+          rows: [{ s: canonicalSchemaAvailable ? "sport_center.payment_settlement_items" : null }],
+        };
       }
       if (text.includes("information_schema.columns")) {
         return { rows: [{ column_name: "settlement_rule_version" }] };
@@ -105,6 +110,25 @@ describe("QRIS candidate final-state race protection", () => {
     expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
       .not.toContain("INSERT INTO qris_mutation_batch_candidates");
   });
+
+it("re-probes the canonical schema after an initial unavailable result", async () => {
+  await generateQrisCandidates({ mutationId: 99, dryRun: true });
+  const initialProbeCount = dbMock.execute.mock.calls
+    .map(([query]) => queryText(query))
+    .filter((text) => text.includes("to_regclass('sport_center.payment_settlement_items')"))
+    .length;
+  expect(initialProbeCount).toBe(1);
+
+  canonicalSchemaAvailable = true;
+  await generateQrisCandidates({ mutationId: 99, dryRun: true });
+
+  const probeQueries = dbMock.execute.mock.calls
+    .map(([query]) => queryText(query))
+    .filter((text) => text.includes("to_regclass('sport_center.payment_settlement_items')"));
+  expect(probeQueries).toHaveLength(2);
+  expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
+    .toContain("sport_center.payment_settlement_items psi");
+});
 
   it("rolls back the inserted snapshot when stale-snapshot cleanup fails", async () => {
     const baseExecute = dbMock.execute.getMockImplementation()!;
