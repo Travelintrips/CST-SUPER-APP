@@ -47,6 +47,35 @@ const API_PORT            = Number(process.env.API_PORT            ?? 8080);
 const BIZPORTAL_PORT      = Number(process.env.BIZPORTAL_PORT      ?? API_PORT);
 const CUSTOMER_PORT       = Number(process.env.CUSTOMER_PORT       ?? API_PORT);
 
+const PUBLIC_SECURITY_HEADERS = Object.freeze({
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "x-frame-options": "SAMEORIGIN",
+  "content-security-policy": [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: https: blob:",
+    "connect-src 'self' https: wss: ws:",
+    "media-src 'self' https: blob:",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'self' https://cstlogistic.co.id https://www.cstlogistic.co.id https://bizportal.cstlogistic.co.id",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join("; "),
+});
+
+function withPublicSecurityHeaders(headers = {}) {
+  const result = { ...headers };
+  const existing = new Set(Object.keys(result).map((key) => key.toLowerCase()));
+  for (const [name, value] of Object.entries(PUBLIC_SECURITY_HEADERS)) {
+    if (!existing.has(name)) result[name] = value;
+  }
+  return result;
+}
+
 const ROUTES = [
   { prefix: "/api",             upstream: { host: "localhost", port: API_PORT } },
   { prefix: "/pos-images",      upstream: { host: "localhost", port: API_PORT } },
@@ -176,7 +205,10 @@ function startingPage(port, attempt) {
 
 /** GET /system/health — gateway liveness only, no external dependencies */
 function handleSystemHealth(res) {
-  res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+  res.writeHead(200, withPublicSecurityHeaders({
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  }));
   res.end(JSON.stringify({ status: "up", service: "gateway", ts: new Date().toISOString() }));
 }
 
@@ -257,7 +289,7 @@ function handleRequest(req, res) {
   const bareUrl = url.split("?")[0];
   if (bareUrl === "/bizportal" || bareUrl === "/logistic-order") {
     const query = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-    res.writeHead(302, { location: `${bareUrl}/${query}` });
+     res.writeHead(302, withPublicSecurityHeaders({ location: `${bareUrl}/${query}` }));
     res.end();
     return;
   }
@@ -265,7 +297,7 @@ function handleRequest(req, res) {
   const { upstream, stripPrefix, redirectStrip, redirectMapTo, redirectDefaultSuffix, matchedPrefix } = resolve(url);
 
   if (redirectStrip) {
-    res.writeHead(302, { location: rewritePath(url, redirectStrip) });
+    res.writeHead(302, withPublicSecurityHeaders({ location: rewritePath(url, redirectStrip) }));
     res.end();
     return;
   }
@@ -275,7 +307,7 @@ function handleRequest(req, res) {
     const target = (!suffix || suffix === "/")
       ? (redirectMapTo + redirectDefaultSuffix)
       : (redirectMapTo + suffix);
-    res.writeHead(302, { location: target });
+    res.writeHead(302, withPublicSecurityHeaders({ location: target }));
     res.end();
     return;
   }
@@ -289,7 +321,7 @@ function handleRequest(req, res) {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         const proxyRes = await proxyAttempt(req, upstream, body, rewrittenPath);
-        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+        res.writeHead(proxyRes.statusCode ?? 502, withPublicSecurityHeaders(proxyRes.headers));
         proxyRes.pipe(res, { end: true });
         return;
       } catch (err) {
@@ -304,11 +336,16 @@ function handleRequest(req, res) {
     console.error(`[gw] :${port} unreachable after ${MAX_ATTEMPTS} attempts — ${lastErr?.message}`);
     if (!res.headersSent) {
       if (isApi) {
-        res.writeHead(503, { "content-type": "application/json", "retry-after": "5" });
+        res.writeHead(503, withPublicSecurityHeaders({
+          "content-type": "application/json",
+          "retry-after": "5",
+        }));
         res.end(JSON.stringify({ error: "upstream_not_ready",
           message: `${SERVICE_NAMES[port] ?? `:${port}`} belum siap, coba lagi.`, port }));
       } else {
-        res.writeHead(503, { "content-type": "text/html; charset=utf-8" });
+        res.writeHead(503, withPublicSecurityHeaders({
+          "content-type": "text/html; charset=utf-8",
+        }));
         res.end(startingPage(port, MAX_ATTEMPTS));
       }
     }

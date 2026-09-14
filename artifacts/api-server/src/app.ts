@@ -208,14 +208,19 @@ app.use(portalCsrfProtection);
 // Register this before bearer/auth middleware. It answers only whether this
 // Node process can accept an HTTP request; it must not wait for the database,
 // migrations, external services, session storage, or any authentication work.
-app.get("/api/health/live", (_req: Request, res: Response) => {
+// Keep /api/health as a compatibility alias for monitors that use the
+// conventional endpoint; readiness remains a separate /api/health/ready route.
+const respondToLiveness = (_req: Request, res: Response) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate");
   res.status(200).json({
     status: "ok",
     service: "api",
     uptime_seconds: Math.floor(process.uptime()),
   });
-});
+};
+
+app.get("/api/health", respondToLiveness);
+app.get("/api/health/live", respondToLiveness);
 
 // Rate-limit bearer-token requests before any auth processing.
 // Applies only to requests carrying "Authorization: Bearer ..." headers
