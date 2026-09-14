@@ -116,6 +116,7 @@
 - [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.
 - [Rule AI direct bank allocation](rule-ai-direct-bank-allocation.md) — `recon_rule` classifies the bank mutation directly; it is not a business document with a source journal.
 - [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
+- [Temporary reconciliation maintenance boundary](recon-maintenance-mode.md) — PROD bypass is session-scoped and duplicate-root-only; restore the exact catalog hash and verify zero disabled protection triggers.
 - [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
 - [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.
