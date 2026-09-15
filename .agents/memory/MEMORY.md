@@ -156,3 +156,4 @@
 - [Reconciliation unit-test DB isolation](reconciliation-unit-test-db-isolation.md) — import the matching engine in pure tests only with mocked DB/Drizzle modules and an explicit transaction fixture.
 - [Sport Center PROD audit schema](sport-center-prod-audit-schema.md) — canonical payments lack journal links; resolve posted journals separately and use public booking_number, not order_number.
 - [Test database DNS boundary](test-database-dns-boundary.md) — TEST_DATABASE_URL can be present and isolated yet unusable when its Supabase hostname cannot resolve; do not fall back to another database.
+- [Production approval deployment parity](production-approval-deployment-parity.md) — do not bypass a live deployment that lacks the reviewed financial approval guard fix; publish first, then rerun the authenticated proof.
