@@ -109,6 +109,10 @@ describe("QRIS candidate final-state race protection", () => {
       .toContain("company_id IS NULL OR bank_account_id IS NOT NULL");
     expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
       .not.toContain("INSERT INTO qris_mutation_batch_candidates");
+    expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
+      .not.toContain("INSERT INTO public.bank_reconciliation_matches");
+    expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
+      .not.toContain("UPDATE public.bank_mutations");
   });
 
 it("re-probes the canonical schema after an initial unavailable result", async () => {
@@ -166,6 +170,7 @@ it("re-probes the canonical schema after an initial unavailable result", async (
 
     const committedCandidateIds: number[] = [];
     let insertObserved = false;
+    let projectionObserved = false;
     let rollbackObserved = false;
     dbMock.transaction.mockImplementation(async (callback) => {
       const pendingCandidateIds: number[] = [];
@@ -178,6 +183,7 @@ it("re-probes the canonical schema after an initial unavailable result", async (
         }
         if (text.includes("INSERT INTO public.bank_reconciliation_matches")
           || text.includes("UPDATE public.bank_mutations")) {
+          projectionObserved = true;
           return { rows: [], rowCount: 1 };
         }
         if (text.includes("SET status = 'stale'")) {
@@ -201,6 +207,7 @@ it("re-probes the canonical schema after an initial unavailable result", async (
         qrisStage: "stale snapshot cleanup",
       });
     expect(insertObserved).toBe(true);
+    expect(projectionObserved).toBe(false);
     expect(rollbackObserved).toBe(true);
     expect(committedCandidateIds).toEqual([]);
   });

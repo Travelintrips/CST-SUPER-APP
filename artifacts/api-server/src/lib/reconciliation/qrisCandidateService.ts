@@ -810,38 +810,13 @@ export async function generateQrisCandidates(options: {
       }
 
        /*
-        * An exact candidate is an actual automatic bank match, not just a
-        * label in the QRIS audit table. Review evidence must never change the
-        * bank mutation status or create an approved reconciliation match.
+        * A MATCHED value on this table is only evidence from the candidate
+        * generator. Its id is the snapshot id, not a canonical settlement
+        * batch id or a sport payment id. Never project it into the generic
+        * reconciliation match table and never advance the bank mutation
+        * lifecycle here. Approval must come from the source-aware canonical
+        * settlement path after a posted settlement journal is proven.
         */
-       if (
-         candidate.status === "MATCHED"
-         && persistedCandidateId != null
-         && Number.isSafeInteger(persistedCandidateId)
-       ) {
-        persistenceStage = "automatic bank match projection";
-        await tx.execute(sql.raw(`
-            INSERT INTO public.bank_reconciliation_matches (
-              mutation_id, candidate_type, candidate_id, candidate_source,
-              match_score, match_reason, amount_match, date_match,
-              name_match, order_id_match, proof_match, status
-            ) VALUES (
-              ${candidate.mutationId}, 'qris_settlement', ${persistedCandidateId},
-              'sport_center.sport_payments', 100,
-              '${esc(candidate.reason)}', TRUE, TRUE, FALSE, FALSE, FALSE, 'approved'
-            )
-            ON CONFLICT DO NOTHING
-          `));
-        await tx.execute(sql.raw(`
-            UPDATE public.bank_mutations
-            SET status = 'matched',
-                updated_at = NOW()
-            WHERE id = ${candidate.mutationId}
-              AND ${candidate.companyId == null ? "company_id IS NULL" : `company_id = ${candidate.companyId}`}
-              AND LOWER(COALESCE(status, 'unmatched')) NOT IN
-                ('posted', 'approved', 'approved_pending_posting', 'void')
-          `));
-      }
     }
 
         // A previously generated candidate may contain metadata that was
