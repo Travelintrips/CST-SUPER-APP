@@ -2258,6 +2258,7 @@ function mapDbErrorToUserMessage(rootMsg: string, originalError: any): string {
   // PostgreSQL error code lives on the cause object (Drizzle unwrap) or the error itself.
   const pgCode: string | undefined =
     originalError?.cause?.code ?? originalError?.code;
+  const normalizedMessage = String(rootMsg ?? "").toLowerCase();
 
   // 23505 — unique_violation (duplicate key)
   if (pgCode === "23505") {
@@ -2291,6 +2292,26 @@ function mapDbErrorToUserMessage(rootMsg: string, originalError: any): string {
   }
   if (rootMsg.includes("foreign key") || rootMsg.includes("violates foreign key")) {
     return "Akun COA tidak valid. Pastikan kode akun benar.";
+  }
+  if (
+    normalizedMessage.includes("journal") &&
+    (normalizedMessage.includes("not found") ||
+      normalizedMessage.includes("does not exist") ||
+      normalizedMessage.includes("tidak ditemukan"))
+  ) {
+    return "Jurnal bank tidak ditemukan. Periksa konfigurasi Bank Journal di Accounting Settings.";
+  }
+  if (
+    normalizedMessage.includes("not-null") ||
+    normalizedMessage.includes("null value in column")
+  ) {
+    return "Data jurnal belum lengkap. Pastikan mutasi memiliki tanggal, nominal, perusahaan, dan akun bank yang valid.";
+  }
+  if (
+    normalizedMessage.includes("invalid input value") ||
+    normalizedMessage.includes("invalid text representation")
+  ) {
+    return "Format data mutasi atau akun tidak valid. Muat ulang mutasi lalu coba lagi.";
   }
 
   // Fallback: generic but still non-technical
@@ -2505,7 +2526,7 @@ export async function approveAndCreateJournal(
           selectedCandidateSource = selectedMatchRow.candidate_source ?? null;
        }
 
-       const selectedType = canonicalCandidateType(selectedCandidateType);
+        const selectedType = canonicalCandidateType(selectedCandidateType);
         if (selectedType === "sport_payment") {
           const { rows: activeSportCandidates } = await tx.execute(sql.raw(`
             SELECT candidate_id::text AS candidate_id
@@ -2559,7 +2580,13 @@ export async function approveAndCreateJournal(
           candidateType: selectedType,
           candidateId: selectedCandidateId == null ? null : Number(selectedCandidateId),
         });
-        if (requiredCandidateError) {
+        // An explicit manual COA is a governed direct-bank allocation. It
+        // must not be blocked by a stale Rule AI "candidate required" marker:
+        // the reviewer has supplied the missing contra account explicitly.
+        // All other approval guards still run, including company scope,
+        // duplicate/economic-event checks, bank COA, journal, period, balance,
+        // and the in-transaction audit record.
+        if (requiredCandidateError && !manualCoaCode?.trim()) {
           throw Object.assign(
             new Error(requiredCandidateError.message),
             { code: requiredCandidateError.code },
@@ -2771,18 +2798,28 @@ export async function approveAndCreateJournal(
        // The engine handles ALL candidate types; no inline queries here.
        let reusedEntry: { id: number; entryNumber: string } | null = null;
 
-       const reuseResolution = await resolveJournalForEconomicEvent(
-         tx as unknown as DbClient,
-         {
-           companyId,
-           candidateType: selectedCandidateType,
-           candidateId: selectedCandidateId,
+        // Use the canonical type for the reuse engine as well as the
+        // validation above. The browser and older import paths can still send
+        // aliases such as `sales_documents` or `expenses`; passing the raw
+        // alias makes the engine classify an otherwise valid candidate as an
+        // unknown economic event and blocks a manual COA approval.
+        //
+        // An unmatched manual COA approval deliberately enters the engine with
+        // no candidate. The engine then returns CREATE_NEW_JOURNAL without
+        // probing source tables that are irrelevant to a direct bank
+        // allocation.
+        const reuseResolution = await resolveJournalForEconomicEvent(
+          tx as unknown as DbClient,
+          {
+            companyId,
+            candidateType: selectedType,
+            candidateId: selectedCandidateId,
             candidateSource: selectedCandidateSource,
-           mutationId,
-           mutationAmount: amount,
-           mutationDate: txDate,
-         },
-       );
+            mutationId,
+            mutationAmount: amount,
+            mutationDate: txDate,
+          },
+        );
 
        logger.info(
          { mutationId, candidateType: selectedCandidateType, candidateId: selectedCandidateId,
@@ -3116,6 +3153,7 @@ export async function approveAndCreateJournal(
         amount,
         direction,
         note:             note ?? null,
+          manual_coa_override: Boolean(manualCoaCode?.trim()),
          auto_post:        autoPost,
       }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
@@ -3155,6 +3193,18 @@ export async function approveAndCreateJournal(
         journalEntryId: null,
         error: e.message,
         manual_review_required: true as const,
+        code: e.code,
+      };
+    }
+
+    // Preserve explicit domain guard codes (candidate required, stale match,
+    // company scope, already processed, etc.). Without this, the route loses
+    // the actionable error and the portal falls back to a generic toast.
+    if (typeof e?.code === "string" && e.code.length > 0) {
+      return {
+        ok: false,
+        journalEntryId: null,
+        error: e.message ?? String(e),
         code: e.code,
       };
     }

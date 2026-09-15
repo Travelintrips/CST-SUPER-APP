@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { postEntryWithClient } = vi.hoisted(() => ({
+const { postEntryWithClient, captureFailedJob } = vi.hoisted(() => ({
   postEntryWithClient: vi.fn(),
+  captureFailedJob: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -25,7 +26,7 @@ vi.mock("../lib/logger.js", () => ({
 }));
 
 vi.mock("../lib/financial/failedJobSystem.js", () => ({
-  captureFailedJob: vi.fn(),
+  captureFailedJob,
 }));
 
 vi.mock("../lib/expenseClassificationService.js", () => ({
@@ -45,7 +46,7 @@ import {
 
 type MockStatement = { query?: string };
 
-function createTransactionMock() {
+function createTransactionMock(candidateRequired = false) {
   const executedQueries: string[] = [];
   const tx = {
     execute: vi.fn(async (statement: MockStatement) => {
@@ -90,6 +91,10 @@ function createTransactionMock() {
         };
       }
 
+      if (query.includes("FROM bank_reconciliation_audit bra")) {
+        return candidateRequired ? { rows: [{ id: 1 }] } : { rows: [] };
+      }
+
       if (query.includes("FROM chart_of_accounts")) {
         return { rows: [{ id: 2202 }] };
       }
@@ -104,6 +109,7 @@ function createTransactionMock() {
 describe("manual COA approval without a candidate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    captureFailedJob.mockResolvedValue(undefined);
     postEntryWithClient.mockResolvedValue({
       id: 9901,
       entryNumber: "BNK/2026/009901",
@@ -185,5 +191,72 @@ describe("manual COA approval without a candidate", () => {
     expect(lines[1]).toMatchObject({ accountId: 2202, debit: 0, credit: 125_000 });
     expect(lines.reduce((sum, line) => sum + line.debit, 0))
       .toBe(lines.reduce((sum, line) => sum + line.credit, 0));
+  });
+
+  it("normalizes legacy candidate aliases before journal reuse", async () => {
+    const { tx } = createTransactionMock();
+    vi.mocked(db.transaction).mockImplementation(async (callback) =>
+      callback(tx as never),
+    );
+
+    const result = await approveAndCreateJournal(
+      7001,
+      null,
+      "sales_documents",
+      123,
+      "manual-coa-alias-regression",
+      "Approval manual COA dengan kandidat legacy",
+      "5-1035-CST",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      journalEntryId: 9901,
+    });
+    expect(postEntryWithClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows an explicit manual COA despite a Rule AI candidate-required marker", async () => {
+    const { tx } = createTransactionMock(true);
+    vi.mocked(db.transaction).mockImplementation(async (callback) =>
+      callback(tx as never),
+    );
+
+    const result = await approveAndCreateJournal(
+      7001,
+      null,
+      null,
+      null,
+      "manual-coa-rule-override-regression",
+      "Approval manual COA setelah Rule AI",
+      "5-1035-CST",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      journalEntryId: 9901,
+    });
+    expect(postEntryWithClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the candidate-required block when no manual COA is supplied", async () => {
+    const { tx } = createTransactionMock(true);
+    vi.mocked(db.transaction).mockImplementation(async (callback) =>
+      callback(tx as never),
+    );
+
+    const result = await approveAndCreateJournal(
+      7001,
+      null,
+      null,
+      null,
+      "candidate-required-regression",
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "RULE_CANDIDATE_REQUIRED",
+    });
+    expect(postEntryWithClient).not.toHaveBeenCalled();
   });
 });
