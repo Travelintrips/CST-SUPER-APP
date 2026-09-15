@@ -32,6 +32,10 @@ import {
   resolveJournalForEconomicEvent,
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
+import {
+  buildBankMutationJournalRef,
+  buildBankMutationSourceEventId,
+} from "./bankMutationIdentity.js";
 import { assertGenericApprovalAllowed } from "./genericPostGuard.js";
 import {
   classifyBankMutationPaymentType,
@@ -2353,9 +2357,10 @@ export async function approveAndCreateJournal(
 
        // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
         const { rows: locked } = await tx.execute(sql.raw(`
-          SELECT bm.id, bm.status, bm.amount, bm.direction,
-               bm.transaction_date, bm.description, bm.mutation_key,
-                 bm.provider_name, bm.provider_order_id, bm.normalized_description,
+           SELECT bm.id, bm.status, bm.amount, bm.direction,
+                bm.transaction_date, bm.description, bm.mutation_key,
+                  bm.bank_reference, bm.canonical_key,
+                  bm.provider_name, bm.provider_order_id, bm.normalized_description,
                   bm.company_id, bm.bank_account_id AS bank_account_reference, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
@@ -2380,6 +2385,15 @@ export async function approveAndCreateJournal(
       const txDate      = String(mut["transaction_date"] ?? "").split("T")[0];
       const amount      = Number(mut["amount"]);
       const direction   = String(mut["direction"] ?? "IN");
+       const bankMutationIdentity = {
+         mutationId,
+         bankReference: mut["bank_reference"],
+         canonicalKey: mut["canonical_key"],
+         providerOrderId: mut["provider_order_id"],
+         mutationKey: mut["mutation_key"],
+       };
+       const bankJournalRef = buildBankMutationJournalRef(bankMutationIdentity);
+       const bankSourceEventId = buildBankMutationSourceEventId(bankMutationIdentity);
       if (companyId == null) {
         throw Object.assign(
           new Error("Mutasi tidak memiliki company_id yang valid; approval diblokir"),
@@ -3066,8 +3080,9 @@ export async function approveAndCreateJournal(
         {
           journalId,
           date:        new Date(txDate),
-          ref:         String(mut["mutation_key"] ?? "").slice(0, 100),
+           ref:         bankJournalRef,
           description: String(mut["description"] ?? "").slice(0, 200),
+           sourceEventId: bankSourceEventId,
            expenseCategory: contraTreatment === "expense"
              ? String(mut["expense_category"] ?? "bank_reconciliation_expense")
              : null,

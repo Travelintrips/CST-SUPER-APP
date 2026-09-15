@@ -436,7 +436,10 @@ async function _postEntryCore(
     // removed while the posted ledger entry remained. The active-ref unique
     // index correctly blocks a second posting. Reuse the posted entry only
     // when the persisted draft has the exact same financial line signature.
-    const activeSameRef = input.companyId != null && input.ref
+    // Bank reconciliation uses bank_mutations.id/source_id as its canonical
+    // event identity. A ref collision with another mutation must never cause a
+    // draft to be rejected in favor of that other mutation's posted journal.
+    const activeSameRef = source !== "bank_reconciliation" && input.companyId != null && input.ref
       ? await client
           .select()
           .from(accountingEntriesTable)
