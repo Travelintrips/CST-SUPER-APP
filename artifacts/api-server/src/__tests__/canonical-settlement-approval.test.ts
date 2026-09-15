@@ -153,4 +153,16 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
       }),
     ).toMatchObject({ ok: false });
   });
+
+  it("supersedes a legacy QRIS snapshot only when its live evidence is exact", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../lib/reconciliation/canonicalSettlementApproval.ts", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS");
+    expect(source).toContain("snapshot.mutation_id = legacy.mutation_id");
+    expect(source).toContain("snapshot.gross_amount = canonical.gross_amount");
+    expect(source).toContain("snapshot.net_amount = canonical.net_amount");
+    expect(source).toContain("supersededHistoricalMatchId");
+    expect(source).toContain("status IN ('unmatched', 'matched', 'auto_matched', 'approved')");
+  });
 });

@@ -499,7 +499,11 @@ export async function approveCanonicalSettlementLink(
           WHERE legacy.id = ${Number(otherMutationApproval.id)}
             AND legacy.mutation_id = ${mutationId}
             AND legacy.candidate_type = 'qris_settlement'
-            AND legacy.candidate_source = 'sport_center.sport_payments'
+            AND legacy.candidate_source IN (
+              '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}',
+              'sport_center.sport_payments'
+            )
+            AND snapshot.mutation_id = legacy.mutation_id
             AND snapshot.company_id = canonical.company_id
             AND snapshot.gross_amount = canonical.gross_amount
             AND snapshot.net_amount = canonical.net_amount
@@ -628,8 +632,13 @@ export async function approveCanonicalSettlementLink(
         "Settlement canonical harus berstatus posted dan belum terhubung.",
       );
     }
+    const historicalApprovedMutationRecovery =
+      historicalRepair
+      && supersededHistoricalMatchId != null
+      && String(publicMutation.status ?? "").toLowerCase() === "approved";
     if (
-       !isCanonicalBankMutationEligible(publicMutation.status)
+      !isCanonicalBankMutationEligible(publicMutation.status)
+      && !historicalApprovedMutationRecovery
     ) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_ELIGIBLE,
@@ -956,7 +965,7 @@ export async function approveCanonicalSettlementLink(
           approved_at = NOW(),
           updated_at = NOW()
       WHERE id = ${mutationId}
-        AND status IN ('unmatched', 'matched', 'auto_matched')
+        AND status IN ('unmatched', 'matched', 'auto_matched', 'approved')
        RETURNING id
     `));
     if (!hasReturnedRow(publicMutationUpdate)) {
