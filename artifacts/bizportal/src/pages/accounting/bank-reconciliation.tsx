@@ -1237,6 +1237,20 @@ const canPost = (m: BankMutation) =>
   m.journal_status !== "posted" &&
   !m.candidates?.some(c => c.candidate_source === CANONICAL_SETTLEMENT_SOURCE);
 
+/** Bulk approve hanya boleh memakai satu kandidat non-QRIS yang tidak diblokir. */
+const bulkApproveCandidate = (m: BankMutation): Candidate | null => {
+  if (!canApprove(m) || isQrisMutation(m)) return null;
+  const candidates = visibleCandidates(m).filter(candidate =>
+    !candidateApprovalBlockReason(candidate)
+    && (!requiresRealTransactionCandidate(m) || isRealTransactionCandidate(candidate)),
+  );
+  return candidates.length === 1 ? candidates[0] ?? null : null;
+};
+
+/** QRIS/canonical settlement tetap memakai alur verifikasi khusus, bukan bulk generic. */
+const canBulkSelect = (m: BankMutation) =>
+  !isQrisMutation(m) && (canPost(m) || bulkApproveCandidate(m) != null);
+
 /** Reject → hanya sebelum approval dan sebelum journal dibuat. */
 const canReject = (m: BankMutation) =>
   m.status === "unmatched" || m.status === "matched" ||
@@ -5328,6 +5342,9 @@ function QrisMutationCard({
 
 function MutationCard({
   m,
+  bulkSelectable,
+  bulkSelected,
+  onToggleBulkSelect,
   onMapCoa,
   onMatchVendorInvoice,
   onRetryReferenceCoa,
@@ -5367,6 +5384,9 @@ function MutationCard({
   mappingError,
 }: {
   m: BankMutation;
+  bulkSelectable?: boolean;
+  bulkSelected?: boolean;
+  onToggleBulkSelect?: (mutationId: number, checked: boolean) => void;
   onMapCoa: (m: BankMutation) => void;
   onMatchVendorInvoice?: (m: BankMutation) => void;
   onRetryReferenceCoa?: (m: BankMutation) => void;
@@ -5518,6 +5538,15 @@ function MutationCard({
     >
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
+          {bulkSelectable && (
+            <Checkbox
+              checked={bulkSelected === true}
+              onCheckedChange={(checked) => onToggleBulkSelect?.(m.id, checked === true)}
+              onClick={event => event.stopPropagation()}
+              aria-label={`Pilih mutasi ${m.id} untuk aksi massal`}
+              className="mt-2 shrink-0"
+            />
+          )}
           {/* Direction icon */}
           <div className={`mt-0.5 shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
             isIN ? "bg-green-100 text-green-600 dark:bg-green-950" : "bg-red-100 text-red-600 dark:bg-red-950"
@@ -8062,6 +8091,8 @@ export default function BankReconciliationPage() {
   const [selectedQrisPaymentIds, setSelectedQrisPaymentIds] = useState<Record<number, number[]>>({});
   const [selectedCandidateByMutation, setSelectedCandidateByMutation] = useState<Record<number, number | null>>({});
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
+  const [selectedMutationIds, setSelectedMutationIds] = useState<number[]>([]);
+  const [bulkAction, setBulkAction] = useState<"approve" | "post" | null>(null);
   const [reverseReason,       setReverseReason]       = useState("");
   /** Populated when backend returns manual_review_required:true on approve */
   const [manualReviewWarning, setManualReviewWarning] = useState<{
@@ -9667,6 +9698,106 @@ export default function BankReconciliationPage() {
   const mutations   = data?.mutations ?? [];
   const total       = data?.total ?? 0;
   const totalPages  = Math.ceil(total / PAGE_SIZE);
+  const bulkSelectableMutations = mutations.filter(canBulkSelect);
+  const selectedMutations = mutations.filter(m => selectedMutationIds.includes(m.id));
+  const selectedBulkApprove = selectedMutations.filter(m => bulkApproveCandidate(m) != null);
+  const selectedBulkPost = selectedMutations.filter(canPost);
+  const allBulkSelectableOnPageSelected =
+    bulkSelectableMutations.length > 0
+    && bulkSelectableMutations.every(m => selectedMutationIds.includes(m.id));
+
+  useEffect(() => {
+    setSelectedMutationIds(current =>
+      current.filter(id => mutations.some(m => m.id === id && canBulkSelect(m))),
+    );
+  }, [data?.mutations]);
+
+  const toggleBulkSelection = (mutationId: number, checked: boolean) => {
+    setSelectedMutationIds(current => checked
+      ? current.includes(mutationId) ? current : [...current, mutationId]
+      : current.filter(id => id !== mutationId));
+  };
+
+  const toggleAllBulkSelection = (checked: boolean) => {
+    setSelectedMutationIds(current => {
+      if (!checked) {
+        const pageIds = new Set(bulkSelectableMutations.map(m => m.id));
+        return current.filter(id => !pageIds.has(id));
+      }
+      return Array.from(new Set([
+        ...current,
+        ...bulkSelectableMutations.map(m => m.id),
+      ]));
+    });
+  };
+
+  const runBulkAction = async (action: "approve" | "post") => {
+    const targets = action === "approve" ? selectedBulkApprove : selectedBulkPost;
+    if (targets.length === 0) {
+      toast({
+        title: action === "approve" ? "Tidak ada mutasi siap di-approve" : "Tidak ada draft siap diposting",
+        description: action === "approve"
+          ? "Pilih mutasi non-QRIS dengan tepat satu kandidat yang valid."
+          : "Pilih mutasi berstatus Menunggu Posting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setBulkAction(action);
+    const succeeded: number[] = [];
+    const failures: string[] = [];
+
+    try {
+      for (const mutation of targets) {
+        try {
+          const candidate = action === "approve" ? bulkApproveCandidate(mutation) : null;
+          const response = await fetch(`/api/bank-reconciliation/${mutation.id}/${action}`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              ...(action === "approve"
+                ? { "x-idempotency-key": crypto.randomUUID() }
+                : {}),
+            },
+            body: action === "approve"
+              ? JSON.stringify(buildBankApprovalRequestBody({
+                  match_id: candidate?.id,
+                  candidate_type: candidate?.candidate_type,
+                  candidate_id: candidate?.candidate_id,
+                  candidate_source: candidate?.candidate_source ?? null,
+                }))
+              : JSON.stringify({}),
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(String(body.error ?? response.statusText ?? "Request gagal"));
+          }
+          succeeded.push(mutation.id);
+        } catch (error) {
+          failures.push(`#${mutation.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } finally {
+      setBulkAction(null);
+      setSelectedMutationIds(current => current.filter(id => !succeeded.includes(id)));
+      invalidate();
+    }
+
+    if (failures.length === 0) {
+      toast({
+        title: action === "approve" ? "Approve massal selesai" : "Posting massal selesai",
+        description: `${succeeded.length} mutasi berhasil diproses.`,
+      });
+    } else {
+      toast({
+        title: "Bulk action selesai sebagian",
+        description: `${succeeded.length} berhasil, ${failures.length} gagal. ${failures.slice(0, 2).join(" · ")}`,
+        variant: "destructive",
+      });
+    }
+  };
 
   const handleOpenQrisMutation = async (candidate: QrisCandidateAudit) => {
     const mutationId = Number(candidate.mutation_id);
@@ -10534,6 +10665,43 @@ export default function BankReconciliationPage() {
               {isLoading ? "Memuat..." : `${total} mutasi`}
             </p>
           </div>
+          {bulkSelectableMutations.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs dark:border-slate-800 dark:bg-slate-900/60">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={allBulkSelectableOnPageSelected}
+                  onCheckedChange={checked => toggleAllBulkSelection(checked === true)}
+                  aria-label="Pilih semua mutasi yang dapat diproses pada halaman ini"
+                />
+                <span className="font-medium">
+                  {selectedMutationIds.length > 0
+                    ? `${selectedMutationIds.length} mutasi dipilih`
+                    : "Pilih mutasi untuk aksi massal"}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={selectedBulkApprove.length === 0 || bulkAction != null}
+                  onClick={() => void runBulkAction("approve")}
+                >
+                  {bulkAction === "approve" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  Approve Terpilih ({selectedBulkApprove.length})
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 bg-yellow-600 text-xs text-white hover:bg-yellow-700"
+                  disabled={selectedBulkPost.length === 0 || bulkAction != null}
+                  onClick={() => void runBulkAction("post")}
+                >
+                  {bulkAction === "post" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ReceiptText className="h-3.5 w-3.5" />}
+                  Post Terpilih ({selectedBulkPost.length})
+                </Button>
+              </div>
+            </div>
+          )}
           {selectedQrisCandidates.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950">
               <p className="font-medium text-indigo-950 dark:text-indigo-100">
@@ -10595,6 +10763,9 @@ export default function BankReconciliationPage() {
                 <MutationCard
                   key={m.id}
                   m={m}
+                  bulkSelectable={canBulkSelect(m)}
+                  bulkSelected={selectedMutationIds.includes(m.id)}
+                  onToggleBulkSelect={toggleBulkSelection}
                   onMapCoa={setCoaReferenceTarget}
                   onMatchVendorInvoice={setVendorPaymentTarget}
                   onRetryReferenceCoa={mutation => retryReferenceCoaMut.mutate(mutation.id)}
