@@ -85,6 +85,37 @@ describe("directionFromBankColumns — bank statement semantics", () => {
   });
 });
 
+describe("bank transfer approval journal direction", () => {
+  const builderStart = unifiedMatchingEngineSource.indexOf(
+    "export function buildBankMutationJournalLines",
+  );
+  const builderSource = unifiedMatchingEngineSource.slice(builderStart);
+
+  it("debits the manual COA and credits the bank COA for OUT", () => {
+    expect(builderStart).toBeGreaterThanOrEqual(0);
+    expect(builderSource).toContain('direction === "IN"');
+    expect(builderSource).toContain(
+      "{ accountId: contraCoaId, debit: amount, credit: 0, description }",
+    );
+    expect(builderSource).toContain(
+      "{ accountId: bankCoaId, debit: 0, credit: amount, description }",
+    );
+  });
+
+  it("debits the bank COA and credits the manual COA for IN", () => {
+    const inBranch = builderSource.slice(
+      builderSource.indexOf('direction === "IN"'),
+      builderSource.indexOf("function treatmentForReconRuleTarget"),
+    );
+    expect(inBranch).toContain(
+      "{ accountId: bankCoaId, debit: amount, credit: 0, description }",
+    );
+    expect(inBranch).toContain(
+      "{ accountId: contraCoaId, debit: 0, credit: amount, description }",
+    );
+  });
+});
+
 describe("Rule AI approval COA guard", () => {
   it("exposes company-scoped COA validation status to the reviewer", () => {
     expect(bankReconciliationRouteSource).toContain("'targetCoaValidationStatus'");
