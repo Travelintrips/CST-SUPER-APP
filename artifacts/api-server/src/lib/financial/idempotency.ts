@@ -28,13 +28,19 @@ import { logger } from "../logger.js";
 import type { Request, Response, NextFunction } from "express";
 import { createHash } from "node:crypto";
 
-// ─── Migration ────────────────────────────────────────────────────────────────
+// ─── Storage readiness / startup migration ────────────────────────────────────
 
-let _migrated = false;
+/**
+ * The idempotency table is provisioned by the deployment/startup migration
+ * lane. Request handling must never run DDL: a contended pool can otherwise
+ * turn an optional idempotency key into a 500 before the accounting transaction
+ * starts.
+ */
+let _storageReady = false;
 let _migrationPromise: Promise<void> | null = null;
 
-export async function ensureIdempotencyTable(): Promise<void> {
-  if (_migrated) return;
+export async function runIdempotencyStorageMigration(): Promise<void> {
+  if (_storageReady) return;
   if (!_migrationPromise) {
     _migrationPromise = (async () => {
       await db.execute(sql`
@@ -59,13 +65,29 @@ export async function ensureIdempotencyTable(): Promise<void> {
       await db.execute(sql`
         CREATE INDEX IF NOT EXISTS pr_expires_idx ON processed_requests(expires_at)
       `);
-      _migrated = true;
+      _storageReady = true;
     })().catch((error) => {
       _migrationPromise = null;
+      _storageReady = false;
       throw error;
     });
   }
   await _migrationPromise;
+}
+
+export function isIdempotencyStorageReady(): boolean {
+  return _storageReady;
+}
+
+/**
+ * Compatibility name retained for callers, but deliberately no longer
+ * performs request-time DDL. Before startup migration completes, fail closed
+ * with the same diagnostic code used for storage failures.
+ */
+export async function ensureIdempotencyTable(): Promise<void> {
+  if (!_storageReady) {
+    throw new Error("IDEMPOTENCY_STORAGE_UNAVAILABLE");
+  }
 }
 
 // ─── Core functions ───────────────────────────────────────────────────────────
@@ -202,27 +224,28 @@ export async function recordIdempotency(
   ttlHours = 24,
   fingerprint?: string | null,
 ): Promise<void> {
-  await ensureIdempotencyTable();
-
-  await db.execute(sql`
-    INSERT INTO processed_requests
-      (idempotency_key, namespace, response_code, response_body, actor, request_fingerprint, expires_at)
-    VALUES (
-      ${key}, ${namespace}, ${code}, ${JSON.stringify(body)},
-      ${actor ?? null},
-      ${fingerprint ?? null},
-      NOW() + ${`${ttlHours} hours`}::INTERVAL
-    )
-    ON CONFLICT (idempotency_key, namespace)
-    DO UPDATE SET
-      response_code = EXCLUDED.response_code,
-      response_body = EXCLUDED.response_body,
-       actor         = EXCLUDED.actor,
-       request_fingerprint = EXCLUDED.request_fingerprint,
-      expires_at    = EXCLUDED.expires_at
-  `).catch((e: unknown) => {
-    logger.warn({ e, key, namespace }, "[idempotency] recordIdempotency failed (non-fatal)");
-  });
+  try {
+    await ensureIdempotencyTable();
+    await db.execute(sql`
+      INSERT INTO processed_requests
+        (idempotency_key, namespace, response_code, response_body, actor, request_fingerprint, expires_at)
+      VALUES (
+        ${key}, ${namespace}, ${code}, ${JSON.stringify(body)},
+        ${actor ?? null},
+        ${fingerprint ?? null},
+        NOW() + ${`${ttlHours} hours`}::INTERVAL
+      )
+      ON CONFLICT (idempotency_key, namespace)
+      DO UPDATE SET
+        response_code = EXCLUDED.response_code,
+        response_body = EXCLUDED.response_body,
+         actor         = EXCLUDED.actor,
+         request_fingerprint = EXCLUDED.request_fingerprint,
+        expires_at    = EXCLUDED.expires_at
+    `);
+  } catch (e: unknown) {
+    logger.warn({ e, key, namespace }, "[idempotency] recordIdempotency skipped (non-fatal)");
+  }
 }
 
 /**
@@ -230,13 +253,18 @@ export async function recordIdempotency(
  * Dipanggil oleh cleanup worker setiap jam.
  */
 export async function cleanupExpiredKeys(): Promise<number> {
-  await ensureIdempotencyTable();
-  const { rows } = await db.execute(sql`
-    DELETE FROM processed_requests
-    WHERE expires_at < NOW()
-    RETURNING idempotency_key
-  `).catch(() => ({ rows: [] }));
-  return rows.length;
+  try {
+    await ensureIdempotencyTable();
+    const { rows } = await db.execute(sql`
+      DELETE FROM processed_requests
+      WHERE expires_at < NOW()
+      RETURNING idempotency_key
+    `);
+    return rows.length;
+  } catch (error) {
+    logger.warn({ error }, "[idempotency] cleanup skipped while storage is unavailable");
+    return 0;
+  }
 }
 
 // ─── Express Middleware ───────────────────────────────────────────────────────
@@ -324,9 +352,12 @@ export function createIdempotencyMiddleware(
       claim = await claimIdempotencySlot(key, ns, ttlHours, fingerprint);
     } catch (error) {
       if (error instanceof Error && error.message === "IDEMPOTENCY_STORAGE_UNAVAILABLE") {
+        res.setHeader("Retry-After", "3");
         res.status(503).json({
           error: "IDEMPOTENCY_STORAGE_UNAVAILABLE",
-          message: "Idempotency storage tidak tersedia; request tidak dijalankan.",
+          code: "IDEMPOTENCY_STORAGE_UNAVAILABLE",
+          retryable: true,
+          message: "Idempotency storage belum tersedia; request tidak dijalankan. Coba lagi.",
         });
         return;
       }

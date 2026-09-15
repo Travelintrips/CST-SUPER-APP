@@ -44,6 +44,7 @@ import { runVendorPaymentHardeningMigration } from "./lib/vendorPaymentHardening
 import { runMktReconciliationLinkMigration } from "./lib/mktReconciliationLinkMigration.js";
 import { runMktFulfillmentIdempotencyMigration } from "./lib/mktFulfillmentIdempotencyMigration.js";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed.js";
+import { runIdempotencyStorageMigration } from "./lib/financial/idempotency.js";
 
 // ── Core / Org / Auth migrations ─────────────────────────────────────────────
 import { runPhase1Migration } from "./lib/phase1Migration.js";
@@ -198,6 +199,7 @@ async function main() {
   await runSafe("companies", runCompaniesMigration);
   await runSafe("holding", runHoldingMigration);
   await runSafe("sessions", runSessionsMigration);
+  await runSafe("financialIdempotencyStorage", runIdempotencyStorageMigration);
   await runSafe("customRoles", runCustomRolesMigration);
   await runSafe("uom", runUomMigration);
   await runSafe("orgFull", runOrgFullMigration);

@@ -75,7 +75,9 @@ Queries run against the development Supabase database post-remediation:
 1. Run `runAccountingMigration()` (executes at API server startup automatically).
 2. Sport-center migration also runs `DROP INDEX IF EXISTS idx_accounting_entries_source_source_id` — order-independent.
 3. No data migration required for R-1 or R-3.
-4. `processed_requests` table for R-2 is created lazily on first idempotency check.
+4. `processed_requests` is provisioned by `lib/db/drizzle/0057_financial_idempotency_storage.sql`
+   and the API startup migration lane. Keyed requests return a controlled 503 while
+   startup storage provisioning is unavailable; requests without a key remain compatible.
 
 ## Git commit
 `"Close end-to-end accounting flow gaps"` — includes R-1 index fix, R-2 expense idempotency, R-3 loan atomicity, 14 new tests, Phase 11 integrity test, and 4 documentation files.

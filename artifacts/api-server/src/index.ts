@@ -153,7 +153,10 @@ import { startFailedJobReplayWorker } from "./lib/financial/failedJobSystem.js";
 import { startDualWriteRetryWorker, startDualWriteIntegrityWorker } from "./lib/services/dualWriteReliabilityService.js";
 import { startDualWriteCleanupWorker } from "./lib/services/marketplaceDualWriteCleanupWorker.js";
 import { startMarketplaceNotificationWorker } from "./lib/services/marketplaceNotificationWorker.js";
-import { startIdempotencyCleanup } from "./lib/financial/idempotency.js";
+import {
+  runIdempotencyStorageMigration,
+  startIdempotencyCleanup,
+} from "./lib/financial/idempotency.js";
 import { startFleetNotificationWorker } from "./lib/fleetNotificationWorker.js";
 import { startSheetSyncWorker } from "./lib/sheetSyncService.js";
 import { startTaxLedgerSyncWorker } from "./lib/taxLedgerSyncService.js";
@@ -2016,6 +2019,12 @@ async function startServer() {
         "sport_payment_mirror_trigger_v3",
         ensureSportPaymentMirrorTrigger,
       );
+      logger.info("Pre-start migration: idempotency storage starting");
+      await runPreStartSubstepWithRetry(
+        "financial_idempotency_storage_v1",
+        runIdempotencyStorageMigration,
+      );
+      logger.info("Idempotency storage ready before request-time keyed operations");
       logger.info("Sport Center canonical payment metadata resolver ready");
       logger.info("Pre-start migration: Vendor Invoice capture schema starting");
       await runPreStartSubstepWithRetry(
