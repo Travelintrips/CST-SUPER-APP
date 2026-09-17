@@ -590,6 +590,16 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
   END`;
 }
 
+function effectiveBankMutationImportStatusSql(alias = "bmi"): string {
+  return `CASE
+    WHEN ${alias}.status IN ('IMPORTED', 'MATCHED', 'SKIPPED_ALREADY_POSTED')
+      THEN 'approved'
+    WHEN ${alias}.status IN ('REJECTED', 'DUPLICATE')
+      THEN 'rejected'
+    ELSE 'unmatched'
+  END`;
+}
+
 type ReconciliationRepairDisposition =
   | "sql_correction"
   | "auto_repair"
@@ -5733,19 +5743,19 @@ router.get("/mutations", async (req, res) => {
   // Filters untuk sumber bank_mutations (bm)
   const bmFilters: string[] = [];
   if (status && status !== "all") {
+    const effectiveStatus = effectiveBankMutationStatusSql("bm");
     if (status === "completed") {
       // The UI's "Selesai" card intentionally combines both states:
       // approved reconciliation and already-posted accounting journals.
       // Use the same effective status projection as the summary endpoint so
       // clicking the card cannot exclude approved rows.
-      bmFilters.push(`${effectiveBankMutationStatusSql("bm")} IN ('posted', 'approved')`);
-    } else if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
-      // Use the same derived status as the summary endpoint. In particular,
-      // QRIS rows with an already-approved match are surfaced as
-      // duplicate_need_review even when bank_mutations.status is still matched.
-      bmFilters.push(`${effectiveBankMutationStatusSql("bm")} = '${esc(status)}'`);
+      bmFilters.push(`${effectiveStatus} IN ('posted', 'approved')`);
     } else {
-      bmFilters.push(`bm.status = '${esc(status)}'`);
+      // Every canonical filter must use the status returned by this endpoint,
+      // not the stored status. The projection can reclassify rows into posted,
+      // void, unmatched, or duplicate_need_review, so filtering the raw column
+      // makes rows leak into (or disappear from) manual_review and other tabs.
+      bmFilters.push(`${effectiveStatus} = '${esc(status)}'`);
     }
   }
   if (direction && direction !== "all")  bmFilters.push(`bm.direction = '${esc(direction)}'`);
@@ -5784,11 +5794,17 @@ router.get("/mutations", async (req, res) => {
     const s = esc(search);
     bmiFilters.push(`(bmi.description ILIKE '%${s}%' OR bmi.unique_key ILIKE '%${s}%')`);
   }
-  if (status === "approved")                   bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
-  else if (status === "completed")             bmiFilters.push(`bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED')`);
-  else if (status === "rejected")              bmiFilters.push(`bmi.status IN ('REJECTED','DUPLICATE')`);
-  else if (status === "unmatched")             bmiFilters.push(`bmi.status IN ('READY','NEED_REVIEW','DRAFT')`);
-  else if (status === "duplicate_need_review") bmiFilters.push(`bmi.status = 'NEED_REVIEW'`);
+  if (status && status !== "all") {
+    const effectiveImportStatus = effectiveBankMutationImportStatusSql("bmi");
+    if (status === "completed") {
+      bmiFilters.push(`${effectiveImportStatus} IN ('posted', 'approved')`);
+    } else {
+      // Imported rows expose the same canonical status vocabulary as the
+      // combined response. Exact filtering also prevents imports from leaking
+      // into statuses they cannot represent, such as manual_review.
+      bmiFilters.push(`${effectiveImportStatus} = '${esc(status)}'`);
+    }
+  }
   if (direction === "IN")  bmiFilters.push(`COALESCE(bmi.credit, 0) > 0`);
   if (direction === "OUT") bmiFilters.push(`COALESCE(bmi.debit, 0) > 0 AND COALESCE(bmi.credit, 0) = 0`);
   if (requestedBankAccountId != null) {
@@ -6598,11 +6614,7 @@ router.get("/mutations", async (req, res) => {
       LOWER(COALESCE(bmi.description, '')) AS normalized_description,
       'BANK_IMPORT' AS provider_name,
       NULL::text AS provider_order_id,
-      CASE
-        WHEN bmi.status IN ('IMPORTED','MATCHED','SKIPPED_ALREADY_POSTED') THEN 'approved'
-        WHEN bmi.status IN ('REJECTED','DUPLICATE')                         THEN 'rejected'
-        ELSE 'unmatched'
-      END AS status,
+      ${effectiveBankMutationImportStatusSql("bmi")} AS status,
       bmi.journal_entry_id,
       NULL::text AS journal_status,
       NULL::integer AS company_id,
