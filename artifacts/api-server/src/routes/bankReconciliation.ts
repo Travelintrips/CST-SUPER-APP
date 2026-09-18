@@ -596,6 +596,8 @@ function effectiveBankMutationImportStatusSql(alias = "bmi"): string {
       THEN 'approved'
     WHEN ${alias}.status IN ('REJECTED', 'DUPLICATE')
       THEN 'rejected'
+    WHEN ${alias}.status = 'NEED_REVIEW'
+      THEN 'duplicate_need_review'
     ELSE 'unmatched'
   END`;
 }
