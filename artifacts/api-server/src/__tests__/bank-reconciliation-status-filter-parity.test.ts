@@ -73,6 +73,18 @@ describe("bank reconciliation status source parity", () => {
     );
   });
 
+  it("includes deduplicated imported review rows in the summary projection", () => {
+    expect(summaryRoute).toContain(
+      '${effectiveBankMutationImportStatusSql("bmi")} AS status',
+    );
+    expect(summaryRoute).toContain(
+      "FROM bank_mutation_imports bmi",
+    );
+    expect(summaryRoute).toContain(
+      "bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)",
+    );
+  });
+
   it("groups the summary by the effective bank mutation status projection", () => {
     expect(summaryRoute).toContain(
       '${effectiveBankMutationStatusSql("bm")} AS status',
