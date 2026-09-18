@@ -10027,12 +10027,29 @@ router.get("/summary", async (req, res) => {
     : `WHERE bm.company_id = ${requestedCompanyId}`;
   const { rows } = await db.execute(sql.raw(`
     SELECT
-      ${effectiveBankMutationStatusSql("bm")} AS status,
-      COUNT(*) as count,
-      SUM(bm.amount) as total_amount
-    FROM bank_mutations bm
-    ${companyFilter}
-    GROUP BY 1
+      summary_rows.status,
+      COUNT(*) AS count,
+      SUM(summary_rows.amount) AS total_amount
+    FROM (
+      SELECT
+        ${effectiveBankMutationStatusSql("bm")} AS status,
+        bm.amount
+      FROM bank_mutations bm
+      ${companyFilter}
+
+      UNION ALL
+
+      SELECT
+        ${effectiveBankMutationImportStatusSql("bmi")} AS status,
+        GREATEST(COALESCE(bmi.credit, 0), COALESCE(bmi.debit, 0)) AS amount
+      FROM bank_mutation_imports bmi
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM bank_mutations bm2
+        WHERE bm2.mutation_key::text = COALESCE(bmi.unique_key::text, bmi.id::text)
+      )
+    ) summary_rows
+    GROUP BY summary_rows.status
     ORDER BY count DESC
   `));
   return res.json({ summary: rows });
