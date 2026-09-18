@@ -49,6 +49,18 @@ describe("bank reconciliation status source parity", () => {
     );
   });
 
+  it("keeps imported NEED_REVIEW rows in the duplicate review queue", () => {
+    expect(routeSource).toContain(
+      "WHEN ${alias}.status = 'NEED_REVIEW'",
+    );
+    expect(routeSource).toContain(
+      "THEN 'duplicate_need_review'",
+    );
+    expect(listRoute).toContain(
+      "bmiFilters.push(`${effectiveImportStatus} = '${esc(status)}'`);",
+    );
+  });
+
   it("counts from the same filtered predicates used by the paginated list", () => {
     expect(listRoute).toContain(
       "SELECT bm.id FROM bank_mutations bm ${bmWhere}",
