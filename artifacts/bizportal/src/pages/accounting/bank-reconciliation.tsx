@@ -617,6 +617,7 @@ interface CandidateDetails {
   sportPaymentType?: "bank_transfer" | "qris" | "paylabs" | null;
   sourceType?: string | null;
   bookingId?: number | null;
+  bookingNumber?: string | null;
   documentType?: string | null;
   grossAmount?: number | string | null;
   mdrAmount?: number | string | null;
@@ -1753,6 +1754,33 @@ function isUiApprovalEligible(
     && requiredCandidateAvailable;
 }
 
+function candidateApprovalReadinessReason(
+  m: BankMutation,
+  candidate: Candidate,
+): string | null {
+  const configuredBlock = candidateApprovalBlockReason(candidate);
+  if (configuredBlock) return configuredBlock;
+  if (isQrisMutation(m)) {
+    return "Kandidat QRIS harus diproses melalui alur settlement QRIS canonical.";
+  }
+  if (sportPaymentSelectionRequired(m)) {
+    return "Ada lebih dari satu payment Sport Center. Pilih tepat satu kandidat sebelum approve.";
+  }
+  if (m.status !== "matched") {
+    return "Kandidat ini masih berstatus review dan belum siap di-approve.";
+  }
+  if (Number(candidate.match_score) < 80) {
+    return "Skor kandidat di bawah ambang 80%; kandidat masih perlu diperiksa manual.";
+  }
+  if (!candidate.amount_match || !candidate.date_match) {
+    return "Nominal dan tanggal kandidat harus cocok sebelum approve.";
+  }
+  if (hasUnresolvedVariance(m)) {
+    return "Masih ada selisih atau variance yang belum diselesaikan.";
+  }
+  return null;
+}
+
 /**
  * Manual-review mutations use the generic journal endpoint, but must never
  * enter the QRIS/canonical settlement flow. The COA dialog is the explicit
@@ -2167,6 +2195,7 @@ function CandidateDetailsBlock({
     { label: "Tanggal settlement", value: d.settlementDate ? fmtDate(String(d.settlementDate)) : null },
     { label: "Status settlement", value: d.settlementStatus },
     { label: "Nama / Partner", value: d.name },
+    { label: "Booking", value: d.bookingNumber ?? d.bookingId },
     { label: "No. Pembayaran", value: d.paymentNumber },
     { label: "Referensi", value: d.reference },
     { label: "Referensi settlement", value: d.settlementReference },
@@ -5643,10 +5672,10 @@ function MutationCard({
               >
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold text-green-300">
-                    {candidateSelectionEnabled ? "Kandidat yang cocok" : "Kandidat pencocokan"}
+                    {candidateSelectionEnabled ? "Kandidat transaksi untuk dipilih" : "Bukti pencocokan"}
                   </p>
                   <span className="text-[10px] text-green-400">
-                    {candidateSelectionEnabled ? "Pilih satu kandidat" : "Bukti tersimpan"}
+                    {candidateSelectionEnabled ? "Belum berarti siap approve" : "Review evidence"}
                   </span>
                 </div>
                 <div className="mt-1.5 space-y-1.5">
@@ -5655,6 +5684,7 @@ function MutationCard({
                      const candidateIsSelectable =
                        !realCandidateRequired || isRealTransactionCandidate(candidate);
                     const candidateApprovalBlockedReason = candidateApprovalBlockReason(candidate);
+                     const candidateReadinessReason = candidateApprovalReadinessReason(m, candidate);
                     const checked = selectedCandidateId === candidate.id;
                     const candidateApproved = String(candidate.status ?? "").toLowerCase() === "approved";
                     const candidateName = candidateDetails?.name ?? candidate.customer_name;
@@ -5696,7 +5726,11 @@ function MutationCard({
                         <div className="min-w-0 flex-1">
                           <span className="flex items-center justify-between gap-2">
                             <span className="truncate text-xs font-medium text-foreground">
-                              {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
+                              {candidateName || (
+                                candidate.candidate_type === "sport_payment"
+                                  ? `Sport Center payment ${candidateReference}`
+                                  : `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} ${candidateReference}`
+                              )}
                             </span>
                             <span className="flex shrink-0 items-center gap-1.5">
                               {candidateApproved && (
@@ -5708,14 +5742,24 @@ function MutationCard({
                           <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                             <span>{candidateReference}</span>
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
+                            {candidate.candidate_type === "sport_payment" && (
+                              <span>Payment ID #{candidate.candidate_id}</span>
+                            )}
+                            {candidateDetails?.bookingNumber && <span>Booking {candidateDetails.bookingNumber}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
                            <CandidateDetailsBlock candidate={candidate} compact />
-                           {candidateApprovalBlockedReason ? (
+                            {candidateApprovalBlockedReason ? (
                              <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
                                {candidateApprovalBlockedReason}
                              </p>
-                           ) : onApproveCandidate && canApprove(m) && candidateIsSelectable && (
+                            ) : candidateReadinessReason && !(
+                              candidateSelectionEnabled && candidateIsSelectable
+                            ) ? (
+                              <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">
+                                {candidateReadinessReason}
+                              </p>
+                            ) : onApproveCandidate && canApprove(m) && candidateIsSelectable && (
                               <Button
                                type="button"
                                size="sm"
@@ -5736,8 +5780,8 @@ function MutationCard({
                                  : <CheckCircle2 className="h-3 w-3" />}
                                 {approvePending
                                   ? "Menyimpan..."
-                                  : requiresSportPaymentSelection
-                                    ? "Pilih Kandidat"
+                                   : requiresSportPaymentSelection
+                                     ? "Pilih kandidat"
                                     : "Approve kandidat"}
                              </Button>
                            )}

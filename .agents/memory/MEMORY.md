@@ -131,3 +131,4 @@
 - [Sport Center PROD audit schema](sport-center-prod-audit-schema.md) — canonical payments lack journal links; resolve posted journals separately and use public booking_number, not order_number.
 - [Production approval deployment parity](production-approval-deployment-parity.md) — do not bypass a live deployment that lacks the reviewed financial approval guard fix; publish first, then rerun the authenticated proof.
 - [Production approval idempotency timeout](production-approval-idempotency-timeout.md) — lazy idempotency DDL can fail before approval under pool contention; distinguish it from accounting guard rejection.
+- [Bank reconciliation approval readiness](bank-reconciliation-approval-readiness.md) — matched candidate evidence with score-review reasons must project to manual review, not the ready-to-approve queue.

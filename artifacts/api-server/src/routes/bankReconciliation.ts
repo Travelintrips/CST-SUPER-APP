@@ -569,6 +569,12 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
     WHEN ${alias}.status = 'matched'
       AND ${sportPaymentSelectionRequired}
     THEN 'duplicate_need_review'
+    -- The matcher persists score-based manual review as status=matched for
+    -- backwards compatibility. It must not leak into the "ready to approve"
+    -- queue: approval readiness is a separate state from candidate evidence.
+    WHEN ${alias}.status = 'matched'
+      AND ${alias}.review_code = 'MATCH_SCORE_REVIEW'
+    THEN 'manual_review'
     WHEN ${alias}.status = 'matched'
       AND NOT EXISTS (
         SELECT 1
@@ -5893,7 +5899,11 @@ router.get("/mutations", async (req, res) => {
            'paymentProvider', sp.payment_provider,
            'sportPaymentType', ${sportPaymentTypeSql("sp")},
           'status', sp.status,
-          'bookingId', sp.booking_id
+           'bookingId', sp.booking_id,
+           'bookingNumber', COALESCE(
+             NULLIF(to_jsonb(sb)->>'booking_number', ''),
+             NULLIF(to_jsonb(sb)->>'order_number', '')
+           )
         )
         FROM sport_payments sp
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id

@@ -61,6 +61,17 @@ describe("bank reconciliation status source parity", () => {
     );
   });
 
+  it("keeps score-based matched evidence out of the ready-to-approve queue", () => {
+    const statusProjection = routeSource.slice(
+      routeSource.indexOf("function effectiveBankMutationStatusSql"),
+      routeSource.indexOf("type ReconciliationRepairDisposition"),
+    );
+    expect(statusProjection).toContain(
+      "AND ${alias}.review_code = 'MATCH_SCORE_REVIEW'",
+    );
+    expect(statusProjection).toContain("THEN 'manual_review'");
+  });
+
   it("counts from the same filtered predicates used by the paginated list", () => {
     expect(listRoute).toContain(
       "SELECT bm.id FROM bank_mutations bm ${bmWhere}",
@@ -89,6 +100,6 @@ describe("bank reconciliation status source parity", () => {
     expect(summaryRoute).toContain(
       '${effectiveBankMutationStatusSql("bm")} AS status',
     );
-    expect(summaryRoute).toContain("GROUP BY 1");
+    expect(summaryRoute).toContain("GROUP BY summary_rows.status");
   });
 });

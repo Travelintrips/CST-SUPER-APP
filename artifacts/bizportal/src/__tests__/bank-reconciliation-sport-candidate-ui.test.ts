@@ -16,7 +16,9 @@ describe("Sport Center candidate selection UI contract", () => {
   });
 
   it("keeps candidate selection and approval distinct from canonical settlement linking", () => {
-    expect(pageSource).toContain("Pilih Kandidat & Approve");
+    expect(pageSource).toContain("Pilih kandidat");
     expect(pageSource).toContain("Tautkan &amp; Approve Settlement");
+    expect(pageSource).toContain("Belum berarti siap approve");
+    expect(pageSource).toContain("candidateApprovalReadinessReason");
   });
 });
