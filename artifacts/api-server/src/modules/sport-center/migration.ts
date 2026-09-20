@@ -2047,7 +2047,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         -- --------------------------------------------------------
 
         IF lower(v_payment_method) LIKE '%qris%'
-           OR v_payment_provider IS NOT NULL
+           OR (
+             v_payment_provider IS NOT NULL
+             AND lower(btrim(v_payment_provider)) NOT IN ('unknown', 'manual')
+           )
         THEN
 
             v_debit_account_code :=
@@ -2066,7 +2069,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_debit_account_name :=
                 'Kas';
 
-        ELSE
+        ELSIF v_finance_mode <> 'central' THEN
 
             v_debit_account_code :=
                 'BANK_RECEIPT';
