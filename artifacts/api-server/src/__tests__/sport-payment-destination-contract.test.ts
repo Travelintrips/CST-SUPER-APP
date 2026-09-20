@@ -22,6 +22,15 @@ describe("Sport Center canonical payment destination contract", () => {
     expect(activeSync).toContain("destinationJournalCode");
   });
 
+  it("keeps provider-backed transfers in payment clearing until settlement", () => {
+    expect(activeSync).toContain("providerBacked");
+    expect(activeSync).toContain('providerCode !== "unknown"');
+    expect(activeSync).toContain('providerCode !== "manual"');
+    expect(activeSync).toContain('paymentMethod === "transfer" && providerBacked');
+    expect(activeSync).toContain("destinationAccountId = qrisAccountId || null");
+    expect(activeSync).toContain('destinationJournalCode = "QRIS"');
+  });
+
   it("maps bank transfers to the exact configured external bank account", () => {
     expect(activeSync).toContain('paymentMethod === "transfer"');
     expect(activeSync).toContain("cba.account_number::text = ${externalBankAccountId}");
