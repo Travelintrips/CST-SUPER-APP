@@ -958,8 +958,17 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         let destinationAccountId = baseDestination.accountId;
         let destinationJournalId = baseDestination.journalId;
         let destinationJournalCode = baseDestination.journalCode;
+        const providerCode = String(raw.payment_provider ?? "").trim().toLowerCase();
+        const providerBacked =
+          Boolean(providerCode)
+          && providerCode !== "unknown"
+          && providerCode !== "manual";
 
-        if (paymentMethod === "transfer") {
+        if (paymentMethod === "transfer" && providerBacked) {
+          destinationAccountId = qrisAccountId || null;
+          destinationJournalId = qrisJournalId || null;
+          destinationJournalCode = "QRIS";
+        } else if (paymentMethod === "transfer") {
           const externalBankAccountId = String(raw.bank_account_id ?? "").trim();
           if (!externalBankAccountId) {
             throw new Error(`CANONICAL_PAYMENT_BANK_ACCOUNT_UNRESOLVED: payment=${paymentId} has no bank_account_id`);
