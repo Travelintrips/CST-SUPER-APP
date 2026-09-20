@@ -37,6 +37,12 @@ describe("Sport Center canonical payment destination contract", () => {
     expect(activeSync).toContain("destinationJournalCode");
   });
 
+  it("does not silently reuse an existing journal posted to a different receipt account", () => {
+    expect(activeSync).toContain("CANONICAL_PAYMENT_EXISTING_DESTINATION_MISMATCH");
+    expect(activeSync).toContain("existingAccountId !== destinationAccountId");
+    expect(activeSync).toContain("public.accounting_entry_lines");
+  });
+
   it("fails closed instead of inventing a payment destination", () => {
     expect(activeSync).toContain("CANONICAL_PAYMENT_METHOD_UNRESOLVED");
     expect(activeSync).toContain("CANONICAL_PAYMENT_DESTINATION_UNRESOLVED");
