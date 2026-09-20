@@ -1072,6 +1072,28 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
               `CANONICAL_PAYMENT_EVENT_CONFLICT: event=${canonicalEventId} already belongs to payment=${row.source_id}`,
             );
           }
+          if (row.entry_id != null) {
+            const existingDestination = await tx.execute(sql`
+              SELECT l.account_id
+              FROM public.accounting_entry_lines l
+              WHERE l.entry_id = ${Number(row.entry_id)}
+                AND l.debit > 0
+                AND ABS(l.debit::numeric - ${gross}::numeric) <= 0.01
+              ORDER BY l.id
+              LIMIT 2
+            `);
+            const existingAccountId =
+              existingDestination.rows.length === 1
+                ? Number(
+                    (existingDestination.rows[0] as Record<string, unknown>).account_id ?? 0,
+                  )
+                : 0;
+            if (existingAccountId !== destinationAccountId) {
+              throw new Error(
+                `CANONICAL_PAYMENT_EXISTING_DESTINATION_MISMATCH: payment=${paymentId} entry=${row.entry_id} expected_account=${destinationAccountId} actual_account=${existingAccountId || "ambiguous"}`,
+              );
+            }
+          }
           if (row.payment_id != null) {
             await tx.execute(sql`
               UPDATE accounting_payments
