@@ -134,6 +134,13 @@ describe("Sport Center payment accounting draft contract", () => {
     );
   });
 
+  it("does not treat manual or unknown providers as gateway clearing", () => {
+    expect(ownerFunction).toContain(
+      "lower(btrim(v_payment_provider)) NOT IN ('unknown', 'manual')",
+    );
+    expect(ownerFunction).toContain("ELSIF v_finance_mode <> 'central' THEN");
+  });
+
   it("preserves fail-closed prerequisite errors", () => {
     for (const marker of [
       "SPORT_PAYMENT_NOT_FOUND",
