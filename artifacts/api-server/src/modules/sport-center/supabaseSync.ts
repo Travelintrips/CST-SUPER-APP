@@ -815,7 +815,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
    */
   const settingsResult = await db.execute(sql`
     SELECT
+      s.default_cash_account_id,
+      s.default_bank_account_id,
       s.qris_account_id,
+      s.cash_journal_id,
+      s.bank_journal_id,
       s.qris_journal_id,
       s.sales_income_account_id,
       s.ppn_output_account_id,
@@ -843,7 +847,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
     LIMIT 1
   `);
   const settings = settingsResult.rows[0] as Record<string, unknown> | undefined;
+  const defaultCashAccountId = Number(settings?.default_cash_account_id ?? 0);
+  const defaultBankAccountId = Number(settings?.default_bank_account_id ?? 0);
   const qrisAccountId = Number(settings?.qris_account_id ?? 0);
+  const cashJournalId = Number(settings?.cash_journal_id ?? 0);
+  const bankJournalId = Number(settings?.bank_journal_id ?? 0);
   const qrisJournalId = Number(settings?.qris_journal_id ?? 0);
   const revenueAccountId = Number(settings?.sales_income_account_id ?? 0);
   const taxAccountId = Number(settings?.ppn_output_account_id ?? 0);
@@ -927,6 +935,10 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const debit = Number(raw.debit_amount);
       const revenue = Number(raw.credit_revenue_amount);
       const tax = Number(raw.credit_ppn_amount ?? 0);
+      const paymentMethod = normalizePaymentMethod(String(raw.payment_method ?? ""));
+      if (!paymentMethod) {
+        throw new Error(`CANONICAL_PAYMENT_METHOD_UNRESOLVED: payment=${paymentId}`);
+      }
       if (![gross, debit, revenue, tax].every(Number.isFinite) ||
           gross <= 0 || Math.abs(debit - gross) > 0.01 ||
           Math.abs(revenue + tax - gross) > 0.01) {
@@ -935,6 +947,53 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
       const dateValue = String(raw.journal_date ?? raw.paid_at ?? new Date().toISOString()).slice(0, 10);
       const result = await db.transaction(async (tx) => {
+        const baseDestination = resolvePaymentDestination(paymentMethod, {
+          defaultCashAccountId: defaultCashAccountId || null,
+          defaultBankAccountId: defaultBankAccountId || null,
+          qrisAccountId: qrisAccountId || null,
+          cashJournalId: cashJournalId || null,
+          bankJournalId: bankJournalId || null,
+          qrisJournalId: qrisJournalId || null,
+        });
+        let destinationAccountId = baseDestination.accountId;
+        let destinationJournalId = baseDestination.journalId;
+        let destinationJournalCode = baseDestination.journalCode;
+
+        if (paymentMethod === "transfer") {
+          const externalBankAccountId = String(raw.bank_account_id ?? "").trim();
+          if (!externalBankAccountId) {
+            throw new Error(`CANONICAL_PAYMENT_BANK_ACCOUNT_UNRESOLVED: payment=${paymentId} has no bank_account_id`);
+          }
+          const bankMapping = await tx.execute(sql`
+            SELECT cba.coa_id
+            FROM public.company_bank_accounts cba
+            JOIN public.chart_of_accounts coa ON coa.id = cba.coa_id
+            WHERE cba.company_id = ${companyId}
+              AND cba.account_number::text = ${externalBankAccountId}
+              AND cba.is_active = TRUE
+              AND coa.is_active = TRUE
+              AND COALESCE(coa.is_postable, TRUE) = TRUE
+            ORDER BY cba.id
+            LIMIT 2
+          `);
+          if (bankMapping.rows.length !== 1) {
+            throw new Error(
+              `CANONICAL_PAYMENT_BANK_ACCOUNT_UNRESOLVED: payment=${paymentId} bank=${externalBankAccountId} matches=${bankMapping.rows.length}`,
+            );
+          }
+          destinationAccountId = Number(
+            (bankMapping.rows[0] as Record<string, unknown>).coa_id ?? 0,
+          );
+          destinationJournalId = bankJournalId || null;
+          destinationJournalCode = "BNK";
+        }
+
+        if (!destinationAccountId || !destinationJournalId) {
+          throw new Error(
+            `CANONICAL_PAYMENT_DESTINATION_UNRESOLVED: payment=${paymentId} method=${paymentMethod}`,
+          );
+        }
+
         // Promote the canonical owner inside the same transaction as the
         // BizPortal accounting mirror and source pointer. If any later
         // validation/write fails, the owner journal remains draft as well.
@@ -1017,7 +1076,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             await tx.execute(sql`
               UPDATE accounting_payments
               SET company_id = ${companyId},
-                  payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  payment_method = ${paymentMethod},
                   payment_provider = ${raw.payment_provider ?? null},
                   updated_at = NOW()
               WHERE id = ${Number(row.payment_id)}
@@ -1027,7 +1086,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             await tx.execute(sql`
               UPDATE accounting_entries
               SET company_id = ${companyId},
-                  payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  payment_method = ${paymentMethod},
                   payment_provider = ${raw.payment_provider ?? null},
                   bank_account_id = ${raw.bank_account_id == null ? null : String(raw.bank_account_id)}
               WHERE id = ${Number(row.entry_id)}
@@ -1042,10 +1101,10 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
                  source_type, source_doc_id, created_by_id, created_at, updated_at)
               VALUES
                 (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
-                 ${row.journal_id ?? qrisJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
+                 ${row.journal_id ?? destinationJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
                  ${`SCPAY-SC-${paymentId}`},
                  ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
-                 ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                 ${paymentMethod},
                   ${raw.payment_provider ?? null},
                  ${Number(row.entry_id)}, 'sport_center', ${mirrorPaymentId},
                  'canonical-sport-center-owner', NOW(), NOW())
@@ -1090,11 +1149,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         const entry = await postEntryWithClient(
           tx,
           {
-            journalId: qrisJournalId,
+            journalId: destinationJournalId,
             date: new Date(`${dateValue}T00:00:00.000Z`),
             ref: `SCPAY-SC-${paymentId}`,
             description: `Canonical Sport Center payment ${raw.order_number ?? paymentId}`,
-            paymentMethod: normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris",
+            paymentMethod: paymentMethod,
             paymentProvider: raw.payment_provider == null
               ? null
               : String(raw.payment_provider),
@@ -1109,10 +1168,10 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             costCenterId: null,
             lines: [
               {
-                accountId: qrisAccountId,
+                accountId: destinationAccountId,
                 debit: gross,
                 credit: 0,
-                description: `QRIS clearing ${raw.order_number ?? paymentId}`,
+                description: `${paymentMethod === "qris" ? "QRIS clearing" : paymentMethod === "cash" ? "Penerimaan kas" : "Penerimaan bank"} ${raw.order_number ?? paymentId}`,
               },
               {
                 accountId: revenueAccountId,
@@ -1128,7 +1187,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
               }] : []),
             ],
           },
-          "QRIS",
+          destinationJournalCode,
           "posted",
         );
 
@@ -1140,10 +1199,10 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
              source_type, source_doc_id, created_by_id, created_at, updated_at)
           VALUES
             (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
-             ${qrisJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
+             ${destinationJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
              ${`SCPAY-SC-${paymentId}`},
              ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
-             ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+             ${paymentMethod},
               ${raw.payment_provider ?? null},
               ${entry.id}, 'sport_center', ${mirrorPaymentId}, 'canonical-sport-center-owner', NOW(), NOW())
           RETURNING id
