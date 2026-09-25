@@ -351,7 +351,7 @@ export default function SportCenterCompanyInvoices() {
                     <TableHead>No. Invoice</TableHead>
                     <TableHead>Perusahaan</TableHead>
                     <TableHead>Periode</TableHead>
-                    <TableHead className="text-right">Grand Total</TableHead>
+                    <TableHead className="text-right">Jumlah Dibayar</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Dibuat</TableHead>
                     <TableHead></TableHead>
@@ -373,7 +373,7 @@ export default function SportCenterCompanyInvoices() {
                           {inv.pic_name && <div className="text-xs text-muted-foreground">{inv.pic_name}</div>}
                         </TableCell>
                         <TableCell className="text-sm">{monthName} {inv.period_year}</TableCell>
-                        <TableCell className="text-right font-medium">{idr(inv.grand_total)}</TableCell>
+                        <TableCell className="text-right font-medium">{idr(inv.amount_due ?? inv.grand_total)}</TableCell>
                         <TableCell><Badge variant={sb.variant}>{sb.label}</Badge></TableCell>
                         <TableCell className="text-sm text-muted-foreground">{fmtDate(inv.created_at)}</TableCell>
                         <TableCell>
@@ -414,7 +414,12 @@ export default function SportCenterCompanyInvoices() {
                     <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Belum ada klien perusahaan</TableCell></TableRow>
                   ) : clients.map(c => (
                     <TableRow key={c.id}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div>{c.name}</div>
+                        {c.pph_withholding_enabled && (
+                          <Badge variant="outline" className="mt-1 text-xs">PPh {c.pph_rate ?? 10}% aktif</Badge>
+                        )}
+                      </TableCell>
                       <TableCell>{c.pic_name ?? "—"}</TableCell>
                       <TableCell>{c.pic_phone ?? "—"}</TableCell>
                       <TableCell>{c.pic_email ?? "—"}</TableCell>
