@@ -655,10 +655,10 @@ export function canonicalSettlementDetailsSql(
               'startTime', sb.start_time,
               'endTime', sb.end_time,
               'grossAmount', psi.gross_amount,
-              'mdrAmount', COALESCE(sp.mdr_amount, 0),
-              'taxWithheldAmount', 0,
-              'otherFeeAmount', 0,
-              'netAmount', COALESCE(NULLIF(sp.net_amount, 0), sp.amount - COALESCE(sp.mdr_amount, 0))
+              'mdrAmount', NULL,
+              'taxWithheldAmount', NULL,
+              'otherFeeAmount', NULL,
+              'netAmount', NULL
             )
             ORDER BY psi.id
           )
