@@ -7140,6 +7140,30 @@ export async function runSportCenterMigration(): Promise<void> {
  * Idempoten — hanya dijalankan sekali.
  */
 export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
+  // Upgrade path for databases that already completed the older bootstrap.
+  // This must run before the startup-complete guard.
+  await db.execute(sql.raw(`
+    DO $pph_upgrade$
+    BEGIN
+      IF to_regclass('public.sport_company_clients') IS NOT NULL THEN
+        ALTER TABLE public.sport_company_clients
+          ADD COLUMN IF NOT EXISTS pph_withholding_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 10;
+      END IF;
+
+      IF to_regclass('public.sport_company_invoices') IS NOT NULL THEN
+        ALTER TABLE public.sport_company_invoices
+          ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS pph_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS amount_due NUMERIC(14,2) NOT NULL DEFAULT 0;
+        UPDATE public.sport_company_invoices
+        SET amount_due = grand_total
+        WHERE amount_due = 0 AND grand_total <> 0;
+      END IF;
+    END
+    $pph_upgrade$;
+  `));
+
   if (await isStartupMigrationComplete("sport_center_company_invoice", SPORT_CENTER_BOOTSTRAP_VERSION)) {
     logger.info("Sport Center company invoice bootstrap already provisioned; startup DDL skipped");
     return;
@@ -7160,6 +7184,9 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE sport_company_clients
+        ADD COLUMN IF NOT EXISTS pph_withholding_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 10;
       CREATE INDEX IF NOT EXISTS idx_scc_company ON sport_company_clients(company_id);
     `);
 
@@ -7182,6 +7209,13 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE sport_company_invoices
+        ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS pph_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS amount_due NUMERIC(14,2) NOT NULL DEFAULT 0;
+      UPDATE sport_company_invoices
+      SET amount_due = grand_total
+      WHERE amount_due = 0 AND grand_total <> 0;
       CREATE INDEX IF NOT EXISTS idx_sci_company  ON sport_company_invoices(company_id);
       CREATE INDEX IF NOT EXISTS idx_sci_client   ON sport_company_invoices(client_id);
       CREATE INDEX IF NOT EXISTS idx_sci_status   ON sport_company_invoices(status);

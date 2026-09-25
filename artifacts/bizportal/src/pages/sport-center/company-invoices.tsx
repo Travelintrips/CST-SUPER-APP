@@ -47,13 +47,15 @@ const STATUS_BADGE: Record<string, { label: string; variant: "default" | "second
 type Client = {
   id: number; name: string; pic_name: string | null; pic_phone: string | null;
   pic_email: string | null; address: string | null; notes: string | null;
+  pph_withholding_enabled: boolean; pph_rate: number;
 };
 
 type Invoice = {
   id: number; invoice_number: string; client_id: number; client_name: string;
   pic_name: string | null; pic_phone: string | null; pic_email: string | null;
   period_month: number; period_year: number; subtotal: number; tax_rate: number;
-  tax_amount: number; grand_total: number; status: string; notes: string | null;
+  tax_amount: number; grand_total: number; pph_rate: number; pph_amount: number;
+  amount_due: number; status: string; notes: string | null;
   paid_at: string | null; created_at: string; item_count: number;
 };
 
@@ -220,11 +222,21 @@ export default function SportCenterCompanyInvoices() {
   // ── Client form ─────────────────────────────────────────────────────────────
   const [showClientForm, setShowClientForm] = useState(false);
   const [editClient, setEditClient] = useState<Client | null>(null);
-  const [clientForm, setClientForm] = useState({ name: "", pic_name: "", pic_phone: "", pic_email: "", address: "", notes: "" });
+  const [clientForm, setClientForm] = useState({
+    name: "", pic_name: "", pic_phone: "", pic_email: "", address: "", notes: "",
+    pph_withholding_enabled: false, pph_rate: "10",
+  });
 
   const openClientForm = (c?: Client) => {
     setEditClient(c ?? null);
-    setClientForm(c ? { name: c.name, pic_name: c.pic_name ?? "", pic_phone: c.pic_phone ?? "", pic_email: c.pic_email ?? "", address: c.address ?? "", notes: c.notes ?? "" } : { name: "", pic_name: "", pic_phone: "", pic_email: "", address: "", notes: "" });
+    setClientForm(c ? {
+      name: c.name, pic_name: c.pic_name ?? "", pic_phone: c.pic_phone ?? "", pic_email: c.pic_email ?? "",
+      address: c.address ?? "", notes: c.notes ?? "", pph_withholding_enabled: Boolean(c.pph_withholding_enabled),
+      pph_rate: String(c.pph_rate ?? 10),
+    } : {
+      name: "", pic_name: "", pic_phone: "", pic_email: "", address: "", notes: "",
+      pph_withholding_enabled: false, pph_rate: "10",
+    });
     setShowClientForm(true);
   };
 
@@ -234,7 +246,7 @@ export default function SportCenterCompanyInvoices() {
       const method = editClient ? "PUT" : "POST";
       const r = await fetch(url, {
         method, headers: { "Content-Type": "application/json" }, credentials: "include",
-        body: JSON.stringify({ ...clientForm, company_id: cId }),
+        body: JSON.stringify({ ...clientForm, company_id: cId, pph_rate: Number(clientForm.pph_rate || 10) }),
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.error ?? "Gagal"); }
       return r.json();
@@ -257,8 +269,8 @@ export default function SportCenterCompanyInvoices() {
 
   const invoices = invoiceData?.data ?? [];
   const totalInvoices = invoiceData?.total ?? 0;
-  const totalUnpaid = invoices.filter(i => i.status === "unpaid").reduce((s, i) => s + Number(i.grand_total), 0);
-  const totalPaid   = invoices.filter(i => i.status === "paid").reduce((s, i) => s + Number(i.grand_total), 0);
+  const totalUnpaid = invoices.filter(i => i.status === "unpaid").reduce((s, i) => s + Number(i.amount_due ?? i.grand_total), 0);
+  const totalPaid   = invoices.filter(i => i.status === "paid").reduce((s, i) => s + Number(i.amount_due ?? i.grand_total), 0);
 
   return (
     <AppShell>
@@ -339,7 +351,7 @@ export default function SportCenterCompanyInvoices() {
                     <TableHead>No. Invoice</TableHead>
                     <TableHead>Perusahaan</TableHead>
                     <TableHead>Periode</TableHead>
-                    <TableHead className="text-right">Grand Total</TableHead>
+                    <TableHead className="text-right">Jumlah Dibayar</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Dibuat</TableHead>
                     <TableHead></TableHead>
@@ -361,7 +373,7 @@ export default function SportCenterCompanyInvoices() {
                           {inv.pic_name && <div className="text-xs text-muted-foreground">{inv.pic_name}</div>}
                         </TableCell>
                         <TableCell className="text-sm">{monthName} {inv.period_year}</TableCell>
-                        <TableCell className="text-right font-medium">{idr(inv.grand_total)}</TableCell>
+                        <TableCell className="text-right font-medium">{idr(inv.amount_due ?? inv.grand_total)}</TableCell>
                         <TableCell><Badge variant={sb.variant}>{sb.label}</Badge></TableCell>
                         <TableCell className="text-sm text-muted-foreground">{fmtDate(inv.created_at)}</TableCell>
                         <TableCell>
@@ -402,7 +414,12 @@ export default function SportCenterCompanyInvoices() {
                     <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Belum ada klien perusahaan</TableCell></TableRow>
                   ) : clients.map(c => (
                     <TableRow key={c.id}>
-                      <TableCell className="font-medium">{c.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div>{c.name}</div>
+                        {c.pph_withholding_enabled && (
+                          <Badge variant="outline" className="mt-1 text-xs">PPh {c.pph_rate ?? 10}% aktif</Badge>
+                        )}
+                      </TableCell>
                       <TableCell>{c.pic_name ?? "—"}</TableCell>
                       <TableCell>{c.pic_phone ?? "—"}</TableCell>
                       <TableCell>{c.pic_email ?? "—"}</TableCell>
@@ -590,8 +607,14 @@ export default function SportCenterCompanyInvoices() {
               <div className="rounded-lg bg-muted/50 p-4 space-y-1 text-sm">
                 <div className="flex justify-between"><span>DPP (Subtotal)</span><span>{idr(detail.invoice.subtotal)}</span></div>
                 <div className="flex justify-between"><span>PPN {detail.invoice.tax_rate}%</span><span>{idr(detail.invoice.tax_amount)}</span></div>
+                <div className="flex justify-between"><span>Grand Total</span><span>{idr(detail.invoice.grand_total)}</span></div>
+                {Number(detail.invoice.pph_amount ?? 0) > 0 && (
+                  <div className="flex justify-between text-amber-700">
+                    <span>Potongan PPh {detail.invoice.pph_rate}%</span><span>- {idr(detail.invoice.pph_amount)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
-                  <span>Grand Total</span><span className="text-primary">{idr(detail.invoice.grand_total)}</span>
+                  <span>Jumlah Dibayar</span><span className="text-primary">{idr(detail.invoice.amount_due ?? detail.invoice.grand_total)}</span>
                 </div>
               </div>
 
@@ -650,6 +673,30 @@ export default function SportCenterCompanyInvoices() {
             <div className="space-y-1">
               <Label>Alamat</Label>
               <Textarea value={clientForm.address} onChange={e => setClientForm(f => ({ ...f, address: e.target.value }))} rows={2} />
+            </div>
+            <div className="rounded-lg border p-3 space-y-3">
+              <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={clientForm.pph_withholding_enabled}
+                  onChange={e => setClientForm(f => ({ ...f, pph_withholding_enabled: e.target.checked }))}
+                />
+                Aktifkan potongan PPh
+              </label>
+              {clientForm.pph_withholding_enabled && (
+                <div className="space-y-1">
+                  <Label>Tarif PPh (%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={clientForm.pph_rate}
+                    onChange={e => setClientForm(f => ({ ...f, pph_rate: e.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground">Default 10%. Potongan dihitung dari DPP dan mengurangi jumlah yang dibayar.</p>
+                </div>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Catatan</Label>
