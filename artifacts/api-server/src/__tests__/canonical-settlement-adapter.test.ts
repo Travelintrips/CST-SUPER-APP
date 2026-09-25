@@ -101,6 +101,12 @@ describe("Phase 4C-3 canonical settlement adapter", () => {
 
     expect(detailsSql).toContain("sport_center.expected_bank_settlements");
     expect(detailsSql).toContain("sport_center.payment_settlement_items");
+    expect(detailsSql).toContain("sport_center.sport_payments");
+    expect(detailsSql).toContain("sport_center.sport_bookings");
+    expect(detailsSql).toContain("'settlementItems'");
+    expect(detailsSql).toContain("'bookingNumber'");
+    expect(detailsSql).toContain("'customerName'");
+    expect(detailsSql).toContain("'facilityName'");
     expect(detailsSql).toContain("ebs.expected_bank_amount");
     expect(detailsSql).toContain("ebs.provider_fee_amount");
     expect(detailsSql).toContain("ebs.fee_tax_amount");
