@@ -423,7 +423,7 @@ export async function listCanonicalSettlementQueue(options: {
             'paymentId', psi.payment_id,
             'grossAmount', psi.gross_amount,
             'itemStatus', psi.item_status,
-            'paymentNumber', sp.payment_number,
+            'paymentNumber', 'SCPAY-SC-' || sp.id::text,
             'bookingId', sp.booking_id,
             'bookingNumber', sb.order_number,
             'customerName', sb.customer_name,
@@ -646,7 +646,7 @@ export function canonicalSettlementDetailsSql(
             jsonb_build_object(
               'id', psi.id,
               'sportPaymentId', psi.payment_id,
-              'paymentNumber', sp.payment_number,
+              'paymentNumber', 'SCPAY-SC-' || sp.id::text,
               'bookingId', sp.booking_id,
               'bookingNumber', sb.order_number,
               'customerName', sb.customer_name,
@@ -655,10 +655,10 @@ export function canonicalSettlementDetailsSql(
               'startTime', sb.start_time,
               'endTime', sb.end_time,
               'grossAmount', psi.gross_amount,
-              'mdrAmount', psi.mdr_amount,
-              'taxWithheldAmount', psi.tax_withheld_amount,
-              'otherFeeAmount', psi.other_fee_amount,
-              'netAmount', psi.net_amount
+              'mdrAmount', COALESCE(sp.mdr_amount, 0),
+              'taxWithheldAmount', 0,
+              'otherFeeAmount', 0,
+              'netAmount', COALESCE(NULLIF(sp.net_amount, 0), sp.amount - COALESCE(sp.mdr_amount, 0))
             )
             ORDER BY psi.id
           )
