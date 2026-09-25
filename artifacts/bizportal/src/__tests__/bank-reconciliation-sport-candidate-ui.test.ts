@@ -21,4 +21,12 @@ describe("Sport Center candidate selection UI contract", () => {
     expect(pageSource).toContain("Belum berarti siap approve");
     expect(pageSource).toContain("candidateApprovalReadinessReason");
   });
+
+  it("shows the Sport Center bookings that compose a canonical QRIS settlement", () => {
+    expect(pageSource).toContain("item.bookingNumber");
+    expect(pageSource).toContain("item.customerName");
+    expect(pageSource).toContain("item.facilityName");
+    expect(pageSource).toContain("item.bookingDate");
+    expect(pageSource).toContain("Rincian payment settlement");
+  });
 });

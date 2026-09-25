@@ -665,6 +665,12 @@ interface CandidateDetails {
     sportPaymentId?: number;
     paymentNumber?: string | null;
     bookingId?: number | null;
+    bookingNumber?: string | null;
+    customerName?: string | null;
+    facilityName?: string | null;
+    bookingDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
     grossAmount?: number | string | null;
     mdrAmount?: number | string | null;
     taxWithheldAmount?: number | string | null;
@@ -933,6 +939,14 @@ interface CanonicalSettlementQueueItem {
     paymentId: number;
     grossAmount: number;
     itemStatus: string | null;
+    paymentNumber: string | null;
+    bookingId: number | null;
+    bookingNumber: string | null;
+    customerName: string | null;
+    facilityName: string | null;
+    bookingDate: string | null;
+    startTime: string | null;
+    endTime: string | null;
   }>;
   bank_status: string | null;
   bank_transaction_date: string | null;
@@ -2307,13 +2321,29 @@ function CandidateDetailsBlock({
                   key={item.id ?? item.sportPaymentId ?? index}
                   className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-medium">
+                        {item.bookingNumber
+                          ? `Booking ${item.bookingNumber}`
+                          : item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                      </span>
+                      {(item.customerName || item.facilityName) && (
+                        <p className="mt-0.5 truncate text-muted-foreground">
+                          {[item.customerName, item.facilityName].filter(Boolean).join(" · ")}
+                        </p>
+                      )}
+                      {item.bookingDate && (
+                        <p className="mt-0.5 text-muted-foreground">
+                          {fmtDate(item.bookingDate)}
+                          {item.startTime ? ` · ${item.startTime}` : ""}
+                          {item.endTime ? `–${item.endTime}` : ""}
+                        </p>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-muted-foreground">
                       {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
                     </span>
-                    {item.bookingId != null && (
-                      <span className="text-muted-foreground">Booking #{item.bookingId}</span>
-                    )}
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
                     <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
@@ -10225,13 +10255,28 @@ export default function BankReconciliationPage() {
                                 {settlement.payment_items.map(item => (
                                   <div
                                     key={`${settlement.id}-${item.paymentId}`}
-                                    className="flex items-center justify-between gap-2 rounded border bg-white px-2 py-1.5 text-[11px] dark:border-slate-700 dark:bg-slate-900"
+                                    className="rounded border bg-white px-2 py-1.5 text-[11px] dark:border-slate-700 dark:bg-slate-900"
                                   >
-                                    <span>
-                                      Payment #{item.paymentId}
-                                      {item.itemStatus ? ` · ${item.itemStatus}` : ""}
-                                    </span>
-                                    <strong>{idr(item.grossAmount)}</strong>
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0">
+                                        <p className="font-medium text-slate-900 dark:text-slate-100">
+                                          {item.bookingNumber
+                                            ? `Booking ${item.bookingNumber}`
+                                            : item.paymentNumber ?? `Payment #${item.paymentId}`}
+                                        </p>
+                                        {(item.customerName || item.facilityName) && (
+                                          <p className="truncate text-slate-500">
+                                            {[item.customerName, item.facilityName].filter(Boolean).join(" · ")}
+                                          </p>
+                                        )}
+                                        <p className="text-slate-500">
+                                          {item.paymentNumber ?? `Payment #${item.paymentId}`}
+                                          {item.bookingDate ? ` · ${fmtDate(item.bookingDate)}` : ""}
+                                          {item.itemStatus ? ` · ${item.itemStatus}` : ""}
+                                        </p>
+                                      </div>
+                                      <strong className="shrink-0">{idr(item.grossAmount)}</strong>
+                                    </div>
                                   </div>
                                 ))}
                               </div>

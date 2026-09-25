@@ -83,6 +83,14 @@ export type CanonicalSettlementQueueItem = CanonicalSettlementCandidate & {
     paymentId: number;
     grossAmount: number;
     itemStatus: string | null;
+    paymentNumber: string | null;
+    bookingId: number | null;
+    bookingNumber: string | null;
+    customerName: string | null;
+    facilityName: string | null;
+    bookingDate: string | null;
+    startTime: string | null;
+    endTime: string | null;
   }>;
   bank_status: string | null;
   bank_transaction_date: string | null;
@@ -414,11 +422,25 @@ export async function listCanonicalSettlementQueue(options: {
           jsonb_build_object(
             'paymentId', psi.payment_id,
             'grossAmount', psi.gross_amount,
-            'itemStatus', psi.item_status
+            'itemStatus', psi.item_status,
+            'paymentNumber', 'SCPAY-SC-' || sp.id::text,
+            'bookingId', sp.booking_id,
+            'bookingNumber', sb.order_number,
+            'customerName', sb.customer_name,
+            'facilityName', sf.name,
+            'bookingDate', sb.booking_date,
+            'startTime', sb.start_time,
+            'endTime', sb.end_time
           )
           ORDER BY psi.payment_id
         )
         FROM sport_center.payment_settlement_items psi
+        JOIN sport_center.sport_payments sp
+          ON sp.id = psi.payment_id
+        LEFT JOIN sport_center.sport_bookings sb
+          ON sb.id = sp.booking_id
+        LEFT JOIN sport_center.sport_facilities sf
+          ON sf.id = sb.facility_id
         WHERE psi.settlement_id = ebs.settlement_id
       ), '[]'::jsonb) AS payment_items,
       bm.status::text AS bank_status,
@@ -483,12 +505,28 @@ export async function listCanonicalSettlementQueue(options: {
           paymentId,
           grossAmount: numberOrZero(value.grossAmount),
           itemStatus: value.itemStatus == null ? null : String(value.itemStatus),
+          paymentNumber: value.paymentNumber == null ? null : String(value.paymentNumber),
+          bookingId: numberOrNull(value.bookingId),
+          bookingNumber: value.bookingNumber == null ? null : String(value.bookingNumber),
+          customerName: value.customerName == null ? null : String(value.customerName),
+          facilityName: value.facilityName == null ? null : String(value.facilityName),
+          bookingDate: dateText(value.bookingDate),
+          startTime: value.startTime == null ? null : String(value.startTime),
+          endTime: value.endTime == null ? null : String(value.endTime),
         };
       })
       .filter((item): item is {
         paymentId: number;
         grossAmount: number;
         itemStatus: string | null;
+        paymentNumber: string | null;
+        bookingId: number | null;
+        bookingNumber: string | null;
+        customerName: string | null;
+        facilityName: string | null;
+        bookingDate: string | null;
+        startTime: string | null;
+        endTime: string | null;
       } => item != null);
 
     const linkedMutationId = numberOrNull(
@@ -602,7 +640,37 @@ export function canonicalSettlementDetailsSql(
           SELECT COUNT(*)
           FROM sport_center.payment_settlement_items psi
           WHERE psi.settlement_id = ebs.settlement_id
-        )
+        ),
+        'settlementItems', COALESCE((
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'id', psi.id,
+              'sportPaymentId', psi.payment_id,
+              'paymentNumber', 'SCPAY-SC-' || sp.id::text,
+              'bookingId', sp.booking_id,
+              'bookingNumber', sb.order_number,
+              'customerName', sb.customer_name,
+              'facilityName', sf.name,
+              'bookingDate', sb.booking_date,
+              'startTime', sb.start_time,
+              'endTime', sb.end_time,
+              'grossAmount', psi.gross_amount,
+              'mdrAmount', NULL,
+              'taxWithheldAmount', NULL,
+              'otherFeeAmount', NULL,
+              'netAmount', NULL
+            )
+            ORDER BY psi.id
+          )
+          FROM sport_center.payment_settlement_items psi
+          JOIN sport_center.sport_payments sp
+            ON sp.id = psi.payment_id
+          LEFT JOIN sport_center.sport_bookings sb
+            ON sb.id = sp.booking_id
+          LEFT JOIN sport_center.sport_facilities sf
+            ON sf.id = sb.facility_id
+          WHERE psi.settlement_id = ebs.settlement_id
+        ), '[]'::jsonb)
       )
        FROM sport_center.expected_bank_settlements ebs
         JOIN public.bank_mutations bm
