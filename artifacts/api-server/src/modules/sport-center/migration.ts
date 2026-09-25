@@ -7160,6 +7160,9 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE sport_company_clients
+        ADD COLUMN IF NOT EXISTS pph_withholding_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 10;
       CREATE INDEX IF NOT EXISTS idx_scc_company ON sport_company_clients(company_id);
     `);
 
@@ -7182,6 +7185,13 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE sport_company_invoices
+        ADD COLUMN IF NOT EXISTS pph_rate NUMERIC(5,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS pph_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS amount_due NUMERIC(14,2) NOT NULL DEFAULT 0;
+      UPDATE sport_company_invoices
+      SET amount_due = grand_total
+      WHERE amount_due = 0 AND grand_total <> 0;
       CREATE INDEX IF NOT EXISTS idx_sci_company  ON sport_company_invoices(company_id);
       CREATE INDEX IF NOT EXISTS idx_sci_client   ON sport_company_invoices(client_id);
       CREATE INDEX IF NOT EXISTS idx_sci_status   ON sport_company_invoices(status);
