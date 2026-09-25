@@ -4178,12 +4178,19 @@ router.get("/company-clients", async (req, res) => {
 router.post("/company-clients", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
   try {
-    const { name, pic_name, pic_phone, pic_email, address, notes, company_id } = req.body;
+    const { name, pic_name, pic_phone, pic_email, address, notes, company_id, pph_withholding_enabled = false, pph_rate = 10 } = req.body;
     if (!name) return res.status(400).json({ error: "Nama perusahaan wajib diisi" });
     const cId = company_id ? Number(company_id) : 1;
+    const pphEnabled = Boolean(pph_withholding_enabled);
+    const pphRate = Number(pph_rate ?? 10);
+    if (!Number.isFinite(pphRate) || pphRate < 0 || pphRate > 100) {
+      return res.status(400).json({ error: "pph_rate tidak valid" });
+    }
     const r = await db.execute(sql`
-      INSERT INTO sport_company_clients (company_id, name, pic_name, pic_phone, pic_email, address, notes)
-      VALUES (${cId}, ${name}, ${pic_name ?? null}, ${pic_phone ?? null}, ${pic_email ?? null}, ${address ?? null}, ${notes ?? null})
+      INSERT INTO sport_company_clients
+        (company_id, name, pic_name, pic_phone, pic_email, address, notes, pph_withholding_enabled, pph_rate)
+      VALUES
+        (${cId}, ${name}, ${pic_name ?? null}, ${pic_phone ?? null}, ${pic_email ?? null}, ${address ?? null}, ${notes ?? null}, ${pphEnabled}, ${pphRate})
       RETURNING *
     `);
     res.status(201).json(r.rows[0]);
@@ -4202,7 +4209,11 @@ router.put("/company-clients/:id", async (req, res) => {
     if (!ccLookup.rows.length) return res.status(404).json({ error: "Tidak ditemukan" });
     const cIdCc = resolveCompanyId(req);
     if (!await assertCompanyAccess((ccLookup.rows[0] as any).company_id as number | null, cIdCc, req, res, { resourceType: "sport_company_client", resourceId: id })) return;
-    const { name, pic_name, pic_phone, pic_email, address, notes } = req.body;
+    const { name, pic_name, pic_phone, pic_email, address, notes, pph_withholding_enabled, pph_rate } = req.body;
+    const pphRate = pph_rate == null ? null : Number(pph_rate);
+    if (pphRate != null && (!Number.isFinite(pphRate) || pphRate < 0 || pphRate > 100)) {
+      return res.status(400).json({ error: "pph_rate tidak valid" });
+    }
     const r = await db.execute(sql`
       UPDATE sport_company_clients
       SET name      = ${name ?? null},
@@ -4211,6 +4222,8 @@ router.put("/company-clients/:id", async (req, res) => {
           pic_email = ${pic_email ?? null},
           address   = ${address ?? null},
           notes     = ${notes ?? null},
+          pph_withholding_enabled = COALESCE(${pph_withholding_enabled == null ? null : Boolean(pph_withholding_enabled)}::boolean, pph_withholding_enabled),
+          pph_rate = COALESCE(${pphRate}::numeric, pph_rate),
           updated_at = NOW()
       WHERE id = ${id}
       RETURNING *
@@ -4394,12 +4407,25 @@ router.post("/company-invoices/generate", async (req, res) => {
     });
     const grandTotal = subtotal + taxAmount; // = sum(bGross)
 
-    // Insert invoice
+    // PPh perusahaan hanya dipotong bila flag akun klien aktif.
+    // Basis potong menggunakan DPP/subtotal, sehingga PPN tidak ikut menjadi basis PPh.
+    const pphEnabled = Boolean(client.pph_withholding_enabled);
+    const pphRate = pphEnabled ? Number(client.pph_rate ?? 10) : 0;
+    if (!Number.isFinite(pphRate) || pphRate < 0 || pphRate > 100) {
+      return res.status(409).json({ error: "Konfigurasi PPh perusahaan tidak valid" });
+    }
+    const pphAmount = pphEnabled ? Math.round(subtotal * pphRate / 100) : 0;
+    const amountDue = Math.max(0, grandTotal - pphAmount);
+
+    // Insert invoice — simpan snapshot PPh agar perubahan setting akun berikutnya
+    // tidak mengubah histori invoice yang sudah diterbitkan.
     const invR = await db.execute(sql`
       INSERT INTO sport_company_invoices
-        (company_id, client_id, invoice_number, period_month, period_year, subtotal, tax_rate, tax_amount, grand_total, notes, status)
+        (company_id, client_id, invoice_number, period_month, period_year, subtotal, tax_rate, tax_amount, grand_total,
+         pph_rate, pph_amount, amount_due, notes, status)
       VALUES
-        (${cId}, ${Number(client_id)}, ${invoiceNumber}, ${month}, ${year}, ${subtotal}, ${taxRate}, ${taxAmount}, ${grandTotal}, ${notes ?? null}, 'unpaid')
+        (${cId}, ${Number(client_id)}, ${invoiceNumber}, ${month}, ${year}, ${subtotal}, ${taxRate}, ${taxAmount}, ${grandTotal},
+         ${pphRate}, ${pphAmount}, ${amountDue}, ${notes ?? null}, 'unpaid')
       RETURNING *
     `);
     const invoice = invR.rows[0] as any;
