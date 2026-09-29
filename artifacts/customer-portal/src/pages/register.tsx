@@ -524,7 +524,7 @@ export default function Register() {
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">Gunakan akun Google terverifikasi. Profil baru akan dilanjutkan ke onboarding.</p>
               <Button className="w-full h-12" variant="outline" onClick={startGoogleRegistration}>
-                Lanjutkan dengan Google
+                Verifikasi Google & lanjut isi data
               </Button>
             </div>
           )}
