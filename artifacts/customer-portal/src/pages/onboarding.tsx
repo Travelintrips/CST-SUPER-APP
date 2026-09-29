@@ -176,6 +176,7 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
 
+    let registrationIntent: RegistrationIntent | null = null;
     try {
       const rawIntent = sessionStorage.getItem(REGISTRATION_INTENT_KEY);
       if (rawIntent) {
@@ -183,12 +184,10 @@ export default function OnboardingPage() {
         const fresh = Number.isFinite(intent.createdAt)
           && Date.now() - intent.createdAt <= REGISTRATION_INTENT_MAX_AGE_MS;
         if (fresh && (intent.role === "customer" || intent.role === "vendor")) {
-          setAccountType(intent.role);
-          if (intent.role === "customer" && (intent.customerType === "individual" || intent.customerType === "company")) {
-            setCustomerType(intent.customerType);
-          }
+          registrationIntent = intent;
+        } else {
+          sessionStorage.removeItem(REGISTRATION_INTENT_KEY);
         }
-        sessionStorage.removeItem(REGISTRATION_INTENT_KEY);
       }
     } catch {
       try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
@@ -211,12 +210,28 @@ export default function OnboardingPage() {
         && bootstrap.onboardingStatus === "active"
         && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
 
+      const shouldApplyRegistrationIntent =
+        bootstrap.onboardingStatus === "incomplete"
+        && registrationIntent !== null;
+
       if (isExistingCustomerWithUnresolvedOrganization) {
         setOrganizationCompletion(contextStatus as OrganizationCompletionStatus);
         setCustomerType(
           resolvedCustomerType
           ?? (contextStatus === "company_unresolved" ? "company" : null),
         );
+      } else if (shouldApplyRegistrationIntent && registrationIntent) {
+        // A newly-created OAuth identity is persisted as role=customer until
+        // onboarding is completed. Preserve the role/type the user selected
+        // on /register so a Vendor or Company registration cannot silently
+        // fall back to Personal Customer after the Google round-trip.
+        setAccountType(registrationIntent.role);
+        setCustomerType(
+          registrationIntent.role === "customer"
+            ? registrationIntent.customerType
+            : null,
+        );
+        try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
       } else if (["customer", "vendor", "driver", "employee"].includes(role)) {
         setAccountType(role as AccountType);
         if (role === "customer") setCustomerType(resolvedCustomerType);
