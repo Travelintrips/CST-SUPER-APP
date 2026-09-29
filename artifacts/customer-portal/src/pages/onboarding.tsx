@@ -29,6 +29,14 @@ type AccountType = "customer" | "vendor" | "driver" | "employee";
 type CustomerType = "individual" | "company";
 type Step = "basic" | "account-type" | "type-specific" | "review";
 type OrganizationCompletionStatus = "legacy_unresolved" | "company_unresolved";
+type RegistrationIntent = {
+  role: "customer" | "vendor";
+  customerType: CustomerType | null;
+  createdAt: number;
+};
+
+const REGISTRATION_INTENT_KEY = "portal_registration_intent";
+const REGISTRATION_INTENT_MAX_AGE_MS = 30 * 60 * 1000;
 
 const STEPS: Step[] = ["basic", "account-type", "type-specific", "review"];
 
@@ -49,7 +57,7 @@ type BaseForm = z.infer<typeof baseSchema>;
 
 const vendorSchema = z.object({
   companyName: z.string().min(2, "Nama perusahaan wajib diisi"),
-  nib:         z.string().optional(),
+  nib:         z.string().min(5, "NIB wajib diisi"),
   npwp:        z.string().optional(),
   serviceType: z.string().min(2, "Jenis layanan wajib diisi"),
 });
@@ -168,6 +176,23 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (!authed) { setLocation("/login"); return; }
 
+    let registrationIntent: RegistrationIntent | null = null;
+    try {
+      const rawIntent = sessionStorage.getItem(REGISTRATION_INTENT_KEY);
+      if (rawIntent) {
+        const intent = JSON.parse(rawIntent) as RegistrationIntent;
+        const fresh = Number.isFinite(intent.createdAt)
+          && Date.now() - intent.createdAt <= REGISTRATION_INTENT_MAX_AGE_MS;
+        if (fresh && (intent.role === "customer" || intent.role === "vendor")) {
+          registrationIntent = intent;
+        } else {
+          sessionStorage.removeItem(REGISTRATION_INTENT_KEY);
+        }
+      }
+    } catch {
+      try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
+    }
+
     const applyBootstrap = (bootstrap: PortalAuthBootstrap | null) => {
       if (!bootstrap) {
         setStatusLoading(false);
@@ -185,12 +210,28 @@ export default function OnboardingPage() {
         && bootstrap.onboardingStatus === "active"
         && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
 
+      const shouldApplyRegistrationIntent =
+        bootstrap.onboardingStatus === "incomplete"
+        && registrationIntent !== null;
+
       if (isExistingCustomerWithUnresolvedOrganization) {
         setOrganizationCompletion(contextStatus as OrganizationCompletionStatus);
         setCustomerType(
           resolvedCustomerType
           ?? (contextStatus === "company_unresolved" ? "company" : null),
         );
+      } else if (shouldApplyRegistrationIntent && registrationIntent) {
+        // A newly-created OAuth identity is persisted as role=customer until
+        // onboarding is completed. Preserve the role/type the user selected
+        // on /register so a Vendor or Company registration cannot silently
+        // fall back to Personal Customer after the Google round-trip.
+        setAccountType(registrationIntent.role);
+        setCustomerType(
+          registrationIntent.role === "customer"
+            ? registrationIntent.customerType
+            : null,
+        );
+        try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
       } else if (["customer", "vendor", "driver", "employee"].includes(role)) {
         setAccountType(role as AccountType);
         if (role === "customer") setCustomerType(resolvedCustomerType);
@@ -359,6 +400,10 @@ export default function OnboardingPage() {
         setCompanyError("Pilih perusahaan canonical atau ajukan perusahaan yang belum terdaftar.");
         return;
       }
+      if (!selectedCompanyId && companyRequestMode && !requestedRegistrationNumber.trim()) {
+        setCompanyError("NIB / NPWP perusahaan wajib diisi untuk pengajuan perusahaan baru.");
+        return;
+      }
       setCompanyError(null);
     } else if (accountType === "vendor") {
       const valid = await vendorForm.trigger();
@@ -386,8 +431,18 @@ export default function OnboardingPage() {
 
   // ── Submit ───────────────────────────────────────────────────────────────────
   async function handleSubmit() {
-    setSubmitting(true);
     setSubmitError(null);
+    if ((accountType === "customer" || accountType === "vendor") && !ktpFile && !ktpUrl) {
+      setSubmitError("KTP wajib diunggah untuk menyelesaikan pendaftaran Customer atau Vendor.");
+      setStep("basic");
+      return;
+    }
+    if (accountType === "vendor" && !legalityFile && !legalityUrl) {
+      setSubmitError("Dokumen legalitas vendor wajib diunggah.");
+      setStep("type-specific");
+      return;
+    }
+    setSubmitting(true);
     try {
       // Upload KTP if selected
       let finalKtpUrl = ktpUrl;
@@ -530,7 +585,7 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Camera className="h-4 w-4" />
-                  {t("onboarding.ktp.uploadLabel", "Upload KTP (Opsional, untuk OCR otomatis)")}
+                  {t("onboarding.ktp.uploadLabel", "Upload KTP")} {(accountType === "customer" || accountType === "vendor") && <span className="text-red-500">*</span>}
                 </Label>
                 <div
                   className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
@@ -806,7 +861,7 @@ export default function OnboardingPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>{t("onboarding.vendor.nib", "NIB (Opsional)")}</Label>
+                      <Label>{t("onboarding.vendor.nib", "NIB")} <span className="text-red-500">*</span></Label>
                       <Input placeholder={t("onboarding.vendor.nibPlaceholder", "Nomor Induk Berusaha")} {...vendorForm.register("nib")} />
                     </div>
                     <div className="space-y-2">
@@ -820,7 +875,7 @@ export default function OnboardingPage() {
                     {vendorForm.formState.errors.serviceType && <p className="text-sm text-red-500">{vendorForm.formState.errors.serviceType.message}</p>}
                   </div>
                   <div className="space-y-2">
-                    <Label className="flex items-center gap-2"><FileText className="h-4 w-4" />{t("onboarding.vendor.legalityDoc", "Upload Dokumen Legalitas (Opsional)")}</Label>
+                    <Label className="flex items-center gap-2"><FileText className="h-4 w-4" />{t("onboarding.vendor.legalityDoc", "Upload Dokumen Legalitas")} <span className="text-red-500">*</span></Label>
                     <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
                       onClick={() => legalityInputRef.current?.click()}>
                       {legalityFile ? (

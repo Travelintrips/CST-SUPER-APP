@@ -34,6 +34,19 @@ interface SimpleItem {
 }
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const REGISTRATION_INTENT_KEY = "portal_registration_intent";
+
+function persistRegistrationIntent(role: UserRole, customerType: CustomerType) {
+  try {
+    sessionStorage.setItem(REGISTRATION_INTENT_KEY, JSON.stringify({
+      role,
+      customerType: role === "customer" ? customerType : null,
+      createdAt: Date.now(),
+    }));
+  } catch {
+    // sessionStorage can be unavailable in hardened/private browser contexts.
+  }
+}
 
 export default function Register() {
   const { t } = useLanguage();
@@ -83,9 +96,13 @@ export default function Register() {
   async function redirectExistingAccount(role: string) {
     const bootstrap = await fetchPortalAuthBootstrap(returnTo);
     if (bootstrap) {
+      if (bootstrap.allowedDestination !== "/onboarding") {
+        try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
+      }
       setLocation(bootstrap.allowedDestination);
       return;
     }
+    try { sessionStorage.removeItem(REGISTRATION_INTENT_KEY); } catch {}
     setLocation(role === "vendor" ? "/vendor-dashboard" : "/dashboard");
   }
 
@@ -138,6 +155,7 @@ export default function Register() {
 
   const startGoogleRegistration = () => {
     if (!capabilities.google) return;
+    persistRegistrationIntent(role, customerType);
     const query = new URLSearchParams({ returnTo: "/onboarding", portal: "1" });
     window.location.assign(`${BASE}/api/login/google?${query.toString()}`);
   };
@@ -199,8 +217,10 @@ export default function Register() {
       // New email identities enter the same canonical onboarding as WA/Google.
       // Existing accounts are also sent through the status-aware onboarding
       // route, which redirects completed profiles to their portal.
-      if (json.isNew) setLocation("/onboarding");
-      else await redirectExistingAccount(json.user.role);
+      if (json.isNew) {
+        persistRegistrationIntent(role, customerType);
+        setLocation("/onboarding");
+      } else await redirectExistingAccount(json.user.role);
     } catch {
       setEmailMsg("Gagal menghubungi server.");
     } finally {
@@ -234,6 +254,7 @@ export default function Register() {
       setPasswordMsg("Nama perusahaan wajib diisi untuk customer perusahaan.");
       return;
     }
+    persistRegistrationIntent(role, customerType);
     setPasswordLoading(true);
     try {
       const res = await fetch(`${BASE}/api/portal/auth/signup`, {
@@ -338,6 +359,7 @@ export default function Register() {
   const completeRegister = async () => {
     setErrorMsg("");
     if (!name.trim()) { setErrorMsg(t("registerPage.errorNameRequired")); return; }
+    persistRegistrationIntent(role, customerType);
     setIsLoading(true);
     try {
       const res = await fetch(`${BASE}/api/portal/auth/wa-register`, {
@@ -502,7 +524,7 @@ export default function Register() {
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">Gunakan akun Google terverifikasi. Profil baru akan dilanjutkan ke onboarding.</p>
               <Button className="w-full h-12" variant="outline" onClick={startGoogleRegistration}>
-                Lanjutkan dengan Google
+                Verifikasi Google & lanjut isi data
               </Button>
             </div>
           )}

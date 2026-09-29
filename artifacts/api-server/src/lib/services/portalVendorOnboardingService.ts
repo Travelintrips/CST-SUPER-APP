@@ -309,6 +309,34 @@ export async function completeOnboarding(
   if (isCustomer && customerType !== "individual" && customerType !== "company") {
     throw new OnboardingServiceError(400, "Tipe customer wajib dipilih.");
   }
+  if (String(fullName ?? "").trim().length < 3) {
+    throw new OnboardingServiceError(400, "Nama lengkap wajib diisi.");
+  }
+  if (String(address ?? "").trim().length < 10) {
+    throw new OnboardingServiceError(400, "Alamat lengkap wajib diisi.");
+  }
+  if ((effectiveAccountType === "customer" || effectiveAccountType === "vendor") && !String(ktpUrl ?? "").trim()) {
+    throw new OnboardingServiceError(400, "KTP wajib diunggah untuk menyelesaikan pendaftaran.");
+  }
+  if (
+    isCustomer
+    && customerType === "company"
+    && !companyId
+    && (!String(requestedCompanyName ?? "").trim() || !String(requestedRegistrationNumber ?? "").trim())
+  ) {
+    throw new OnboardingServiceError(400, "Nama perusahaan dan NIB / NPWP wajib diisi untuk perusahaan baru.");
+  }
+  if (effectiveAccountType === "vendor") {
+    if (
+      !vendor
+      || !String(vendor.companyName ?? "").trim()
+      || !String(vendor.nib ?? "").trim()
+      || !String(vendor.serviceType ?? "").trim()
+      || !String(vendor.legalityDocUrl ?? "").trim()
+    ) {
+      throw new OnboardingServiceError(400, "Data vendor, NIB, jenis layanan, dan dokumen legalitas wajib dilengkapi.");
+    }
+  }
   const status = isCustomer ? "active" : "pending";
   const now = new Date();
   const normalizedPhone = normalizePhone(String(phone));

@@ -92,9 +92,9 @@ export type VendorSelfProfileInput = z.infer<typeof VendorSelfProfileSchema>;
 
 // ── Onboarding: complete onboarding ───────────────────────────────────────────
 export const CompleteOnboardingSchema = z.object({
-  fullName: z.string().min(1).max(200),
-  phone: z.string().min(5).max(30),
-  address: z.string().min(1).max(500),
+  fullName: z.string().trim().min(3).max(200),
+  phone: z.string().trim().min(9).max(30),
+  address: z.string().trim().min(10).max(500),
   accountType: z.enum(["vendor", "driver", "employee", "customer"]),
   customerType: z.enum(["individual", "company"]).optional(),
   companyId: z.number().int().positive().optional(),
@@ -134,12 +134,66 @@ export const CompleteOnboardingSchema = z.object({
       message: "Tipe customer wajib dipilih",
     });
   }
-  if (data.accountType === "vendor" && !data.vendor) {
+  if ((data.accountType === "customer" || data.accountType === "vendor") && !data.ktpUrl?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      path: ["vendor"],
-      message: "Data perusahaan vendor wajib diisi",
+      path: ["ktpUrl"],
+      message: "KTP wajib diunggah",
     });
+  }
+  if (data.accountType === "customer" && data.customerType === "company" && !data.companyId) {
+    if (!data.requestedCompanyName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requestedCompanyName"],
+        message: "Nama perusahaan wajib diisi",
+      });
+    }
+    if (!data.requestedRegistrationNumber?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requestedRegistrationNumber"],
+        message: "NIB / NPWP wajib diisi untuk perusahaan baru",
+      });
+    }
+  }
+  if (data.accountType === "vendor") {
+    if (!data.vendor) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["vendor"],
+        message: "Data perusahaan vendor wajib diisi",
+      });
+    } else {
+      if (!data.vendor.companyName?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["vendor", "companyName"],
+          message: "Nama perusahaan vendor wajib diisi",
+        });
+      }
+      if (!data.vendor.nib?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["vendor", "nib"],
+          message: "NIB vendor wajib diisi",
+        });
+      }
+      if (!data.vendor.serviceType?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["vendor", "serviceType"],
+          message: "Jenis layanan vendor wajib diisi",
+        });
+      }
+      if (!data.vendor.legalityDocUrl?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["vendor", "legalityDocUrl"],
+          message: "Dokumen legalitas vendor wajib diunggah",
+        });
+      }
+    }
   }
 });
 export type CompleteOnboardingInput = z.infer<typeof CompleteOnboardingSchema>;

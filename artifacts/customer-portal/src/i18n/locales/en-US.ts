@@ -1451,7 +1451,7 @@ const locale: DeepRecord = {
     ktp: {
       clickToUpload: "Klik untuk upload foto KTP",
       fileHint: "JPG, PNG, maks. 10MB",
-      uploadLabel: "Upload KTP (Opsional, untuk OCR otomatis)",
+      uploadLabel: "Upload KTP",
     },
     next: "Continue",
     ocr: {
@@ -1513,8 +1513,8 @@ const locale: DeepRecord = {
       companyName: "Nama Perusahaan",
       companyNamePlaceholder: "PT / CV / UD ...",
       legalityDocHint: "NIB, Akta Perusahaan, dll.",
-      legalityDoc: "Upload Dokumen Legalitas (Opsional)",
-      nib: "NIB (Opsional)",
+      legalityDoc: "Upload Dokumen Legalitas",
+      nib: "NIB",
       nibPlaceholder: "Nomor Induk Berusaha",
       npwp: "NPWP (Opsional)",
       serviceType: "Jenis Layanan Vendor",
